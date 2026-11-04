@@ -57,7 +57,9 @@ export type AdminSubscriptionStripe =
       upcoming: { amount: number; currency: string; at: string } | null;
     };
 
-type PaymentRef = { payments?: { data: { payment?: { type?: string; payment_intent?: string | { id: string } | null } }[] } };
+type PaymentRef = {
+  payments?: { data: { payment?: { type?: string; payment_intent?: string | { id: string } | null } }[] };
+};
 
 /**
  * The id the ledger stores as `stripePaymentIntentId` for an invoice's grant: the payment intent, else the

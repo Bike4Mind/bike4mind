@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
+import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
+import { cardExpiresWithinDays } from '@client/app/utils/adminSubscriptionStripe';
 import {
   isCompSubscription,
   type AdminSubscriptionDetail,
   type AdminSubscriptionRow,
 } from '@client/app/utils/adminSubscriptionDetail';
-import { CopyValue, EmptyState, Fact, SectionCard, StatusChip } from '../../../shared';
+import { CopyValue, Fact, SectionCard, StatusChip, formatMoney } from '../../../shared';
 import { formatCreditDelta, formatCredits } from '../../../Users/Profile/actions/creditAdjustment';
 import { subscriptionStatusDisplay } from '../../subscriptionStatusTone';
 import {
@@ -17,12 +19,14 @@ import {
   sourceLabel,
   type OwnerLink,
 } from '../subscriptionDetailModel';
+import { StripeSection, invoiceStatusTone, type StripeData } from '../stripeSections';
 
 type OverviewTabProps = {
   detail: AdminSubscriptionDetail;
   onOpenOwner: (link: OwnerLink) => void;
   onOpenSubscription: (id: string) => void;
   onOpenLedger: (userId: string) => void;
+  stripe: AdminSubscriptionStripeState;
 };
 
 const StatusFact: React.FC<{ row: AdminSubscriptionRow; testId?: string }> = ({ row, testId }) => {
@@ -88,13 +92,63 @@ const PlanAndBillingCard: React.FC<{ detail: AdminSubscriptionDetail }> = ({ det
   );
 };
 
-const PaymentCard: React.FC = () => (
+const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+
+const PaymentFacts: React.FC<{ data: StripeData }> = ({ data }) => {
+  const [now] = useState(Date.now);
+  const { paymentMethod, upcoming } = data;
+  const latest = data.invoices[0];
+  const expiry =
+    paymentMethod?.expMonth && paymentMethod.expYear
+      ? `${String(paymentMethod.expMonth).padStart(2, '0')}/${paymentMethod.expYear}`
+      : null;
+  return (
+    <Box
+      component="dl"
+      sx={{
+        m: 0,
+        px: 2,
+        py: 1.75,
+        display: 'grid',
+        gridTemplateColumns: 'minmax(120px, 40%) 1fr',
+        columnGap: 1.5,
+        rowGap: 1.25,
+        fontSize: 14,
+        '& dt': { color: 'admin.inkMuted' },
+        '& dd': { m: 0, minWidth: 0, overflowWrap: 'anywhere', color: 'admin.ink' },
+      }}
+    >
+      <Fact label="Card" data-testid="subscription-detail-payment-card-number">
+        {paymentMethod &&
+          (paymentMethod.last4
+            ? `${capitalize(paymentMethod.brand ?? paymentMethod.type)} ending ${paymentMethod.last4}`
+            : capitalize(paymentMethod.type))}
+      </Fact>
+      <Fact label="Expires" data-testid="subscription-detail-payment-expiry">
+        {expiry && (
+          <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+            {expiry}
+            {cardExpiresWithinDays(paymentMethod, now) && (
+              <StatusChip tone="warn" label="Expires soon" data-testid="subscription-detail-card-expiring-chip" />
+            )}
+          </Stack>
+        )}
+      </Fact>
+      <Fact label="Latest invoice" data-testid="subscription-detail-latest-invoice">
+        {latest?.status && <StatusChip tone={invoiceStatusTone(latest.status)} label={capitalize(latest.status)} dot />}
+      </Fact>
+      <Fact label="Next invoice" data-testid="subscription-detail-next-invoice">
+        {upcoming && `${formatMoney(upcoming.amount, upcoming.currency)} on ${formatDate(upcoming.at)}`}
+      </Fact>
+    </Box>
+  );
+};
+
+const PaymentCard: React.FC<{ stripe: AdminSubscriptionStripeState }> = ({ stripe }) => (
   <SectionCard title="Payment" body="custom" data-testid="subscription-detail-payment-card">
-    <EmptyState
-      title="Payment details are not shown yet"
-      description="Card, expiry and the latest invoice arrive with the live Stripe read."
-      action={null}
-    />
+    <StripeSection stripe={stripe} testIdPrefix="subscription-detail-payment">
+      {data => <PaymentFacts data={data} />}
+    </StripeSection>
   </SectionCard>
 );
 
@@ -259,8 +313,14 @@ const SeatsCard: React.FC<{ detail: AdminSubscriptionDetail }> = ({ detail }) =>
   );
 };
 
-/** Our records for this subscription, in two columns; Stripe-live data arrives in later work. */
-export const OverviewTab: React.FC<OverviewTabProps> = ({ detail, onOpenOwner, onOpenSubscription, onOpenLedger }) => (
+/** Our records for this subscription plus the live Stripe card, in two columns. */
+export const OverviewTab: React.FC<OverviewTabProps> = ({
+  detail,
+  onOpenOwner,
+  onOpenSubscription,
+  onOpenLedger,
+  stripe,
+}) => (
   <Box
     sx={{
       display: 'grid',
@@ -271,7 +331,7 @@ export const OverviewTab: React.FC<OverviewTabProps> = ({ detail, onOpenOwner, o
     data-testid="subscription-detail-overview"
   >
     <PlanAndBillingCard detail={detail} />
-    {!isCompSubscription(detail.subscription) && <PaymentCard />}
+    {!isCompSubscription(detail.subscription) && <PaymentCard stripe={stripe} />}
     <CreditsCard detail={detail} onOpenLedger={onOpenLedger} />
     <OwnerCard detail={detail} onOpenOwner={onOpenOwner} onOpenSubscription={onOpenSubscription} />
     <SeatsCard detail={detail} />
