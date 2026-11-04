@@ -341,3 +341,38 @@ describe('/api/auth/github/mcp-callback reconnect', () => {
     );
   });
 });
+
+describe('/api/auth/github/mcp-callback - authorization not completed', () => {
+  async function runWith(query: Record<string, string>) {
+    const { req, res } = createMocks({ method: 'GET', query });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    (req as any).logger = logger;
+    await handler(req, res);
+    return { res, logger };
+  }
+
+  it('sends a declined consent back as access_denied, logged at warn', async () => {
+    const { res, logger } = await runWith({ error: 'access_denied', state: 'opaque-state' });
+
+    expect(res._getRedirectUrl()).toBe(
+      '/profile?tab=integrations&github_oauth=error&error=access_denied#github-integration'
+    );
+    expect(logger.warn).toHaveBeenCalledWith('GitHub authorization not completed', { error: 'access_denied' });
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('maps any other provider error to the generic failure without echoing it', async () => {
+    const { res, logger } = await runWith({ error: 'call 555-0100' });
+
+    expect(res._getRedirectUrl()).toContain('error=callback_failed');
+    expect(logger.warn).toHaveBeenCalledWith('GitHub authorization not completed', { error: 'unrecognized' });
+  });
+
+  it('logs a callback with no code at all at warn', async () => {
+    const { res, logger } = await runWith({});
+
+    expect(res._getRedirectUrl()).toContain('error=missing_code');
+    expect(logger.warn).toHaveBeenCalledWith('Missing or invalid code parameter');
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+});
