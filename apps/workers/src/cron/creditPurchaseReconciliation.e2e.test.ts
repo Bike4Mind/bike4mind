@@ -120,7 +120,10 @@ describe('credit purchase reconciliation against the real ledger', () => {
       emitMetrics: false,
     });
 
-    expect(result.ungranted.map(p => p.paymentIntentId)).toEqual(['pi_selfhost_ungranted']);
+    expect(result.checked).toBe(2);
+    expect(result.ungranted).toEqual([
+      expect.objectContaining({ paymentIntentId: 'pi_selfhost_ungranted', reason: 'balance_not_applied', userId }),
+    ]);
     expect(mockEmitMetric).not.toHaveBeenCalled();
   });
 

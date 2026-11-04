@@ -374,6 +374,7 @@ describe('creditPurchaseReconciliation cron', () => {
 
     expect(result.checked).toBe(1);
     expect(result.ungranted.map(p => p.paymentIntentId)).toEqual(['pi_selfhost']);
+    expect(mockConnectDB).not.toHaveBeenCalled();
   });
 
   it('connects to this stage database and reports the counts when configured', async () => {
