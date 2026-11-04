@@ -52,6 +52,31 @@ describe('SubscriptionInvoicesTab', () => {
     expect(screen.getByText('Amount (USD)')).toBeInTheDocument();
   });
 
+  it('shows what was paid on a paid invoice and what is due otherwise, and drops the currency sort when mixed', () => {
+    renderTab(
+      buildStripeState({
+        data: buildStripeData({
+          invoices: [
+            invoice({ amountDue: 2000, amountPaid: 1500 }),
+            invoice({ id: 'in_2', status: 'open', amountDue: 3000, amountPaid: 0, currency: 'eur' }),
+          ],
+        }),
+      })
+    );
+    const rows = screen.getAllByTestId('subscription-invoices-row');
+    expect(within(rows[0]).getByText('$15.00')).toBeInTheDocument();
+    expect(within(rows[1]).getByText(/30\.00/)).toBeInTheDocument();
+    expect(screen.getByText('Amount')).toBeInTheDocument();
+  });
+
+  it('says when the data was fetched and refreshes past the cache', () => {
+    const refetchFresh = vi.fn();
+    renderTab(buildStripeState({ data: buildStripeData({ invoices: [invoice({})] }), refetchFresh }));
+    expect(screen.getByTestId('subscription-invoices-fetched-at')).toHaveTextContent('Fetched from Stripe');
+    fireEvent.click(screen.getByTestId('subscription-invoices-refresh-btn'));
+    expect(refetchFresh).toHaveBeenCalled();
+  });
+
   it('links to the hosted invoice in a new tab', () => {
     renderTab(buildStripeState({ data: buildStripeData({ invoices: [invoice({})] }) }));
     const link = screen.getByTestId('subscription-invoices-hosted-link');

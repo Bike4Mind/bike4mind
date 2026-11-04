@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Logger } from '@bike4mind/observability';
 import { clearAdminSubscriptionStripeCache, getAdminSubscriptionStripe } from './getAdminSubscriptionStripe';
 
 const ID = 'a'.repeat(24);
@@ -103,7 +104,10 @@ describe('getAdminSubscriptionStripe', () => {
       lifetimePaid: [{ amount: 2000, currency: 'usd' }],
       invoicesTruncated: false,
     });
-    expect(mocks.createPreview).toHaveBeenCalledWith({ subscription: 'sub_1' });
+    expect(mocks.createPreview).toHaveBeenCalledWith(
+      { subscription: 'sub_1' },
+      expect.objectContaining({ timeout: 5_000 })
+    );
   });
 
   it('falls back to the customer default payment method', async () => {
@@ -132,18 +136,18 @@ describe('getAdminSubscriptionStripe', () => {
     );
   });
 
-  it('counts only paid invoices toward lifetime paid, per currency', async () => {
+  it('counts only paid invoices toward lifetime paid, per currency, largest first', async () => {
     mocks.list.mockReturnValue(
       pages([
         invoice('in_1'),
         invoice('in_2', { status: 'open', amount_paid: 0 }),
-        invoice('in_3', { currency: 'eur', amount_paid: 400 }),
+        invoice('in_3', { currency: 'eur', amount_paid: 4000 }),
       ])
     );
     expect(await getAdminSubscriptionStripe(ID)).toMatchObject({
       lifetimePaid: [
+        { amount: 4000, currency: 'eur' },
         { amount: 1000, currency: 'usd' },
-        { amount: 400, currency: 'eur' },
       ],
     });
   });
@@ -157,7 +161,15 @@ describe('getAdminSubscriptionStripe', () => {
 
   it('keeps invoices when the upcoming preview fails, and skips it for a canceling subscription', async () => {
     mocks.createPreview.mockRejectedValue(new Error('preview down'));
-    expect(await getAdminSubscriptionStripe(ID, { fresh: true })).toMatchObject({ upcoming: null, invoices: [{}, {}] });
+    const logger = { warn: vi.fn() } as unknown as Logger;
+    expect(await getAdminSubscriptionStripe(ID, { fresh: true, logger })).toMatchObject({
+      upcoming: null,
+      invoices: [{}, {}],
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Admin subscription upcoming invoice preview failed',
+      expect.objectContaining({ subscriptionId: 'sub_1' })
+    );
     mocks.createPreview.mockClear();
     mocks.retrieve.mockResolvedValue({ ...stripeSub, cancel_at_period_end: true });
     expect(await getAdminSubscriptionStripe(ID, { fresh: true })).toMatchObject({ upcoming: null });

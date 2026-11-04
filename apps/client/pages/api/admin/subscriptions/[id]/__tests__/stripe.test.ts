@@ -60,16 +60,20 @@ describe('GET /api/admin/subscriptions/[id]/stripe', () => {
 
   it('returns the payload with no-store caching and passes the fresh flag', async () => {
     const res = await call({ id: ID, fresh: '1' });
-    expect(mockRead).toHaveBeenCalledWith(ID, { fresh: true });
+    expect(mockRead).toHaveBeenCalledWith(ID, expect.objectContaining({ fresh: true }));
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ stripeConfigured: true, kind: 'comp' });
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
-  it('maps a Stripe outage to 502 and rethrows anything else', async () => {
+  it('maps any Stripe error to 502 and rethrows anything else', async () => {
     mockRead.mockRejectedValueOnce(Object.assign(new Error('down'), { type: 'StripeConnectionError' }));
     const res = await call();
     expect(res._getStatusCode()).toBe(502);
+    expect(res._getJSONData()).toEqual({ message: "Couldn't reach Stripe" });
+
+    mockRead.mockRejectedValueOnce(Object.assign(new Error('no access'), { type: 'StripePermissionError' }));
+    expect((await call())._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toEqual({ message: "Couldn't reach Stripe" });
 
     mockRead.mockRejectedValueOnce(new Error('our bug'));

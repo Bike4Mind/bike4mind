@@ -1,4 +1,5 @@
 import type Stripe from 'stripe';
+import type { Logger } from '@bike4mind/observability';
 import { CreditTransaction, mongoose } from '@bike4mind/database';
 import { getStripe, isStripeConfigured } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
@@ -11,6 +12,9 @@ import {
 } from '@client/app/utils/adminSubscriptionStripe';
 
 const READ_MAX_TIME_MS = 10_000;
+// Up to five sequential Stripe calls must finish inside the API gateway timeout; a timeout surfaces as a
+// StripeConnectionError, which the route answers with 502.
+const STRIPE_READ_OPTIONS: Stripe.RequestOptions = { timeout: 5_000, maxNetworkRetries: 0 };
 const INVOICE_PAGE_SIZE = 100;
 /** Invoices read per subscription (about 25 years monthly); past it the result is flagged truncated. */
 export const MAX_INVOICES = 300;
@@ -64,11 +68,10 @@ const iso = (seconds: number | null | undefined) => (seconds ? new Date(seconds 
 const listInvoices = async (stripe: Stripe, subscriptionId: string) => {
   const invoices: Stripe.Invoice[] = [];
   let truncated = false;
-  for await (const invoice of stripe.invoices.list({
-    subscription: subscriptionId,
-    limit: INVOICE_PAGE_SIZE,
-    expand: ['data.payments'],
-  })) {
+  for await (const invoice of stripe.invoices.list(
+    { subscription: subscriptionId, limit: INVOICE_PAGE_SIZE, expand: ['data.payments'] },
+    STRIPE_READ_OPTIONS
+  )) {
     if (invoices.length === MAX_INVOICES) {
       truncated = true;
       break;
@@ -80,7 +83,11 @@ const listInvoices = async (stripe: Stripe, subscriptionId: string) => {
 
 // A preview persists nothing at Stripe. Canceled or ending subscriptions have no next invoice, and a failed
 // preview must not take the invoices down with it.
-const upcomingOf = async (stripe: Stripe, subscription: Stripe.Subscription): Promise<CachedStripe['upcoming']> => {
+const upcomingOf = async (
+  stripe: Stripe,
+  subscription: Stripe.Subscription,
+  logger?: Logger
+): Promise<CachedStripe['upcoming']> => {
   const periodEnd = subscription.items.data[0]?.current_period_end;
   if (!periodEnd) return null;
   // A cancel_at beyond this period still renews first.
@@ -89,9 +96,10 @@ const upcomingOf = async (stripe: Stripe, subscription: Stripe.Subscription): Pr
   const at = iso(periodEnd);
   if (!at) return null;
   try {
-    const preview = await stripe.invoices.createPreview({ subscription: subscription.id });
+    const preview = await stripe.invoices.createPreview({ subscription: subscription.id }, STRIPE_READ_OPTIONS);
     return { amount: preview.amount_due, currency: preview.currency, at };
-  } catch {
+  } catch (error) {
+    logger?.warn('Admin subscription upcoming invoice preview failed', { subscriptionId: subscription.id, error });
     return null;
   }
 };
@@ -120,17 +128,18 @@ const lifetimePaidOf = (invoices: Stripe.Invoice[]): CachedStripe['lifetimePaid'
     if (invoice.status === 'paid')
       totals.set(invoice.currency, (totals.get(invoice.currency) ?? 0) + invoice.amount_paid);
   }
-  return [...totals].map(([currency, amount]) => ({ amount, currency }));
+  return [...totals].map(([currency, amount]) => ({ amount, currency })).sort((a, b) => b.amount - a.amount);
 };
 
 /**
  * The live Stripe side of one subscription's detail page, read-only: payment method, invoices joined to the
  * credits the ledger granted, the next invoice and lifetime paid. Null when the id names no subscription.
  * Stripe errors other than an unknown subscription propagate to the route. A successful read is cached 60 s.
+ * `lifetimePaid` is largest total first.
  */
 export async function getAdminSubscriptionStripe(
   id: string,
-  { fresh = false }: { fresh?: boolean } = {}
+  { fresh = false, logger }: { fresh?: boolean; logger?: Logger } = {}
 ): Promise<AdminSubscriptionStripe | null> {
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await Subscription.findById(id).maxTimeMS(READ_MAX_TIME_MS).lean<OwnedSubscription>();
@@ -145,9 +154,11 @@ export async function getAdminSubscriptionStripe(
   const stripe = getStripe();
   let subscription: Stripe.Subscription;
   try {
-    subscription = await stripe.subscriptions.retrieve(doc.subscriptionId, {
-      expand: ['default_payment_method', 'customer.invoice_settings.default_payment_method'],
-    });
+    subscription = await stripe.subscriptions.retrieve(
+      doc.subscriptionId,
+      { expand: ['default_payment_method', 'customer.invoice_settings.default_payment_method'] },
+      STRIPE_READ_OPTIONS
+    );
   } catch (error) {
     if (isResourceMissing(error)) return { stripeConfigured: true, kind: 'missing' };
     throw error;
@@ -155,7 +166,7 @@ export async function getAdminSubscriptionStripe(
 
   const [{ invoices, truncated }, upcoming] = await Promise.all([
     listInvoices(stripe, doc.subscriptionId),
-    upcomingOf(stripe, subscription),
+    upcomingOf(stripe, subscription, logger),
   ]);
   const keys = invoices.flatMap(invoice => [invoicePaymentKey(invoice), invoice.id]);
   const credits = await creditsByKey(doc, [...new Set(keys)]);
