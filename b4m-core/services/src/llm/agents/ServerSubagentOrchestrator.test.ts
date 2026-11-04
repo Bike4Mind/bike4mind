@@ -17,6 +17,7 @@ import {
   type SubagentHandoffSignal,
   type ChildExecutionStatus,
 } from './ServerSubagentOrchestrator';
+import { reportSubagentCredits } from '../tools/implementation/delegateToAgent';
 import { runWithFakeTimers } from '../__tests__/helpers/fakeTimers';
 
 // The real stochastic rounding, with its draw pinned so the fallback charge is assertable.
@@ -1097,6 +1098,131 @@ describe('ServerSubagentOrchestrator', () => {
       expect(checkInsufficientCredits).toHaveBeenCalledWith(MODEL_ID);
       expect(tracker.onStart).not.toHaveBeenCalled();
       expect(run).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('substituted run pricing', () => {
+    const rates = (k: number) => ({ 1_000_000: { input: 0.000003 * k, output: 0.000015 * k } });
+    const cheap = { id: 'cheap-model', backend: 'bedrock', pricing: rates(1) } as unknown as ModelInfo;
+    const premium = { id: 'premium-model', backend: 'bedrock', pricing: rates(10) } as unknown as ModelInfo;
+    const other = { id: 'other-model', backend: 'bedrock', pricing: rates(3) } as unknown as ModelInfo;
+    const turnUsage = [{ inputTokens: 10_000, outputTokens: 2_000 }];
+    const ranInfo = {
+      totalTokens: 12_000,
+      totalInputTokens: 10_000,
+      totalOutputTokens: 2_000,
+      turnUsage,
+      iterations: 1,
+      toolCalls: 0,
+      reachedMaxIterations: false,
+    };
+    const substituteIdentity = {
+      substituteId: 'cheap-model',
+      identityId: 'premium-model',
+      chargedModel: premium,
+    };
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function stubRun(): void {
+      vi.spyOn(ReActAgent.prototype, 'run').mockResolvedValue({
+        finalAnswer: 'done',
+        steps: [],
+        completionInfo: { ...ranInfo },
+      } satisfies AgentResult);
+    }
+
+    it('prices credits on the requested model while costUsd stays on the run model', async () => {
+      stubRun();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap],
+        substituteIdentity,
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) });
+
+      expect(result.model).toBe('cheap-model');
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(premium, turnUsage)));
+      expect(result.completionInfo.totalCredits).not.toBe(settledAtHalf(getTurnsCost(cheap, turnUsage)));
+
+      const onCredits = vi.fn();
+      await reportSubagentCredits(result, { onCredits, availableModels: [cheap], logger: makeLogger() });
+      expect(onCredits).toHaveBeenCalledWith(
+        result.completionInfo.totalCredits,
+        expect.objectContaining({ usdCost: getTurnsCost(cheap, turnUsage), model: 'cheap-model' })
+      );
+    });
+
+    it('prices the tokens a failed run spent on the requested model', async () => {
+      vi.spyOn(ReActAgent.prototype, 'run').mockRejectedValue(new Error('provider 500'));
+      vi.spyOn(ReActAgent.prototype, 'toCheckpoint').mockReturnValue({
+        totalTokens: ranInfo.totalTokens,
+        totalInputTokens: ranInfo.totalInputTokens,
+        totalOutputTokens: ranInfo.totalOutputTokens,
+        totalCacheReadTokens: 0,
+        totalCacheWriteTokens: 0,
+        turnUsage,
+        totalCredits: 0,
+      } as unknown as ReturnType<ReActAgent['toCheckpoint']>);
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap],
+        substituteIdentity,
+      });
+
+      const error = await orchestrator
+        .delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) })
+        .catch((err: unknown) => err);
+
+      const credits = spentResultOf(error)?.completionInfo.totalCredits;
+      expect(credits).toBe(settledAtHalf(getTurnsCost(premium, turnUsage)));
+      expect(credits).not.toBe(settledAtHalf(getTurnsCost(cheap, turnUsage)));
+    });
+
+    it('prices a pinned subagent model on its own price on a substituted run', async () => {
+      stubRun();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap, other],
+        resolveBackend: (id: string) => makeLlm(id),
+        substituteIdentity,
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: 'other-model' }),
+      });
+
+      expect(result.model).toBe('other-model');
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(other, turnUsage)));
+    });
+
+    it('prices on the run model when the substitute carries no charged model', async () => {
+      stubRun();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm('cheap-model'),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [cheap],
+        substituteIdentity: { substituteId: 'cheap-model', identityId: 'premium-model' },
+      });
+
+      const result = await orchestrator.delegateToAgent({ task: 't', agentDef: makeAgentDef({ model: undefined }) });
+
+      expect(result.completionInfo.totalCredits).toBe(settledAtHalf(getTurnsCost(cheap, turnUsage)));
     });
   });
 

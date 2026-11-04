@@ -23,6 +23,7 @@ import {
   uncoveredIterationCredits,
   buildInProcessBalanceCheck,
   readPayerBalance,
+  type ToolUsageTotals,
 } from './agentExecutor.billing';
 import { ChatModels, type ModelInfo } from '@bike4mind/common';
 import { GeminiBackend } from '@bike4mind/llm-adapters';
@@ -610,7 +611,14 @@ describe('tool-usage accumulator (addToolUsage / takeToolUsage)', () => {
     addToolUsage(pending, { costUsd: 2, inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 1 });
 
     const snapshot = takeToolUsage(pending);
-    expect(snapshot).toEqual({ costUsd: 3, inputTokens: 30, outputTokens: 7, cacheReadTokens: 3, cacheWriteTokens: 5 });
+    expect(snapshot).toEqual({
+      costUsd: 3,
+      chargedCostUsd: 3,
+      inputTokens: 30,
+      outputTokens: 7,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 5,
+    });
     // Reset so a repeat take can't double-count the same spend.
     expect(takeToolUsage(pending)).toEqual({
       costUsd: 0,
@@ -619,6 +627,50 @@ describe('tool-usage accumulator (addToolUsage / takeToolUsage)', () => {
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
     });
+  });
+
+  it('accumulates chargedCostUsd, falling back to costUsd for reports without one', () => {
+    const pending: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    addToolUsage(pending, {
+      costUsd: 1,
+      chargedCostUsd: 3,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+    addToolUsage(pending, { costUsd: 2, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+
+    expect(pending.costUsd).toBe(3);
+    expect(pending.chargedCostUsd).toBe(5);
+  });
+
+  it('resets chargedCostUsd on take so the next iteration does not re-bill it', () => {
+    const pending: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    addToolUsage(pending, {
+      costUsd: 1,
+      chargedCostUsd: 3,
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+
+    expect(takeToolUsage(pending).chargedCostUsd).toBe(3);
+    const second = takeToolUsage(pending);
+    expect(second.chargedCostUsd ?? second.costUsd).toBe(0);
   });
 });
 
@@ -1460,7 +1512,7 @@ describe('billIteration (UsageEvent price stamp)', () => {
 });
 
 describe('billIteration (charged model)', () => {
-  const run = (chargedModelInfo?: ModelInfo) => {
+  const run = (chargedModelInfo?: ModelInfo, toolUsage: Partial<ToolUsageTotals> = {}) => {
     const counters = makeCounters();
     const { effects, spies } = makeEffects();
     const promise = billIteration({
@@ -1471,7 +1523,14 @@ describe('billIteration (charged model)', () => {
       chargedModelInfo,
       model: 'test-model',
       startTime: 0,
-      toolUsage: { costUsd: 5, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      toolUsage: {
+        costUsd: 5,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        ...toolUsage,
+      },
       effects,
     });
     return { counters, spies, promise };
@@ -1487,6 +1546,31 @@ describe('billIteration (charged model)', () => {
       expect.objectContaining({ costUsd: 105, creditsCharged: 1005 })
     );
     expect(counters.cumulativeCost).toBe(100);
+  });
+
+  it('prices tool credits on the tool charged USD when a charged model is set', async () => {
+    const { spies, promise } = run(makeModelInfo(1000, 10), { chargedCostUsd: 50 });
+    await promise;
+
+    // credits: charged 100 * 10 + tool charged 50; cost: run 100 + tool 5.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1050 }));
+    expect(spies.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ costUsd: 105, creditsCharged: 1050 })
+    );
+  });
+
+  it('prices tool credits on costUsd when the tool report carries no charged USD', async () => {
+    const { spies, promise } = run(makeModelInfo(1000, 10));
+    await promise;
+
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 1005 }));
+  });
+
+  it('ignores the tool charged USD without a charged model', async () => {
+    const { spies, promise } = run(undefined, { chargedCostUsd: 50 });
+    await promise;
+
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 105 }));
   });
 
   it('without a charged model credits follow the run model', async () => {

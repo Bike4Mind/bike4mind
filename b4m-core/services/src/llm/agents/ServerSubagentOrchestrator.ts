@@ -278,7 +278,8 @@ export interface ServerSubagentTracker {
  * Dependencies required by the server-side orchestrator
  */
 export interface ServerOrchestratorDeps {
-  substituteIdentity?: { substituteId: string; identityId: string; displayName?: string };
+  /** `chargedModel` prices the `totalCredits` fallback for a run on `substituteId`. */
+  substituteIdentity?: { substituteId: string; identityId: string; displayName?: string; chargedModel?: ModelInfo };
   userId: string;
   llm: ICompletionBackend;
   logger: Logger;
@@ -559,8 +560,12 @@ export class ServerSubagentOrchestrator {
 
   /** Fills `totalCredits` from token usage when the agent did not report it (priced on `model`). */
   private priceCompletion(completionInfo: AgentResult['completionInfo'], effectiveModel: string): void {
-    if (completionInfo.totalCredits === undefined && this.deps.availableModels) {
-      const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
+    if (completionInfo.totalCredits === undefined) {
+      const sub = this.deps.substituteIdentity;
+      const modelInfo =
+        sub?.chargedModel && effectiveModel === sub.substituteId
+          ? sub.chargedModel
+          : this.deps.availableModels?.find(m => m.id === effectiveModel);
       if (modelInfo) {
         const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens, turnUsage } =
           completionInfo;
@@ -579,7 +584,7 @@ export class ServerSubagentOrchestrator {
               totalInputTokens + (totalCacheReadTokens ?? 0) + (totalCacheWriteTokens ?? 0)
             );
         completionInfo.totalCredits = usdToCreditsStochastic(usdCost);
-      } else {
+      } else if (this.deps.availableModels) {
         // Model absent from availableModels: credits stay unset and the delegation's
         // cost is lost from the usage events. Warn so the miss rate is observable (#152).
         this.deps.logger.warn(

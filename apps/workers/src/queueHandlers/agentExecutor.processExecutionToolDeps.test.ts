@@ -585,6 +585,33 @@ describe('processExecution tool deps', () => {
       expect(deps.subagentModels.map(m => m.id)).toEqual(['claude-sonnet-5']);
     });
 
+    describe('substitute identity', () => {
+      const cheapModel = { id: 'cheap-model', type: 'text', name: 'Cheap', backend: 'anthropic' };
+
+      async function substituteIdentityFor(user: Record<string, unknown>) {
+        const { User } = await import('@bike4mind/database');
+        vi.mocked(User.findById).mockResolvedValueOnce({ id: 'user-1', currentCredits: 100, ...user } as never);
+        await runWithModels([runModel, cheapModel]);
+        return (buildSharedToolsMock.mock.calls[0][0] as { substituteIdentity?: unknown }).substituteIdentity;
+      }
+
+      it('prices a restricted-tier run on the requested model', async () => {
+        const identity = await substituteIdentityFor({ throttle: { tier: 'shadow' } });
+
+        expect(identity).toEqual(
+          expect.objectContaining({
+            substituteId: 'cheap-model',
+            identityId: 'claude-sonnet-5',
+            chargedModel: expect.objectContaining({ id: 'claude-sonnet-5' }),
+          })
+        );
+      });
+
+      it('sets no substitute identity for an unrestricted run', async () => {
+        expect(await substituteIdentityFor({})).toBeUndefined();
+      });
+    });
+
     async function subagentTracker() {
       await runWithModels([runModel]);
       return (buildSharedToolsMock.mock.calls[0][1] as { subagentTracker: ServerSubagentTracker }).subagentTracker;
