@@ -1489,7 +1489,8 @@ export class ChatService {
   }
 
   /**
-   * Share a folder the user named - from the chip's picker or `/add-dir` - with this conversation.
+   * Share a folder the user named - from a picker (the Code chip or the Chat composer's Add folder)
+   * or `/add-dir` - with this conversation, before its first message too.
    *
    * Any time, a running turn included: only the folder, branch and worktree decide where commands
    * run, and those stay locked once the session has run (see describeChipRow). A context folder is
