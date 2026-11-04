@@ -52,6 +52,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
+  'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
+  'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
 
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },

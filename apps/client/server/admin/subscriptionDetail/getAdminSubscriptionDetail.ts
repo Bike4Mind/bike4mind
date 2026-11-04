@@ -15,7 +15,11 @@ const RECENT_GRANT_LIMIT = 6;
 const OTHER_SUBSCRIPTIONS_LIMIT = 10;
 const READ_MAX_TIME_MS = 10_000;
 
-type DetailDoc = SubscriptionDoc & { grantedBy?: string | null; grantedReason?: string | null };
+type DetailDoc = SubscriptionDoc & {
+  grantedBy?: string | null;
+  grantedReason?: string | null;
+  lastSyncedAt?: Date | null;
+};
 
 type OwnerRecord = {
   userId?: string | null;
@@ -101,5 +105,12 @@ export async function getAdminSubscriptionDetail(id: string): Promise<AdminSubsc
     otherSubscriptions,
     seats: isUserOwned ? null : await seatsOf(doc, owner),
     actingUserId: isUserOwned ? (owner ? doc.ownerId : null) : (owner?.userId ?? null),
+    stripe:
+      subscription.source === 'stripe'
+        ? {
+            lastSyncedAt: doc.lastSyncedAt ? new Date(doc.lastSyncedAt).toISOString() : null,
+            cancelAtPeriodEnd: Boolean(doc.cancelAtPeriodEnd),
+          }
+        : null,
   };
 }

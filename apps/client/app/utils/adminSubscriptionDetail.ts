@@ -40,6 +40,18 @@ export type AdminCompChange = z.infer<typeof AdminCompChangeSchema>;
 
 export type AdminCompChangeResponse = { subscription: AdminSubscriptionRow };
 
+/**
+ * Body of the admin Stripe-write routes (cancel, resume) under /api/admin/subscriptions/[id]. The key is minted
+ * once per dialog open and reused across retries; `expectedLastSyncedAt` is the mirror stamp the admin reviewed.
+ */
+export const AdminStripeWriteBodySchema = z.object({
+  idempotencyKey: z.string().min(8).max(128),
+  expectedLastSyncedAt: z.iso.datetime().nullable(),
+});
+export type AdminStripeWriteBody = z.infer<typeof AdminStripeWriteBodySchema>;
+
+export type AdminStripeWriteResponse = { subscription: AdminSubscriptionRow; lastSyncedAt: string | null };
+
 export type AdminSubscriptionCreditGrant = {
   id: string;
   credits: number;
@@ -82,6 +94,8 @@ export type AdminSubscriptionDetail = {
    * `null` when no such user exists, which disables those actions.
    */
   actingUserId: string | null;
+  /** Mirror state the Stripe-write actions are previewed against; `null` for comps, which never touch Stripe. */
+  stripe: { lastSyncedAt: string | null; cancelAtPeriodEnd: boolean } | null;
 };
 
 export type AdminSubscriptionByStripeIdResponse = { id: string };
