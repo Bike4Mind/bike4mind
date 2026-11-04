@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ConflictError } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, ConflictError } from '@bike4mind/common';
 
 // Middleware is stripped so the handler body runs directly (same pattern as verify.test.ts).
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
@@ -91,6 +91,24 @@ describe('POST /api/email/verify-change', () => {
     mockVerifyEmailChange.mockResolvedValue('changed');
     mockSessionEnded.mockResolvedValue(undefined);
     mockIsEligibleForFreeCredits.mockResolvedValue(true);
+  });
+
+  it('refuses a deletion-pending account and leaves its email untouched', async () => {
+    mockFindByPendingToken.mockResolvedValue({
+      ...USER,
+      deletion: {
+        requestedAt: new Date('2026-11-01T00:00:00Z'),
+        scheduledFor: new Date('2026-12-01T00:00:00Z'),
+        source: 'self_serve',
+      },
+    });
+    const { req, res } = fire();
+
+    await expect(handler(req, res)).rejects.toMatchObject({
+      additionalInfo: { code: ACCOUNT_DELETION_PENDING_CODE },
+    });
+    expect(mockVerifyEmailChange).not.toHaveBeenCalled();
+    expect(mockSessionEnded).not.toHaveBeenCalled();
   });
 
   it('signs the user out everywhere once the new email is confirmed', async () => {

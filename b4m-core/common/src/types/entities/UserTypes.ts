@@ -323,6 +323,42 @@ export interface IUserRiskSignal {
   at: Date;
 }
 
+export const ACCOUNT_DELETION_SOURCES = ['self'] as const;
+export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
+
+/** Days between a deletion request and the purge; the user can cancel until then. */
+export const ACCOUNT_DELETION_GRACE_DAYS = 14;
+
+export interface AccountDeletionRetainedRecord {
+  category: string;
+  reason: string;
+  retention: string;
+}
+
+// The full list is owned by the personal-data inventory and must stay in sync with the privacy policy.
+/** What survives a completed deletion, as listed in the deletion-complete email. */
+export const ACCOUNT_DELETION_RETAINED_RECORDS: readonly AccountDeletionRetainedRecord[] = [
+  { category: 'Security audit log of sign-ins', reason: 'Account security', retention: '12 months' },
+  { category: 'Pseudonymized performance telemetry', reason: 'Service reliability', retention: 'Up to 90 days' },
+];
+
+/** Error `code` (status 403) for every request a deletion-pending account may not make. */
+export const ACCOUNT_DELETION_PENDING_CODE = 'ACCOUNT_DELETION_PENDING';
+
+/** Error `code` (status 409) when a deletion request is refused because the user owns an organization. */
+export const ACCOUNT_DELETION_ORG_OWNER_CODE = 'ACCOUNT_DELETION_ORG_OWNER';
+
+/**
+ * A pending account deletion. While set the account is locked down to the cancel screen, and the
+ * purge job deletes it once `scheduledFor` passes. Cleared on cancel. Distinct from `deletedAt`,
+ * which existing queries read as "already deleted".
+ */
+export interface IUserDeletion {
+  requestedAt: Date;
+  scheduledFor: Date;
+  source: AccountDeletionSource;
+}
+
 export interface IUser extends ICreditHolder {
   id: string;
   username: string;
@@ -394,6 +430,8 @@ export interface IUser extends ICreditHolder {
    * Blocks chat completions and API key access until resolved by an admin.
    */
   disputePending?: boolean;
+  /** Set while a requested deletion is in its grace period (see IUserDeletion). */
+  deletion?: IUserDeletion | null;
   /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.
