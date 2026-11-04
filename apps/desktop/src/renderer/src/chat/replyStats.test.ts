@@ -212,6 +212,15 @@ describe('replyStats', () => {
     expect(note(3000, 3000)).toBeUndefined();
   });
 
+  it('does not note untimed tokens on a hosted reply, whose first token per round is never timed', () => {
+    const row = replyStats({
+      stats: { ...base, generation: { tokens: 2999, ms: 10_000 } },
+      usage: { outputTokens: 3000 },
+    }).find(r => r.id === 'speed');
+
+    expect(row?.note).toBeUndefined();
+  });
+
   // Both as main stores them: a 3000-token call that arrived whole, then a 20-token answer
   // over 300ms; and 1900 tokens of thinking the server never streamed, then 100 of text.
   it('rates a hosted reply by its tokens over the time spent producing them', () => {

@@ -194,7 +194,8 @@ export function replyStats(source: ReplyStatsSource, { live = false }: { live?: 
       'speed',
       generation && formatTokenRate({ evalTokens: generation.tokens, evalMs: generation.ms }),
       generation?.estimated && ESTIMATES.speed,
-      (generation && untimedOutputNote(generation.tokens, usage?.outputTokens)) || undefined
+      // A hosted turn leaves each round's first token untimed by design, so the gap says nothing there.
+      (generation && usage?.rate && untimedOutputNote(generation.tokens, usage.outputTokens)) || undefined
     ),
     cacheShare: stat('cacheShare', cached !== null ? formatShare(cached) : null),
     promptSpeed: stat(
