@@ -1,7 +1,6 @@
-import { organizationRepository, withTransaction } from '@bike4mind/database';
+import { withTransaction } from '@bike4mind/database';
 import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
-import { stripeMirrorFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import {
   type ISubscription,
   SubscriptionMetadata,
@@ -15,8 +14,7 @@ import {
   subscriptionEventUser,
 } from '@server/analytics/billingEventDetails';
 import type Stripe from 'stripe';
-import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
-import { setSeats } from '@server/services/organizationService';
+import { applyStripeSubscriptionState } from '@server/subscriptions/applyStripeSubscriptionState';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
@@ -25,7 +23,6 @@ import { postSubscriptionChangesToSlack } from '@server/integrations/slack/subsc
 import { detectSubscriptionChanges } from '@bike4mind/server-utils/lib/subscriptions/subscriptionChanges';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import dayjs from 'dayjs';
 import { Resource } from 'sst';
 import { withEventContext } from '@workers/utils/eventContext';
 
@@ -86,49 +83,14 @@ export const handler = withEventContext(async (event, logger) => {
 
   // Update subscription in unified Subscription model
   const shouldInvalidateOrgs = await withTransaction(async () => {
-    const [item] = subscription.items.data;
     // Reassigned on a retried transaction, so both hold the attempt that committed.
-    before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(subscription.id, {
-      status: subscription.status,
-      periodStartsAt: dayjs.unix(item.current_period_start).toDate(),
-      periodEndsAt: dayjs.unix(item.current_period_end).toDate(),
-      canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
-      priceId: item.price.id,
-      quantity: item.quantity ?? 1,
-      ...stripeMirrorFields(subscription),
-    });
+    const result = await applyStripeSubscriptionState(subscription, { ownerType: metadata.ownerType, logger });
+    before = result.before;
     owned = before !== null;
-
-    if (metadata.ownerType === SubscriptionOwnerType.Organization) {
-      // Keep organization.seats and the active Subscription.quantity in sync
-      // with Stripe via the shared setSeats service (validation included).
-      const organization = await organizationRepository.findByStripeCustomerId(subscription.customer as string);
-      if (organization) {
-        const newQuantity = item.quantity ?? 1;
-        try {
-          await setSeats(organization.id, newQuantity, { type: 'stripe' });
-        } catch (err) {
-          // Stripe is the source of truth for billed seat count. If our
-          // local validation (team-size floor / platform min) would reject
-          // this value, we still must NOT drift from Stripe - otherwise the
-          // customer is billed for a different number of seats than our DB
-          // reports. Log loudly and force-write the seat count directly.
-          // The org-internal floor will re-apply on the next manual change.
-          const message = err instanceof Error ? err.message : String(err);
-          logger.warn(
-            `setSeats validation failed for org ${organization.id} on Stripe webhook (quantity=${newQuantity}). Force-syncing to avoid drift. Reason: ${message}`
-          );
-          await organizationRepository.update({ id: organization.id, seats: newQuantity });
-        }
-        return true;
-      }
-    }
-
+    if (result.seats) return true;
     if (!owned) {
       logger.warn(`Subscription not found: ${subscription.id}`);
-      return false;
     }
-
     return false;
   });
 

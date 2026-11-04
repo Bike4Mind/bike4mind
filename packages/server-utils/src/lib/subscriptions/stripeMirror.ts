@@ -74,3 +74,40 @@ export const stripeMirrorFields = (
     lastSyncedAt: syncedAt,
   };
 };
+
+/** What `stripeSubscriptionRowFields` reads on top of the mirror source. */
+export type StripeSubscriptionRowSource = StripeSubscriptionMirrorSource &
+  Pick<Stripe.Subscription, 'status' | 'canceled_at'> & {
+    items: {
+      data: ReadonlyArray<
+        StripeSubscriptionMirrorSource['items']['data'][number] &
+          Pick<Stripe.SubscriptionItem, 'current_period_start' | 'current_period_end' | 'quantity'> & {
+            price: Pick<Stripe.Price, 'id'>;
+          }
+      >;
+    };
+  };
+
+const unixDate = (seconds: number): Date => new Date(seconds * 1000);
+
+/**
+ * Every Subscription row field the Stripe-wins rule writes: the lifecycle fields plus the mirror.
+ * The customer.subscription.updated worker, Sync from Stripe and the nightly reconciliation compare
+ * all go through this, so what is compared and what is written cannot drift apart.
+ */
+export const stripeSubscriptionRowFields = (
+  subscription: StripeSubscriptionRowSource,
+  syncedAt: Date = new Date()
+): Pick<ISubscription, 'status' | 'periodStartsAt' | 'periodEndsAt' | 'canceledAt' | 'priceId' | 'quantity'> &
+  SubscriptionStripeMirror => {
+  const [item] = subscription.items.data;
+  return {
+    status: subscription.status,
+    periodStartsAt: unixDate(item.current_period_start),
+    periodEndsAt: unixDate(item.current_period_end),
+    canceledAt: subscription.canceled_at ? unixDate(subscription.canceled_at) : null,
+    priceId: item.price.id,
+    quantity: item.quantity ?? 1,
+    ...stripeMirrorFields(subscription, syncedAt),
+  };
+};
