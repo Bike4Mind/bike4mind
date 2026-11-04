@@ -31,6 +31,17 @@ export async function readUserIntegrationGrants(userId: string): Promise<UserInt
   return User.findById(userId, 'googleDrive atlassianConnect').lean<UserIntegrationGrants>();
 }
 
+/** User-facing summary the deletion-complete email sends; keep in sync with the steps below and the user delete. */
+export const PURGED_USER_DATA: readonly string[] = [
+  'Your account and profile',
+  'Sign-in sessions and sign-in history',
+  'Google Drive and Atlassian connections',
+  'Published pages',
+  'Embedded chat conversations',
+  'Integration requests',
+  'Skill Market listings (copies others already imported stay with them)',
+];
+
 /**
  * Remove the data a deleted account leaves behind that nothing else would ever reach. Call it
  * from every path that deletes a user, AFTER the delete has been authorized and committed.

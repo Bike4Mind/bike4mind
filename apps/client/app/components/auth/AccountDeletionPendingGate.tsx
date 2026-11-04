@@ -49,8 +49,8 @@ const AccountDeletionPendingGate: React.FC<{ children: React.ReactNode }> = ({ c
       <Typography level="h2">Your account is scheduled for deletion</Typography>
       <Typography level="body-md" sx={{ maxWidth: 520, color: 'text.secondary' }} data-testid="account-deletion-date">
         {date
-          ? `Your account and its data will be permanently deleted on ${date}.`
-          : 'Your account and its data will be permanently deleted soon.'}{' '}
+          ? `Your account will be permanently deleted on ${date}.`
+          : 'Your account will be permanently deleted soon.'}{' '}
         Cancel the deletion to use your account again.
       </Typography>
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', justifyContent: 'center' }}>
