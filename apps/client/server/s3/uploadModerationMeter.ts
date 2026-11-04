@@ -37,9 +37,11 @@ export function buildUploadModerationMeter(args: {
       try {
         const user = await loadUploader();
         if (!user) return;
-        const organization = user.organizationId
-          ? await organizationRepository.findById(user.organizationId).catch(() => null)
-          : null;
+        const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+        // An unresolved organization must never redirect its charge to the uploader.
+        if (user.organizationId && !organization) {
+          throw new Error(`Billing organization ${user.organizationId} could not be resolved`);
+        }
         await recordOperationalUsage(
           {
             requestId: fabFileId,

@@ -88,16 +88,25 @@ describe('buildUploadModerationMeter', () => {
     );
   });
 
-  it('records without an organization when the uploader has none or it cannot be read', async () => {
+  it('records without an organization when the uploader has none', async () => {
     h.findUser.mockResolvedValue({ id: 'u1' });
     await meter().recordModerationCalls!(1);
     expect(h.findOrg).not.toHaveBeenCalled();
     expect(h.record.mock.calls[0][0].organization).toBeNull();
+  });
 
-    h.findUser.mockResolvedValue(uploader);
-    h.findOrg.mockRejectedValue(new Error('db down'));
-    await meter().recordModerationCalls!(1);
-    expect(h.record.mock.calls[1][0].organization).toBeNull();
+  it.each([
+    ['missing', () => h.findOrg.mockResolvedValue(null)],
+    ['unavailable', () => h.findOrg.mockRejectedValue(new Error('db down'))],
+  ])('does not redirect an organization charge when its payer is %s', async (_state, failLookup) => {
+    failLookup();
+
+    await expect(meter().recordModerationCalls!(1)).resolves.toBeUndefined();
+
+    expect(h.record).not.toHaveBeenCalled();
+    expect((logger as { warn: ReturnType<typeof vi.fn> }).warn).toHaveBeenCalledWith(
+      expect.stringContaining('could not record moderation usage for ff1')
+    );
   });
 
   it('skips recording for a missing uploader', async () => {
