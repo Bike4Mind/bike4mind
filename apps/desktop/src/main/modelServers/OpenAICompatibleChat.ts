@@ -429,11 +429,16 @@ export class OpenAICompatibleChat implements LocalChat {
   }
 
   private recallThinkers(): Promise<void> {
-    this.recalled ??= (this.server.learnedThinkers?.read() ?? Promise.resolve([])).then(
+    if (this.recalled) return this.recalled;
+    const recalling: Promise<void> = (this.server.learnedThinkers?.read() ?? Promise.resolve([])).then(
       entries => entries.forEach(entry => this.thinkers.set(entry.model, entry.identity)),
-      () => undefined
+      () => {
+        // A failed read is tried again on the next listing.
+        if (this.recalled === recalling) this.recalled = null;
+      }
     );
-    return this.recalled;
+    this.recalled = recalling;
+    return recalling;
   }
 
   /**

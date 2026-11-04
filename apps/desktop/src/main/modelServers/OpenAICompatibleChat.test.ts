@@ -426,6 +426,28 @@ describe('OpenAICompatibleChat generation settings', () => {
     expect(add).toHaveBeenCalledWith('phi-4', undefined);
   });
 
+  it('reads the learned thinking switches again after a failed read', async () => {
+    const { fetch } = server(['qwen3-8b'], true);
+    const read = vi
+      .fn<() => Promise<LearnedThinker[]>>()
+      .mockRejectedValueOnce(new Error('EACCES'))
+      .mockResolvedValue([{ model: 'qwen3-8b' }]);
+    const client = new OpenAICompatibleChat({
+      runtimeId: 'srv-abc123',
+      baseUrl: BASE,
+      label: 'llama box',
+      product: 'vllm',
+      fetch,
+      hasCredentials: () => false,
+      redact: text => text,
+      learnedThinkers: { read, add: vi.fn(), forget: vi.fn() },
+    });
+    expect((await client.listModels())[0].thinkingToggle).toBeUndefined();
+    expect((await client.listModels())[0].thinkingToggle).toBe(true);
+    await client.listModels();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('forgets a learned thinking switch once other weights are served under its name', async () => {
     let size = 4_000_000_000;
     const fetch: FetchLike = async url => {
