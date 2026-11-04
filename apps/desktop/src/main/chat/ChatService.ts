@@ -5281,7 +5281,7 @@ export class ChatService {
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
     const standingAnswer = (): ChatApprovalAnswer | null => {
-      if (prompt.irreversible || stuck || askedByRule) return null;
+      if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule) return null;
       const currentlyTainted = mode === 'auto' && sendsOut(call.name) && !prompt.contained && !!directories.untrusted;
       const standing = gate.isStanding(
         sessionId,
@@ -5369,6 +5369,7 @@ export class ChatService {
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
+            ...(prompt.allowOnce ? { approvalOnceOnly: true } : {}),
             ...(alwaysScope
               ? {
                   approvalAlways: alwaysScope.shown,
@@ -5381,7 +5382,7 @@ export class ChatService {
         });
       },
       {
-        remember: !prompt.irreversible,
+        remember: !prompt.irreversible && !prompt.allowOnce,
         tainted: !!tainted,
         // Another card's "always", or a rule saved from it, may cover this one while it waits.
         recheck: async () => {
@@ -5397,7 +5398,7 @@ export class ChatService {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'deny' };
             }
-            if (prompt.irreversible || stuck || askedByRule || decision === 'ask') return null;
+            if (prompt.irreversible || prompt.allowOnce || stuck || askedByRule || decision === 'ask') return null;
             if (freshVerdict?.decision === 'allow') {
               coveredBy = ruleDecider(freshVerdict.rule);
               return { decision: 'once', ...(runnable[0] ? { optionId: runnable[0].id } : {}) };

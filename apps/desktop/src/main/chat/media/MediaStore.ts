@@ -3,6 +3,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
+import { own } from '@shared/ownKeys';
 import { pipeline } from 'node:stream/promises';
 
 /**
@@ -79,7 +80,7 @@ export function mediaUrl(sessionId: string, name: string): string {
 }
 
 export function isSupportedMediaType(mimeType: string): boolean {
-  return normalizeMime(mimeType) in EXTENSION_BY_MIME;
+  return own(EXTENSION_BY_MIME, normalizeMime(mimeType)) !== undefined;
 }
 
 /** Strip parameters and case, so `audio/mpeg; charset=binary` matches the table. */
@@ -100,7 +101,7 @@ export class MediaStore {
 
   async save(sessionId: string, bytes: Buffer, mimeType: string): Promise<StoredMedia> {
     const normalized = normalizeMime(mimeType);
-    const extension = EXTENSION_BY_MIME[normalized];
+    const extension = own(EXTENSION_BY_MIME, normalized);
     if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
     if (bytes.length === 0) throw new Error('The server returned an empty file.');
     if (bytes.length > MAX_MEDIA_BYTES) {
@@ -117,7 +118,7 @@ export class MediaStore {
     return {
       name,
       url: mediaUrl(sessionId, name),
-      mimeType: MIME_BY_EXTENSION[extension],
+      mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream',
       byteLength: bytes.length,
     };
   }
@@ -135,7 +136,7 @@ export class MediaStore {
       if (!info.isFile()) return null;
       const bytes = await readFile(path);
       const extension = name.slice(name.lastIndexOf('.') + 1);
-      return { bytes, mimeType: MIME_BY_EXTENSION[extension] ?? 'application/octet-stream' };
+      return { bytes, mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream' };
     } catch {
       return null;
     }
@@ -148,7 +149,7 @@ export class MediaStore {
    * a quit or a cap never leaves a truncated file the protocol handler would serve as a clip.
    */
   async saveStream(sessionId: string, source: Readable, mimeType: string, maxBytes: number): Promise<StoredMedia> {
-    const extension = EXTENSION_BY_MIME[normalizeMime(mimeType)];
+    const extension = own(EXTENSION_BY_MIME, normalizeMime(mimeType));
     if (!extension) throw new Error(`Cannot display ${mimeType || 'an unknown media type'}.`);
 
     const directory = this.sessionDirectory(sessionId);
@@ -174,7 +175,12 @@ export class MediaStore {
       throw error;
     }
 
-    return { name, url: mediaUrl(sessionId, name), mimeType: MIME_BY_EXTENSION[extension], byteLength };
+    return {
+      name,
+      url: mediaUrl(sessionId, name),
+      mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream',
+      byteLength,
+    };
   }
 
   /**
@@ -188,7 +194,7 @@ export class MediaStore {
       const info = await stat(path);
       if (!info.isFile()) return null;
       const extension = name.slice(name.lastIndexOf('.') + 1);
-      return { path, size: info.size, mimeType: MIME_BY_EXTENSION[extension] ?? 'application/octet-stream' };
+      return { path, size: info.size, mimeType: own(MIME_BY_EXTENSION, extension) ?? 'application/octet-stream' };
     } catch {
       return null;
     }
