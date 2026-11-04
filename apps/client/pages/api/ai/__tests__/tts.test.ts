@@ -55,7 +55,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   UnprocessableEntityError,
   DEFAULT_TTS_PROVIDER: 'openai',
   synthesizeSpeechContract: { method: 'post', path: '/api/ai/tts', auth: 'apiKeyOrJwt', responses: {} },
-  TTS_MAX_INPUT_CHARS: { openai: 2000, elevenlabs: 10000 },
+  TTS_MAX_INPUT_CHARS: { openai: 4096, elevenlabs: 10000 },
   VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },
   TTS_DEFAULT_MODEL: { openai: 'tts-1', elevenlabs: 'eleven_multilingual_v2' },
   estimateTtsCreditCost: (...a: unknown[]) => mocks.estimateTtsCreditCost(...a),

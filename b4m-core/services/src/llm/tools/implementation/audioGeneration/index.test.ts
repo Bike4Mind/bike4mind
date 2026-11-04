@@ -277,8 +277,8 @@ describe('audio_generation tool', () => {
 
   it('rejects speech longer than the resolved provider cap before the paid call', async () => {
     const context = createFakeContext();
-    // OpenAI cap is 2000 chars.
-    const result = await run(context, { kind: 'speech', text: 'a'.repeat(2001) }, { ttsProvider: 'openai' });
+    // OpenAI cap is 4096 chars.
+    const result = await run(context, { kind: 'speech', text: 'a'.repeat(4097) }, { ttsProvider: 'openai' });
     expect(result).toMatch(/too long/i);
     expect(mockSynthesize).not.toHaveBeenCalled();
     expect(context.onFinish).not.toHaveBeenCalled();

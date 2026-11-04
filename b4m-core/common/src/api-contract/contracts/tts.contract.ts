@@ -31,7 +31,7 @@ export const synthesizeSpeechContract = defineEndpoint({
   description:
     'Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured ' +
     'provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the ' +
-    '`X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 2000 characters, ' +
+    '`X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ' +
     'ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a ' +
     '422 before any provider cost is incurred. ' +
     '`organization_id` picks the payer: an organization you belong to, or null for your personal ' +

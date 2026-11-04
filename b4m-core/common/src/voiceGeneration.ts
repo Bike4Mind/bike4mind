@@ -48,12 +48,15 @@ export const VOICE_VENDOR_SUPPORTED_FORMATS: Record<VoiceGenerationVendor, Voice
   elevenlabs: ['mp3', 'pcm', 'opus'],
 };
 
-// Per-provider max input length (characters). OpenAI gpt-4o-mini-tts caps near 2000 tokens;
-// ElevenLabs accepts more (model-dependent, up to 10k on multilingual v2). Each
-// vendor service enforces its own limit so no provider is needlessly throttled
-// to another's ceiling.
+// Per-provider max input length (characters). OpenAI: tts-1 hard-caps at 4096
+// chars; gpt-4o-mini-tts caps at 2000 tokens, which 4096 chars stays under for
+// most scripts (English is ~700 tokens). A char cap cannot express a token
+// limit, so dense scripts (long CJK) are left to OpenAI to reject rather than
+// capping every caller below what tts-1 accepts. ElevenLabs accepts more
+// (model-dependent, up to 10k on multilingual v2). Each vendor service enforces
+// its own limit so no provider is needlessly throttled to another's ceiling.
 export const TTS_MAX_INPUT_CHARS: Record<VoiceGenerationVendor, number> = {
-  openai: 2000,
+  openai: 4096,
   elevenlabs: 10000,
 };
 
