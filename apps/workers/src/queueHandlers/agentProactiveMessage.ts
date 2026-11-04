@@ -159,6 +159,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
           ? `New message in "${truncateForPush(sessionName, 60)}".`
           : 'Your agent sent you a new message.',
         deepLink: sessionDeepLink(config.sessionId),
+        // The body names only the session, so a later message replaces an earlier one rather than stacking.
         collapseId: `agent-message:${config.sessionId}:${config.agentId}`,
         sessionId: config.sessionId,
       },
