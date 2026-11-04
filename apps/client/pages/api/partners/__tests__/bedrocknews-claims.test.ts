@@ -3,11 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById, mockPreview, mockRedeem, mockRungCredits } = vi.hoisted(() => ({
+const { mockFindById, mockPreview, mockRedeem, mockRungCredits, mockPayableRungCredits } = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockPreview: vi.fn(),
   mockRedeem: vi.fn(),
   mockRungCredits: vi.fn(),
+  mockPayableRungCredits: vi.fn(),
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
@@ -27,6 +28,7 @@ vi.mock('@server/partners/bedrocknewsTickets', async orig => ({
 vi.mock('@server/partners/bedrocknewsPuzzleReward', async orig => ({
   ...(await orig<Record<string, unknown>>()),
   rungCredits: (...a: unknown[]) => mockRungCredits(...a),
+  payableRungCredits: (...a: unknown[]) => mockPayableRungCredits(...a),
 }));
 vi.mock('@bike4mind/database', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -90,6 +92,7 @@ describe('BedrockNews claim routes', () => {
     warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     dbUser(PAYABLE);
     mockRungCredits.mockResolvedValue(130);
+    mockPayableRungCredits.mockResolvedValue(130);
   });
   afterEach(() => warn.mockRestore());
 
@@ -142,11 +145,21 @@ describe('BedrockNews claim routes', () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'open', expiresAt: 'x', rungs: RUNGS } });
       const res = await preview();
       expect(res._getStatusCode()).toBe(200);
-      expect(res._getJSONData()).toEqual({ state: 'ready', credits: 130, rungs: RUNGS, account: EMAIL });
+      expect(res._getJSONData()).toEqual({ state: 'ready', credits: 130, payable: 130, rungs: RUNGS, account: EMAIL });
       expect(mockPreview).toHaveBeenCalledWith(TICKET);
       expect(mockRungCredits).toHaveBeenCalledWith([
         { tier: 5, hard: false },
         { tier: 7, hard: true },
+      ]);
+    });
+
+    it('prices what the daily cap still pays the session user, in ticket order', async () => {
+      mockPreview.mockResolvedValue({ ok: true, preview: { status: 'open', expiresAt: 'x', rungs: RUNGS } });
+      mockPayableRungCredits.mockResolvedValue(40);
+      expect((await preview())._getJSONData()).toMatchObject({ state: 'ready', credits: 130, payable: 40 });
+      expect(mockPayableRungCredits).toHaveBeenCalledWith(SESSION_USER.id, [
+        { puzzleDate: '2026-11-02', tier: 5, hard: false },
+        { puzzleDate: '2026-11-01', tier: 7, hard: true },
       ]);
     });
 
@@ -157,6 +170,7 @@ describe('BedrockNews claim routes', () => {
         result: { claimed: [], total: 0, firstSolveCredits: 0, capped: 0 },
       });
       expect(mockRungCredits).not.toHaveBeenCalled();
+      expect(mockPayableRungCredits).not.toHaveBeenCalled();
     });
 
     it('is in-progress while another redeem holds the ticket', async () => {

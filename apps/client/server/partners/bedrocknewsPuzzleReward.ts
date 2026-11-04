@@ -103,6 +103,20 @@ async function sumCredits(match: Record<string, unknown>): Promise<number> {
   return row?.total ?? 0;
 }
 
+// A row for puzzleDate cannot predate that UTC day; the bound keeps the scan off older ledger rows.
+const paidOnPuzzleDate = (userId: string, puzzleDate: string) =>
+  sumCredits({
+    ownerId: userId,
+    reason: BEDROCKNEWS_PUZZLE_REASON,
+    'metadata.puzzleDate': puzzleDate,
+    createdAt: { $gte: new Date(`${puzzleDate}T00:00:00.000Z`) },
+  });
+
+const exceedsDailyCap = (paidOnDate: number, amount: number, cap: number) => paidOnDate + amount > cap;
+
+const puzzleTransactionId = (userId: string, puzzleDate: string, tier: PuzzleTier) =>
+  `bedrocknews-puzzle:${userId}:${puzzleDate}:${tier}`;
+
 async function storedCredits(transactionId: string): Promise<number> {
   const row = await CreditTransaction.findOne({ transactionId }).select('credits').lean<{ credits: number }>();
   return row?.credits ?? 0;
@@ -127,7 +141,7 @@ export async function grantPuzzleReward({
   const user = await User.findById(userId).select(`${PAYABLE_FIELDS} currentCredits`).lean<RewardUser>();
   if (!user) return { ok: false, status: 404, code: 'USER_NOT_FOUND' };
 
-  const transactionId = `bedrocknews-puzzle:${userId}:${puzzleDate}:${tier}`;
+  const transactionId = puzzleTransactionId(userId, puzzleDate, tier);
   const replayed = await CreditTransaction.findOne({ transactionId }).select('credits').lean<{ credits: number }>();
   if (replayed) {
     return {
@@ -148,14 +162,8 @@ export async function grantPuzzleReward({
     return { ok: true, granted: true, credits: 0, balance: user.currentCredits ?? 0, firstSolveCredits: 0 };
   }
 
-  // A row for puzzleDate cannot predate that UTC day; the bound keeps the scan off older ledger rows.
-  const paidOnDate = await sumCredits({
-    ownerId: userId,
-    reason: BEDROCKNEWS_PUZZLE_REASON,
-    'metadata.puzzleDate': puzzleDate,
-    createdAt: { $gte: new Date(`${puzzleDate}T00:00:00.000Z`) },
-  });
-  if (paidOnDate + amount > setting('BedrockNewsPuzzleDailyCap')) {
+  const paidOnDate = await paidOnPuzzleDate(userId, puzzleDate);
+  if (exceedsDailyCap(paidOnDate, amount, setting('BedrockNewsPuzzleDailyCap'))) {
     return { ok: false, status: 403, code: 'DAILY_CAP' };
   }
 
@@ -215,4 +223,35 @@ export async function grantPuzzleReward({
   }
 
   return { ok: true, granted: true, credits: amount, balance: await currentBalance(userId), firstSolveCredits };
+}
+
+/**
+ * What grantPuzzleReward would add now for these rungs, granted one by one in this order: a rung already
+ * in the ledger replays for nothing, and a rung that would push its puzzle day past the cap is refused whole.
+ */
+export async function payableRungCredits(
+  userId: string,
+  rungs: { puzzleDate: string; tier: PuzzleTier; hard: boolean }[]
+): Promise<number> {
+  const setting = await loadRewardSettings();
+  const multiplier = setting('BedrockNewsPuzzleHardMultiplier');
+  const cap = setting('BedrockNewsPuzzleDailyCap');
+  const paidByDate = new Map<string, number>();
+  let payable = 0;
+  for (const { puzzleDate, tier, hard } of rungs) {
+    const amount = rungAmount(setting(TIER_CREDITS_SETTING[tier]), multiplier, hard);
+    if (amount <= 0) continue;
+    const paid = await CreditTransaction.findOne({ transactionId: puzzleTransactionId(userId, puzzleDate, tier) })
+      .select('_id')
+      .lean();
+    if (paid) continue;
+    const paidOnDate = paidByDate.get(puzzleDate) ?? (await paidOnPuzzleDate(userId, puzzleDate));
+    if (exceedsDailyCap(paidOnDate, amount, cap)) {
+      paidByDate.set(puzzleDate, paidOnDate);
+      continue;
+    }
+    paidByDate.set(puzzleDate, paidOnDate + amount);
+    payable += amount;
+  }
+  return payable;
 }

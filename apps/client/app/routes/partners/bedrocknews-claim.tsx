@@ -1,12 +1,33 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useSearch, Link } from '@tanstack/react-router';
-import { Box, Button, CircularProgress, List, ListItem, Sheet, Typography } from '@mui/joy';
+import {
+  Alert,
+  Avatar,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Link as JoyLink,
+  List,
+  ListDivider,
+  ListItem,
+  Sheet,
+  Typography,
+} from '@mui/joy';
+import type { ColorPaletteProp } from '@mui/joy';
+import AccessTimeRounded from '@mui/icons-material/AccessTimeRounded';
+import ArrowBackRounded from '@mui/icons-material/ArrowBackRounded';
+import CheckRounded from '@mui/icons-material/CheckRounded';
+import HighlightOffRounded from '@mui/icons-material/HighlightOffRounded';
+import MailOutlineRounded from '@mui/icons-material/MailOutlineRounded';
+import WarningAmberRounded from '@mui/icons-material/WarningAmberRounded';
 import { api } from '@client/app/contexts/ApiContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useUserLogout } from '@client/app/hooks/data/user';
 import useGetLogo from '@client/app/hooks/useGetLogo';
+import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 
 interface Rung {
   date: string;
@@ -22,22 +43,13 @@ interface ClaimResult {
 }
 
 type ClaimState =
-  | { state: 'ready'; credits: number; rungs: Rung[]; account: string }
+  | { state: 'ready'; credits: number; payable?: number; rungs: Rung[]; account: string }
   | { state: 'done' | 'redeemed'; result: ClaimResult }
   | { state: 'verify-email' | 'expired' | 'not-found' | 'in-progress' | 'budget-spent' | 'unavailable' };
 
-type View = { kind: 'loading' } | { kind: 'claim'; claim: ClaimState; afterConfirm?: boolean };
+type MessageState = Exclude<ClaimState['state'], 'ready' | 'done' | 'redeemed'> | 'already' | 'capped';
 
-const RETRYABLE = new Set<ClaimState['state']>(['in-progress', 'unavailable', 'budget-spent']);
-
-const ERROR_COPY: Record<string, string> = {
-  expired: 'This claim link expired. Go back to Headword and press Claim again.',
-  'not-found': 'This claim link isn\u2019t valid.',
-  'in-progress': 'This claim is already being processed. Try again in a minute.',
-  'budget-spent': 'Bike4Mind has paid out all of today\u2019s Headword credits. Yours are safe; try again later.',
-  unavailable: 'Couldn\u2019t reach BedrockNews. Your credits are safe; try again.',
-  'verify-email': 'Verify your email to claim credits.',
-};
+type View = { kind: 'loading' } | { kind: 'claim'; claim: ClaimState };
 
 const PREVIEW_URL = '/api/partners/bedrocknews/claims/preview';
 const REDEEM_URL = '/api/partners/bedrocknews/claims/redeem';
@@ -66,77 +78,362 @@ const headwordUrl = (appUrl: unknown, ticket: string | undefined) => {
   return `${appUrl.replace(/\/$/, '')}/games/headword${ticket ? `?claim=${encodeURIComponent(ticket)}` : ''}`;
 };
 
-const rungLabel = ({ length, hard }: Rung) => `${length}-letter word${hard ? ' (hard)' : ''}`;
+const CAPPED_NOTE =
+  'Bike4Mind\u2019s daily limit is reached for that day, so those credits can\u2019t be paid. They stay waiting in Headword.';
 
-const ClaimShell = ({ logoUrl, backHref, children }: { logoUrl: string; backHref?: string; children: ReactNode }) => (
+const MESSAGES: Record<
+  MessageState,
+  { tone: ColorPaletteProp; icon: ReactNode; title: string; body: string; action?: 'retry' | 'verify' }
+> = {
+  'verify-email': {
+    tone: 'primary',
+    icon: <MailOutlineRounded />,
+    title: 'Verify your email',
+    body: 'Verify your email to claim credits.',
+    action: 'verify',
+  },
+  expired: {
+    tone: 'warning',
+    icon: <AccessTimeRounded />,
+    title: 'This link expired',
+    body: 'This claim link expired. Go back to Headword and press Claim again.',
+  },
+  'not-found': {
+    tone: 'danger',
+    icon: <HighlightOffRounded />,
+    title: 'This link isn\u2019t valid',
+    body: 'This claim link isn\u2019t valid. Go back to Headword and press Claim again.',
+  },
+  'in-progress': {
+    tone: 'neutral',
+    icon: <AccessTimeRounded />,
+    title: 'Already in progress',
+    body: 'This claim is already being processed. Try again in a minute.',
+    action: 'retry',
+  },
+  'budget-spent': {
+    tone: 'warning',
+    icon: <WarningAmberRounded />,
+    title: 'Today\u2019s credits are paid out',
+    body: 'Bike4Mind has paid out all of today\u2019s Headword credits. Yours are safe; try again later.',
+    action: 'retry',
+  },
+  unavailable: {
+    tone: 'neutral',
+    icon: <WarningAmberRounded />,
+    title: 'We couldn\u2019t finish this',
+    body: 'Something went wrong on our side. Your credits are safe; try again.',
+    action: 'retry',
+  },
+  already: {
+    tone: 'neutral',
+    icon: <CheckRounded />,
+    title: 'Already claimed',
+    body: 'These credits were already claimed.',
+  },
+  capped: { tone: 'warning', icon: <WarningAmberRounded />, title: 'Daily limit reached', body: CAPPED_NOTE },
+};
+
+const STATUS_MESSAGES = new Set<MessageState>(['already', 'capped']);
+
+const ACTION_SX = { minHeight: 44, fontSize: '15px' } as const;
+const LABEL_SX = { fontSize: '13px', fontWeight: 600 } as const;
+const TILE_SX = { display: 'flex', flexDirection: 'column-reverse', p: '12px 14px', borderRadius: 'md' } as const;
+
+const ClaimShell = ({ logoUrl, busy, children }: { logoUrl: string; busy?: boolean; children: ReactNode }) => (
   <Box
-    sx={theme => ({
+    sx={{
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      justifyContent: 'center',
+      gap: 3,
       minHeight: '100vh',
-      px: 2,
-      py: 4,
-      backgroundColor: theme.palette.background.panel,
-    })}
+      boxSizing: 'border-box',
+      p: { xs: '28px 12px', sm: '48px 16px' },
+      bgcolor: 'background.body',
+    }}
   >
-    <Box component="img" src={logoUrl} alt="" sx={{ width: 56, height: 56, objectFit: 'contain', mb: 2 }} />
+    <Box component="img" src={logoUrl} alt="Bike4Mind" sx={{ height: 34, width: 'auto', objectFit: 'contain' }} />
     <Sheet
+      component="main"
       variant="outlined"
       data-testid="claim-card"
+      aria-busy={busy || undefined}
       sx={{
         width: '100%',
-        maxWidth: 420,
+        maxWidth: 440,
         boxSizing: 'border-box',
         overflowWrap: 'anywhere',
-        borderRadius: 'md',
-        p: 3,
+        borderRadius: 'lg',
+        boxShadow: 'sm',
+        p: { xs: '20px', sm: '28px' },
         display: 'flex',
         flexDirection: 'column',
-        gap: 2,
+        gap: '18px',
       }}
     >
       {children}
-      {backHref && (
-        <Typography level="body-sm">
-          <a href={backHref} style={{ color: 'inherit', textDecoration: 'underline' }}>
-            Back to Headword
-          </a>
-        </Typography>
-      )}
     </Sheet>
+    <Typography textColor="text.tertiary" sx={{ maxWidth: 440, textAlign: 'center', fontSize: '12px' }}>
+      Credits are paid only after you confirm. This link works for 30 minutes.
+    </Typography>
   </Box>
 );
 
-const ClaimOutcome = ({ result }: { result: ClaimResult }) => {
-  const { total, balance, firstSolveCredits, capped } = result;
+const BackLink = ({ href }: { href?: string }) =>
+  href ? (
+    <JoyLink
+      href={href}
+      startDecorator={<ArrowBackRounded />}
+      sx={{ alignSelf: 'center', minHeight: 44, fontSize: '14px', fontWeight: 600 }}
+    >
+      Back to Headword
+    </JoyLink>
+  ) : null;
+
+const BackButton = ({ href }: { href?: string }) =>
+  href ? (
+    <Button component="a" href={href} startDecorator={<ArrowBackRounded />} sx={ACTION_SX}>
+      Back to Headword
+    </Button>
+  ) : null;
+
+const ToneCircle = ({ tone, children }: { tone: ColorPaletteProp; children: ReactNode }) => (
+  <Sheet
+    variant="soft"
+    color={tone}
+    aria-hidden
+    sx={{
+      width: 52,
+      height: 52,
+      flex: 'none',
+      borderRadius: '50%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      '& svg': { fontSize: 24 },
+    }}
+  >
+    {children}
+  </Sheet>
+);
+
+const LimitNote = ({ children }: { children: ReactNode }) => (
+  <Alert role="note" variant="soft" color="warning" startDecorator={<WarningAmberRounded />} sx={{ fontSize: '14px' }}>
+    <span>{children}</span>
+  </Alert>
+);
+
+const MessageView = ({ state, action, backHref }: { state: MessageState; action?: ReactNode; backHref?: string }) => {
+  const { tone, icon, title, body } = MESSAGES[state];
   return (
     <>
-      {total > 0 && (
-        <Typography level="h4" component="h1">
+      <Box
+        role={STATUS_MESSAGES.has(state) ? 'status' : 'alert'}
+        sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, textAlign: 'center', pt: 1.5 }}
+      >
+        <ToneCircle tone={tone}>{icon}</ToneCircle>
+        <Typography component="h1" sx={{ mt: 0.5, fontSize: '20px', fontWeight: 700 }}>
+          {title}
+        </Typography>
+        <Typography textColor="text.secondary" sx={{ fontSize: '15px', maxWidth: 340 }}>
+          {body}
+        </Typography>
+      </Box>
+      {action ?? <BackButton href={backHref} />}
+      {action && <BackLink href={backHref} />}
+    </>
+  );
+};
+
+const DoneView = ({ result, account, backHref }: { result: ClaimResult; account?: string; backHref?: string }) => {
+  const { total, balance, firstSolveCredits, capped } = result;
+  if (total <= 0) return <MessageView state={capped > 0 ? 'capped' : 'already'} backHref={backHref} />;
+  return (
+    <>
+      <Box
+        role="status"
+        sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, textAlign: 'center', pt: 1 }}
+      >
+        <ToneCircle tone="success">
+          <CheckRounded />
+        </ToneCircle>
+        <Typography component="h1" sx={{ mt: 0.5, fontSize: '22px', fontWeight: 700 }}>
           {total} credits added
         </Typography>
+        {account && (
+          <Typography textColor="text.secondary" sx={{ fontSize: '14px' }}>
+            to {account}
+          </Typography>
+        )}
+      </Box>
+      {(balance != null || firstSolveCredits > 0) && (
+        <Box
+          component="dl"
+          sx={{ m: 0, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(0, 1fr))', gap: 1 }}
+        >
+          {balance != null && (
+            <Sheet variant="outlined" sx={TILE_SX}>
+              <Typography component="dt" textColor="text.tertiary" sx={{ fontSize: '13px' }}>
+                New balance
+              </Typography>
+              <Typography component="dd" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
+                {balance}
+              </Typography>
+            </Sheet>
+          )}
+          {firstSolveCredits > 0 && (
+            <Sheet variant="soft" color="success" sx={TILE_SX}>
+              <Typography component="dt" textColor="inherit" sx={{ fontSize: '13px' }}>
+                First-solve bonus
+              </Typography>
+              <Typography component="dd" textColor="inherit" sx={{ m: 0, fontSize: '22px', fontWeight: 700 }}>
+                +{firstSolveCredits}
+              </Typography>
+            </Sheet>
+          )}
+        </Box>
       )}
-      {total === 0 && capped <= 0 && (
-        <Typography level="h4" component="h1">
-          These credits were already claimed
+      {capped > 0 && <LimitNote>{CAPPED_NOTE}</LimitNote>}
+      <BackButton href={backHref} />
+    </>
+  );
+};
+
+interface ReadyViewProps {
+  claim: Extract<ClaimState, { state: 'ready' }>;
+  confirming: boolean;
+  switchingAccount: boolean;
+  onConfirm: () => void;
+  onUseAnotherAccount: () => void;
+  backHref?: string;
+}
+
+const ReadyView = ({
+  claim,
+  confirming,
+  switchingAccount,
+  onConfirm,
+  onUseAnotherAccount,
+  backHref,
+}: ReadyViewProps) => {
+  const { credits, payable, rungs, account } = claim;
+  return (
+    <>
+      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 0.75 }}>
+        <Chip
+          variant="soft"
+          color="neutral"
+          startDecorator={
+            <Box aria-hidden sx={{ width: 16, height: 16, borderRadius: '4px', bgcolor: 'success.solidBg' }} />
+          }
+          sx={{ fontSize: '12px', fontWeight: 600 }}
+        >
+          From BedrockNews Headword
+        </Chip>
+        <Typography component="h1" sx={{ fontSize: '22px', fontWeight: 700, lineHeight: 1.25 }}>
+          Claim your Headword credits
         </Typography>
-      )}
-      {total > 0 && balance != null && <Typography level="body-md">Balance {balance}</Typography>}
-      {total > 0 && firstSolveCredits > 0 && (
-        <Typography level="body-md">+{firstSolveCredits} first-solve bonus</Typography>
-      )}
-      {capped > 0 && (
-        <Typography level="body-md">
-          Bike4Mind&rsquo;s daily limit is reached for that day, so those credits can&rsquo;t be paid.
+      </Box>
+
+      <Sheet
+        variant="soft"
+        color="primary"
+        data-testid="claim-amount"
+        sx={{ p: 2, borderRadius: 'lg', display: 'flex', flexDirection: 'column', gap: 0.25 }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+          <Typography textColor="inherit" sx={{ fontSize: '36px', fontWeight: 800, lineHeight: 1.1 }}>
+            {credits}
+          </Typography>
+          <Typography textColor="inherit" sx={{ fontSize: '16px', fontWeight: 600 }}>
+            credits
+          </Typography>
+        </Box>
+        <Typography textColor="inherit" sx={{ fontSize: '14px' }}>
+          from BedrockNews Headword
         </Typography>
+      </Sheet>
+
+      {payable != null && payable < credits && (
+        <LimitNote>
+          Your daily limit allows <strong>up to {payable}</strong> today. The rest stays waiting in Headword.
+        </LimitNote>
       )}
+
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Typography textColor="text.tertiary" sx={LABEL_SX}>
+          Goes to this Bike4Mind account
+        </Typography>
+        <Sheet variant="outlined" sx={{ display: 'flex', alignItems: 'center', gap: 1.5, p: 1.5, borderRadius: 'md' }}>
+          <Avatar variant="soft" color="primary" aria-hidden sx={{ width: 36, height: 36, fontWeight: 700 }}>
+            {account.charAt(0).toUpperCase()}
+          </Avatar>
+          <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            <Typography noWrap data-testid="claim-account" sx={{ fontSize: '15px', fontWeight: 600 }}>
+              {account}
+            </Typography>
+            <Typography textColor="text.tertiary" sx={{ fontSize: '13px' }}>
+              Signed in to Bike4Mind
+            </Typography>
+          </Box>
+        </Sheet>
+      </Box>
+
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        <Typography textColor="text.tertiary" sx={LABEL_SX}>
+          Solved words ({rungs.length})
+        </Typography>
+        <List sx={{ '--ListItem-paddingX': '0px', '--ListItem-minHeight': '38px', '--ListDivider-gap': '0px', py: 0 }}>
+          {rungs.map((rung, index) => (
+            <Fragment key={`${rung.date}-${rung.length}`}>
+              {index > 0 && <ListDivider />}
+              <ListItem data-testid="claim-rung" sx={{ justifyContent: 'space-between', gap: 1.25 }}>
+                <Typography sx={{ fontSize: '14px' }}>
+                  <Typography component="span" textColor="text.secondary" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {rung.date}
+                  </Typography>
+                  {` \u00b7 ${rung.length}-letter word`}
+                </Typography>
+                {rung.hard && (
+                  <Chip size="sm" variant="soft" color="warning" sx={{ fontSize: '12px', fontWeight: 600 }}>
+                    Hard mode
+                  </Chip>
+                )}
+              </ListItem>
+            </Fragment>
+          ))}
+        </List>
+      </Box>
+
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Button
+          data-testid="claim-confirm-btn"
+          loading={confirming}
+          loadingPosition="start"
+          disabled={confirming}
+          onClick={onConfirm}
+          sx={ACTION_SX}
+        >
+          {confirming ? 'Adding credits\u2026' : `Add ${credits} credits`}
+        </Button>
+        <Button
+          variant="outlined"
+          color="neutral"
+          disabled={confirming || switchingAccount}
+          onClick={onUseAnotherAccount}
+          sx={ACTION_SX}
+        >
+          Use another account
+        </Button>
+      </Box>
+      <BackLink href={backHref} />
     </>
   );
 };
 
 const BedrockNewsClaimPage = () => {
+  useDocumentTitle('Claim Headword credits \u00b7 Bike4Mind');
   const navigate = useNavigate();
   const { ticket } = useSearch({ strict: false }) as { ticket?: string };
   const { accessToken } = useAccessToken();
@@ -147,13 +444,17 @@ const BedrockNewsClaimPage = () => {
   const [view, setView] = useState<View>(
     ticket ? { kind: 'loading' } : { kind: 'claim', claim: { state: 'not-found' } }
   );
+  const [account, setAccount] = useState<string>();
   const [confirming, setConfirming] = useState(false);
   const confirmingRef = useRef(false);
   const didPreview = useRef(false);
 
   const loadPreview = (claimTicket: string) => {
     setView({ kind: 'loading' });
-    postClaim(PREVIEW_URL, claimTicket).then(claim => setView({ kind: 'claim', claim }));
+    postClaim(PREVIEW_URL, claimTicket).then(claim => {
+      if (claim.state === 'ready') setAccount(claim.account);
+      setView({ kind: 'claim', claim });
+    });
   };
 
   useEffect(() => {
@@ -175,7 +476,7 @@ const BedrockNewsClaimPage = () => {
     confirmingRef.current = true;
     setConfirming(true);
     const claim = await postClaim(REDEEM_URL, ticket);
-    setView({ kind: 'claim', claim, afterConfirm: true });
+    setView({ kind: 'claim', claim });
     confirmingRef.current = false;
     setConfirming(false);
   };
@@ -194,102 +495,76 @@ const BedrockNewsClaimPage = () => {
 
   const backHref = headwordUrl(appUrl, ticket);
 
-  const shell = (children: ReactNode) => (
-    <ClaimShell logoUrl={logoUrl} backHref={backHref}>
-      {children}
-    </ClaimShell>
-  );
-
   if (view.kind === 'loading') {
     return (
-      <Box
-        data-testid="claim-loading"
-        sx={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          minHeight: '100vh',
-          gap: 2,
-        }}
-      >
-        <CircularProgress size="lg" />
-        <Typography level="body-sm" color="neutral">
-          Checking your claim...
-        </Typography>
-      </Box>
+      <ClaimShell logoUrl={logoUrl} busy>
+        <Box
+          role="status"
+          data-testid="claim-loading"
+          sx={{
+            minHeight: 300,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 1.75,
+          }}
+        >
+          <CircularProgress color="primary" sx={{ '--CircularProgress-size': '32px' }} />
+          <Typography textColor="text.secondary" sx={{ fontSize: '14px', fontWeight: 500 }}>
+            Loading your Headword credits&hellip;
+          </Typography>
+        </Box>
+      </ClaimShell>
     );
   }
 
   const { claim } = view;
 
   if (claim.state === 'ready') {
-    return shell(
-      <>
-        <Box>
-          <Typography level="h4" component="h1">
-            Claim your Headword credits
-          </Typography>
-          <Typography level="title-md" sx={{ mt: 1 }}>
-            {claim.credits} credits from BedrockNews Headword
-          </Typography>
-          <Typography level="body-sm" textColor="text.primary" sx={{ mt: 0.5 }}>
-            to {claim.account}
-          </Typography>
-        </Box>
-        <List sx={{ '--ListItem-paddingX': '0px' }}>
-          {claim.rungs.map(rung => (
-            <ListItem key={`${rung.date}-${rung.length}`} data-testid="claim-rung">
-              <Typography level="body-sm" textColor="text.primary">
-                {rung.date} · {rungLabel(rung)}
-              </Typography>
-            </ListItem>
-          ))}
-        </List>
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 1 }}>
-          <Button variant="plain" color="neutral" disabled={confirming || logout.isPending} onClick={useAnotherAccount}>
-            Use another account
-          </Button>
-          <Button
-            data-testid="claim-confirm-btn"
-            loading={confirming}
-            disabled={confirming}
-            onClick={confirm}
-            loadingIndicator={<CircularProgress size="sm" />}
-          >
-            Add {claim.credits} credits
-          </Button>
-        </Box>
-      </>
+    return (
+      <ClaimShell logoUrl={logoUrl} busy={confirming}>
+        <ReadyView
+          claim={claim}
+          confirming={confirming}
+          switchingAccount={logout.isPending}
+          onConfirm={confirm}
+          onUseAnotherAccount={useAnotherAccount}
+          backHref={backHref}
+        />
+      </ClaimShell>
     );
   }
 
   if (claim.state === 'done' || claim.state === 'redeemed') {
-    return shell(<ClaimOutcome result={claim.result} />);
+    return (
+      <ClaimShell logoUrl={logoUrl}>
+        <DoneView result={claim.result} account={account} backHref={backHref} />
+      </ClaimShell>
+    );
   }
 
-  return shell(
-    <>
-      <Typography
-        level="body-md"
-        textColor="text.primary"
-        color={claim.state === 'verify-email' ? undefined : 'danger'}
-      >
-        {ERROR_COPY[claim.state] ?? ERROR_COPY.unavailable}
-      </Typography>
-      {claim.state === 'verify-email' && (
-        <Typography level="body-sm">
-          <Link to="/new" data-testid="claim-verify-link" style={{ color: 'inherit', textDecoration: 'underline' }}>
-            Verify your email
-          </Link>
-        </Typography>
-      )}
-      {ticket && (claim.state === 'in-progress' || (view.afterConfirm && RETRYABLE.has(claim.state))) && (
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <Button onClick={() => loadPreview(ticket)}>Try again</Button>
-        </Box>
-      )}
-    </>
+  const state: MessageState = claim.state in MESSAGES ? claim.state : 'unavailable';
+  const { action } = MESSAGES[state];
+  let actionButton: ReactNode;
+  if (action === 'verify') {
+    actionButton = (
+      <Button component={Link} to="/new" data-testid="claim-verify-link" sx={ACTION_SX}>
+        Verify your email
+      </Button>
+    );
+  } else if (action === 'retry' && ticket) {
+    actionButton = (
+      <Button onClick={() => loadPreview(ticket)} sx={ACTION_SX}>
+        Try again
+      </Button>
+    );
+  }
+
+  return (
+    <ClaimShell logoUrl={logoUrl}>
+      <MessageView state={state} action={actionButton} backHref={backHref} />
+    </ClaimShell>
   );
 };
 

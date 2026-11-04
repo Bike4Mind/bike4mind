@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { rungCredits } from '@server/partners/bedrocknewsPuzzleReward';
+import { payableRungCredits, rungCredits } from '@server/partners/bedrocknewsPuzzleReward';
 import { answerClaim, withOwnBalance } from '@server/partners/bedrocknewsClaimRoute';
 import {
   failureState,
@@ -33,7 +33,13 @@ export default baseApi({ auth: 'jwtOnly' })
       // Everything was paid through another ticket; show it as claimed rather than "Add 0 credits".
       if (rungs.length === 0) return { state: 'redeemed', result: NOTHING_PAID };
 
-      const credits = await rungCredits(rungs.map(({ length, hard }) => ({ tier: length, hard })));
-      return { state: 'ready', credits, rungs, account: user.email };
+      const [credits, payable] = await Promise.all([
+        rungCredits(rungs.map(({ length, hard }) => ({ tier: length, hard }))),
+        payableRungCredits(
+          user.id,
+          rungs.map(({ date, length, hard }) => ({ puzzleDate: date, tier: length, hard }))
+        ),
+      ]);
+      return { state: 'ready', credits, payable, rungs, account: user.email };
     })
   );

@@ -6,7 +6,7 @@ type CommonState = { state: 'verify-email' | 'expired' | 'not-found' | 'in-progr
 
 export type PreviewState =
   | CommonState
-  | { state: 'ready'; credits: number; rungs: TicketPreview['rungs']; account: string }
+  | { state: 'ready'; credits: number; payable?: number; rungs: TicketPreview['rungs']; account: string }
   | { state: 'redeemed'; result: ClaimResult };
 
 export type RedeemState = CommonState | { state: 'budget-spent' } | { state: 'done'; result: ClaimResult };

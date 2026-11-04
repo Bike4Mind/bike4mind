@@ -1,7 +1,7 @@
 import React from 'react';
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
@@ -58,6 +58,9 @@ const READY = {
 };
 
 const DONE = { total: 150, balance: 900, firstSolveCredits: 50, capped: 0, claimed: [] };
+const UNAVAILABLE_COPY = 'Something went wrong on our side. Your credits are safe; try again.';
+const CAPPED_COPY =
+  'Bike4Mind\u2019s daily limit is reached for that day, so those credits can\u2019t be paid. They stay waiting in Headword.';
 
 describe('BedrockNewsClaimPage', () => {
   beforeEach(() => {
@@ -71,6 +74,8 @@ describe('BedrockNewsClaimPage', () => {
     mockPost.mockReturnValue(new Promise(() => {}));
     renderPage();
     expect(screen.getByTestId('claim-loading')).toBeInTheDocument();
+    expect(screen.getByText('Loading your Headword credits\u2026')).toBeInTheDocument();
+    expect(screen.getByTestId('claim-card')).toHaveAttribute('aria-busy', 'true');
     expect(mockPost).toHaveBeenCalledWith('/api/partners/bedrocknews/claims/preview', { ticket: TICKET });
   });
 
@@ -78,14 +83,45 @@ describe('BedrockNewsClaimPage', () => {
     mockPost.mockResolvedValue({ data: READY });
     renderPage();
     expect(await screen.findByText('Claim your Headword credits')).toBeInTheDocument();
-    expect(screen.getByText('150 credits from BedrockNews Headword')).toBeInTheDocument();
-    expect(screen.getByText('to victor@example.com')).toBeInTheDocument();
-    expect(screen.getAllByTestId('claim-rung')).toHaveLength(2);
+    expect(within(screen.getByTestId('claim-amount')).getByText('150')).toBeInTheDocument();
+    expect(screen.getByTestId('claim-account')).toHaveTextContent('victor@example.com');
+    expect(screen.getByText('Solved words (2)')).toBeInTheDocument();
+    const rungs = screen.getAllByTestId('claim-rung');
+    expect(rungs).toHaveLength(2);
+    expect(rungs[0]).toHaveTextContent('2026-11-01 \u00b7 5-letter word');
+    expect(within(rungs[0]).queryByText('Hard mode')).not.toBeInTheDocument();
+    expect(within(rungs[1]).getByText('Hard mode')).toBeInTheDocument();
+    expect(screen.getByTestId('claim-card')).not.toHaveAttribute('aria-busy');
+    expect(screen.queryByText(/daily limit allows/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add 150 credits' })).toBeEnabled();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',
       `https://news.example/games/headword?claim=${TICKET}`
     );
+  });
+
+  it('sets the browser tab title', () => {
+    mockPost.mockReturnValue(new Promise(() => {}));
+    renderPage();
+    expect(document.title).toBe('Claim Headword credits \u00b7 Bike4Mind');
+  });
+
+  it.each([
+    ['equals', 150],
+    ['is missing', undefined],
+  ])('hides the limit note when payable %s the amount', async (_label, payable) => {
+    mockPost.mockResolvedValue({ data: { ...READY, payable } });
+    renderPage();
+    await screen.findByText('Claim your Headword credits');
+    expect(screen.queryByText(/daily limit allows/)).not.toBeInTheDocument();
+  });
+
+  it('warns before confirming when the daily limit pays less than the amount', async () => {
+    mockPost.mockResolvedValue({ data: { ...READY, payable: 60 } });
+    renderPage();
+    const note = await screen.findByRole('note');
+    expect(note).toHaveTextContent('Your daily limit allows up to 60 today. The rest stays waiting in Headword.');
+    expect(screen.getByRole('button', { name: 'Add 150 credits' })).toBeEnabled();
   });
 
   it('disables the confirm button with a spinner while redeeming, then shows the result', async () => {
@@ -99,14 +135,36 @@ describe('BedrockNewsClaimPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Add 150 credits' }));
     const busy = await screen.findByTestId('claim-confirm-btn');
     await waitFor(() => expect(busy).toBeDisabled());
+    expect(busy).toHaveTextContent('Adding credits\u2026');
     expect(busy.querySelector('[role="progressbar"]')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use another account' })).toBeDisabled();
+    expect(screen.getByTestId('claim-card')).toHaveAttribute('aria-busy', 'true');
     expect(mockPost).toHaveBeenLastCalledWith('/api/partners/bedrocknews/claims/redeem', { ticket: TICKET });
 
     resolveRedeem({ data: { state: 'done', result: DONE } });
-    expect(await screen.findByText('150 credits added')).toBeInTheDocument();
-    expect(screen.getByText('Balance 900')).toBeInTheDocument();
-    expect(screen.getByText('+50 first-solve bonus')).toBeInTheDocument();
+    const status = (await screen.findByText('150 credits added')).closest('[role="status"]') as HTMLElement;
+    expect(within(status).getByText('to victor@example.com')).toBeInTheDocument();
+    expect(screen.getByText('New balance')).toBeInTheDocument();
+    expect(screen.getByText('900')).toBeInTheDocument();
+    expect(screen.getByText('First-solve bonus')).toBeInTheDocument();
+    expect(screen.getByText('+50')).toBeInTheDocument();
     expect(screen.queryByText(/daily limit/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
+      'href',
+      `https://news.example/games/headword?claim=${TICKET}`
+    );
+    expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the amount actually paid, not the previewed one', async () => {
+    mockPost
+      .mockResolvedValueOnce({ data: { ...READY, payable: 60 } })
+      .mockResolvedValueOnce({ data: { state: 'done', result: { ...DONE, total: 60, capped: 1 } } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add 150 credits' }));
+    expect(await screen.findByText('60 credits added')).toBeInTheDocument();
+    expect(screen.getByText(CAPPED_COPY)).toBeInTheDocument();
+    expect(screen.queryByText(/150/)).not.toBeInTheDocument();
   });
 
   it('shows the done result straight from a redeemed preview', async () => {
@@ -115,31 +173,32 @@ describe('BedrockNewsClaimPage', () => {
     });
     renderPage();
     expect(await screen.findByText('150 credits added')).toBeInTheDocument();
-    expect(screen.queryByText(/Balance/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/first-solve/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/balance/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/first-solve/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^to /)).not.toBeInTheDocument();
   });
 
   it('shows the capped line next to credits that were added', async () => {
     mockPost.mockResolvedValue({ data: { state: 'redeemed', result: { ...DONE, total: 100, capped: 50 } } });
     renderPage();
     expect(await screen.findByText('100 credits added')).toBeInTheDocument();
-    expect(
-      screen.getByText('Bike4Mind\u2019s daily limit is reached for that day, so those credits can\u2019t be paid.')
-    ).toBeInTheDocument();
+    expect(screen.getByText(CAPPED_COPY)).toBeInTheDocument();
   });
 
   it('says already claimed when nothing was paid and nothing capped', async () => {
     mockPost.mockResolvedValue({ data: { state: 'redeemed', result: { ...DONE, total: 0 } } });
     renderPage();
-    expect(await screen.findByText('These credits were already claimed')).toBeInTheDocument();
+    const status = (await screen.findByText('Already claimed')).closest('[role="status"]') as HTMLElement;
+    expect(within(status).getByText('These credits were already claimed.')).toBeInTheDocument();
     expect(screen.queryByText(/credits added/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Headword' })).toBeInTheDocument();
   });
 
   it('shows only the capped line when everything was capped', async () => {
     mockPost.mockResolvedValue({ data: { state: 'redeemed', result: { ...DONE, total: 0, capped: 50 } } });
     renderPage();
     expect(await screen.findByText(/daily limit is reached/)).toBeInTheDocument();
-    expect(screen.queryByText('These credits were already claimed')).not.toBeInTheDocument();
+    expect(screen.queryByText('These credits were already claimed.')).not.toBeInTheDocument();
     expect(screen.queryByText(/credits added/)).not.toBeInTheDocument();
   });
 
@@ -169,7 +228,7 @@ describe('BedrockNewsClaimPage', () => {
     window.history.replaceState(null, '', `/partners/bedrocknews/claim?ticket=${TICKET}`);
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Use another account' }));
-    expect(await screen.findByText(/Couldn\u2019t reach BedrockNews/)).toBeInTheDocument();
+    expect(await screen.findByText(UNAVAILABLE_COPY)).toBeInTheDocument();
     expect(window.location.pathname + window.location.search).toBe(`/partners/bedrocknews/claim?ticket=${TICKET}`);
   });
 
@@ -186,19 +245,29 @@ describe('BedrockNewsClaimPage', () => {
     expect(mockPost).not.toHaveBeenCalled();
   });
 
-  const ERROR_CASES: [string, string][] = [
-    ['expired', 'This claim link expired. Go back to Headword and press Claim again.'],
-    ['not-found', 'This claim link isn\u2019t valid.'],
-    ['in-progress', 'This claim is already being processed. Try again in a minute.'],
-    ['budget-spent', 'Bike4Mind has paid out all of today\u2019s Headword credits. Yours are safe; try again later.'],
-    ['unavailable', 'Couldn\u2019t reach BedrockNews. Your credits are safe; try again.'],
-    ['verify-email', 'Verify your email to claim credits.'],
+  const ERROR_CASES: [string, string, string][] = [
+    ['expired', 'This link expired', 'This claim link expired. Go back to Headword and press Claim again.'],
+    [
+      'not-found',
+      'This link isn\u2019t valid',
+      'This claim link isn\u2019t valid. Go back to Headword and press Claim again.',
+    ],
+    ['in-progress', 'Already in progress', 'This claim is already being processed. Try again in a minute.'],
+    [
+      'budget-spent',
+      'Today\u2019s credits are paid out',
+      'Bike4Mind has paid out all of today\u2019s Headword credits. Yours are safe; try again later.',
+    ],
+    ['unavailable', 'We couldn\u2019t finish this', UNAVAILABLE_COPY],
+    ['verify-email', 'Verify your email', 'Verify your email to claim credits.'],
   ];
 
-  it.each(ERROR_CASES)('renders the %s state with a back link', async (state, copy) => {
+  it.each(ERROR_CASES)('renders the %s state as an alert with a back link', async (state, title, copy) => {
     mockPost.mockResolvedValue({ data: { state } });
     renderPage();
-    expect(await screen.findByText(copy)).toBeInTheDocument();
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).getByRole('heading', { name: title })).toBeInTheDocument();
+    expect(within(alert).getByText(copy)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',
       `https://news.example/games/headword?claim=${TICKET}`
@@ -208,7 +277,9 @@ describe('BedrockNewsClaimPage', () => {
   it('links to the email verification flow from the verify-email state', async () => {
     mockPost.mockResolvedValue({ data: { state: 'verify-email' } });
     renderPage();
-    expect(await screen.findByTestId('claim-verify-link')).toHaveAttribute('href', '/new');
+    const verify = await screen.findByTestId('claim-verify-link');
+    expect(verify).toHaveAttribute('href', '/new');
+    expect(verify).toHaveTextContent('Verify your email');
   });
 
   it('renders a redeem-time error state and keeps the back link', async () => {
@@ -234,15 +305,15 @@ describe('BedrockNewsClaimPage', () => {
     }
   );
 
-  it.each(['unavailable', 'budget-spent', 'expired'])('does not offer Try again for a %s preview', async state => {
+  it.each(['expired', 'not-found', 'verify-email'])('does not offer Try again for a %s preview', async state => {
     mockPost.mockResolvedValue({ data: { state } });
     renderPage();
     await screen.findByTestId('claim-card');
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
   });
 
-  it('offers Try again for an in-progress preview and re-runs it', async () => {
-    mockPost.mockResolvedValueOnce({ data: { state: 'in-progress' } }).mockResolvedValueOnce({ data: READY });
+  it.each(['in-progress', 'unavailable'])('offers Try again for a %s preview and re-runs it', async state => {
+    mockPost.mockResolvedValueOnce({ data: { state } }).mockResolvedValueOnce({ data: READY });
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: 'Add 150 credits' })).toBeInTheDocument();
@@ -277,7 +348,7 @@ describe('BedrockNewsClaimPage', () => {
   ])('shows the unavailable copy for %s', async (_label, data) => {
     mockPost.mockResolvedValue({ data });
     renderPage();
-    expect(await screen.findByText(/Couldn\u2019t reach BedrockNews/)).toBeInTheDocument();
+    expect(await screen.findByText(UNAVAILABLE_COPY)).toBeInTheDocument();
   });
 
   it.each([
@@ -294,19 +365,19 @@ describe('BedrockNewsClaimPage', () => {
   it('treats a 400 from the server as the state it carries', async () => {
     mockPost.mockRejectedValue({ isAxiosError: true, response: { status: 400, data: { state: 'not-found' } } });
     renderPage();
-    expect(await screen.findByText('This claim link isn\u2019t valid.')).toBeInTheDocument();
+    expect(await screen.findByText('This link isn\u2019t valid')).toBeInTheDocument();
   });
 
   it('treats a network failure as unavailable', async () => {
     mockPost.mockRejectedValue(new Error('boom'));
     renderPage();
-    expect(await screen.findByText(/Couldn\u2019t reach BedrockNews/)).toBeInTheDocument();
+    expect(await screen.findByText(UNAVAILABLE_COPY)).toBeInTheDocument();
   });
 
   it('shows the invalid-link state without calling the API when there is no ticket', async () => {
     searchParams = {};
     renderPage();
-    expect(await screen.findByText('This claim link isn\u2019t valid.')).toBeInTheDocument();
+    expect(await screen.findByText('This link isn\u2019t valid')).toBeInTheDocument();
     expect(mockPost).not.toHaveBeenCalled();
   });
 
@@ -316,7 +387,7 @@ describe('BedrockNewsClaimPage', () => {
     const card = await screen.findByTestId('claim-card');
     const style = getComputedStyle(card);
     expect(style.width).toBe('100%');
-    expect(style.maxWidth).toBe('420px');
+    expect(style.maxWidth).toBe('440px');
     expect(style.overflowWrap).toBe('anywhere');
   });
 });
