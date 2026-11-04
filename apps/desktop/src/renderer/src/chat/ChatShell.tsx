@@ -15,6 +15,7 @@ import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import type { ModelSettings } from '@shared/modelSettings';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BlankChat, BlankChatGreeting } from './BlankChat';
@@ -37,6 +38,7 @@ import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
+import { GenerationSettingsPicker } from './GenerationSettingsPicker';
 import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
 import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
@@ -441,6 +443,26 @@ export function ChatShell({
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = findModelOption(catalog.models, conversation.session?.model);
+  const [storedDefaults, setStoredDefaults] = useState<{ modelId: string; settings: ModelSettings | null } | null>(
+    null
+  );
+  const defaultsModelId = modelOption && isLocalModel(modelOption.id) ? modelOption.id : null;
+  const modelDefaults = storedDefaults && storedDefaults.modelId === defaultsModelId ? storedDefaults.settings : null;
+  const defaultEffort = modelDefaults?.effort ?? null;
+  // Re-read on returning from the Models screen, where the defaults are edited.
+  useEffect(() => {
+    if (!defaultsModelId || screen !== 'conversation') return;
+    let live = true;
+    void Promise.resolve()
+      .then(() => window.b4m.chat.getModelSettings(defaultsModelId))
+      .then(
+        settings => live && setStoredDefaults({ modelId: defaultsModelId, settings: settings ?? null }),
+        () => undefined
+      );
+    return () => {
+      live = false;
+    };
+  }, [defaultsModelId, screen]);
   const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
   // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
   const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
@@ -874,19 +896,27 @@ export function ChatShell({
     [create, remove, apply, markSessionStart]
   );
   /** The catalog's own entry for an installed model, so the conversation routes to the server it runs on. */
-  const chatWith = useCallback(
+  const modelWith = useCallback(
     (serverId: string, name: string) => {
       const wanted = name.toLowerCase();
-      const option = catalog.models.find(
-        model =>
-          isLocalBackend(model) &&
-          (!model.unavailable || model.pending) &&
-          (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
-          model.name.toLowerCase() === wanted
+      return (
+        catalog.models.find(
+          model =>
+            isLocalBackend(model) &&
+            (!model.unavailable || model.pending) &&
+            (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
+            model.name.toLowerCase() === wanted
+        ) ?? null
       );
+    },
+    [catalog.models]
+  );
+  const chatWith = useCallback(
+    (serverId: string, name: string) => {
+      const option = modelWith(serverId, name);
       return option ? () => void startChatOn(option.id) : null;
     },
-    [catalog.models, startChatOn]
+    [modelWith, startChatOn]
   );
 
   /**
@@ -1053,6 +1083,7 @@ export function ChatShell({
           inUse={modelsInUse}
           onOpenModelServers={onOpenModelServers}
           chatWith={chatWith}
+          modelWith={modelWith}
           catalog={catalog}
           chatError={chatOnError}
           onDismissChatError={() => setChatOnError(null)}
@@ -1568,8 +1599,19 @@ export function ChatShell({
                   models={catalog.models}
                   modelId={conversation.session?.model ?? null}
                   effort={conversation.session?.reasoningEffort ?? 'default'}
+                  defaultEffort={defaultEffort}
                   disabled={!activeId}
                   onSelect={effort => void conversation.setReasoningEffort(effort)}
+                />
+                {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
+                <GenerationSettingsPicker
+                  key={activeId ?? ''}
+                  model={modelOption}
+                  generation={conversation.session?.generation}
+                  modelDefaults={modelDefaults ?? undefined}
+                  effort={conversation.session?.reasoningEffort ?? 'default'}
+                  disabled={!activeId}
+                  onChange={conversation.setGeneration}
                 />
                 <PromptCacheTtlPicker
                   model={modelOption}

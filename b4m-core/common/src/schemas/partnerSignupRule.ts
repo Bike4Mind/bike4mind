@@ -76,6 +76,9 @@ const entitlementKeySchema = z
 // Shared field schemas so create and update validate identically (DRY) without
 // the update path inheriting create's defaults.
 const entitlementsSchema = z.array(entitlementKeySchema).max(20, 'Too many entitlements');
+/** When set, the package supplies the signup credits (and its caps) instead of signupCredits. */
+const grantPackageIdSchema = z.string().trim().min(1, 'Grant package id is required').nullable();
+
 const signupCreditsSchema = z.number().int('Credits must be a whole number').min(0, 'Credits cannot be negative');
 const userTagSchema = z
   .string()
@@ -125,6 +128,7 @@ export const createPartnerSignupRuleSchema = z.object({
   domain: domainSchema,
   entitlements: entitlementsSchema,
   signupCredits: signupCreditsSchema,
+  grantPackageId: grantPackageIdSchema.optional(),
   organizationId: organizationIdSchema.optional(),
   tags: tagsSchema.optional(),
   subscription: subscriptionSchema.nullable().optional(),
@@ -142,6 +146,8 @@ export const updatePartnerSignupRuleSchema = z
   .object({
     entitlements: entitlementsSchema.optional(),
     signupCredits: signupCreditsSchema.optional(),
+    // `null` unlinks the package so the rule's own signupCredits apply again.
+    grantPackageId: grantPackageIdSchema.optional(),
     organizationId: organizationIdSchema.optional(),
     tags: tagsSchema.optional(),
     // `null` clears the subscription; omitting the field leaves it untouched.

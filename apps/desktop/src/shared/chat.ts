@@ -11,6 +11,7 @@
 
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ChatImportOrigin } from './claudeImport';
+import type { CatalogSampling, GenerationSettings, ModelControls } from './generation';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -949,13 +950,18 @@ export interface ChatModelOption {
   /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
   supportsOneHourCache?: boolean;
   /**
-   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
-   * so the effort picker becomes that switch, stored as `default` (on) and
-   * THINKING_OFF_SETTING (off).
+   * A local model that can think. Its server takes no effort, only thinking on or off, so the
+   * effort picker becomes that switch, stored as `default` (on) and THINKING_OFF_SETTING (off);
+   * see thinkingSwitchedOff.
    */
   thinkingToggle?: boolean;
   /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
   thinkingAlwaysOn?: boolean;
+  /**
+   * A `thinkingToggle` model a stored `minimal` leaves thinking: a saved OpenAI-compatible server's,
+   * where that was an effort the server ignored before the switch existed.
+   */
+  minimalThinks?: true;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
   /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
@@ -976,10 +982,27 @@ export interface ChatModelOption {
   disabled?: boolean;
   /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
+  /** The generation settings this model takes, built in main; see shared/generation.ts. */
+  controls?: ModelControls;
+  /** A local model whose name matches a reviewed curated build, on any local server: its family's recommended sampling. */
+  catalogSampling?: CatalogSampling;
 }
 
-/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
-export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
+/** The setting a `thinkingToggle` model's "Off" is stored as. */
+export const THINKING_OFF_SETTING = 'none' satisfies ReasoningEffortSetting;
+
+/**
+ * Whether a stored setting switches a `thinkingToggle` model's thinking off, which a model listing
+ * effort levels has no switch for. `minimal` does too unless `minimalThinks`, since Off was stored
+ * that way before `none` existed. Every other setting thinks.
+ */
+export function thinkingSwitchedOff(
+  setting: ReasoningEffortSetting | undefined,
+  option: Pick<ChatModelOption, 'thinkingToggle' | 'minimalThinks' | 'controls'> | undefined
+): boolean {
+  if (!option?.thinkingToggle || option.controls?.effort) return false;
+  return setting === THINKING_OFF_SETTING || (setting === 'minimal' && !option.minimalThinks);
+}
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -988,15 +1011,17 @@ export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
  * conversation did before the setting existed. It is a real choice in the picker rather than
  * an empty state, because "let the provider decide" is a different instruction from "low".
  */
-export type ReasoningEffortSetting = 'default' | 'minimal' | 'low' | 'medium' | 'high';
+export type ReasoningEffortSetting = 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 /** Ascending, which is the order the picker lists them in. */
 export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
   'default',
+  'none',
   'minimal',
   'low',
   'medium',
   'high',
+  'xhigh',
 ];
 
 /**
@@ -1200,9 +1225,9 @@ interface ChatSessionMeta {
    * careful one is a thing to do WITHIN one app, and reopening a thread should resume the
    * effort it was held at rather than whatever the last conversation was set to.
    *
-   * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
-   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
+   * Only a level the model's `controls.effort` lists is actually sent. For a model with
+   * `thinkingToggle`, it turns thinking off or on instead; see thinkingSwitchedOff. Otherwise
+   * this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
@@ -1211,6 +1236,12 @@ interface ChatSessionMeta {
    * takes the 1-hour TTL; see `ChatModelOption.supportsOneHourCache`.
    */
   promptCacheTtl?: PromptCacheTtl;
+  /**
+   * Overrides of the model's sampling and output defaults, absent until one is set. Kept across
+   * a model switch; each turn sends only what the current model's `controls` list. Titles,
+   * suggestions and compaction never carry them.
+   */
+  generation?: GenerationSettings;
   /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a

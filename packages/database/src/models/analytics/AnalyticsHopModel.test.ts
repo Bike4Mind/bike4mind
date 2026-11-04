@@ -99,6 +99,63 @@ describe('analyticsHopRepository', () => {
     expect(redeemed).not.toHaveProperty('redeemedSessionId');
   });
 
+  describe('bindToSignup', () => {
+    const VISIT = 'f'.repeat(32);
+    const LATER = new Date(SOON.getTime() + 5 * 60_000);
+    const bind = (over: Partial<Parameters<typeof analyticsHopRepository.bindToSignup>[0]> = {}) =>
+      analyticsHopRepository.bindToSignup({
+        hopId: 'a'.repeat(32),
+        dest: 'bike4mind',
+        sessionId: VISIT,
+        now: LATER,
+        redeemedSince: WINDOW_START,
+        ...over,
+      });
+
+    it('binds a hop redeemed in the same visit, once, and keeps it from then on', async () => {
+      await analyticsHopRepository.create(hop());
+      await redeem({ sessionId: VISIT });
+
+      const bound = await bind();
+      expect(bound?.boundAt).toEqual(LATER);
+      expect(bound).not.toHaveProperty('expiresAt');
+      expect(await bind({ now: new Date(LATER.getTime() + 1000) })).toBeNull();
+      expect((await analyticsHopRepository.findByHopId('a'.repeat(32)))?.boundAt).toEqual(LATER);
+    });
+
+    it('lets exactly one of several concurrent signups take the hop', async () => {
+      await analyticsHopRepository.create(hop());
+      await redeem({ sessionId: VISIT });
+      const results = await Promise.all(Array.from({ length: 6 }, () => bind()));
+      expect(results.filter(r => r !== null)).toHaveLength(1);
+    });
+
+    it('refuses a signup in another visit', async () => {
+      await analyticsHopRepository.create(hop());
+      await redeem({ sessionId: VISIT });
+      expect(await bind({ sessionId: 'e'.repeat(32) })).toBeNull();
+    });
+
+    it('refuses a hop redeemed with no visit, or never redeemed', async () => {
+      await analyticsHopRepository.create(hop());
+      expect(await bind()).toBeNull();
+      await redeem();
+      expect(await bind()).toBeNull();
+    });
+
+    it('refuses a hop redeemed before the binding window', async () => {
+      await analyticsHopRepository.create(hop());
+      await redeem({ sessionId: VISIT });
+      expect(await bind({ redeemedSince: new Date(SOON.getTime() + 1) })).toBeNull();
+    });
+
+    it('refuses a hop for another destination', async () => {
+      await analyticsHopRepository.create(hop());
+      await redeem({ sessionId: VISIT });
+      expect(await bind({ dest: 'another-product' })).toBeNull();
+    });
+  });
+
   it('indexes hopId uniquely and sweeps on expiresAt', async () => {
     const indexes = await AnalyticsHop.collection.indexes();
     const ttl = indexes.find(i => i.key.expiresAt === 1);

@@ -39,6 +39,12 @@ export const ADMIN_REASON_PRESETS = {
     'Internal testing',
   ],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
+  grantPackage: [
+    'Pilot or partner access',
+    'Sales-approved campaign',
+    'Event or conference signups',
+    'Internal testing',
+  ],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
   compChange: ['Pilot or trial ended', 'Granted in error', 'Customer request', 'Account cleanup'],

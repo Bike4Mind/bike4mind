@@ -3,16 +3,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { OverwatchAnalyticsEventSchema, OVERWATCH_UNKNOWN_SESSION_ID } from '@bike4mind/common';
 import type { IAnalyticsHopDoc } from '@bike4mind/database';
 
-const { config, mockCreate, mockRedeem, mockEmitProductEvent } = vi.hoisted(() => ({
+const { config, mockCreate, mockRedeem, mockBind, mockEmitProductEvent } = vi.hoisted(() => ({
   config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } as Record<string, string | undefined>,
   mockCreate: vi.fn(),
   mockRedeem: vi.fn(),
+  mockBind: vi.fn(),
   mockEmitProductEvent: vi.fn(),
 }));
 
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: config }));
 vi.mock('@bike4mind/database', () => ({
-  analyticsHopRepository: { create: mockCreate, redeem: mockRedeem },
+  analyticsHopRepository: { create: mockCreate, redeem: mockRedeem, bindToSignup: mockBind },
 }));
 vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', () => ({
   HOST_PRODUCT_ID: 'bike4mind',
@@ -23,6 +24,7 @@ import {
   HOP_COOKIE_TTL_SECONDS,
   HOP_RECORD_RETENTION_DAYS,
   HopMintBodySchema,
+  bindSignupHop,
   hopCookieHeader,
   hopLandingUrl,
   hopMintedEvent,
@@ -288,5 +290,53 @@ describe('the b4m_hop cookie', () => {
     for (const cookie of [undefined, '', 'b4m_hop=', 'b4m_hop=everyone', `b4m_hop=${HOP_ID}x`]) {
       expect(readHopCookie(cookie), String(cookie)).toBeUndefined();
     }
+  });
+});
+
+describe('bindSignupHop', () => {
+  const signupRequest = (cookie: string) => ({ headers: { cookie } });
+  const ALL = `b4m_vid=${VISIT_ID}; b4m_hop=${HOP_ID}; b4m_consent=granted`;
+  const LATER = new Date(NOW.getTime() + 5 * 60_000);
+
+  it('binds the hop redeemed in this visit and returns the verified touch', async () => {
+    mockBind.mockResolvedValue(storedHop({ redeemedSessionId: VISIT_ID, boundAt: LATER }));
+
+    const touch = await bindSignupHop(signupRequest(ALL), LATER);
+
+    expect(touch).toEqual({ srcProductId: 'source-product', hopId: HOP_ID, redeemedAt: NOW });
+    expect(mockBind).toHaveBeenCalledWith({
+      hopId: HOP_ID,
+      dest: 'bike4mind',
+      sessionId: VISIT_ID,
+      now: LATER,
+      redeemedSince: new Date(LATER.getTime() - HOP_COOKIE_TTL_SECONDS * 1000),
+    });
+  });
+
+  it.each([
+    ['no hop cookie', `b4m_vid=${VISIT_ID}; b4m_consent=granted`],
+    ['a hop cookie this server did not set', `b4m_vid=${VISIT_ID}; b4m_hop=everyone; b4m_consent=granted`],
+    ['no visit', `b4m_hop=${HOP_ID}; b4m_consent=granted`],
+    ['no consent', `b4m_vid=${VISIT_ID}; b4m_hop=${HOP_ID}`],
+    ['consent declined', `b4m_vid=${VISIT_ID}; b4m_hop=${HOP_ID}; b4m_consent=denied`],
+  ])('binds nothing, and asks nothing, with %s', async (_name, cookie) => {
+    expect(await bindSignupHop(signupRequest(cookie), LATER)).toBeUndefined();
+    expect(mockBind).not.toHaveBeenCalled();
+  });
+
+  it('returns no touch when the store finds no hop to bind (another visit, already bound, too old)', async () => {
+    mockBind.mockResolvedValue(null);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await bindSignupHop(signupRequest(ALL), LATER)).toBeUndefined();
+    // An ordinary outcome, not a failure.
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('never throws on a store failure', async () => {
+    mockBind.mockRejectedValue(new Error('connection reset'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await bindSignupHop(signupRequest(ALL), LATER)).toBeUndefined();
+    warn.mockRestore();
   });
 });

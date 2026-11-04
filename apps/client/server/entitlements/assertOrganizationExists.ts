@@ -1,4 +1,4 @@
-import { organizationRepository } from '@bike4mind/database';
+import { grantPackageRepository, organizationRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 
 /**
@@ -12,5 +12,24 @@ export async function assertOrganizationExists(organizationId: string | null | u
   const organization = await organizationRepository.findById(organizationId);
   if (!organization) {
     throw new BadRequestError(`Organization ${organizationId} not found`);
+  }
+}
+
+/**
+ * Same guard for a rule's grant package. A `null` id (unlinking the package) is always allowed.
+ * Pass `requireActive` when the rule is being linked to this package: an inactive package would
+ * silently withhold the signup credits (same message as referService.requireActiveGrantPackage).
+ */
+export async function assertGrantPackageExists(
+  grantPackageId: string | null | undefined,
+  { requireActive = false }: { requireActive?: boolean } = {}
+): Promise<void> {
+  if (!grantPackageId) return;
+  const grantPackage = await grantPackageRepository.findById(grantPackageId);
+  if (!grantPackage) {
+    throw new BadRequestError(`Grant package ${grantPackageId} not found`);
+  }
+  if (requireActive && !grantPackage.active) {
+    throw new BadRequestError('Grant package is inactive');
   }
 }
