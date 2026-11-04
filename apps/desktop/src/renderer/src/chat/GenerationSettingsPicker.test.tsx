@@ -336,9 +336,17 @@ describe('GenerationSettingsPicker', () => {
     expect(input('maxOutputTokens').value).toBe('64000');
     expect(note('maxOutputTokens')).toBe('Model default: 128,000. Saved as 2,048, sent as 64,000 on this model.');
     await blur('maxOutputTokens');
-    await type('maxOutputTokens', '64000');
     expect(onChange).not.toHaveBeenCalled();
     expect(byTestId('generation-settings-maxOutputTokens-reset-btn')).not.toBeNull();
+  });
+
+  it('saves the value sent on this model when it is typed over a stored one it adjusts', async () => {
+    await render(ADAPTIVE, { maxOutputTokens: 2048 });
+    await open();
+    await fill('maxOutputTokens', '');
+    await type('maxOutputTokens', '64000');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith({ maxOutputTokens: 64_000 });
   });
 
   it('raises the max output floor with the thinking budget the turn sends', async () => {

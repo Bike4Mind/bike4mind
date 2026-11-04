@@ -76,8 +76,11 @@ function FieldRow({
   const committed = useRef<string | null>(null);
   const attempt = useRef(0);
   const discarded = useRef(false);
+  // Whether the field was typed in since it last showed what the turn sends.
+  const edited = useRef(false);
   useEffect(() => {
     committed.current = null;
+    edited.current = false;
     setDraft(shown(sent));
   }, [sent]);
   const locked = control.locked;
@@ -102,14 +105,16 @@ function FieldRow({
       return;
     }
     const text = draft.trim();
-    if (text === shown(sent)) return;
+    if (!edited.current && text === shown(sent)) return;
+    edited.current = false;
     if (!text) {
-      save(undefined);
+      if (stored !== undefined) save(undefined);
       return;
     }
     const next = requestGeneration({ [field]: Number(text) }, { [field]: control })[field];
     setDraft(shown(next ?? sent));
-    if (next !== undefined && next !== sent) save(next);
+    // Against what is stored, so typing the value this model adjusts a stored one to saves it.
+    if (next !== undefined && next !== stored) save(next);
   };
 
   return (
@@ -151,7 +156,10 @@ function FieldRow({
         disabled={disabled}
         readOnly={locked !== undefined}
         autoFocus={autoFocus}
-        onChange={event => setDraft(event.target.value)}
+        onChange={event => {
+          edited.current = true;
+          setDraft(event.target.value);
+        }}
         onBlur={locked ? undefined : event => commit(event.currentTarget)}
         onKeyDown={event => {
           if (event.key === 'Enter' && !locked) commit(event.currentTarget);
