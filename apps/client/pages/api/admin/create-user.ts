@@ -15,7 +15,7 @@ import { getLogoUrl, buildEmailLogoImg } from '@bike4mind/server-utils/utils/mai
 import { Config } from '@bike4mind/server-utils/utils/config';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
+import { emitSignupFunnelEvents, recordAccountLane } from '@server/analytics/funnel';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const createUserSchema = z.object({
@@ -130,9 +130,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
     // The user and audit row are already committed, so analytics failures must not turn into a 400.
     try {
-      const isSynthetic = await recordSyntheticIdentity(newUser);
+      const lane = await recordAccountLane(newUser);
       await emitSignupFunnelEvents({
-        user: { id: newUser.id, isSynthetic },
+        user: { id: newUser.id, ...lane },
         method: 'admin',
         emailVerified: newUser.emailVerified === true,
         creditsGranted: newUser.currentCredits ?? validatedData.initialCredits,

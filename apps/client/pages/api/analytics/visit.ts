@@ -1,7 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isDevelopment } from '@bike4mind/server-utils/utils/config';
-import { isAnalyticsConfigured, emitVisitEvent } from '@bike4mind/server-utils/analytics/emitActiveEvent';
+import {
+  isAnalyticsConfigured,
+  emitPageViewEvent,
+  emitVisitEvent,
+} from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import {
   isProbableBot,
@@ -12,6 +16,8 @@ import {
   visitPendingCookieHeader,
 } from '@server/analytics/visitSession';
 import { readVisitLanding } from '@server/analytics/visitLanding';
+import { hopCookieHeader, readHopToken, redeemHop } from '@server/analytics/hops';
+import { resolveServerConsent } from '@bike4mind/server-utils/analytics/serverConsent';
 
 /**
  * POST /api/analytics/visit - the visit beacon.
@@ -24,8 +30,11 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
  *
  * So the app's bootstrap calls this on every page load, signed in or not. The cookie does
  * the counting: a request with no visit cookie is the start of a visit and emits exactly
- * one event; a request that already carries one emits nothing and only slides the
- * inactivity window forward. One event per visit, by construction rather than by throttle.
+ * one visit event; a request that already carries one emits no visit and slides the
+ * inactivity window forward. One visit event per visit, by construction rather than by
+ * throttle. With consent, such a later load also records the page it loaded as a page_view
+ * (a new tab, a typed URL, a link, a reload); the pages the app moves to without a load are
+ * reported by the page beacon (page.ts).
  *
  * One exception to "emits at the start": a visitor still being asked for consent can't send a
  * source yet, and a visit's source is read from its one event alone. So a beacon awaiting
@@ -42,10 +51,25 @@ import { readVisitLanding } from '@server/analytics/visitLanding';
  * Hence the per-IP rate limit below, on top of the `/api/` per-IP counter the edge WAF already
  * keeps.
  *
+ * No lane either (server-utils analytics/lane.ts), on purpose. The browser sends this without the
+ * session's bearer token, so nothing here identifies the visitor: a mark could only come from the
+ * body or a cookie, which the visitor controls, and would let anyone take a real visit out of the
+ * count. A synthetic or internal user's visit is set apart downstream instead, by the marked
+ * `active` analyticsMiddleware sends for each of their visits under the same visit id.
+ *
  * The referrer comes from the body, never the Referer header: the beacon is a fetch from the
  * app's own page, so the header always names that page, and a visit read from it came from the
  * app itself. A body without one (consent declined or never given, no referrer, or a page loaded
  * before this shipped) records none, which reads as direct.
+ *
+ * The beacon is also where a verified hop is redeemed (server/analytics/hops.ts): a landing from a
+ * source product's redirect carries a hop token, which the page takes off its URL and sends here.
+ * Redeemed here, the hop names the same visit id as this visit's event. It is redeemed on any
+ * beacon that carries one, not only the one that starts the visit, since a visitor can arrive by a
+ * hop mid-visit. Never on a beacon still awaiting consent: the page holds the token until the
+ * answer, and sends it with the beacon that releases the visit. The visit is linked to the hop (the
+ * hop's sessionId, its cookie) only with consent, read server-side as signup attribution reads it;
+ * without it the hop is counted alone. The token is never logged.
  */
 
 // Per-IP, and generous against real use: a page load fires this once, so a browser needs
@@ -86,11 +110,37 @@ const handler = baseApi({ auth: false, maxBodySize: 1024 })
     // it while the event is held, and is expired once it is not.
     const cookies = [visitCookieHeader(visitId, { secure })];
     if (hold || markedPending) cookies.push(visitPendingCookieHeader(hold, { secure }));
+
+    const hopToken = hold ? undefined : readHopToken(req.body);
+    if (hopToken !== undefined) {
+      // Awaited, unlike the visit event below: a hop is redeemed once, so a `hop` event lost to a
+      // frozen Lambda has no later request to recover it. The emit's HTTP call times out at 2s; the
+      // store update and a failure metric add to that.
+      const linkVisit = resolveServerConsent(req) === 'granted';
+      const outcome = await redeemHop({ token: hopToken, visitId, linkVisit });
+      if (outcome.redeemed) {
+        if (linkVisit) cookies.push(hopCookieHeader(outcome.hop.hopId, { secure }));
+        req.logger?.info('analytics.hop.redeemed', { hopId: outcome.hop.hopId, linked: linkVisit });
+      } else {
+        req.logger?.info('analytics.hop.refused', { reason: outcome.reason });
+      }
+    }
     res.setHeader('Set-Cookie', cookies);
 
-    if (!unrecorded || hold) return res.status(204).end();
+    if (hold) return res.status(204).end();
 
     const landing = readVisitLanding(req.body);
+
+    if (!unrecorded) {
+      // A later page load of a recorded visit: its page is one of the visit's pages, and the page
+      // beacon counts it as sent (pageBeacon.ts), so it must be recorded here. Only a consented
+      // body carries a path; the awaiting-consent check only guards against hand-made bodies that
+      // send both.
+      if (landing.landingPath !== undefined && !isAwaitingConsent(req.body)) {
+        void emitPageViewEvent({ sessionId: visitId, path: landing.landingPath }).catch(() => {});
+      }
+      return res.status(204).end();
+    }
 
     // Fire-and-forget, like the middleware's emit: a page load must not wait on the ingest
     // hop, and a dropped visit event costs one session in a count that is already

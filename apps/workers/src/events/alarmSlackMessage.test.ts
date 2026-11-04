@@ -94,7 +94,7 @@ describe('formatAlarmSlackMessage on production', () => {
         label: 'Open in CloudWatch',
         url: 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#alarmsV2:alarm/bike4mind-production-signup-code-send-burst',
       },
-      { label: 'Signup activity', url: 'https://app.example.com/admin?tab=users&recentSignups=hour' },
+      { label: 'Signup activity', url: 'https://app.example.com/admin?tab=users&signedUp=hour' },
       { label: 'WAF block list', url: 'https://app.example.com/admin?tab=security-dashboard' },
     ]);
     expect(contextOf(message)).toBe(
@@ -393,6 +393,18 @@ describe('ALARM_CATALOG', () => {
       'young-account-spend'
     );
     expect(alarmCatalogEntry(sample, 'production')?.detail).toBeUndefined();
+  });
+
+  it('describes the image moderation review alarms by their CloudWatch names', () => {
+    for (const suffix of [
+      'image-moderation-incident-unalerted',
+      'image-moderation-incident-unreviewed',
+      'image-moderation-no-reviewers',
+    ]) {
+      const entry = alarmCatalogEntry({ ...sample, AlarmName: `bike4mind-production-${suffix}` }, 'production');
+      expect(entry?.level).toBe('page');
+      expect(entry?.category).toBe('security');
+    }
   });
 
   it('only names admin links that exist', () => {

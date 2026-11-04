@@ -1,3 +1,5 @@
+import { own } from '@shared/ownKeys';
+
 /**
  * Which Prism grammar a file's lines should be read with.
  *
@@ -57,10 +59,10 @@ const LANGUAGE_BY_FILENAME: Record<string, string> = {
 /** 'text' for anything unrecognised: Prism leaves it alone rather than colouring it wrongly. */
 export function diffLanguage(path: string): string {
   const name = (path.split(/[/\\]/).pop() ?? '').toLowerCase();
-  const byName = LANGUAGE_BY_FILENAME[name];
+  const byName = own(LANGUAGE_BY_FILENAME, name);
   if (byName) return byName;
 
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return 'text';
-  return LANGUAGE_BY_EXTENSION[name.slice(dot + 1)] ?? 'text';
+  return own(LANGUAGE_BY_EXTENSION, name.slice(dot + 1)) ?? 'text';
 }

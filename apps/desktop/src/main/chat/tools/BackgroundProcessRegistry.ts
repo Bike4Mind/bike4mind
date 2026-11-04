@@ -4,7 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo, BackgroundProcessStatus } from '@shared/chat';
 import { parentWatchStdioIndex, wrapWithParentWatchdog } from './backgroundScript';
 import { OutputBuffer, type OutputStream } from './outputBuffer';
-import { commandEnv, launchCommand } from './commandLaunch';
+import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree, signalCommandTreesSync, type CommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
 
@@ -121,7 +121,8 @@ export class BackgroundProcessLimit extends Error {
  * Three independent mechanisms enforce that guarantee, because each covers a hole in the others:
  *
  *  1. `shutdown()` on quit - SIGTERM the groups, wait, then SIGKILL. The polite path; on Windows
- *     the first signal already force-ends each tagged tree.
+ *     the first signal force-ends a Git Bash command's tagged tree, and a WSL command gets TERM,
+ *     then KILL after the grace period.
  *  2. `shutdownSync()` on `will-quit` - a synchronous SIGKILL sweep, because that handler cannot
  *     await and a quit that races the grace period must not leave anything behind.
  *  3. The in-child watchdog (see backgroundScript.ts) - the only one that survives main being
@@ -133,8 +134,9 @@ export class BackgroundProcessLimit extends Error {
  * stale handle the model could call `bash_output` on is worse than no handle at all.
  *
  * Signals go to the process GROUP (`-pgid`), never the bare pid: signalling the shell alone
- * would leave whatever it spawned running. Windows has no groups to signal; there every signal
- * force-ends the command's tagged process tree (see commandTree.ts).
+ * would leave whatever it spawned running. Windows has no groups to signal: any signal force-ends
+ * a Git Bash command's tagged process tree, and a WSL command gets TERM, then KILL after the
+ * grace period (see commandTree.ts).
  */
 export class BackgroundProcessRegistry {
   private readonly processes = new Map<string, Tracked>();
@@ -147,7 +149,7 @@ export class BackgroundProcessRegistry {
     this.enforceLimits(request.sessionId);
 
     const wrapped = wrapWithParentWatchdog(request.command);
-    const launch = await launchCommand(wrapped, request.roots, request.protectedPaths);
+    const launch = await launchCommand(wrapped, request.roots, request.protectedPaths, request.cwd);
 
     const info = this.newInfo(request.sessionId, request.command, request.cwd, new Date().toISOString());
 
@@ -157,9 +159,9 @@ export class BackgroundProcessRegistry {
       const env = await commandEnv(launch, { B4M_DESKTOP_BACKGROUND: '1' });
       child = spawn(launch.executable, launch.args, {
         cwd: request.cwd,
-        // Detached so the child leads its own process group: that is what makes one signal
-        // reach the command's whole tree rather than just the shell.
-        detached: true,
+        // Detached so the child leads its own process group and one signal reaches the whole
+        // tree, except a WSL command, which stays attached (see `spawnsDetached`).
+        detached: spawnsDetached(launch),
         windowsHide: true,
         // The watch pipe the child blocks on. Its write end stays open in this process for
         // exactly as long as this process lives, which is the entire mechanism.
@@ -374,8 +376,8 @@ export class BackgroundProcessRegistry {
   }
 
   /**
-   * SIGTERM the group, SIGKILL after a grace period; on Windows the tagged tree is force-ended at
-   * once. Resolves once it is actually gone.
+   * SIGTERM the group, SIGKILL after a grace period; on Windows a Git Bash command's tagged tree is
+   * force-ended at once, and a WSL command gets the same TERM then KILL. Resolves once it is gone.
    */
   async kill(id: string, sessionId: string): Promise<BackgroundProcessInfo | null> {
     const tracked = this.processes.get(id);

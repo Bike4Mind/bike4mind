@@ -10,7 +10,7 @@
  */
 
 import { z } from 'zod';
-import type { AuthSessionCreatedVia } from '@bike4mind/common';
+import { NATIVE_OAUTH_CLIENT_ID, type AuthSessionCreatedVia } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
@@ -37,7 +37,7 @@ import { getClientIp } from '@server/utils/ip';
 const MAX_DEVICE_NAME_LENGTH = 64;
 
 // First-party clients whose sessions are labeled by a dedicated createdVia instead of the generic one.
-const CREATED_VIA_BY_CLIENT_ID: Readonly<Record<string, AuthSessionCreatedVia>> = { 'b4m-ios-app': 'ios' };
+const CREATED_VIA_BY_CLIENT_ID: Readonly<Record<string, AuthSessionCreatedVia>> = { [NATIVE_OAUTH_CLIENT_ID]: 'ios' };
 
 const AuthCodeRequestSchema = z.object({
   grant_type: z.literal('authorization_code'),

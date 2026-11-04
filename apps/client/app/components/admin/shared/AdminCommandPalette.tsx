@@ -30,10 +30,13 @@ const shortcuts = [
 export function AdminCommandPalette({
   commands = [],
   onNavigate,
+  canOpenTab = () => true,
   onOpenHelp,
 }: {
   commands?: AdminCommand[];
   onNavigate?: (tab: AdminTab) => void;
+  /** Drops navigation to tabs this user may not open (a delegated admin's permissions). */
+  canOpenTab?: (tab: AdminTab) => boolean;
   onOpenHelp?: () => void;
 }) {
   const navigate = useNavigate();
@@ -46,14 +49,20 @@ export function AdminCommandPalette({
   const [active, setActive] = useState(0);
   const go = (tab: AdminTab) =>
     onNavigate ? onNavigate(tab) : navigate({ to: '/admin', search: { tab: adminTabToSlug(tab) } });
+  const tabNavigation = [
+    { id: 'users', label: 'Find users', tab: AdminTab.Users },
+    { id: 'organizations', label: 'Find organizations', tab: AdminTab.Organizations },
+    { id: 'settings', label: 'Open admin settings', tab: AdminTab.AdminSettings },
+    { id: 'audit', label: 'Open audit log', tab: AdminTab.AuditLog },
+  ];
   const navigation: AdminCommand[] = [
-    { id: 'users', label: 'Find users', run: () => go(AdminTab.Users) },
-    { id: 'organizations', label: 'Find organizations', run: () => go(AdminTab.Organizations) },
-    { id: 'settings', label: 'Open admin settings', run: () => go(AdminTab.AdminSettings) },
-    { id: 'audit', label: 'Open audit log', run: () => go(AdminTab.AuditLog) },
+    ...tabNavigation
+      .filter(({ tab }) => canOpenTab(tab))
+      .map(({ id, label, tab }) => ({ id, label, run: () => go(tab) })),
     ...(onOpenHelp ? [{ id: 'help', label: 'Open Help Center', run: onOpenHelp }] : []),
   ];
-  const userId = parseUserId(query.trim().toLowerCase());
+  // A user profile belongs to the Users tab.
+  const userId = canOpenTab(AdminTab.Users) ? parseUserId(query.trim()) : undefined;
   const results: AdminCommand[] = [
     ...(userId
       ? [

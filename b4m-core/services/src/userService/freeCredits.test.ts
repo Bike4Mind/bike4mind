@@ -142,7 +142,7 @@ describe('free credits service', () => {
       const repository = { reserve: vi.fn(), refund: vi.fn(), markAlerted: vi.fn(), getSpent: vi.fn() };
       repository.reserve.mockResolvedValue(null);
       adapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => ({
-        settingValue: name === 'signupGrantDailyBudget' ? '50' : '100',
+        settingValue: name === 'signupGrantSignupPoolDaily' ? '50' : '100',
       }));
       adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
       const users = Object.assign(adapters.db.users, { addTagsToUser: vi.fn(), update: vi.fn() });
@@ -160,7 +160,7 @@ describe('free credits service', () => {
     const exhaustedBudget = (adapters: ReturnType<typeof buildAdapters>) => {
       const repository = { reserve: vi.fn().mockResolvedValue(null), refund: vi.fn(), markAlerted: vi.fn() };
       adapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => ({
-        settingValue: name === 'signupGrantDailyBudget' ? '50' : '100',
+        settingValue: name === 'signupGrantSignupPoolDaily' ? '50' : '100',
       }));
       const users = Object.assign(adapters.db.users, { addTagsToUser: vi.fn(), update: vi.fn() });
       Object.assign(adapters.db, { signupProtection: { repository: {}, grantBudget: { repository } } });
@@ -211,6 +211,33 @@ describe('free credits service', () => {
 
       expect(adapters.db.users.claimFreeCreditGrant).not.toHaveBeenCalled();
       expect(result.creditsGranted).toBe(5000);
+    });
+
+    it('claims the inbox for a grant-package amount and pays it unmetered', async () => {
+      const adapters = buildAdapters('100');
+      const reserve = vi.fn().mockResolvedValue(null);
+      (adapters.db as Record<string, unknown>).signupProtection = { grantBudget: { repository: { reserve } } };
+      adapters.db.users.findById.mockResolvedValue({ id: 'user-2', grantPackageId: 'pkg-1' });
+
+      const result = await grantFreeCredits({ id: 'user-2', pendingCreditGrant: 100 }, adapters);
+
+      expect(adapters.db.users.claimFreeCreditGrant).toHaveBeenCalledWith('user-2');
+      expect(reserve).not.toHaveBeenCalled();
+      expect(result.creditsGranted).toBe(100);
+    });
+
+    it('withholds a grant-package amount whose inbox claim was lost and frees the package slot', async () => {
+      const adapters = buildAdapters('100');
+      const releaseRedemption = vi.fn().mockResolvedValue(undefined);
+      (adapters.db as Record<string, unknown>).grantPackages = { releaseRedemption };
+      adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
+      adapters.db.users.findById.mockResolvedValue({ id: 'user-2', grantPackageId: 'pkg-1' });
+
+      const result = await grantFreeCredits({ id: 'user-2', pendingCreditGrant: 100 }, adapters);
+
+      expect(result).toEqual({ creditsGranted: 0, currentCredits: null });
+      expect(releaseRedemption).toHaveBeenCalledWith('pkg-1', 'user-2');
+      expect(addCreditsSpy).not.toHaveBeenCalled();
     });
 
     it('reports no grant when the transaction id was already paid', async () => {

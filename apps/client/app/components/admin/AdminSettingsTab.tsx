@@ -34,6 +34,7 @@ import {
   Tooltip,
 } from '@mui/joy';
 import React, { useCallback, useMemo, useState, type ComponentProps } from 'react';
+import AdminJsonSettingField from './AdminJsonSettingField';
 import AdminSettingInputField from './AdminSettingInputField';
 import AdminStringListSettingField from './AdminStringListSettingField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
@@ -178,6 +179,9 @@ const STRING_LIST_SETTING_KEYS = new Set<string>([
   'blockedEmailDomains',
   'freeTierAllowedModels',
 ]);
+
+// Structured operator configs get a JSON editor; the server parses them with the setting's schema.
+const JSON_SETTING_KEYS = new Set<string>(['abuseAssessmentConfig', 'usagePatternSignalsConfig']);
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();
@@ -467,6 +471,17 @@ const AdminSettingsTab: React.FC = () => {
                 const storedValue = settingValueByName.get(setting.key) ?? setting.defaultValue;
                 return (
                   <AdminStringListSettingField
+                    key={`${setting.key}-${JSON.stringify(storedValue)}`}
+                    index={index}
+                    setting={setting as CoreSettingConfig}
+                    storedValue={storedValue}
+                  />
+                );
+              }
+              if (setting.type === 'object' && JSON_SETTING_KEYS.has(setting.key)) {
+                const storedValue = settingValueByName.get(setting.key) ?? setting.defaultValue;
+                return (
+                  <AdminJsonSettingField
                     key={`${setting.key}-${JSON.stringify(storedValue)}`}
                     index={index}
                     setting={setting as CoreSettingConfig}

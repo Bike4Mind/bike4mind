@@ -2,7 +2,8 @@ import type { Logger } from '@bike4mind/observability';
 import type { ServerToolExecutors } from '@bike4mind/services';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { buildDecideExecutor } from '@server/decisions/cliDecideExecutor';
-import { executeToolWithLogging } from '@bike4mind/server-utils/cli/toolsHandler.shared';
+import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
+import { executeToolWithLogging, toolResultStatus } from '@bike4mind/server-utils/cli/toolsHandler.shared';
 import { executeToolContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 
@@ -18,7 +19,10 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
  * socket hang ups; Next.js API works reliably in local dev.
  */
 /** Same executor wiring as the Lambda entry - see apps/workers/src/cli/tools.ts. */
-const buildExecutors = (logger: Logger): ServerToolExecutors => ({ decide: buildDecideExecutor(logger) });
+const buildExecutors = (logger: Logger): ServerToolExecutors => ({
+  decide: buildDecideExecutor(logger),
+  ...buildWebToolExecutors(logger),
+});
 
 const handler = nextRouteForContract(executeToolContract, {
   // Passed as an option so the adapter orders it before validation (a malformed
@@ -37,7 +41,7 @@ const handler = nextRouteForContract(executeToolContract, {
     });
 
     // Echo request_id in the body to match the X-Request-ID header.
-    return res.status(result.success ? 200 : 500).json({ ...result, request_id: req.requestId });
+    return res.status(toolResultStatus(result)).json({ ...result, request_id: req.requestId });
   } catch (error) {
     req.logger.error('[TOOLS_API] Unexpected error:', error);
 

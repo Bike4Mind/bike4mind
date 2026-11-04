@@ -20,6 +20,7 @@ import {
   sanitizeReferrer,
   emitActiveEvent,
   emitVisitEvent,
+  emitPageViewEvent,
   emitProductEvent,
 } from './emitActiveEvent';
 import { pseudonymize } from './pseudonymize';
@@ -136,6 +137,31 @@ describe('emitActiveEvent', () => {
         (JSON.parse((init as RequestInit).body as string) as { event: { metadata: unknown } }).event.metadata
     );
     expect(metadata).toEqual([{ userType: 'free', lane: 'synthetic' }, { userType: 'free' }, { userType: 'free' }]);
+  });
+
+  it("stamps internal: true on an internal account's or an admin's event, and the lane alone on a synthetic one", async () => {
+    resetConfig();
+    await emitActiveEvent({ pseudoUserId: 'p1', sessionId: 's1', userType: 'free', isInternal: true });
+    await emitActiveEvent({ pseudoUserId: 'p2', sessionId: 's2', userType: 'free', isAdmin: true });
+    await emitActiveEvent({
+      pseudoUserId: 'p3',
+      sessionId: 's3',
+      userType: 'free',
+      isSynthetic: true,
+      isInternal: true,
+    });
+    await emitActiveEvent({ pseudoUserId: 'p4', sessionId: 's4', userType: 'free', isInternal: false, isAdmin: false });
+
+    const metadata = mockFetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse((init as RequestInit).body as string) as { event: { metadata: unknown } }).event.metadata
+    );
+    expect(metadata).toEqual([
+      { userType: 'free', internal: true },
+      { userType: 'free', internal: true },
+      { userType: 'free', lane: 'synthetic' },
+      { userType: 'free' },
+    ]);
   });
 
   it('sends x-api-key header and no Authorization header', async () => {
@@ -272,6 +298,38 @@ describe('emitVisitEvent', () => {
     const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
       event: Record<string, unknown>;
     };
+    expect('referrer' in body.event).toBe(false);
+    expect('utm' in body.event).toBe(false);
+  });
+});
+
+describe('emitPageViewEvent', () => {
+  const mockFetch = vi.fn();
+
+  beforeEach(() => {
+    mockFetch.mockClear();
+    vi.stubGlobal('fetch', mockFetch);
+    mockFetch.mockResolvedValue({ status: 200 });
+  });
+
+  it('is a no-op when not configured (fail-open)', async () => {
+    await expect(emitPageViewEvent({ sessionId: 'visit-1', path: '/pricing' })).resolves.toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('sends the page on its visit, anonymous like the visit itself, with the path and nothing else', async () => {
+    resetConfig();
+    await emitPageViewEvent({ sessionId: 'visit-1', path: '/notebooks' });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const body = JSON.parse((mockFetch.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+      event: Record<string, unknown>;
+    };
+    expect(body.event.event).toBe('page_view');
+    expect(body.event.productId).toBe('bike4mind');
+    expect(body.event.sessionId).toBe('visit-1');
+    expect(body.event.userId).toBe(OVERWATCH_ANONYMOUS_USER_ID);
+    expect(body.event.metadata).toEqual({ path: '/notebooks' });
     expect('referrer' in body.event).toBe(false);
     expect('utm' in body.event).toBe(false);
   });

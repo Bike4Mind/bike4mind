@@ -360,6 +360,8 @@ export interface IUser extends ICreditHolder {
    * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
+  /** GrantPackage this account redeemed at signup; its grant claims the inbox like the default grant. */
+  grantPackageId?: string | null;
   /**
    * Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under. Unset
    * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
@@ -778,6 +780,15 @@ export interface IUser extends ICreditHolder {
    */
   isSynthetic?: boolean;
 
+  /**
+   * An account of the team's own: set at signup for an email on a NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+   * domain (or an admin-created admin), by an admin through the user's internal toggle, and for
+   * existing accounts by a one-off backfill. Analytics only: the user's events are stamped
+   * `internal: true` (server-utils analytics/lane.ts) so they can be kept out of customer counts.
+   * Never an authorization source.
+   */
+  isInternal?: boolean;
+
   /** When the user first got a completed chat answer; set once, drives the first_value event. */
   firstValueAt?: Date | null;
 }
@@ -789,9 +800,23 @@ export interface IUserAcquisitionTouch {
   content?: string;
 }
 
+/**
+ * The verified hop a signup followed (apps/client server/analytics/hops.ts): the product whose own
+ * server sent the visitor here, as that server proved with its ingest key, not as the browser
+ * claimed. Written only when the hop was redeemed in the same visit as the signup, with consent.
+ */
+export interface IUserVerifiedTouch {
+  /** The Overwatch product whose ingest key minted the hop. */
+  srcProductId: string;
+  hopId: string;
+  redeemedAt: Date;
+}
+
 export interface IUserAcquisition {
   firstTouch?: IUserAcquisitionTouch;
   lastTouch?: IUserAcquisitionTouch;
+  /** Absent for a signup that followed no verified hop. */
+  verifiedTouch?: IUserVerifiedTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;

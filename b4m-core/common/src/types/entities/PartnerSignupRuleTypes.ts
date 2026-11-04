@@ -20,6 +20,11 @@ export interface IPartnerSignupRule {
   /** One-time signup credits granted once at email verification. */
   signupCredits: number;
   /**
+   * Grant package that supplies the signup credits instead of `signupCredits`. When its cap is
+   * reached the signup still gets membership, tags and subscription, just no credits.
+   */
+  grantPackageId?: string | null;
+  /**
    * Optional organization a verified signup on this domain is auto-added to (as a
    * read-permission member - the same shape `organizationService.addMember` writes).
    * `null`/absent = no org auto-join. Members are added, never removed: disabling or

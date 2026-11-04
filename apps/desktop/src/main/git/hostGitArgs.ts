@@ -1,17 +1,74 @@
 import { execFile } from 'node:child_process';
 import { hostProgram } from '../chat/tools/userPath';
+import { toLinuxArgument, wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../wsl/wslPath';
 const EMPTY_HOOKS_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
-/** Config overrides so a repo's own `.git/config` cannot run hooks or a file-system monitor on the host. */
-export const HOST_GIT_CONFIG_ARGS: readonly string[] = [
-  '-c',
-  'core.fsmonitor=false',
-  '-c',
-  `core.hooksPath=${EMPTY_HOOKS_PATH}`,
-];
+function configArgs(emptyHooksPath: string): string[] {
+  return ['-c', 'core.fsmonitor=false', '-c', `core.hooksPath=${emptyHooksPath}`];
+}
 
-export function hostGitArgs(args: readonly string[]): string[] {
-  return [...HOST_GIT_CONFIG_ARGS, ...args];
+/** Config overrides so a repo's own `.git/config` cannot run hooks or a file-system monitor on the host. */
+export const HOST_GIT_CONFIG_ARGS: readonly string[] = configArgs(EMPTY_HOOKS_PATH);
+
+/** The overrides for git run in `directory`: a WSL folder gets Linux git, which needs Linux's null device. */
+export function configArgsFor(
+  directory: string | undefined,
+  platform: NodeJS.Platform = process.platform
+): readonly string[] {
+  return directory && wslLocation(directory, platform) ? configArgs('/dev/null') : HOST_GIT_CONFIG_ARGS;
+}
+
+export function hostGitArgs(
+  args: readonly string[],
+  directory?: string,
+  platform: NodeJS.Platform = process.platform
+): string[] {
+  return [...configArgsFor(directory, platform), ...args];
+}
+
+/** `git args...` run in `directory`: Linux git through wsl.exe for a WSL folder, the host's git otherwise (null if none). */
+export async function gitCommand(
+  directory: string,
+  args: readonly string[],
+  platform: NodeJS.Platform = process.platform
+): Promise<{ file: string; args: string[]; cwd?: string } | null> {
+  const location = wslLocation(directory, platform);
+  if (location) return wslCommand(location, 'git', args);
+  const git = await hostProgram('git');
+  return git ? { file: git, args: [...args], cwd: directory } : null;
+}
+
+/** A path argument for git run in `directory`: Linux git in a WSL folder is given the Linux path. */
+export function gitArgumentPath(directory: string, path: string, platform: NodeJS.Platform = process.platform): string {
+  const location = wslLocation(directory, platform);
+  return location ? toLinuxArgument(location, path) : path;
+}
+
+/** The env for a `gitCommand` in `directory`; undefined keeps this process's own. */
+export async function gitCommandEnv(
+  directory: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<NodeJS.ProcessEnv | undefined> {
+  const location = wslLocation(directory, platform);
+  // The distro user's PATH, so a credential helper such as `gh` resolves as it does in their shell.
+  return location ? wslCommandEnv(process.env, location.distro) : undefined;
+}
+
+/**
+ * The timeout for a quick git read, given its `gitCommandEnv`: through wsl.exe (an env is set) it
+ * can spend seconds starting a distro that is not running yet.
+ */
+export function quickGitTimeout(env: NodeJS.ProcessEnv | undefined): number {
+  return env ? 10_000 : 2000;
+}
+
+/** Of `env`, only what wsl.exe passes into Linux: the variables WSLENV names for that direction. */
+export function crossingEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    wslEnvNames(env)
+      .filter(name => env[name] !== undefined)
+      .map(name => [name, env[name]])
+  );
 }
 
 export type ConfigEntry = { scope: string; key: string; value: string };
@@ -19,31 +76,28 @@ export type ScopedConfigReader = (cwd: string) => Promise<ConfigEntry[]>;
 
 const NETWORK_KEYS = '^(credential\\.(.*\\.)?helper|core\\.sshcommand|core\\.askpass)$';
 
-const readScopedConfig: ScopedConfigReader = async cwd => {
-  const git = await hostProgram('git');
+const readScopedConfig: ScopedConfigReader = async directory => {
+  const env = await gitCommandEnv(directory);
+  const command = await gitCommand(directory, ['config', '--show-scope', '-z', '--get-regexp', NETWORK_KEYS]);
   return new Promise(resolve => {
-    if (!git) return resolve([]);
-    execFile(
-      git,
-      ['config', '--show-scope', '-z', '--get-regexp', NETWORK_KEYS],
-      { cwd, timeout: 2000 },
-      (error, stdout) => {
-        if (error) return resolve([]);
-        // `-z` output is `scope\0key\nvalue\0` per entry; a key written without `=` has no value line.
-        const fields = stdout.split('\0');
-        const entries: ConfigEntry[] = [];
-        for (let i = 0; i + 1 < fields.length; i += 2) {
-          const newline = fields[i + 1].indexOf('\n');
-          if (newline === -1) continue;
-          entries.push({
-            scope: fields[i],
-            key: fields[i + 1].slice(0, newline),
-            value: fields[i + 1].slice(newline + 1),
-          });
-        }
-        resolve(entries);
+    if (!command) return resolve([]);
+    const { file, args, cwd } = command;
+    execFile(file, args, { cwd, env, timeout: quickGitTimeout(env), windowsHide: true }, (error, stdout) => {
+      if (error) return resolve([]);
+      // `-z` output is `scope\0key\nvalue\0` per entry; a key written without `=` has no value line.
+      const fields = stdout.split('\0');
+      const entries: ConfigEntry[] = [];
+      for (let i = 0; i + 1 < fields.length; i += 2) {
+        const newline = fields[i + 1].indexOf('\n');
+        if (newline === -1) continue;
+        entries.push({
+          scope: fields[i],
+          key: fields[i + 1].slice(0, newline),
+          value: fields[i + 1].slice(newline + 1),
+        });
       }
-    );
+      resolve(entries);
+    });
   });
 };
 
@@ -54,13 +108,17 @@ const TRUSTED_SCOPES = new Set(['system', 'global', 'unknown']);
  * Overrides for a git call that touches the network: the base set, plus credential, ssh and
  * askpass settings restricted to the user's own system/global config. Needs git 2.26+ for
  * `--show-scope`; on an older git the lookup fails and no credential helper is kept.
+ *
+ * `env` is this process's environment; for a WSL folder only what crosses into Linux counts.
  */
 export async function hostNetworkGitArgs(
   args: readonly string[],
   cwd: string,
   readConfig: ScopedConfigReader = readScopedConfig,
-  env: NodeJS.ProcessEnv = process.env
+  hostEnv: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
 ): Promise<string[]> {
+  const env = wslLocation(cwd, platform) ? crossingEnv(hostEnv) : hostEnv;
   const entries = await readConfig(cwd);
   const trusted = entries.filter(entry => TRUSTED_SCOPES.has(entry.scope));
   const setByRepo = (key: string) => entries.some(entry => entry.key === key && !TRUSTED_SCOPES.has(entry.scope));
@@ -77,5 +135,5 @@ export async function hostNetworkGitArgs(
   if (!env.GIT_ASKPASS && setByRepo('core.askpass')) {
     overrides.push('-c', `core.askPass=${lastTrusted('core.askpass') ?? env.SSH_ASKPASS ?? ''}`);
   }
-  return [...HOST_GIT_CONFIG_ARGS, ...overrides, ...args];
+  return [...configArgsFor(cwd, platform), ...overrides, ...args];
 }

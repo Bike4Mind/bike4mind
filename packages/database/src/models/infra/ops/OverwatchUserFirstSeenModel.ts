@@ -20,6 +20,8 @@ export interface IOverwatchUserFirstSeenDoc {
   firstSeenDate: string;
   /** 'synthetic' once any of the user's events carried that lane; sticky. Absent means unmarked. */
   lane?: OverwatchLane;
+  /** true once any of the user's events carried `metadata.internal: true`; sticky. Absent means unmarked. */
+  internal?: boolean;
   createdAt: Date;
 }
 
@@ -32,6 +34,7 @@ const OverwatchUserFirstSeenSchema = new Schema<IOverwatchUserFirstSeenDoc>(
     firstSeenDate: { type: String, required: true },
     // No default: an old record must keep reading as unmarked.
     lane: { type: String, enum: OVERWATCH_LANE_VALUES },
+    internal: { type: Boolean },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

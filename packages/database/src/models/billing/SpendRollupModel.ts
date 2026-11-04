@@ -9,6 +9,7 @@ import {
   SPEND_BUCKET_MS,
   SPEND_ROLLUP_SCOPE_TYPES,
   SpendRollupScopeType,
+  SpendSeriesPoint,
 } from '@bike4mind/common';
 import { API_KEY_REQUEST_TRANSACTION_TYPES, CreditTransaction } from './CreditTransactionModel';
 import { UsageEvent } from './UsageEventModel';
@@ -184,13 +185,17 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
     scopeIds: string[],
     from: Date,
     to: Date
-  ): Promise<Map<string, ISpendRollup[]>> {
+  ): Promise<Map<string, SpendSeriesPoint[]>> {
+    // The platform baseline reads ~29 days of buckets every run, so only the summed fields come back.
     const docs = await this.model
-      .find({ scopeType, scopeId: { $in: scopeIds }, bucketStart: { $gte: from, $lt: to } })
+      .find(
+        { scopeType, scopeId: { $in: scopeIds }, bucketStart: { $gte: from, $lt: to } },
+        { _id: 0, bucketStart: 1, scopeId: 1, credits: 1, costUsd: 1 }
+      )
       .sort({ bucketStart: 1 })
-      .lean();
+      .lean<SpendSeriesPoint[]>();
 
-    const series = new Map<string, ISpendRollup[]>();
+    const series = new Map<string, SpendSeriesPoint[]>();
     for (const doc of docs) {
       const bucket = series.get(doc.scopeId) ?? [];
       bucket.push(doc);

@@ -93,6 +93,20 @@ describe('ReferralSubscriptionRewardModel', () => {
     });
   });
 
+  describe('countSubscribedFriends', () => {
+    it('counts each friend once and leaves out refunded-away and other inviters', async () => {
+      await repo.create(reward());
+      await repo.create(reward({ invoiceId: 'in_2', paymentIntentId: 'pi_2', step: 'second_payment' }));
+      await repo.create(reward({ invoiceId: 'in_3', paymentIntentId: 'pi_3', payerId: 'friend2' }));
+      const refunded = await repo.create(reward({ invoiceId: 'in_4', paymentIntentId: 'pi_4', payerId: 'friend3' }));
+      await repo.cancelPending(refunded!.id, 'refunded', now);
+      await repo.create(reward({ invoiceId: 'in_5', paymentIntentId: 'pi_5', payerId: 'friend4', inviterId: 'other' }));
+
+      expect(await repo.countSubscribedFriends('inviter1')).toBe(2);
+      expect(await repo.countSubscribedFriends('nobody')).toBe(0);
+    });
+  });
+
   describe('claimForRelease', () => {
     it('lets exactly one concurrent caller claim a due reward', async () => {
       const created = await repo.create(reward({ releaseAt: days(-1) }));

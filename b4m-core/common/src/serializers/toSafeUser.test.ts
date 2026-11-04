@@ -171,6 +171,23 @@ describe('redactUserSecretsForSelf', () => {
       'signupGrantAssessment'
     );
   });
+  it('keeps the signup grant for its holder but not an admin block on it', () => {
+    const grant = {
+      stage: 'signup',
+      signupCredits: 10,
+      unlockCredits: 40,
+      creditsReleased: 10,
+      nextCondition: 'verification',
+    };
+    const blocked = { ...fullUser, signupGrant: { ...grant, blocked: { at: new Date() } } } as IUser;
+    const out = redactUserSecretsForSelf(blocked) as { signupGrant: Record<string, unknown> };
+    expect(out.signupGrant).toEqual(grant);
+    expect(out.signupGrant).not.toHaveProperty('blocked');
+    const unblocked = redactUserSecretsForSelf({ ...fullUser, signupGrant: grant } as IUser) as {
+      signupGrant: unknown;
+    };
+    expect(unblocked.signupGrant).toEqual(grant);
+  });
   it('drops pure-secret fields entirely', () => {
     const self = redactUserSecretsForSelf(fullUser)!;
     // `authProviders` is NOT here: it moved to USER_SUBFIELD_REDACTED_FIELDS, since the

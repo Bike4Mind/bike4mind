@@ -1,5 +1,5 @@
 import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import { isExecutableUploadMimeType } from '@bike4mind/common';
+import { hasAdminPermission, isExecutableUploadMimeType } from '@bike4mind/common';
 import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -47,7 +47,8 @@ function generateCacheKey(rawUrl: string, parsed: URL): string {
 
 const handler = baseApi().get(
   asyncHandler(async (req, res) => {
-    if (!req.user?.isAdmin) {
+    // The modal editor previews images through here, so whoever may edit modals may use it.
+    if (!hasAdminPermission(req.user, 'settings:manage')) {
       throw new ForbiddenError('Admin only');
     }
 

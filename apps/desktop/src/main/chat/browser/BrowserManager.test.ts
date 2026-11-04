@@ -32,6 +32,8 @@ const contents = vi.hoisted(() => {
     /** The DevTools protocol, shared by every contents: what a command answers, and who attached. */
     cdp: (_method: string, _params?: unknown): Promise<unknown> => Promise.reject(new Error('no DevTools')),
     debuggerAttached: false,
+    /** What each manager's partition registered with `protocol.handle`, by scheme. */
+    protocols: new Map<string, (request: { url: string }) => Response>(),
     attaches: 0,
     detaches: 0,
     emit(event: string, ...args: unknown[]) {
@@ -163,6 +165,11 @@ vi.mock('electron', () => {
         setPermissionRequestHandler: () => undefined,
         setPermissionCheckHandler: () => undefined,
         on: () => undefined,
+        protocol: {
+          handle: (scheme: string, handler: (request: { url: string }) => Response) => {
+            contents.protocols.set(scheme, handler);
+          },
+        },
         webRequest: {
           onBeforeRequest: () => undefined,
           onCompleted: () => undefined,
@@ -1215,5 +1222,66 @@ describe('BrowserManager snapshot indexing', () => {
     await pending;
     expect(index).not.toHaveBeenCalled();
     manager.closeAll();
+  });
+});
+
+describe('BrowserManager opening an artifact', () => {
+  let states: BrowserPaneState[];
+  let manager: InstanceType<typeof BrowserManager>;
+  const lastState = () => states.at(-1)!;
+  const serve = (url: string) => contents.protocols.get('b4m-artifact')!({ url });
+
+  beforeEach(() => {
+    contents.handlers.clear();
+    contents.url = '';
+    contents.loads = [];
+    contents.protocols.clear();
+    contents.load = url => {
+      contents.url = url;
+      contents.emit('did-navigate', url, 200);
+      return Promise.resolve();
+    };
+    states = [];
+    manager = new BrowserManager((_sessionId, state) => states.push(state));
+  });
+
+  afterEach(() => manager.closeAll());
+
+  it('loads the artifact from a fresh view url served on the browser partition', async () => {
+    const state = await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    const url = contents.loads.at(-1)!.url;
+    expect(url).toMatch(/^b4m-artifact:\/\/view\/[0-9a-f-]{36}$/);
+    expect(state).toMatchObject({ url, activeTabId: 1, error: '' });
+    const response = serve(url);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Security-Policy')).toContain("connect-src 'none'");
+    await expect(response.text()).resolves.toBe('<title>Chart</title><p>hi</p>');
+  });
+
+  it('opens in a new tab rather than replacing a page the conversation is on', async () => {
+    await manager.navigate('s', 'http://localhost:3080/');
+
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+
+    expect(lastState()).toMatchObject({ activeTabId: 2, tabs: [{ id: 1 }, { id: 2 }] });
+    expect(contents.loads.map(load => load.url)).toEqual([
+      'http://localhost:3080/',
+      expect.stringMatching(/^b4m-artifact:\/\/view\//),
+    ]);
+  });
+
+  it('forgets every artifact when all browsers close', async () => {
+    await manager.openArtifact('s', 'Chart', '<p>hi</p>');
+    const url = contents.loads.at(-1)!.url;
+
+    manager.closeAll();
+
+    expect(serve(url).status).toBe(404);
+  });
+
+  it('still refuses the scheme when it is typed into the url bar', async () => {
+    await expect(manager.navigate('s', 'b4m-artifact://view/abc')).rejects.toThrow(/http and https/);
+    expect(contents.loads).toEqual([]);
   });
 });

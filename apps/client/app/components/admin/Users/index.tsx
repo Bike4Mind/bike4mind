@@ -103,6 +103,7 @@ const UsersTab: React.FC = () => {
     value: search,
     debouncedValue: debouncedSearch,
     setValue: setSearch,
+    setValueImmediately: resetSearch,
   } = useDebounceValue(useUsersTab.getState().params.search);
   useEffect(() => {
     if (debouncedSearch === params.search) return;
@@ -182,7 +183,7 @@ const UsersTab: React.FC = () => {
 
   const hasFilters = countActiveFilters(params) > 0 || params.search.trim().length > 0;
   const clearFilters = () => {
-    setSearch('');
+    resetSearch('');
     setParams({ ...CLEARED_FILTER_PARAMS, search: '' });
   };
 
@@ -250,7 +251,7 @@ const UsersTab: React.FC = () => {
       <AnomalyBanner
         snapshot={anomalyQuery.data}
         onReview={() => {
-          setSearch('');
+          resetSearch('');
           setParams({ ...CLEARED_FILTER_PARAMS, search: '', signedUp: 'hour', groupBy: 'emailDomain' });
         }}
       />
@@ -270,7 +271,7 @@ const UsersTab: React.FC = () => {
             search={search}
             summary={summary}
             onApply={patch => {
-              setSearch(patch.search);
+              resetSearch(patch.search);
               setParams(patch);
             }}
           />

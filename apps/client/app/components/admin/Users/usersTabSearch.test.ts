@@ -68,6 +68,7 @@ describe('USERS_SEARCH_PARSERS', () => {
     expect(USERS_SEARCH_PARSERS.risk('extreme')).toBeUndefined();
 
     expect(USERS_SEARCH_PARSERS.userId('0123456789abcdef01234567')).toBe('0123456789abcdef01234567');
+    expect(USERS_SEARCH_PARSERS.userId('0123456789ABCDEF01234567')).toBe('0123456789abcdef01234567');
     expect(USERS_SEARCH_PARSERS.userId('../organizations')).toBeUndefined();
   });
 

@@ -1,7 +1,7 @@
 import type { IpcMain } from 'electron';
 import { isHubRepoId } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { ModelStoreLocation } from '@shared/models';
+import type { LoadedModelState, ModelStoreLocation } from '@shared/models';
 import type { ModelHubService } from './ModelHubService';
 
 const MAX_TEXT = 512;
@@ -47,6 +47,7 @@ export function registerModelsIpc(
     | 'dismiss'
     | 'remove'
     | 'storeLocation'
+    | 'loadedState'
   >
 ): void {
   ipc.handle(IPC_CHANNELS.modelsGetStatus, (_event, value: unknown) => {
@@ -136,5 +137,9 @@ export function registerModelsIpc(
   ipc.handle(IPC_CHANNELS.modelsGetStoreLocation, (_event, value: unknown): Promise<ModelStoreLocation> => {
     const target = serverArg(value);
     return target ? service.storeLocation(target.id) : Promise.resolve({ path: null, source: null, freeBytes: null });
+  });
+  ipc.handle(IPC_CHANNELS.modelsGetLoadedState, (_event, value: unknown): Promise<LoadedModelState> => {
+    const modelId = text(value);
+    return modelId ? service.loadedState(modelId) : Promise.resolve({ kind: 'unsupported' });
   });
 }

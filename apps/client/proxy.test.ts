@@ -96,6 +96,15 @@ describe('proxy CSP header', () => {
     expect(values).toContain('https://tile.openstreetmap.org');
   });
 
+  // ElevenLabs hosts voice preview clips on regional hosts (api.us.elevenlabs.io). connect-src as
+  // well, for the same service-worker re-fetch as the map tiles above.
+  it.each(['media-src', 'connect-src'])('%s allows the ElevenLabs hosts that serve voice previews', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toContain('https://*.elevenlabs.io');
+  });
+
   // Social post thumbnails load straight from each network's image CDN. connect-src as well, for
   // the same service-worker re-fetch as the map tiles above. video.cdn.bsky.app is where
   // video.bsky.app redirects every poster frame, and CSP checks each redirect hop.
@@ -211,6 +220,14 @@ describe('proxy CSP header', () => {
   it('does NOT clobber Referrer-Policy on /embed/ routes (the URL carries the ?k= key)', () => {
     const embed = proxy(makeRequest('https://app.bike4mind.com/embed/chat?k=b4m_live_x'));
     expect(embed.headers.get('Referrer-Policy')).toBeNull();
+  });
+
+  it('serves a verified-hop landing with strict-origin, so the token never rides a Referer', () => {
+    const landing = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x&b4m_hop=abc.123.def'));
+    expect(landing.headers.get('Referrer-Policy')).toBe('strict-origin');
+    // Only the landing that carries one: the same page without it keeps the app default.
+    const plain = proxy(makeRequest('https://app.bike4mind.com/new?utm_source=x'));
+    expect(plain.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
   });
 
   it('sets X-Frame-Options on HTML routes', () => {

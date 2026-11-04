@@ -1,6 +1,7 @@
 import { basename, dirname, sep } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
+import { own } from '@shared/ownKeys';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 
@@ -117,7 +118,7 @@ export function parseRule(text: string, options: { native?: boolean } = {}): Par
     };
   }
 
-  const mapping = CLAUDE_CODE_TOOLS[name];
+  const mapping = own(CLAUDE_CODE_TOOLS, name);
   if (!mapping) {
     if (options.native && NATIVE_NAME.test(name)) {
       const kind = DESKTOP_KIND.get(name);
@@ -258,6 +259,8 @@ export interface PermissionSubject {
     commands: readonly ShellSubjectCommand[];
     directories: readonly string[];
     paths?: readonly string[];
+    /** Paths in a WSL distro no root is in: no allow rule covers a call that names one. */
+    ungranted?: readonly string[];
   };
   paths?: readonly string[];
   /** A search may read descendants of any named path, rather than only the named file. */
@@ -387,6 +390,7 @@ export class PermissionRuleSet {
     if (subject.shell) {
       const { script, commands, directories } = subject.shell;
       if (commands.length === 0 || NAMES_RULE_FILE.test(script)) return null;
+      if (subject.shell.ungranted?.length) return null;
       if (this.protectedRoots.some(root => script.includes(root))) return null;
       if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(path))) return null;
       if (!directories.every(directory => this.coversFolder(directory))) return null;

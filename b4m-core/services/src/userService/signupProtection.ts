@@ -11,7 +11,10 @@ import { detectSignupBurst, signupDomain } from './signupBurstDetector';
 import { blockedDomainsFrom } from './disposableEmail';
 import { domainHoldReason } from './domainIntelligence';
 
-/** Never held. The disposable-list refresh job also drops these from the upstream lists. */
+/**
+ * Never held. The disposable-list refresh job also drops these, and PRIVACY_RELAY_DOMAINS in
+ * disposableEmail.ts, from the upstream lists.
+ */
 export const PUBLIC_MAILBOX_DOMAINS: ReadonlySet<string> = new Set([
   ...DISALLOWED_SIGNUP_RULE_DOMAINS,
   ...personalEmailProviders,

@@ -390,6 +390,139 @@ describe('ChatService.shareDirectory', () => {
   });
 });
 
+/** The composer's "Add folder" in a Chat session: the card's checks and grant, with no card. */
+describe('ChatService.shareDirectory in a Chat session', () => {
+  let base: string;
+  let store: SessionStore;
+  let events: ChatStreamEvent[];
+  let streams: PassThrough[];
+  let outside: string;
+  let h: ReturnType<typeof harness>;
+
+  const settled = (id: string): Promise<ChatToolCall> =>
+    vi.waitUntil(
+      () =>
+        events
+          .map(event => (event.type === 'tool-end' ? event.call : null))
+          .find((call): call is ChatToolCall => call !== null && call.id === id),
+      { timeout: 5000, interval: 10 }
+    );
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-share-chat-')));
+    outside = join(base, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'NOTES.md'), 'outside notes', 'utf8');
+    await writeFile(join(base, 'file.txt'), 'not a folder', 'utf8');
+    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-share-chat-sessions-')), 'test-model');
+    events = [];
+    streams = [];
+    h = harness(store, streams, events);
+  });
+
+  afterEach(() => {
+    h.service.dispose();
+    for (const stream of streams) stream.end();
+    vi.unstubAllEnvs();
+  });
+
+  it('reaches a new chat before its first message: the first turn lists it and its tools read it', async () => {
+    const chat = await h.service.createSession();
+    expect((await store.get(chat.id))?.messages).toEqual([]);
+
+    expect(await h.service.shareDirectory(chat.id, outside)).toMatchObject({
+      status: 'added',
+      path: outside,
+      session: { id: chat.id, grantedDirectories: [outside] },
+    });
+
+    await h.service.send(chat.id, 'read my notes');
+    await h.awaitRound(1);
+    expect(h.systemPrompt(0)).toContain(
+      `These folders are shared with you, including everything beneath them:\n  ${outside}`
+    );
+    expect(h.toolNames(0)).toContain('file_read');
+
+    streams[0].write(toolTurn('read-1', 'file_read', { path: join(outside, 'NOTES.md') }));
+    streams[0].write(frame('[DONE]'));
+    expect((await settled('read-1')).preview).toContain('outside notes');
+  });
+
+  it("is the model's grant too: request_directory for that folder returns without a card", async () => {
+    const chat = await h.service.createSession();
+    await h.service.shareDirectory(chat.id, outside);
+    await h.service.send(chat.id, 'edit my notes');
+    await h.awaitRound(1);
+
+    streams[0].write(toolTurn('ask-1', 'request_directory', { path: outside, reason: 'Edit the notes.' }));
+    streams[0].write(frame('[DONE]'));
+
+    const done = await settled('ask-1');
+    expect(done.input.outcome).toEqual({ status: 'already' });
+    expect(events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval')).toBe(false);
+  });
+
+  it.each([
+    ['a missing path', () => join(base, 'missing'), /not an existing folder/],
+    ['a file', () => join(base, 'file.txt'), /not an existing folder/],
+    ['the filesystem root', () => '/', /root cannot be shared/],
+    ['a relative path', () => 'outside', /absolute path/],
+  ])('refuses %s, and the first turn still has no folder', async (_name, path, message) => {
+    const chat = await h.service.createSession();
+
+    const result = await h.service.shareDirectory(chat.id, path());
+    expect(result.status).toBe('refused');
+    if (result.status === 'refused') expect(result.error).toMatch(message);
+    expect((await store.get(chat.id))?.grantedDirectories).toBeUndefined();
+
+    await h.service.send(chat.id, 'read my notes');
+    await h.awaitRound(1);
+    expect(h.toolNames(0)).not.toContain('file_read');
+    expect(h.systemPrompt(0)).toContain('You currently have NO access');
+  });
+
+  it("refuses the app's own folder, a folder inside it and a symlink to it", async () => {
+    h.service.dispose();
+    const guarded = join(base, 'app-data');
+    await mkdir(join(guarded, 'sessions'), { recursive: true });
+    const link = join(base, 'looks-harmless');
+    await symlink(guarded, link);
+    h = harness(store, streams, events, { protectedPaths: [guarded] });
+    const chat = await h.service.createSession();
+
+    for (const path of [guarded, join(guarded, 'sessions'), link]) {
+      const result = await h.service.shareDirectory(chat.id, path);
+      expect(result.status).toBe('refused');
+      if (result.status === 'refused') expect(result.error).toMatch(/belongs to this app/);
+    }
+    expect((await store.get(chat.id))?.grantedDirectories).toBeUndefined();
+  });
+
+  it('shares the home folder with the warning the card would show', async () => {
+    const home = join(base, 'home');
+    await mkdir(home);
+    vi.stubEnv('HOME', home);
+    const chat = await h.service.createSession();
+
+    expect(await h.service.shareDirectory(chat.id, '~')).toMatchObject({
+      status: 'added',
+      path: home,
+      warning: expect.stringMatching(/whole home folder/),
+    });
+  });
+
+  it('takes a folder back before the first message, so that turn never sees it', async () => {
+    const chat = await h.service.createSession();
+    await h.service.shareDirectory(chat.id, outside);
+    expect((await h.service.removeContextDirectory(chat.id, outside))?.grantedDirectories).toBeUndefined();
+
+    await h.service.send(chat.id, 'read my notes');
+    await h.awaitRound(1);
+    expect(h.systemPrompt(0)).not.toContain(outside);
+    expect(h.toolNames(0)).not.toContain('file_read');
+  });
+});
+
 /** A spawned session's seed run has nobody to answer a card; a turn the user types into it does. */
 describe('request_directory in a spawned session', () => {
   let store: SessionStore;

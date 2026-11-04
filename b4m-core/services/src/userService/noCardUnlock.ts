@@ -6,6 +6,7 @@ import {
   ICreditLotRepository,
   ICreditTransactionRepository,
   IUserRepository,
+  isSignupGrantBlocked,
   NO_CARD_UNLOCK_REASONS,
   noCardUnlockTransactionId,
   personalEmailProviders,
@@ -243,7 +244,8 @@ export async function grantNoCardUnlock(
   if (reasonCredits <= 0) return refused('disabled');
 
   const user = await db.users.findById(userId);
-  if (!user || !user.emailVerified || accountBlockReasons(user).length > 0) return refused('disabled');
+  if (!user || !user.emailVerified || accountBlockReasons(user).length > 0 || isSignupGrantBlocked(user))
+    return refused('disabled');
 
   const transactionId = noCardUnlockTransactionId(reason, userId);
   if (await db.creditTransactions.findOne({ transactionId })) return refused('already_granted');
@@ -271,7 +273,8 @@ export async function grantNoCardUnlock(
   try {
     result = await withTransaction(async () => {
       const current = await db.users.findById(userId);
-      if (!current || accountBlockReasons(current).length > 0) return refused('disabled');
+      if (!current || accountBlockReasons(current).length > 0 || isSignupGrantBlocked(current))
+        return refused('disabled');
 
       const granted = await sumGranted(db, userId);
       const amount = Math.min(reasonCredits, settings.maxCredits - granted);
@@ -280,7 +283,8 @@ export async function grantNoCardUnlock(
       const reservation = await reserveSignupGrantBudget(
         { adminSettings: db.adminSettings, signupProtection },
         transactionId,
-        amount
+        amount,
+        { pool: 'signup' }
       );
       reservations.push(reservation);
       if (reservation.outcome === 'exhausted') return refused('daily_budget_reached');

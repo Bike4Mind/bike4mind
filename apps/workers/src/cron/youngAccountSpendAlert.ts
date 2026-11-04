@@ -1,11 +1,12 @@
 import { Logger } from '@bike4mind/observability';
-import { getSettingsMap } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { YoungAccountSpendSummary, YoungAccountSpender } from '@bike4mind/database';
 import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 import { stripeCustomerSlackLink } from '@server/integrations/slack/accountLinks';
 import { appUrlFromEnv } from '../events/alarmSlackMessage';
+import { recordYoungAccountSpendShadowDetections } from './youngAccountSpendShadowDetections';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import axios from 'axios';
 import { Resource } from 'sst';
@@ -117,6 +118,17 @@ export async function handler(event: unknown) {
   }
 
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+  // Before the Slack step and never throws, so a delivery failure neither loses nor fails the record.
+  if (getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) {
+    const recorded = await recordYoungAccountSpendShadowDetections({
+      summary,
+      thresholds,
+      window: { start, end },
+      logger,
+    });
+    // 0 with listed spenders means every claim was taken, i.e. this window was already recorded.
+    logger.log('young-account-spend-shadow-detections', { recorded, listed: summary.topSpenders.length });
+  }
   const webhookUrl = resolveSlackWebhookUrl('SlackLiveopsWebhookUrl', settings);
   if (!webhookUrl) {
     throw new Error('young-account spend alert breached but no Slack webhook is configured');

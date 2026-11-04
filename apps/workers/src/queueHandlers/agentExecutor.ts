@@ -1234,7 +1234,7 @@ async function processExecution(
     const runModelInfo = shadowModelInfo ?? modelInfo;
     const agentModel = shadowModelInfo ? shadowModelInfo.id : execution.model;
     // Subagents fall back to the parent backend, so their reported model is the substitute too.
-    const visibleModelId = (id: string) => (shadowModelInfo && id === shadowModelInfo.id ? execution.model : id);
+    const visibleModelId = (id: string) => (shadowModelInfo && id === shadowModelInfo.id ? resolvedModelId : id);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, {
       modelInfo: runModelInfo,
       logger,
@@ -1292,8 +1292,7 @@ async function processExecution(
     const orgCredits = organization?.currentCredits ?? 0;
     const availableCredits = organization ? orgCredits : userCredits;
     const gateIterations = enforceCredits && Boolean(modelInfo);
-    // Gated at the requested model's price even on substituted runs: refusing early beats a credit cost that reveals the substitute.
-    // Per-iteration billing below still charges the model that ran, so the gate can be stricter than the bill.
+    // Gated at the requested model's price, which per-iteration billing also charges on substituted runs.
     const requiredCredits =
       gateIterations && modelInfo && !isAggregationOnlyWake ? nextIterationCredits(modelInfo, lastInputTokens) : 0;
     if (availableCredits <= 0 || availableCredits < requiredCredits) {
@@ -2014,7 +2013,12 @@ async function processExecution(
       },
       subagentModels: shadowSettings && runModelInfo ? [runModelInfo] : runnableModels,
       substituteIdentity: shadowModelInfo
-        ? { substituteId: shadowModelInfo.id, identityId: execution.model, displayName: modelInfo?.name }
+        ? {
+            substituteId: shadowModelInfo.id,
+            identityId: execution.model,
+            displayName: modelInfo?.name,
+            chargedModel: modelInfo,
+          }
         : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // The delegation tools are injected as OBJECTS keyed on these two deps, never on
@@ -2597,6 +2601,7 @@ async function processExecution(
         checkpoint,
         counters,
         modelInfo: resolvedModelInfo,
+        chargedModelInfo: shadowModelInfo ? modelInfo : undefined,
         toolUsage,
         model: execution.model,
         startTime,
@@ -4326,7 +4331,12 @@ async function processSubagentDispatch(
       precomputed: { adminSettingsEnforceCredits: false, models },
       subagentModels: childRunnableModels,
       substituteIdentity: shadowModelInfo
-        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        ? {
+            substituteId: shadowModelInfo.id,
+            identityId: childModel,
+            displayName: modelInfo?.name,
+            chargedModel: modelInfo,
+          }
         : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
@@ -4634,7 +4644,12 @@ async function processSubagentDispatch(
       optInTools: subagentLatticeTools,
       availableModels: childRunnableModels,
       substituteIdentity: shadowModelInfo
-        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        ? {
+            substituteId: shadowModelInfo.id,
+            identityId: childModel,
+            displayName: modelInfo?.name,
+            chargedModel: modelInfo,
+          }
         : undefined,
       // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
       // orchestrator cannot test whether a grandchild's model is serviceable and

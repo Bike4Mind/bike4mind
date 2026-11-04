@@ -3,13 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   forfeitPaymentUnlock: vi.fn(),
   findByStripeCustomerId: vi.fn(),
+  findByPaymentIntentId: vi.fn(),
   retrieveCharge: vi.fn(),
   alertFraudBlock: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository: {},
-  creditTransactionRepository: {},
+  creditTransactionRepository: { findByPaymentIntentId: mocks.findByPaymentIntentId },
   userRepository: { findByStripeCustomerId: mocks.findByStripeCustomerId },
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { forfeitPaymentUnlock: mocks.forfeitPaymentUnlock } }));
@@ -44,6 +45,26 @@ describe('payment unlock forfeit helpers', () => {
     });
   });
 
+  it('falls back to the credit pack buyer when the refunded charge has no customer user', async () => {
+    mocks.findByPaymentIntentId.mockImplementation(async id =>
+      id === 'pi_pack'
+        ? { ownerType: 'User', ownerId: 'user_2' }
+        : id === 'pi_org'
+          ? { ownerType: 'Organization', ownerId: 'org_1' }
+          : null
+    );
+    await forfeitHeldUnlockForRefund({ customer: null, payment_intent: 'pi_pack' }, logger);
+    await forfeitHeldUnlockForRefund({ customer: 'cus_gone', payment_intent: { id: 'pi_pack' } }, logger);
+    await forfeitHeldUnlockForRefund({ customer: null, payment_intent: 'pi_org' }, logger);
+    await forfeitHeldUnlockForRefund({ customer: null, payment_intent: 'pi_none' }, logger);
+    await forfeitHeldUnlockForRefund({ customer: 'cus_1', payment_intent: 'pi_pack' }, logger);
+    expect(forfeitedWith()).toEqual([
+      ['user_2', 'refund'],
+      ['user_2', 'refund'],
+      ['user_1', 'refund'],
+    ]);
+  });
+
   it('resolves the warned charge payer, and warns when there is none', async () => {
     mocks.retrieveCharge.mockResolvedValueOnce({ customer: 'cus_1' }).mockResolvedValueOnce({ customer: 'cus_x' });
     await forfeitHeldUnlockForFraudWarning({ id: 'issfr_1', charge: 'ch_1' }, logger);
@@ -51,6 +72,19 @@ describe('payment unlock forfeit helpers', () => {
     expect(mocks.retrieveCharge.mock.calls).toEqual([['ch_1'], ['ch_2']]);
     expect(forfeitedWith()).toEqual([['user_1', 'fraud_warning']]);
     expect(logger.warn).toHaveBeenCalledWith('Could not find user for early fraud warning issfr_2');
+  });
+
+  it('falls back to the credit pack buyer when the warned charge has no customer user', async () => {
+    mocks.findByPaymentIntentId.mockImplementation(async id =>
+      id === 'pi_pack' ? { ownerType: 'User', ownerId: 'user_2' } : null
+    );
+    mocks.retrieveCharge
+      .mockResolvedValueOnce({ customer: null, payment_intent: 'pi_pack' })
+      .mockResolvedValueOnce({ customer: null, payment_intent: 'pi_none' });
+    await forfeitHeldUnlockForFraudWarning({ id: 'issfr_3', charge: 'ch_3' }, logger);
+    await forfeitHeldUnlockForFraudWarning({ id: 'issfr_4', charge: 'ch_4' }, logger);
+    expect(forfeitedWith()).toEqual([['user_2', 'fraud_warning']]);
+    expect(logger.warn).toHaveBeenCalledWith('Could not find user for early fraud warning issfr_4');
   });
 
   it('alerts LiveOps when a held unlock is actually cancelled, not on a replay', async () => {

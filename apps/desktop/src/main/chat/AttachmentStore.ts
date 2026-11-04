@@ -5,19 +5,25 @@ import type { AddAttachmentsResult, ChatAttachmentInput } from '@shared/chat';
 import { isValidSessionId } from './SessionStore';
 import {
   IMAGE_INPUT_MAX,
+  PDF_INPUT_MAX,
   MAX_ATTACHMENTS_PER_TURN,
   TEXT_BYTE_CAP,
   formatBytes,
   imageMediaTypeForName,
   isImageMediaType,
+  looksLikePdf,
   prepareImage,
   prepareText,
   type PrepareResult,
   type ShrinkImage,
 } from './attachments';
+import { extractPdfPromptText, preparePdf, type PdfPromptText } from './pdfText';
 
 /** Same shape as a session id, and validated for the same reason - both become path components. */
 const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Entries are capped text (at most TEXT_BYTE_CAP each), so this bounds the cache's memory too. */
+const PDF_TEXT_CACHE_MAX = 16;
 
 export interface AttachmentStoreLogger {
   debug(message: string): void;
@@ -43,6 +49,12 @@ export class AttachmentStore {
     private readonly shrink?: ShrinkImage
   ) {}
 
+  /**
+   * Keyed by attachment id, so replaying history does not re-parse every PDF on every turn.
+   * Seeded at intake, which has just extracted the text; least recently used goes first.
+   */
+  private readonly pdfTexts = new Map<string, PdfPromptText>();
+
   private sessionDirectory(sessionId: string): string {
     if (!isValidSessionId(sessionId)) throw new Error(`invalid session id: ${sessionId}`);
     return join(this.baseDirectory, sessionId);
@@ -66,7 +78,7 @@ export class AttachmentStore {
       const name = input.source === 'path' ? input.path : input.name;
       let prepared: PrepareResult;
       try {
-        prepared = input.source === 'path' ? await this.readPath(input.path) : this.readBytes(input);
+        prepared = input.source === 'path' ? await this.readPath(input.path) : await this.readBytes(input);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.warn(`CHAT: attachment intake failed for ${name}: ${message}`);
@@ -82,6 +94,10 @@ export class AttachmentStore {
       const path = this.filePath(sessionId, id);
       await mkdir(this.sessionDirectory(sessionId), { recursive: true });
       await writeFile(path, prepared.prepared.bytes);
+      const { promptText, pages, truncated } = prepared.prepared;
+      if (promptText !== undefined && pages) {
+        this.rememberPdfText(id, { text: promptText, pages, truncated: truncated ?? false });
+      }
 
       result.attachments.push({
         id,
@@ -91,6 +107,7 @@ export class AttachmentStore {
         byteSize: prepared.prepared.bytes.length,
         sourceBytes: prepared.prepared.sourceBytes,
         ...(prepared.prepared.truncated ? { truncated: true } : {}),
+        ...(prepared.prepared.pages ? { pages: prepared.prepared.pages } : {}),
       });
     }
 
@@ -111,6 +128,40 @@ export class AttachmentStore {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
+    }
+  }
+
+  /**
+   * A stored PDF's text as the model receives it, or null when the file is gone or no longer
+   * parses. A failure here is logged: the turn goes out without the PDF, and the log is the only
+   * place that says why.
+   */
+  async readPdfText(sessionId: string, attachmentId: string): Promise<PdfPromptText | null> {
+    const cached = this.pdfTexts.get(attachmentId);
+    if (cached) {
+      this.rememberPdfText(attachmentId, cached);
+      return cached;
+    }
+
+    const bytes = await this.read(sessionId, attachmentId);
+    if (!bytes) return null;
+    try {
+      const extracted = await extractPdfPromptText(bytes);
+      this.rememberPdfText(attachmentId, extracted);
+      return extracted;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`CHAT: could not extract text from PDF attachment ${attachmentId}: ${message}`);
+      return null;
+    }
+  }
+
+  private rememberPdfText(attachmentId: string, text: PdfPromptText): void {
+    this.pdfTexts.delete(attachmentId);
+    this.pdfTexts.set(attachmentId, text);
+    if (this.pdfTexts.size > PDF_TEXT_CACHE_MAX) {
+      const oldest = this.pdfTexts.keys().next();
+      if (!oldest.done) this.pdfTexts.delete(oldest.value);
     }
   }
 
@@ -191,18 +242,29 @@ export class AttachmentStore {
     try {
       const head = Buffer.alloc(Math.min(info.size, TEXT_BYTE_CAP + 1));
       const { bytesRead } = await handle.read(head, 0, head.length, 0);
-      return prepareText(path, head.subarray(0, bytesRead), info.size);
+      const headBytes = head.subarray(0, bytesRead);
+      if (looksLikePdf(path, undefined, headBytes)) {
+        if (info.size > PDF_INPUT_MAX) {
+          return {
+            ok: false,
+            reason: `That PDF is ${formatBytes(info.size)}; the limit is ${formatBytes(PDF_INPUT_MAX)}.`,
+          };
+        }
+        return preparePdf(path, await readFile(path));
+      }
+      return prepareText(path, headBytes, info.size);
     } finally {
       await handle.close();
     }
   }
 
   /** The paste path: the bytes are already here, and the media type is the clipboard's word for it. */
-  private readBytes(input: Extract<ChatAttachmentInput, { source: 'bytes' }>): PrepareResult {
+  private async readBytes(input: Extract<ChatAttachmentInput, { source: 'bytes' }>): Promise<PrepareResult> {
     const bytes = Buffer.from(input.data);
     const mediaType =
       input.mediaType && isImageMediaType(input.mediaType) ? input.mediaType : imageMediaTypeForName(input.name);
     if (mediaType) return prepareImage(input.name, mediaType, bytes, this.shrink);
+    if (looksLikePdf(input.name, input.mediaType, bytes)) return preparePdf(input.name, bytes);
     return prepareText(input.name, bytes.subarray(0, TEXT_BYTE_CAP + 1), bytes.length);
   }
 }

@@ -36,6 +36,7 @@ export const buildProfile = (overrides: Partial<AdminUserProfile> = {}): AdminUs
     emailVerified: true,
     apiKeyTrustApproved: false,
     newAccountSpendCapLifted: false,
+    isInternal: false,
     currentCredits: 500,
     tags: [],
     organizationId: null,

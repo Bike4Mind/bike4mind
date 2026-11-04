@@ -1531,7 +1531,7 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     h.isOperationalBillingEnabled.mockResolvedValue(true);
     h.reserveRequestCredits.mockResolvedValue({ refund: h.reservationRefund, settle: h.reservationSettle });
     h.reservationSettle.mockResolvedValue(1);
-    h.deferFailureIfRetryable.mockResolvedValue(false);
+    h.deferFailureIfRetryable.mockReset().mockResolvedValue(false);
   });
 
   it('asks the billing policy about the uploader with the plan resolver', async () => {
@@ -1559,6 +1559,20 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
       expect.objectContaining({ feature: 'embedding', settledCredits: 1 }),
       expect.anything()
     );
+  });
+
+  it('attributes the indexing charge to the API key that uploaded the file', async () => {
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile(undefined), apiKeyId: 'key-1' });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reservationSettle).toHaveBeenCalledWith(1, expect.objectContaining({ apiKeyId: 'key-1' }));
+  });
+
+  it('attributes no API key to the indexing charge of a JWT upload', async () => {
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.reservationSettle.mock.calls[0][1]).not.toHaveProperty('apiKeyId');
   });
 
   it('fails the file without embedding, and consumes the message, when the holder cannot cover it', async () => {
@@ -1642,28 +1656,63 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     );
   });
 
-  it('indexes unbilled when the billing check fails', async () => {
-    h.isOperationalBillingEnabled.mockRejectedValueOnce(new Error('settings down'));
+  it.each(['billing policy', 'organization lookup'])(
+    'retries a failed %s before reserving or embedding, then completes after recovery',
+    async source => {
+      const error = new Error('store unavailable');
+      if (source === 'billing policy') {
+        h.isOperationalBillingEnabled.mockRejectedValueOnce(error);
+      } else {
+        (User.findById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'u1', organizationId: 'org-1' });
+        h.organizationFindById.mockRejectedValueOnce(error);
+      }
+      h.deferFailureIfRetryable.mockResolvedValueOnce(true);
 
-    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toMatchObject({ cause: error });
 
-    expect(h.reserveRequestCredits).not.toHaveBeenCalled();
-    expect(h.getVector).toHaveBeenCalled();
-    expect(h.recordOperationalUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ settledCredits: undefined }),
-      expect.anything()
+      expect(mockLogger.warn).toHaveBeenCalledWith('embedding-billing-check-retry', {
+        fabFileId: 'ff1',
+        error: 'store unavailable',
+      });
+      expect(h.deferFailureIfRetryable).toHaveBeenCalledWith(
+        expect.anything(),
+        FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+        expect.objectContaining({ fabFileId: 'ff1', action: 'Vectorization' })
+      );
+      expect(h.markFailedIfNotAlready).not.toHaveBeenCalled();
+      expect(h.reserveRequestCredits).not.toHaveBeenCalled();
+      expect(h.getVector).not.toHaveBeenCalled();
+      expect(h.chunkUpdate).not.toHaveBeenCalled();
+      expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+      if (source === 'organization lookup') {
+        expect(h.isOperationalBillingEnabled).not.toHaveBeenCalled();
+      }
+
+      await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
+
+      expect(h.reserveRequestCredits).toHaveBeenCalledTimes(1);
+      expect(h.getVector).toHaveBeenCalledTimes(1);
+      expect(h.chunkUpdate).toHaveBeenCalled();
+      expect(h.reservationSettle).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('marks the file failed with safe retry advice when billing checks exhaust deliveries', async () => {
+    h.isOperationalBillingEnabled.mockRejectedValueOnce(new Error('internal store details'));
+    h.markFailedIfNotAlready.mockResolvedValueOnce(true);
+
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(
+      'File indexing is temporarily unavailable. Re-index the file to try again.'
     );
-  });
 
-  it('indexes unbilled when the organization read fails', async () => {
-    (User.findById as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ id: 'u1', organizationId: 'org-1' });
-    h.organizationFindById.mockRejectedValueOnce(new Error('org lookup down'));
-
-    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
-
-    expect(h.isOperationalBillingEnabled).not.toHaveBeenCalled();
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith(
+      'ff1',
+      'File indexing is temporarily unavailable. Re-index the file to try again.'
+    );
     expect(h.reserveRequestCredits).not.toHaveBeenCalled();
-    expect(h.getVector).toHaveBeenCalled();
+    expect(h.getVector).not.toHaveBeenCalled();
+    expect(h.chunkUpdate).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
   });
 
   it('never reserves for data-lake work, which its own spend gate governs', async () => {

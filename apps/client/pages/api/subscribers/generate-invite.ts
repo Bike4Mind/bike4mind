@@ -1,7 +1,13 @@
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
-import { subscriberRepository, registrationInviteRepository, withTransaction } from '@bike4mind/database';
+import {
+  grantPackageRepository,
+  subscriberRepository,
+  registrationInviteRepository,
+  withTransaction,
+} from '@bike4mind/database';
+import { referService } from '@bike4mind/services';
 import { generateCode } from '@server/managers/regInviteManager';
 import { RegInviteStatusType, requireEnv } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
@@ -19,22 +25,20 @@ const generateInviteSchema = z.object({
   emailBody: z.string().optional(),
   unlimitedUse: z.boolean().prefault(false),
   expiresAt: z.string().optional(),
+  grantPackageId: z.string().min(1).optional(),
 });
 
 const handler = adminApi({ adminPermissions: { POST: 'credits:adjust' } }).post(
   asyncHandler<{}, unknown, z.infer<typeof generateInviteSchema>>(async (req, res) => {
     const validatedData = generateInviteSchema.parse(req.body);
-    const {
-      subscriberId,
-      email,
-      firstName,
-      lastName,
-      startingCredits,
-      startingStorage,
-      emailBody,
-      unlimitedUse,
-      expiresAt,
-    } = validatedData;
+    const { subscriberId, email, firstName, lastName, emailBody, unlimitedUse, expiresAt, grantPackageId } =
+      validatedData;
+    let { startingCredits, startingStorage } = validatedData;
+    if (grantPackageId) {
+      const grantPackage = await referService.requireActiveGrantPackage(grantPackageId, grantPackageRepository);
+      startingCredits = grantPackage.credits;
+      startingStorage = grantPackage.storageMb ?? startingStorage;
+    }
 
     const subscriber = await subscriberRepository.findById(subscriberId);
     if (!subscriber) {
@@ -68,6 +72,7 @@ const handler = adminApi({ adminPermissions: { POST: 'credits:adjust' } }).post(
         status: RegInviteStatusType.open,
         unlimitedUse,
         ...(expiresAtDate ? { expiresAt: expiresAtDate } : {}),
+        ...(grantPackageId ? { grantPackageId } : {}),
         usageHistory: [],
         // Credits/storage are recorded here for reference; applied when the user registers
         title: `Invite for ${firstName} ${lastName}`,
@@ -93,6 +98,7 @@ const handler = adminApi({ adminPermissions: { POST: 'credits:adjust' } }).post(
           startingStorage,
           unlimitedUse,
           expiresAt: expiresAtDate?.toISOString() ?? null,
+          grantPackageId: grantPackageId ?? null,
         },
       });
       return invite;

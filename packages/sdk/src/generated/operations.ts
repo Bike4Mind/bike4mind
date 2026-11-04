@@ -5,6 +5,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
   },
+  bulkDeleteFiles: {
+    method: 'POST',
+    path: '/api/v1/files/bulk-delete',
+  },
   cancelMusicGeneration: {
     method: 'POST',
     path: '/api/v1/music-generations/{id}/cancel',
@@ -12,6 +16,10 @@ export const operations = {
   cancelVideoGeneration: {
     method: 'POST',
     path: '/api/v1/video-generations/{id}/cancel',
+  },
+  chunkFile: {
+    method: 'POST',
+    path: '/api/v1/files/{id}/chunk',
   },
   cloneSession: {
     method: 'POST',
@@ -177,6 +185,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/files/{id}',
   },
+  getFilesByIds: {
+    method: 'GET',
+    path: '/api/v1/files/by-ids',
+  },
   getMe: {
     method: 'GET',
     path: '/api/v1/me',
@@ -305,6 +317,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/skills/market/listings',
   },
+  registerPushToken: {
+    method: 'POST',
+    path: '/api/v1/push-tokens',
+  },
   removeDataLakeFile: {
     method: 'DELETE',
     path: '/api/v1/data-lakes/{id}/files/{file_id}',
@@ -321,6 +337,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/data-lakes/{id}/search',
   },
+  searchFiles: {
+    method: 'GET',
+    path: '/api/v1/files/search',
+  },
   sendChatMessage: {
     method: 'POST',
     path: '/api/chat',
@@ -336,6 +356,10 @@ export const operations = {
   synthesizeSpeech: {
     method: 'POST',
     path: '/api/ai/tts',
+  },
+  unregisterPushToken: {
+    method: 'DELETE',
+    path: '/api/v1/push-tokens',
   },
   updateAgent: {
     method: 'PATCH',

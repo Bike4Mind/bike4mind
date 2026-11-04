@@ -16,7 +16,8 @@ export {
 
 type EffectiveKeys = DecisionProviderKeys;
 
-const loadEffectiveKeys = (userId: string, logger: Logger): Promise<EffectiveKeys> =>
+// A null userId reads platform keys only (admin settings, plus env on self-host), never a user's.
+const loadEffectiveKeys = (userId: string | null, logger: Logger): Promise<EffectiveKeys> =>
   apiKeyService.getEffectiveLLMApiKeys(
     userId,
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
@@ -41,4 +42,16 @@ export const resolveCallableDecisionProviders = async (
   const needsKeys = providers.some(provider => provider !== 'test');
   const keys = needsKeys ? await loadEffectiveKeys(userId, logger) : ({} as EffectiveKeys);
   return new Set(providers.filter(provider => usableDecisionProviderKey(provider, keys) !== null));
+};
+
+/**
+ * The platform's key for a provider, for internal calls that must never use (or bill) a user's own
+ * key. Same usability rules as a caller's key.
+ */
+export const resolvePlatformDecisionProviderKey = async (
+  provider: DecisionProviderId,
+  logger: Logger
+): Promise<string | null> => {
+  const keys = provider === 'test' ? ({} as EffectiveKeys) : await loadEffectiveKeys(null, logger);
+  return usableDecisionProviderKey(provider, keys);
 };
