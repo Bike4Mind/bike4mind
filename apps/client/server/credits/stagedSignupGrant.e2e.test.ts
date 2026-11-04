@@ -574,6 +574,19 @@ describe('staged signup ledger', () => {
     expect(warning).toHaveBeenCalledWith('[signup-risk] Shadow observation collection failed; signals not recorded');
   });
 
+  it('grants in full when a shadow collector query fails server-side', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const collectRiskSignals = vi.fn(async () => {
+      await User.collection.aggregate([{ $notAStage: 1 }]).toArray();
+      return { datacenter: false };
+    });
+    const user = await createUser();
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals })).creditsGranted).toBe(
+      12
+    );
+    expect((await User.findById(user.id))?.signupGrantAssessment).not.toHaveProperty('signals');
+  });
+
   it('grants in full and records no signals when shadow collection fails under a disabled policy', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const failingCollector = vi.fn(async () => {

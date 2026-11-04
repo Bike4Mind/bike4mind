@@ -155,6 +155,18 @@ async function scoreNeedsReview(score: number, adminSettings: GrantAdapters['db'
   return !parsed.success || score >= parsed.data.reviewThreshold;
 }
 
+async function readRiskPolicy(adminSettings: GrantAdapters['db']['adminSettings']) {
+  const setting = await adminSettings.findBySettingName('signupGrantRiskPolicy');
+  let policy: unknown = { enabled: false };
+  try {
+    if (setting)
+      policy = typeof setting.settingValue === 'string' ? JSON.parse(setting.settingValue) : setting.settingValue;
+  } catch {
+    policy = undefined;
+  }
+  return { policy, parsedPolicy: signupRiskPolicySchema.safeParse(policy) };
+}
+
 async function releaseStage(
   userId: string,
   expected: SignupGrant['stage'],
@@ -181,6 +193,23 @@ async function releaseStage(
   // A re-run of the payout transaction re-reserves as a no-op, so every attempt's hold is kept for the refund.
   const reservations: SignupGrantBudgetReservation[] = [];
   const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
+  // Shadow collection under a disabled policy only feeds offline replay (replaySignupRisk). It runs outside the
+  // transaction: a failed query inside a session aborts the payout and fails every retry. A failure or a slow
+  // lookup records nothing rather than delaying the grant.
+  let shadowSignals: SignupRiskSignals | undefined;
+  if (expected === 'pending_email' && adapters.collectRiskSignals) {
+    const user = await db.users.findById(userId);
+    if (user && isReleaseEligible(user, expected) && !user.signupGrantAssessment) {
+      const { parsedPolicy } = await readRiskPolicy(db.adminSettings);
+      if (parsedPolicy.success && !parsedPolicy.data.enabled) {
+        try {
+          shadowSignals = await withShadowTimeout(adapters.collectRiskSignals(user));
+        } catch {
+          console.warn('[signup-risk] Shadow observation collection failed; signals not recorded');
+        }
+      }
+    }
+  }
   try {
     const result = await inCallerTransaction<AssessedGrantResult>(async () => {
       const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
@@ -205,17 +234,8 @@ async function releaseStage(
       let dripRemainingAfter = 0;
       if (expected === 'pending_email') {
         if (!assessment) {
-          const setting = await db.adminSettings.findBySettingName('signupGrantRiskPolicy');
-          let policy: unknown = { enabled: false };
+          const { policy, parsedPolicy } = await readRiskPolicy(db.adminSettings);
           let signals: SignupRiskSignals = { datacenter: user.signupMeta?.isDatacenter };
-          try {
-            if (setting)
-              policy =
-                typeof setting.settingValue === 'string' ? JSON.parse(setting.settingValue) : setting.settingValue;
-          } catch {
-            policy = undefined;
-          }
-          const parsedPolicy = signupRiskPolicySchema.safeParse(policy);
           let collected = false;
           if (adapters.collectRiskSignals && parsedPolicy.success && parsedPolicy.data.enabled) {
             try {
@@ -228,14 +248,11 @@ async function releaseStage(
               throw new Error('Signup risk observation collection unavailable; retry the signup grant');
             }
           } else if (adapters.collectRiskSignals && parsedPolicy.success) {
-            // Shadow collection under a disabled policy: the values only feed offline replay of candidate
-            // policies (replaySignupRisk), so a failure or a slow lookup records nothing rather than
-            // delaying the grant on the user-facing verification path.
-            try {
-              signals = await withShadowTimeout(adapters.collectRiskSignals(user));
+            // Shadow signals were gathered before the transaction (see below); a failed lookup there
+            // leaves them undefined and records nothing.
+            if (shadowSignals) {
+              signals = shadowSignals;
               collected = true;
-            } catch {
-              console.warn('[signup-risk] Shadow observation collection failed; signals not recorded');
             }
           }
           // Only collector output is recorded: the signupMeta fallback alone would read as an observed
