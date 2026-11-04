@@ -22,6 +22,7 @@ import {
   dataLakeRepository,
   adminSettingsRepository,
   creditTransactionRepository,
+  heldCreditRewardRepository,
   gearStampRepository,
   gearOverrideRepository,
   hearthRepository,
@@ -29,6 +30,7 @@ import {
   rapidReplyAuditLogRepository,
   researchDataRepository,
 } from '@bike4mind/database';
+import { creditService } from '@bike4mind/services';
 
 /**
  * The gear catalog and its evaluation, shared by GET /api/gears/status, POST
@@ -73,6 +75,8 @@ interface GearFacts {
   stamps: Set<string>;
   accountAgeInDays: number;
   emailVerified: boolean;
+  /** The payout gate creditService.payCreditReward applies; mirrored here so a refused account sees no Claim. */
+  rewardBlocked: boolean;
 }
 
 async function gatherFacts(userId: string): Promise<GearFacts> {
@@ -80,10 +84,16 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
     UsageEvent.distinct('feature', { userId }) as Promise<string[]>,
     UsageEvent.distinct('model', { userId, feature: 'chat' }) as Promise<string[]>,
     gearStampRepository.stampedKeys(userId),
-    User.findById(userId, { createdAt: 1, emailVerified: 1 }).lean() as Promise<{
-      createdAt?: Date;
-      emailVerified?: boolean;
-    } | null>,
+    User.findById(userId, {
+      createdAt: 1,
+      emailVerified: 1,
+      isBanned: 1,
+      disputePending: 1,
+      moderation: 1,
+      deletedAt: 1,
+      isSynthetic: 1,
+      'signupGrant.blocked': 1,
+    }).lean() as Promise<({ createdAt?: Date; emailVerified?: boolean } & creditService.RewardPartyFields) | null>,
   ]);
   // Mirrors accountCreatedMs in userApiKeyService/trust.ts.
   const createdAtMs = user?.createdAt ? new Date(user.createdAt).getTime() : NaN;
@@ -100,6 +110,7 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
     stamps,
     accountAgeInDays,
     emailVerified: user?.emailVerified ?? false,
+    rewardBlocked: !user || creditService.isRewardRecipientBlocked(user),
   };
 }
 
@@ -369,6 +380,8 @@ export interface GearEvaluation {
   /** The payout's own condition - `rewardCheck` where the gear has one. */
   rewardEligible: boolean;
   alreadyRewarded: boolean;
+  /** Claimed, but held for the trickle pool; alreadyRewarded is also true. */
+  rewardQueued: boolean;
   /** Why rewardEligible is false for an unlocked, unpaid gear. */
   pendingReason?: GearPendingReason;
 }
@@ -411,11 +424,21 @@ export async function evaluateGears(
   const txIds = activeGears.map(g => gearTxId(userId, g.key));
   const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
   const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
+  const heldRows = await heldCreditRewardRepository.findByTransactionIds(txIds);
+  // A reward queued for the trickle pool is already claimed: it pays on release, not on a second claim.
+  // A ledger row wins: a losing concurrent claim can leave a held row until the release settles it.
+  const queued = new Set(
+    heldRows.filter(row => row.status === 'held' && !rewarded.has(row.transactionId)).map(row => row.transactionId)
+  );
+  for (const txId of queued) rewarded.add(txId);
+  // Voided at release (the account was refused then): payCreditReward refuses every later claim of it.
+  const voided = new Set(heldRows.filter(row => row.status === 'void').map(row => row.transactionId));
 
   const evaluations = await Promise.all(
     activeGears.map(async (def, i) => {
       const unlocked = unlockedFlags[i];
       const alreadyRewarded = rewarded.has(gearTxId(userId, def.key));
+      const rewardQueued = queued.has(gearTxId(userId, def.key));
       const credits = overrides.get(def.key)?.credits ?? creditsFor(def);
 
       let rewardEligible: boolean;
@@ -424,6 +447,9 @@ export async function evaluateGears(
       // an admin, purchase, plan or manual-approval exemption: access is not a reward.
       if (!unlocked || alreadyRewarded) {
         rewardEligible = unlocked;
+      } else if (facts.rewardBlocked || voided.has(gearTxId(userId, def.key))) {
+        rewardEligible = false;
+        pendingReason = 'unavailable';
       } else if (!facts.emailVerified) {
         rewardEligible = false;
         pendingReason = 'unverified';
@@ -442,6 +468,7 @@ export async function evaluateGears(
         credits,
         rewardEligible,
         alreadyRewarded,
+        rewardQueued,
         pendingReason,
       };
     })

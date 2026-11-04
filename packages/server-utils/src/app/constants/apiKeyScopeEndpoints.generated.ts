@@ -44,6 +44,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/files/tags/counts',
     'GET /api/v1/files',
     'GET /api/v1/files/:id',
+    'GET /api/v1/files/by-ids',
+    'GET /api/v1/files/search',
   ],
   [ApiKeyScope.WRITE_FILES]: [
     'DELETE /api/files',
@@ -64,6 +66,8 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/files/tags/toggle',
     'POST /api/v1/files',
     'PATCH|DELETE /api/v1/files/:id',
+    'POST /api/v1/files/:id/chunk',
+    'POST /api/v1/files/bulk-delete',
   ],
   [ApiKeyScope.AI_GENERATE]: [
     'POST /api/ai/music',
@@ -170,7 +174,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'POST /api/v1/agents/:id/generate-system-prompt',
   ],
   [ApiKeyScope.ME_READ]: ['GET /api/v1/credits', 'GET /api/v1/credits/transactions', 'GET /api/v1/me'],
-  [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events'],
+  [ApiKeyScope.OVERWATCH_INGEST_WRITE]: ['POST /api/overwatch/v1/events', 'POST /api/overwatch/v1/hops'],
   [ApiKeyScope.REWARDS_GRANT]: ['POST /api/partners/rewards/grant'],
   [ApiKeyScope.EMBED_CHAT]: [
     'GET /api/embed/branding',

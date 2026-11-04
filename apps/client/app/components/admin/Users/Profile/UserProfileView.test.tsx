@@ -65,7 +65,7 @@ vi.mock('./tabs/OverviewTab', () => ({
     onViewCredits: () => void;
   }) => (
     <div data-testid="stub-overview">
-      {['tags', 'mfaReset', 'emailVerification', 'apiKeyTrust'].map(action => (
+      {['tags', 'mfaReset', 'emailVerification', 'apiKeyTrust', 'internalAccount'].map(action => (
         <button key={action} data-testid={`stub-overview-${action}-btn`} onClick={() => onAction(action)} />
       ))}
       <button data-testid="stub-overview-activity-btn" onClick={onViewActivity} />
@@ -103,6 +103,7 @@ vi.mock('./actions/accountDialogs', () => {
   return {
     ApiKeyTrustDialog: stub('api-key-trust-dialog'),
     EmailVerificationDialog: stub('email-verification-dialog'),
+    InternalAccountDialog: stub('internal-account-dialog'),
     LoginAsDialog: stub('login-as-dialog'),
     ResetMfaDialog: stub('mfa-reset-dialog'),
     RestrictDialog: stub('restrict-dialog'),
@@ -277,6 +278,7 @@ describe('UserProfileView', () => {
       ['mfaReset', 'mfa-reset-dialog'],
       ['emailVerification', 'email-verification-dialog'],
       ['apiKeyTrust', 'api-key-trust-dialog'],
+      ['internalAccount', 'internal-account-dialog'],
     ])('opens the %s dialog requested by the overview tab', (action, dialogId) => {
       setup();
 

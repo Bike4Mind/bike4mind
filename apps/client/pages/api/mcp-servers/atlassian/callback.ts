@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { readStateNonceHash, clearStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { oauthProviderErrorCode } from '@server/utils/auth/oauthProviderErrorCode';
 
 const OAUTH_TIMEOUT = 30000;
 
@@ -39,7 +40,7 @@ interface ResourceResponse {
  * - Duplicate code usage from browser retries
  */
 const handler = baseApi({ auth: false }).get(async (req, res) => {
-  const { code, state } = req.query;
+  const { code, state, error: providerError } = req.query;
 
   // Burn the browser-binding nonce cookie on every exit path.
   clearStateNonce(res);
@@ -54,8 +55,16 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     req
   );
 
+  // warn, not error: a provider error (the user declined consent) or a code-less hit on this public
+  // URL is an expected outcome, and error-level lines raise production alerts.
+  if (providerError) {
+    console.warn('[Atlassian Callback] Authorization not completed', { error: oauthProviderErrorCode(providerError) });
+    auditLogger.failure('oauth_error');
+    return res.redirect('/profile?tab=integrations&atlassian=error');
+  }
+
   if (!code || typeof code !== 'string') {
-    console.error('❌ Missing authorization code');
+    console.warn('[Atlassian Callback] Missing authorization code');
     auditLogger.failure('missing_code');
     return res.redirect('/profile?tab=integrations&atlassian=error');
   }

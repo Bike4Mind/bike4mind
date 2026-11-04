@@ -31,6 +31,13 @@ const WRITTEN = [
   'Taskfile.yml',
   'cfg/custom.config.ts',
   'plugins/myplug.py',
+  'a.R',
+  'b.ps1',
+  'npx',
+  'npx.cmd',
+  'pnpm',
+  'sub/npx',
+  'uv.bat',
 ];
 
 describe('sessionScriptRun', () => {
@@ -77,11 +84,28 @@ describe('sessionScriptRun', () => {
     ['env A=1 python3 tools/go.py', 'tools/go.py'],
     ['cd tools && python go.py', 'go.py'],
     ['bash < setup.sh', 'setup.sh'],
+    ['Rscript a.R', 'a.R'],
+    ['cat a.R | Rscript -', 'a.R'],
     ['cat setup.sh | sh', 'setup.sh'],
     ['bash -lc "bash setup.sh"', 'setup.sh'],
     ['echo ok; (bash setup.sh)', 'setup.sh'],
     ['make build', 'Makefile'],
     ['npx tsx tools/x.ts', 'tools/x.ts'],
+    ['NPX tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.exe tsx tools/x.ts', 'tools/x.ts'],
+    ['npx.cmd tsx tools/x.ts', 'tools/x.ts'],
+    ['/usr/bin/npx tsx tools/x.ts', 'tools/x.ts'],
+    ['./npx ls', './npx'],
+    ['./npx.cmd ls', './npx.cmd'],
+    ['./pnpm exec ls', './pnpm'],
+    ['sub/npx ls', 'sub/npx'],
+    ['ROOT/npx ls', 'ROOT/npx'],
+    ['./uv.bat run ls', './uv.bat'],
+    ['./npx tsx x.ts', './npx'],
+    ['uv.bat run python tools/go.py', 'tools/go.py'],
+    ['bash.bat setup.sh', 'setup.sh'],
+    ['PNPM exec tsx tools/x.ts', 'tools/x.ts'],
+    ['powershell.exe -File b.ps1', 'b.ps1'],
     ['bunx tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm exec tsx tools/x.ts', 'tools/x.ts'],
     ['pnpm dlx tsx tools/x.ts', 'tools/x.ts'],
@@ -107,15 +131,44 @@ describe('sessionScriptRun', () => {
     ['bash -c "cd sub && ./y.sh"', './y.sh'],
     ['bash -c "cd sub; bash y.sh"', 'y.sh'],
     ['bash +ec "cd sub; bash y.sh"', 'y.sh'],
+    ['sudo -u bob bash -c "cd sub && ./y.sh"', './y.sh'],
+    ['timeout -s KILL 5 bash -c "cd sub && ./y.sh"', './y.sh'],
     ['echo "$(./run.sh)"', './run.sh'],
     ['echo "$(bash run.sh)"', 'run.sh'],
     ['bash <(cat run.sh)', 'run.sh'],
     ['cat run.sh | sudo bash', 'run.sh'],
     ['cat run.sh | env bash', 'run.sh'],
+    ['time FOO=1 make', 'Makefile'],
+    ['cat run.sh | time FOO=1 bash', 'run.sh'],
+    ['./run.sh; constructor', './run.sh'],
+    ['__proto__; ./run.sh', './run.sh'],
+    ['bash.exe setup.sh', 'setup.sh'],
+    ['BASH.EXE -c "bash setup.sh"', 'setup.sh'],
+    ['cat setup.sh | sh.exe', 'setup.sh'],
+    ['nice --adj 5 make', 'Makefile'],
+    ['cat run.sh | nice --adj 5 bash', 'run.sh'],
+    ["env -S './run.sh'", './run.sh'],
+    ["env -S 'bash run.sh'", 'run.sh'],
+    ['env -S make', 'Makefile'],
+    ['env -iS make build', 'Makefile'],
+    ['env --split-string=./run.sh', './run.sh'],
+    ['env -S \'bash -c "cd sub && ./y.sh"\'', './y.sh'],
+    ['cat run.sh | env -S bash', 'run.sh'],
     ["git -c alias.z='!sh run.sh' z", 'run.sh'],
     ['/usr/bin/git -c core.hooksPath=./run.sh commit', './run.sh'],
   ])('finds %s', async (command, name) => {
     expect(await runs(command.replace('ROOT', root))).toContain(name.replace('ROOT', root));
+  });
+
+  it('finds a launcher path spelled relative to the directory a cd moved into', async () => {
+    const id = 'launcher-after-cd';
+    await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'sub/npx'));
+    expect(await runs('cd sub && ./npx ls', id)).toContain('./npx');
+    expect(await runs('./npx ls', id)).toBeNull();
+  });
+
+  it('finds a path-spelled launcher behind another launcher', async () => {
+    expect(await runs('npx ./npx ls')).toContain('./npx');
   });
 
   it('matches a written file in the home folder given as ~', async () => {
@@ -154,6 +207,7 @@ describe('sessionScriptRun', () => {
     'echo "$(cat run.sh)"',
     'diff <(cat run.sh) data.txt',
     'cat run.sh | sudo tee out.txt',
+    'command -v ./run.sh',
   ])('ignores %s', async command => {
     expect(await runs(command)).toBeNull();
   });
@@ -178,6 +232,7 @@ describe('sessionScriptRun', () => {
     expect(run?.hooks.map(([repository]) => repository)).toEqual([repo]);
     expect(await sessionScriptRun('git status', root, id)).toBeNull();
     expect(await sessionScriptRun(`git -C ${repo} status`, root, id)).not.toBeNull();
+    expect(await sessionScriptRun('timeout -s KILL 5 git status', repo, id)).not.toBeNull();
 
     expectShellRun('key', id, run!.hooks);
     shellCommandRan({ sessionId: id, approvedKey: 'key' } as ToolContext);
@@ -244,6 +299,23 @@ describe('sessionScriptRun', () => {
     await recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'setup.sh'));
     forgetSessionWrites(id);
     expect(await sessionScriptRun('bash setup.sh', root, id)).toBeNull();
+  });
+
+  describe.each(['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty'])('a command named %s', name => {
+    const id = 'session-scripts-own-keys';
+    beforeAll(() => recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'run.sh')));
+
+    it('is not a project-file runner', async () => {
+      expect(await runs(`${name} x`, id)).toBeNull();
+      expect(await runs(`${name} -C sub x`, id)).toBeNull();
+      expect(await runs(`FOO=./run.sh ${name}`, id)).toBeNull();
+    });
+
+    it('does not hide a session script run in the same command', async () => {
+      expect(await runs(`./run.sh; ${name}`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name}; ./run.sh`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name} && npx ${name} && ./run.sh`, id)).toEqual(['./run.sh']);
+    });
   });
 });
 

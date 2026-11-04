@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   settings: vi.fn(),
   getSpent: vi.fn(),
+  resolvePoolBudget: vi.fn(),
   countPendingRiskReviews: vi.fn(),
   countHeld: vi.fn(),
   countDomainHolds: vi.fn(),
@@ -22,7 +23,11 @@ vi.mock('@bike4mind/database', () => ({
   paymentAttemptRepository: { summarizeWindow: h.summarizeWindow },
 }));
 vi.mock('@bike4mind/services', () => ({
-  userService: { signupGrantBudgetDay: (now: Date) => now.toISOString().slice(0, 10) },
+  userService: {
+    signupGrantBudgetDay: (now: Date) => now.toISOString().slice(0, 10),
+    signupGrantBudgetKey: (pool: string, day: string) => `${pool}:${day}`,
+    resolvePoolBudget: h.resolvePoolBudget,
+  },
 }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: {
@@ -59,7 +64,6 @@ beforeEach(() => {
     storedSettings({
       turnstileEnabled: true,
       turnstileFailClosed: false,
-      signupGrantDailyBudget: 5000,
       newAccountSpendCapDays: 7,
       paymentRiskAlertsEnabled: true,
       paymentRiskAutoRefundEnabled: false,
@@ -67,7 +71,10 @@ beforeEach(() => {
       paymentRiskCheckoutMaxBlockedAttempts: 3,
     })
   );
-  h.getSpent.mockResolvedValue(1200);
+  h.resolvePoolBudget.mockImplementation(async (_settings: unknown, pool: string) =>
+    pool === 'signup' ? { budget: 5000, missing: false } : { budget: 0, missing: true }
+  );
+  h.getSpent.mockImplementation(async (key: string) => (key.startsWith('signup:') ? 1200 : 40));
   h.countPendingRiskReviews.mockResolvedValue(4);
   h.countHeld.mockResolvedValue(9);
   h.countDomainHolds.mockResolvedValue(2);
@@ -84,7 +91,13 @@ describe('getIncidentState', () => {
       generatedAt: NOW.toISOString(),
       defenses: {
         turnstile: { enabled: true, failClosed: false, secretConfigured: true },
-        grantBudget: { limit: 5000, spentToday: 1200, day: '2026-11-02' },
+        grantBudget: {
+          day: '2026-11-02',
+          pools: [
+            { pool: 'signup', limit: 5000, spentToday: 1200, missing: false },
+            { pool: 'trickle', limit: 0, spentToday: 40, missing: true },
+          ],
+        },
         newAccountSpendCapDays: 7,
         paymentRisk: {
           alertsEnabled: true,
@@ -96,7 +109,7 @@ describe('getIncidentState', () => {
       queues: { riskReviewsPending: 4, heldGrants: 9, domainHoldsPending: 2 },
       payments: { last24h: window(5), last7d: window(20) },
     });
-    expect(h.getSpent).toHaveBeenCalledWith('2026-11-02');
+    expect(h.getSpent.mock.calls.map(([key]) => key)).toEqual(['signup:2026-11-02', 'trickle:2026-11-02']);
     expect(h.countDomainHolds).toHaveBeenCalledWith({ status: 'held_pending_review' });
     expect(h.summarizeWindow.mock.calls.map(([since]) => (since as Date).toISOString())).toEqual([
       new Date(NOW.getTime() - DAY_MS).toISOString(),
@@ -104,15 +117,14 @@ describe('getIncidentState', () => {
     ]);
   });
 
-  it('reports an unmetered budget and switched-off caps as null, with setting defaults for the rest', async () => {
+  it('reports switched-off caps as null, with setting defaults for the rest', async () => {
     h.secret = 'not-configured';
     h.settings.mockResolvedValue(
-      storedSettings({ signupGrantDailyBudget: 0, newAccountSpendCapDays: 0, paymentRiskCheckoutMaxBlockedAttempts: 0 })
+      storedSettings({ newAccountSpendCapDays: 0, paymentRiskCheckoutMaxBlockedAttempts: 0 })
     );
 
     const { defenses } = await getIncidentState(NOW);
 
-    expect(defenses.grantBudget).toBeNull();
     expect(defenses.newAccountSpendCapDays).toBeNull();
     expect(defenses.paymentRisk?.checkoutMaxBlockedAttempts).toBeNull();
     expect(defenses.turnstile).toEqual({ enabled: false, failClosed: false, secretConfigured: false });
@@ -122,7 +134,6 @@ describe('getIncidentState', () => {
       linkedAccountActions: true,
     });
     expect(defenses.error).toBeUndefined();
-    expect(h.getSpent).not.toHaveBeenCalled();
   });
 
   it('reports the Turnstile secret as unknown (null) when reading it throws', async () => {
@@ -170,6 +181,6 @@ describe('getIncidentState', () => {
 
     expect(defenses.grantBudget).toBeNull();
     expect(defenses.turnstile?.enabled).toBe(true);
-    expect(defenses.error).toBe('Signup grant budget spend could not be read');
+    expect(defenses.error).toBe('Signup grant budget could not be read');
   });
 });

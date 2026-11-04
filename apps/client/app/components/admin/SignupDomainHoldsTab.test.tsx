@@ -44,6 +44,28 @@ beforeEach(() => {
 });
 
 describe('SignupDomainHoldsTab', () => {
+  it('marks a hold the disposable list rule confirmed and keeps Release available', async () => {
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            ...reviews[1],
+            reason: 'disposable-aggregate',
+            autoDecision: { policy: 'disposable-aggregate-rule', decidedAt: '2026-01-02T00:00:00.000Z' },
+          },
+          reviews[0],
+        ],
+        total: 2,
+      },
+    });
+    renderTab();
+    expect(await screen.findByTestId('signup-domain-auto-decision-beta.test')).toHaveTextContent(
+      'Auto-confirmed by the disposable list rule'
+    );
+    expect(screen.queryByTestId('signup-domain-auto-decision-alpha.test')).not.toBeInTheDocument();
+    expect(screen.getByTestId('signup-domain-release-beta.test')).toBeEnabled();
+    expect(screen.getByTestId('signup-domain-confirm-beta.test')).toBeDisabled();
+  });
   it('uses server pagination without a second local pager', async () => {
     renderTab();
     expect(await screen.findByTestId('signup-domain-confirm-alpha.test')).toBeEnabled();

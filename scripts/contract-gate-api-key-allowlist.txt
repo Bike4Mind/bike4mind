@@ -258,6 +258,7 @@ apps/client/pages/api/ai/v1/tools.ts
 apps/client/pages/api/ai/voice-sessions/index.ts
 apps/client/pages/api/analytics/aggregate.ts
 apps/client/pages/api/analytics/log-event.ts
+apps/client/pages/api/analytics/page.ts  # deliberately unauthenticated (auth: false): the app's page beacon, sent signed in or out like analytics/visit; rate limited, records only on a visit already recorded
 apps/client/pages/api/analytics/visit.ts
 apps/client/pages/api/api-keys/[id]/delete.ts
 apps/client/pages/api/api-keys/[id]/set-active.ts
@@ -581,6 +582,7 @@ apps/client/pages/api/otc/form-token.ts  # deliberately unauthenticated (auth: f
 apps/client/pages/api/otc/send.ts
 apps/client/pages/api/otc/verify.ts
 apps/client/pages/api/overwatch/v1/events.ts
+apps/client/pages/api/overwatch/v1/hops.ts  # confined Overwatch ingest scope, like v1/events beside it, kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
 apps/client/pages/api/partners/rewards/grant.ts  # confined, admin-provisioned partner scope (rewards:grant) kept out of the public OpenAPI; server-to-server only, session callers refused in the handler
 apps/client/pages/api/ping.ts
 apps/client/pages/api/projects/[id]/files.ts
@@ -660,11 +662,9 @@ apps/client/pages/api/secret-rotations/[id]/index.ts
 apps/client/pages/api/secret-rotations/index.ts
 apps/client/pages/api/secret-rotations/renewed.ts
 apps/client/pages/api/security/api-usage.ts
-apps/client/pages/api/security/behavioral-summary.ts
 apps/client/pages/api/security/blocked-ips.ts
 apps/client/pages/api/security/blocked-ips/evaluate.ts
 apps/client/pages/api/security/user-recent.ts
-apps/client/pages/api/security/user-summary.ts
 apps/client/pages/api/sessions/[id]/agents.ts
 apps/client/pages/api/sessions/[id]/agents/[agentId]/config.ts
 apps/client/pages/api/sessions/[id]/agents/configs.ts

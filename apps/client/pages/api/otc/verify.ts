@@ -17,6 +17,7 @@ import {
   subscriberRepository,
   creditTransactionRepository,
   creditLotRepository,
+  grantPackageRepository,
   pendingOtcTokenRepository,
   authSessionRepository,
   oauthClientRepository,
@@ -34,7 +35,7 @@ import {
   releaseBootstrapAdminClaim,
   resolveBootstrapAdmin,
 } from '@server/utils/auth/bootstrapAdmin';
-import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -82,6 +83,18 @@ function parseSourceClientId(value: unknown): string | undefined {
   return isOAuthClientIdShape(value) ? value : undefined;
 }
 
+// Same address shape /api/otc/send accepts. Only strings get past this, so the email
+// that reaches the limiter keys and the Mongo lookups below can never be an operator object.
+const otcVerifyCredentialsSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(254)
+    .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/),
+  code: z.string().trim().min(1).max(32),
+});
+
 // Existing-user login spreads the self-view user at the top level next to the access token.
 const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
 const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
@@ -105,18 +118,20 @@ const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(otcCounterLimit({ bucket: 'verify-ip', window: OTC_LIMITS.verify.perIp, subject: ipSubject }))
   .post(async (req, res) => {
-    const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
+    const credentials = otcVerifyCredentialsSchema.safeParse(req.body);
+    if (!credentials.success) {
+      req.logger.warn('OTC verify rejected a malformed request body', {
+        issues: credentials.error.issues.map(({ path, code }) => ({ path: path.join('.'), code })),
+      });
+      return res.status(400).json({ error: 'Invalid request' });
+    }
+    const { email: normalizedEmail, code } = credentials.data;
+    const { username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
     const parsedInviteCode = z.string().trim().optional().safeParse(req.body.inviteCode);
     if (!parsedInviteCode.success) {
       return res.status(400).json({ error: 'Invalid invite code' });
     }
     const inviteCode = parsedInviteCode.data;
-
-    if (!email || !code) {
-      return res.status(400).json({ error: 'Email and code are required' });
-    }
-
-    const normalizedEmail = (email as string).toLowerCase().trim();
 
     // --- UNIFORM CODE VERIFICATION (enumeration-resistant by construction) ---
     // Both login and registration verify the emailed code against the server-side
@@ -477,8 +492,10 @@ const handler = baseApi({ auth: false })
               creditTransactions: creditTransactionRepository,
               oauthClients: oauthClientRepository,
               creditLots: creditLotRepository,
+              grantPackages: grantPackageRepository,
             },
             logger: req.logger,
+            deferFreeCreditRelease: Boolean(inviteCode),
             skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
             signupMeta: {
               ...signupNetwork,
@@ -534,6 +551,21 @@ const handler = baseApi({ auth: false })
       // login branch and self-heals. Log the real cause; surface only a generic message.
       req.logger.error('OTC inline registration failed', err);
       throw new InternalServerError('Registration failed. Please try again.', { pendingToken: reissuedToken });
+    }
+
+    // With an invite code registerViaOTC ran inside a transaction, so it left the credits pending: the
+    // staged grant's own transaction cannot see an account that is not committed yet. Release now.
+    if (inviteCode) {
+      const release = await releaseVerifiedPendingFreeCredits(
+        { id: newUser.id, tags: newUser.tags, pendingCreditGrant: newUser.pendingCreditGrant },
+        'OTC registration (email verified)',
+        req.logger,
+        readNetworkMeta(req)
+      );
+      if (release.tags !== null || release.creditsGranted > 0) {
+        const refreshed = await userRepository.findById(newUser.id);
+        if (refreshed) newUser = refreshed;
+      }
     }
 
     const isBootstrapUser = bootstrapClaimId !== null;
@@ -631,6 +663,7 @@ const handler = baseApi({ auth: false })
         userId: newUser.id,
         touches: readConsentedAcquisitionTouches(req),
         method: 'otc',
+        account: signupFunnel,
       });
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };

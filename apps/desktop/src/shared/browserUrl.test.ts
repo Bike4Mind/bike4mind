@@ -18,6 +18,7 @@ describe('normalizeUrl', () => {
     expect(() => normalizeUrl('file:///etc/passwd')).toThrow(/http and https/);
     expect(() => normalizeUrl('b4m-media:12345')).toThrow(/http and https/);
     expect(() => normalizeUrl('b4m-artifact:abc')).toThrow(/http and https/);
+    expect(() => normalizeUrl('b4m-artifact://view/00000000-0000-0000-0000-000000000000')).toThrow(/http and https/);
     expect(() => normalizeUrl('javascript:alert(1)')).toThrow(/http and https/);
   });
 });

@@ -49,7 +49,7 @@ Below the numbers, cards sit in two columns, or one column on a narrow screen.
 
 | Card | What it shows |
 |------|---------------|
-| **Defenses** | Whether the signup challenge is on and fails closed, each firewall block list with its size and whether it blocks or only counts, the runtime blocker, today's signup grant budget, the new-account spend cap, and the payment risk settings |
+| **Defenses** | Whether the signup challenge is on and fails closed, each firewall block list with its size and whether it blocks or only counts, the runtime blocker, today's spend against the signup and trickle grant pools (or Paused), the new-account spend cap, and the payment risk settings |
 | **Queues** | The number of items waiting in **Risk review**, **Held signup grants** and **Signup domain holds**, each with an **Open** button that takes you to that admin page |
 | **Alarms** | Every alarm that is firing, newest first, with how long ago it started |
 | **Payments** | Attempts, successes, failures, Stripe Radar blocks, elevated risk, payments from hosting networks and distinct cards, for the last 24 hours and the last 7 days |

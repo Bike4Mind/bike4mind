@@ -55,6 +55,28 @@ const planned = (
   logo: IntegrationDefinition['logo']
 ): IntegrationDefinition => ({ name, description, category, logo, stage: 'planned', capabilities: [] });
 
+/**
+ * A beta entry users connect as an API-key preset of the custom MCP connectors. Gated by the
+ * platform `EnableCustomMcpConnectors` switch, like the connection routes themselves.
+ */
+const apiKeyPreset = (
+  name: string,
+  description: string,
+  category: IntegrationDefinition['category'],
+  logo: IntegrationDefinition['logo'],
+  url: string,
+  capability: { id: string; label: string }
+): IntegrationDefinition => ({
+  name,
+  description,
+  category,
+  logo,
+  stage: 'beta',
+  flag: 'EnableCustomMcpConnectors',
+  remoteMcp: { url, auth: 'api_key' },
+  capabilities: [{ ...capability, kind: 'agent-tools', stage: 'beta' }],
+});
+
 export const INTEGRATION_CATALOG: Record<IntegrationId, IntegrationDefinition> = {
   'google-drive': {
     name: 'Google Drive',
@@ -295,7 +317,14 @@ export const INTEGRATION_CATALOG: Record<IntegrationId, IntegrationDefinition> =
     'files',
     'google-docs-sheets'
   ),
-  linear: planned('Linear', 'Agents create, update and triage Linear issues.', 'productivity', 'linear'),
+  linear: apiKeyPreset(
+    'Linear',
+    'Agents create, update and triage Linear issues.',
+    'productivity',
+    'linear',
+    'https://mcp.linear.app/mcp',
+    { id: 'linear-tools', label: 'Agent tools for Linear issues and projects' }
+  ),
   asana: planned('Asana', 'Agents create and update Asana tasks and projects.', 'productivity', 'asana'),
   trello: planned('Trello', 'Agents create and move cards on your Trello boards.', 'productivity', 'trello'),
   'microsoft-teams': planned(
@@ -306,14 +335,28 @@ export const INTEGRATION_CATALOG: Record<IntegrationId, IntegrationDefinition> =
   ),
   discord: planned('Discord', 'Chat with Bike4Mind in your Discord server.', 'communication', 'discord'),
   telegram: planned('Telegram', 'Chat with Bike4Mind from Telegram.', 'communication', 'telegram'),
-  airtable: planned('Airtable', 'Agents read and update records in your Airtable bases.', 'productivity', 'airtable'),
+  airtable: apiKeyPreset(
+    'Airtable',
+    'Agents read and update records in your Airtable bases.',
+    'productivity',
+    'airtable',
+    'https://mcp.airtable.com/mcp',
+    { id: 'airtable-tools', label: 'Agent tools for Airtable bases and records' }
+  ),
   zapier: planned(
     'Zapier',
     'Trigger Bike4Mind agents from Zaps and send their results onward.',
     'automation',
     'zapier'
   ),
-  gitlab: planned('GitLab', 'Agents work GitLab repos, issues and merge requests.', 'dev-tools', 'gitlab'),
+  gitlab: apiKeyPreset(
+    'GitLab',
+    'Agents work GitLab repos, issues and merge requests.',
+    'dev-tools',
+    'gitlab',
+    'https://gitlab.com/api/v4/mcp',
+    { id: 'gitlab-tools', label: 'Agent tools for GitLab projects, issues and merge requests' }
+  ),
   bitbucket: planned('Bitbucket', 'Agents work Bitbucket repos and pull requests.', 'dev-tools', 'bitbucket'),
 };
 
@@ -329,6 +372,29 @@ const plannedIdSet: ReadonlySet<string> = new Set(PLANNED_INTEGRATION_IDS);
 
 /** True for a roadmap entry a user may request. */
 export const isPlannedIntegrationId = (id: string): id is IntegrationId => plannedIdSet.has(id);
+
+/** An entry that carries a hosted MCP server and so can back a custom connector connection. */
+export type McpPresetId = IntegrationId;
+
+const mcpPresetHosts: ReadonlyMap<string, string> = new Map(
+  INTEGRATIONS.flatMap(i => (i.remoteMcp ? [[i.id, new URL(i.remoteMcp.url).hostname.toLowerCase()] as const] : []))
+);
+
+export const MCP_PRESET_IDS: readonly McpPresetId[] = INTEGRATIONS.filter(i => i.remoteMcp).map(i => i.id);
+
+/** True for an id a connection may be created from as a preset. */
+export const isMcpPresetId = (id: unknown): id is McpPresetId => typeof id === 'string' && mcpPresetHosts.has(id);
+
+/** The preset's server address, or undefined for an id that is not a preset. */
+export const getMcpPresetUrl = (id: string | undefined): string | undefined =>
+  id !== undefined && isMcpPresetId(id) ? INTEGRATION_CATALOG[id].remoteMcp?.url : undefined;
+
+/**
+ * The host policy compares a preset connection against. Resolved from the catalog, never from a
+ * request, so a stored or submitted preset id cannot widen what `presets_only` admits.
+ */
+export const getMcpPresetHost = (id: string | undefined): string | undefined =>
+  id !== undefined && isMcpPresetId(id) ? mcpPresetHosts.get(id) : undefined;
 
 /**
  * The Models tab. Only providers with a wired backend belong here: chat backends in

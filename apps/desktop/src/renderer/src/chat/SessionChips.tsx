@@ -711,9 +711,10 @@ function DirectoryChip({
 }
 
 /**
- * The folders a Chat session was granted from a `request_directory` card. A Chat session draws no
- * SessionChips row, and a grant nobody can see is one nobody can take back, so these get a row of
- * their own - drawn only while there is something in it.
+ * The folders a Chat session was granted: from a `request_directory` card, the composer's Add
+ * folder or `/add-dir`. A Chat session draws no SessionChips row, and a grant nobody can see is
+ * one nobody can take back, so these get a row of their own - drawn only while there is something
+ * in it.
  */
 export function GrantedFolderChips({
   directories,

@@ -15,12 +15,16 @@ import {
   type HintApp,
 } from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, parseLocalModelId, type ChatModelOption, type ChatTokenRate } from '@shared/chat';
+import { isChatCapable } from '@shared/models';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
-import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
+import { estimateTokens, LOCAL_CONTEXT_TARGET_TOKENS, replyLimit, toolReplyReserve } from '../chat/localContext';
+import { toMessages } from '../chat/OllamaLocal';
+import { OPENAI_COMPATIBLE_EFFORT_LEVELS, openAICompatibleControls } from '../chat/modelControls';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import { estimatedRate, llamaServerRate, type StreamTiming } from '../chat/tokenRate';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
+import type { LearnedThinker } from './ModelServerStore';
 
 export interface OpenAICompatibleServer {
   runtimeId: string;
@@ -31,8 +35,14 @@ export interface OpenAICompatibleServer {
   hasCredentials(): boolean;
   /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
   redact: (text: string, response: Response) => string;
-  /** Tools went off or came back on, so the server's view and the model list changed. */
+  /** Tools went off or came back on, or a model first replied with reasoning, so the model list changed. */
   toolsChanged?: () => void;
+  /** The models that replied with reasoning on an earlier run; see ModelServerStore.thinkers. */
+  learnedThinkers?: {
+    read(): Promise<readonly LearnedThinker[]>;
+    add(model: string, identity: string | undefined): Promise<void>;
+    forget(model: string): Promise<void>;
+  };
 }
 
 const DESKTOP_HINTS: HintApp = {
@@ -150,6 +160,55 @@ interface StreamChunk {
 
 const STOP_REASONS: Record<string, string> = { length: 'max_tokens', tool_calls: 'tool_use', stop: 'stop' };
 
+function supportsThinkingSwitch(product: OpenAICompatibleProduct | null): boolean {
+  return product === 'llama-server' || product === 'vllm';
+}
+
+/** vLLM's refusal of a prompt plus max_tokens past max_model_len. */
+async function overflowsContext(response: Response): Promise<boolean> {
+  if (response.status !== 400) return false;
+  return /maximum context length/i.test(await response.clone().text());
+}
+
+/**
+ * gpt-oss is the template family these servers pass `reasoning_effort` to; nothing else names its
+ * levels. A served name can hide it, so its base model and the names sharing its weights count too.
+ */
+function takesReasoningEffort(model: { name: string; baseModel?: string; aliases?: readonly string[] }): boolean {
+  return [model.name, model.baseModel, ...(model.aliases ?? [])].some(name => name && /gpt-oss/i.test(name));
+}
+
+/**
+ * What the listing says about the weights behind a name (llama-server's file size, LM Studio's
+ * arch and quantization), so a learned thinker is forgotten when other weights take its name.
+ * Undefined when the listing says nothing, as vLLM's does not.
+ */
+export function modelIdentity(model: InstalledModel): string | undefined {
+  const parts = [model.sizeBytes, model.family, model.parameterSize, model.quantization];
+  return parts.some(part => part !== null) ? JSON.stringify(parts) : undefined;
+}
+
+/**
+ * A conversation's sampling overrides as the product's body fields. vLLM spells the repeat penalty
+ * `repetition_penalty`; an unknown product gets only the OpenAI fields.
+ */
+function samplingFields(
+  product: OpenAICompatibleProduct | null,
+  generation: CompletionRequest['generation']
+): Record<string, number> {
+  if (!generation) return {};
+  const fields: Record<string, number> = {};
+  if (generation.temperature !== undefined) fields.temperature = generation.temperature;
+  if (generation.topP !== undefined) fields.top_p = generation.topP;
+  if (generation.presencePenalty !== undefined) fields.presence_penalty = generation.presencePenalty;
+  if (product === null) return fields;
+  if (generation.topK !== undefined) fields.top_k = generation.topK;
+  if (generation.repeatPenalty !== undefined)
+    fields[product === 'vllm' ? 'repetition_penalty' : 'repeat_penalty'] = generation.repeatPenalty;
+  if (generation.minP !== undefined && product !== 'lmstudio') fields.min_p = generation.minP;
+  return fields;
+}
+
 function tokenCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
@@ -179,6 +238,16 @@ export class OpenAICompatibleChat implements LocalChat {
   private readonly unlistedContexts = new Set<string>();
   /** Names from the last listing, for the server's hint. */
   private listed: string[] = [];
+  /**
+   * Models a reply came back from with reasoning split out, which is what earns them a thinking
+   * switch, each with the identity of its weights then.
+   */
+  private readonly thinkers = new Map<string, string | undefined>();
+  /** Each name's weights in the last listing, where it gives one; see modelIdentity. */
+  private readonly identities = new Map<string, string>();
+  private recalled: Promise<void> | null = null;
+  /** Served names, aliases included, of the gpt-oss models in the last listing. */
+  private readonly effortModels = new Set<string>();
 
   constructor(private readonly server: OpenAICompatibleServer) {
     this.runtime = new OpenAICompatibleRuntime({
@@ -192,24 +261,44 @@ export class OpenAICompatibleChat implements LocalChat {
 
   /** Rejects when the server cannot be listed, so the caller can mark it down. */
   async listModels(): Promise<ChatModelOption[]> {
-    const models = await this.runtime.list();
+    const [models] = await Promise.all([this.runtime.list(), this.recallThinkers()]);
     const before = this.smallKey();
     this.learnContexts(models);
-    const chat = models.filter(model => !model.capabilities.embeddings || model.capabilities.completion);
+    const chat = models.filter(model => isChatCapable(model.capabilities, 'openai-compatible'));
     this.listed = chat.map(model => model.name);
     this.smallChanged(before);
-    return chat.map(model => ({
-      id: localModelId(this.server.runtimeId, model.name),
-      name: model.name,
-      backend: localBackend(this.server.runtimeId),
-      ...(model.capabilities.vision ? { supportsVision: true } : {}),
-      ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name), contextFixed: true } : {}),
-      ...(model.baseModel ? { baseModel: model.baseModel } : {}),
-      ...(model.aliases?.length
-        ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
-        : {}),
-      ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
-    }));
+    this.learnIdentities(models);
+    this.effortModels.clear();
+    return chat.map(model => {
+      const thinks = this.thinkers.has(model.name);
+      const effortLevels = takesReasoningEffort(model);
+      if (effortLevels) for (const name of [model.name, ...(model.aliases ?? [])]) this.effortModels.add(name);
+      const controls = openAICompatibleControls(this.server.product, {
+        ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name) } : {}),
+        effortLevels,
+        thinks,
+      });
+      return {
+        id: localModelId(this.server.runtimeId, model.name),
+        name: model.name,
+        backend: localBackend(this.server.runtimeId),
+        ...(model.capabilities.vision ? { supportsVision: true } : {}),
+        ...(this.contexts.has(model.name) ? { contextWindow: this.contexts.get(model.name), contextFixed: true } : {}),
+        ...(model.baseModel ? { baseModel: model.baseModel } : {}),
+        ...(model.aliases?.length
+          ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
+          : {}),
+        ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
+        // The server does not say which models think, so a model earns the switch by thinking once.
+        ...(thinks && !controls.effort
+          ? supportsThinkingSwitch(this.server.product)
+            ? { thinkingToggle: true, minimalThinks: true as const }
+            : { thinkingAlwaysOn: true }
+          : {}),
+        supportsReasoningEffort: controls.effort !== undefined,
+        controls,
+      };
+    });
   }
 
   async contextTokens(modelId: string, signal?: AbortSignal): Promise<number> {
@@ -271,7 +360,9 @@ export class OpenAICompatibleChat implements LocalChat {
     const tools = this.toolsOffFor(model)
       ? []
       : (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
-    const post = (withTools: boolean) =>
+    const context = this.contexts.get(model);
+    const limit = replyLimit(context, request.maxTokens, estimateTokens(toMessages(request.messages), tools));
+    const post = (withTools: boolean, maxTokens: number | undefined) =>
       this.server.fetch(`${this.server.baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
@@ -281,22 +372,31 @@ export class OpenAICompatibleChat implements LocalChat {
           stream: true,
           stream_options: { include_usage: true },
           messages: toOpenAIMessages(request.messages),
-          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...(maxTokens ? { max_tokens: maxTokens } : {}),
+          ...samplingFields(this.server.product, request.generation),
+          ...this.thinkingFields(model, request),
           ...(withTools && tools.length > 0 ? { tools } : {}),
         }),
       });
-    const context = this.contexts.get(model);
     const measured = request.toolPromptTokens;
     // Desktop's prompt and tools fit, so the overflow came from this message: a notice for this turn, not the server.
     const longMessage =
-      measured !== undefined && context !== undefined && holdsPrompt(context, measured, request.maxTokens);
+      measured !== undefined &&
+      context !== undefined &&
+      holdsPrompt(context, measured, toolReplyReserve(request.maxTokens));
     if (measured !== undefined || (request.tools?.length ?? 0) > 0) {
       this.learnToolPrompt(measured !== undefined && !longMessage ? measured : undefined);
     }
-    let response = await post(true);
+    let withTools = true;
+    let response = await post(withTools, limit);
     if (!response.ok && tools.length > 0 && (await refusesTools(response))) {
       this.setRefused(model, true);
-      response = await post(false);
+      withTools = false;
+      response = await post(withTools, limit);
+    }
+    // The estimate can run short of the server's own count; without max_tokens it answers in what is left.
+    if (!response.ok && limit !== undefined && context !== undefined && (await overflowsContext(response))) {
+      response = await post(withTools, undefined);
     }
     const why = this.toolsOffFor(model)
       ? toolsOffHint(this.server.label, this.server.product)
@@ -312,13 +412,81 @@ export class OpenAICompatibleChat implements LocalChat {
       onNotice(why);
     }
     if (!response.ok || !response.body) throw await this.httpError(response);
-    await this.readStream(response.body, onEvent, text => this.server.redact(text, response));
+    await this.readStream(
+      response.body,
+      onEvent,
+      text => this.server.redact(text, response),
+      () => this.learnThinking(model)
+    );
+  }
+
+  /**
+   * gpt-oss templates take a `reasoning_effort` level and cannot stop reasoning; other templates
+   * that think take Off as `chat_template_kwargs.enable_thinking`. Thinking left on sends nothing.
+   */
+  private thinkingFields(model: string, request: CompletionRequest): Record<string, unknown> {
+    if (this.effortModels.has(model) || takesReasoningEffort({ name: model })) {
+      const level = request.reasoningEffort;
+      if (!level || !OPENAI_COMPATIBLE_EFFORT_LEVELS.includes(level)) return {};
+      // llama-server builds before mid-2026 read the level only from the template kwargs.
+      return this.server.product === 'llama-server'
+        ? { reasoning_effort: level, chat_template_kwargs: { reasoning_effort: level } }
+        : { reasoning_effort: level };
+    }
+    return request.thinking === false && supportsThinkingSwitch(this.server.product)
+      ? { chat_template_kwargs: { enable_thinking: false } }
+      : {};
+  }
+
+  private recallThinkers(): Promise<void> {
+    if (this.recalled) return this.recalled;
+    const recalling: Promise<void> = (this.server.learnedThinkers?.read() ?? Promise.resolve([])).then(
+      entries => entries.forEach(entry => this.thinkers.set(entry.model, entry.identity)),
+      () => {
+        // A failed read is tried again on the next listing.
+        if (this.recalled === recalling) this.recalled = null;
+      }
+    );
+    this.recalled = recalling;
+    return recalling;
+  }
+
+  /**
+   * Forgets a learned thinker whose name now serves other weights, which may not think, and gives one
+   * stored without an identity the weights listed now.
+   */
+  private learnIdentities(models: readonly InstalledModel[]): void {
+    this.identities.clear();
+    for (const model of models) {
+      const identity = modelIdentity(model);
+      if (identity) for (const name of [model.name, ...(model.aliases ?? [])]) this.identities.set(name, identity);
+    }
+    for (const [name, identity] of this.thinkers) {
+      const listed = this.identities.get(name);
+      if (listed === undefined || listed === identity) continue;
+      if (identity === undefined) {
+        this.thinkers.set(name, listed);
+        void this.server.learnedThinkers?.add(name, listed).catch(() => undefined);
+      } else {
+        this.thinkers.delete(name);
+        void this.server.learnedThinkers?.forget(name).catch(() => undefined);
+      }
+    }
+  }
+
+  private learnThinking(model: string): void {
+    if (this.thinkers.has(model)) return;
+    const identity = this.identities.get(model);
+    this.thinkers.set(model, identity);
+    void this.server.learnedThinkers?.add(model, identity).catch(() => undefined);
+    this.server.toolsChanged?.();
   }
 
   private async readStream(
     body: ReadableStream<Uint8Array>,
     onEvent: (event: CompletionStreamEvent) => void,
-    redact: (text: string) => string
+    redact: (text: string) => string,
+    onReasoning: () => void
   ) {
     const calls = new Map<number, { id?: string; name: string; arguments: string }>();
     let stopReason: string | undefined;
@@ -362,6 +530,7 @@ export class OpenAICompatibleChat implements LocalChat {
         const reasoning = delta?.reasoning_content ?? delta?.reasoning;
         if (typeof reasoning === 'string' && reasoning) {
           streamed();
+          onReasoning();
           onEvent({ type: 'content', text: `<think>${reasoning}</think>` });
         }
         if (typeof delta?.content === 'string' && delta.content) {

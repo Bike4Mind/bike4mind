@@ -78,3 +78,4 @@ apps/client/pages/api/ai/__tests__/generate-video.integration.test.ts # Test fil
 apps/client/pages/api/[...unmatchedApiPath].ts           # JSON 404 in the shared error envelope instead of the SPA shell
 apps/client/pages/api/__tests__/unmatchedApiPath.test.ts # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/v1/[...unmatchedV1Path].ts        # Re-exports the catch-all above so /api/v1 misses outrank pages/api/[type]/[id]
+apps/client/pages/api/tools/__tests__/billing.test.ts # Test file for the web-search/web-fetch handlers (script greps by path, not export)

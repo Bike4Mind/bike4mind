@@ -19,11 +19,11 @@ import type {
 } from '@client/app/components/admin/SecurityDashboard/incidentTypes';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const GRANT_POOLS = ['signup', 'trickle'] as const;
 
 const SETTING_NAMES = [
   'turnstileEnabled',
   'turnstileFailClosed',
-  'signupGrantDailyBudget',
   'newAccountSpendCapDays',
   'paymentRiskAlertsEnabled',
   'paymentRiskAutoRefundEnabled',
@@ -79,15 +79,19 @@ async function getDefenses(now: Date): Promise<IncidentDefenses> {
     },
   };
 
-  const limit = getSettingsValue('signupGrantDailyBudget', settings) ?? 0;
-  if (limit > 0) {
-    const day = userService.signupGrantBudgetDay(now);
-    try {
-      defenses.grantBudget = { limit, spentToday: await signupGrantBudgetRepository.getSpent(day), day };
-    } catch (error) {
-      Logger.globalInstance.warn('Incident state: grant budget read failed', { error });
-      defenses.error = 'Signup grant budget spend could not be read';
-    }
+  const day = userService.signupGrantBudgetDay(now);
+  try {
+    const pools = await Promise.all(
+      GRANT_POOLS.map(async pool => {
+        const { budget, missing } = await userService.resolvePoolBudget(adminSettingsRepository, pool);
+        const spentToday = await signupGrantBudgetRepository.getSpent(userService.signupGrantBudgetKey(pool, day));
+        return { pool, limit: budget, spentToday, missing };
+      })
+    );
+    defenses.grantBudget = { day, pools };
+  } catch (error) {
+    Logger.globalInstance.warn('Incident state: grant budget read failed', { error });
+    defenses.error = 'Signup grant budget could not be read';
   }
   return defenses;
 }

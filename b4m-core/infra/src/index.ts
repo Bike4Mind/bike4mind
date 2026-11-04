@@ -88,6 +88,16 @@ export type { QuestMetricName } from './questMetricSpecs.js';
 export { QUESTS_NAMESPACE, QUEST_METRICS } from './questMetricSpecs.js';
 export type { VoiceMetricName } from './voiceMetricSpecs.js';
 export { VOICE_NAMESPACE, VOICE_METRICS } from './voiceMetricSpecs.js';
+export type { ImageModerationReviewMetricName } from './imageModerationReviewSpecs.js';
+export {
+  IMAGE_MODERATION_REVIEW_NAMESPACE,
+  IMAGE_MODERATION_REVIEW_METRICS,
+  REVIEW_SWEEP_INTERVAL_MINUTES,
+  REVIEW_SWEEP_MIN_INCIDENT_AGE_MINUTES,
+  REVIEW_REMINDER_INTERVAL_HOURS,
+  UNALERTED_INCIDENT_ALARM_MINUTES,
+  PENDING_INCIDENT_ALARM_MINUTES,
+} from './imageModerationReviewSpecs.js';
 export type {
   ContributedSecretSpec,
   ContributedSecretRotationSpec,

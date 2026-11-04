@@ -13,6 +13,7 @@ export const OUTBOUND_ACTIONS_RESTRICTED_MESSAGE =
 
 function describeOutboundTrustRequirement(assessment: userApiKeyService.UntrustedApiKeyAssessment): string {
   if (assessment.reason === 'email_unverified') return 'Verify your email address to use this feature.';
+  // Unreachable: the outbound gate always passes honorAccountAge: true. Kept so narrowing on `reason` stays exhaustive.
   if (assessment.reason === 'paid_standing_required') {
     return 'Free accounts cannot use this feature. To unlock it, purchase credits or a plan, or contact support.';
   }

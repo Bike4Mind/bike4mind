@@ -32,6 +32,8 @@ export type IRegistrationInvite = {
   tags?: string[];
   startingCredits?: number;
   startingStorage?: number;
+  /** GrantPackage this code redeems; when set it supplies the credits, storage and tags. */
+  grantPackageId?: string;
 };
 
 export interface IRegInviteDocument extends IRegistrationInvite, IMongoDocument {}

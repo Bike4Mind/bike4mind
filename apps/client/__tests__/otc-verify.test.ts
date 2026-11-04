@@ -82,6 +82,7 @@ vi.mock('@server/auth/signupNetworkLimits', () => ({
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
 vi.mock('@server/auth/signupRiskScore', () => ({ refreshSignupRiskScore: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
+  grantPackageRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 1, expiresAt: new Date() })),
     tryAddWithinLimitFixedWindow: vi.fn(async () => ({ success: true, count: 0, expiresAt: new Date() })),

@@ -15,6 +15,7 @@ import { ChangeRoleDialog, ManageTagsDialog, ProductAccessDialog } from './actio
 import {
   ApiKeyTrustDialog,
   NewAccountSpendCapDialog,
+  InternalAccountDialog,
   DeleteUserDialog,
   EmailVerificationDialog,
   LoginAsDialog,
@@ -77,6 +78,8 @@ const ActionHost: React.FC<ProfileDialogProps & { action: ProfileAction; onDelet
       return <ApiKeyTrustDialog {...props} />;
     case 'newAccountSpendCap':
       return <NewAccountSpendCapDialog {...props} />;
+    case 'internalAccount':
+      return <InternalAccountDialog {...props} />;
     case 'subscription':
       return <GrantSubscriptionModal user={props.user} open onClose={props.onClose} />;
     case 'loginAs':

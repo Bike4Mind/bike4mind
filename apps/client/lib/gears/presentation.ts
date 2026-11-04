@@ -222,7 +222,7 @@ export const GEAR_PRESENTATION: Record<GearKey, GearPresentation> = {
     tagline: 'Your account, actually yours',
     intro: 'Turn on two-factor authentication - TOTP with backup codes.',
     cta: 'Enable 2FA',
-    ctaAction: 'navigate:/profile?tab=settings',
+    ctaAction: 'navigate:/profile?tab=security',
   },
   shareagent: {
     title: 'Share an Agent',

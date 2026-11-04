@@ -14,7 +14,7 @@ import { Context } from 'aws-lambda';
 import { Config } from '../utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '../utils/logger';
-import { JsonWebTokenError } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import { ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
 import { isConnectionLostError } from '@bike4mind/db-core';
 import { ServiceUnavailableError } from '../utils/errors';
@@ -178,7 +178,7 @@ export function withWebSocketContext<T>(
       // suspended account) is a refusal too, not a handler failure: without it a subscribe from
       // such a session answers 200 "Internal server error" and logs at error severity.
       const isForbidden = error instanceof ForbiddenError;
-      const isAuthError = isForbidden || error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
+      const isAuthError = isForbidden || error instanceof UnauthorizedError || error instanceof jwt.JsonWebTokenError;
       // A 5xx HTTPError (e.g. the API-key check could not reach the database) keeps its status, and a
       // raw lost connection (connectDB, the web ticket consume, the Connection write) becomes a 503, so
       // $connect refuses the handshake as retryable instead of accepting a socket with no Connection row.

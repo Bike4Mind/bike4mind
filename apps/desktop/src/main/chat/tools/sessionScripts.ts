@@ -1,10 +1,11 @@
 import { stat } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename, join, posix, relative, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
+import { parseWslPath, wslLocation } from '../../wsl/wslPath';
 import { directoryOptionValues } from './bashArity';
 import { parseBash } from './bashParser';
-import { isWithin, physicalTarget } from './paths';
-import { expandHome, unquote, words } from './shellScan';
+import { hostPhysicalTarget, isWithin, operandTargets, resolveOperand } from './paths';
+import { expandHome, isWrapper, pastWrapper, programName, shellHome, splitString, unquote, words } from './shellScan';
 import { repositoryRoot } from './shellWrites';
 import type { ToolContext } from './types';
 
@@ -141,7 +142,7 @@ function save(sessionId: string, record: SessionWrites): Promise<void> {
 async function recordWrite(context: ToolContext, target: string, kind: 'files' | 'trees'): Promise<void> {
   const id = context.sessionId;
   if (!id) return;
-  const physical = await physicalTarget(target).catch(() => resolve(target));
+  const physical = await hostPhysicalTarget(target).catch(() => resolve(target));
   const record = remember(
     id,
     (await sessionRecord(id)) ?? {
@@ -207,7 +208,6 @@ export function expectShellRun(key: string, sessionId: string, hooks: [string, n
   if (pendingHooks.size > MAX_PENDING) pendingHooks.delete(pendingHooks.keys().next().value as string);
 }
 
-const WRAPPERS = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'time', 'nice', 'timeout', 'xargs']);
 /** Leading words that start another program: `npx tsx x.ts` runs `tsx x.ts`. */
 const LAUNCHERS: readonly (readonly string[])[] = [
   ['npx'],
@@ -219,7 +219,7 @@ const LAUNCHERS: readonly (readonly string[])[] = [
   ['poetry', 'run'],
 ];
 const INTERPRETER =
-  /^(sh|bash|zsh|dash|ksh|fish|source|\.|node|nodejs|bun|deno|tsx|ts-node|python[\d.]*|ruby|perl|php|lua|Rscript|pwsh|osascript|make)$/;
+  /^(sh|bash|zsh|dash|ksh|fish|source|\.|node|nodejs|bun|deno|tsx|ts-node|python[\d.]*|ruby|perl|php|lua|rscript|pwsh|powershell|osascript|make)$/;
 const SHELLS = /^(sh|bash|zsh|dash|ksh)$/;
 const CONFIGURED_RUNNERS = new Set(['vitest', 'jest', 'pytest', 'py.test']);
 const TEST_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'vitest', 'jest', 'pytest', 'py.test']);
@@ -227,23 +227,23 @@ const JS_CONFIG = ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs'];
 const PACKAGE_FILES = ['package.json'];
 const PYTEST_FILES = ['conftest.py', 'pytest.ini', 'pyproject.toml', 'setup.cfg'];
 /** Programs that run code their config file in the working directory defines. */
-const PROJECT_FILES: Record<string, readonly string[]> = {
-  npm: PACKAGE_FILES,
-  pnpm: PACKAGE_FILES,
-  yarn: PACKAGE_FILES,
-  bun: PACKAGE_FILES,
-  make: ['Makefile', 'makefile', 'GNUmakefile'],
-  vitest: JS_CONFIG.map(extension => `vitest.config.${extension}`),
-  jest: [...JS_CONFIG, 'json'].map(extension => `jest.config.${extension}`),
-  pytest: PYTEST_FILES,
-  'py.test': PYTEST_FILES,
-  uv: ['pyproject.toml'],
-  poetry: ['pyproject.toml'],
-  hatch: ['pyproject.toml'],
-  cargo: ['build.rs'],
-  just: ['justfile', 'Justfile', '.justfile'],
-  task: ['Taskfile.yml', 'Taskfile.yaml'],
-};
+const PROJECT_FILES = new Map<string, readonly string[]>([
+  ['npm', PACKAGE_FILES],
+  ['pnpm', PACKAGE_FILES],
+  ['yarn', PACKAGE_FILES],
+  ['bun', PACKAGE_FILES],
+  ['make', ['Makefile', 'makefile', 'GNUmakefile']],
+  ['vitest', JS_CONFIG.map(extension => `vitest.config.${extension}`)],
+  ['jest', [...JS_CONFIG, 'json'].map(extension => `jest.config.${extension}`)],
+  ['pytest', PYTEST_FILES],
+  ['py.test', PYTEST_FILES],
+  ['uv', ['pyproject.toml']],
+  ['poetry', ['pyproject.toml']],
+  ['hatch', ['pyproject.toml']],
+  ['cargo', ['build.rs']],
+  ['just', ['justfile', 'Justfile', '.justfile']],
+  ['task', ['Taskfile.yml', 'Taskfile.yaml']],
+]);
 
 /** yarn's `--cwd`, which bashArity does not drop. */
 function cwdOptionValues(args: readonly string[]): string[] {
@@ -294,24 +294,40 @@ function pathsIn(word: string): string[] {
 }
 
 function launcherLength(tokens: readonly string[], start: number): number {
-  const match = LAUNCHERS.find(words => words.every((word, index) => tokens[start + index] === word));
+  const match = LAUNCHERS.find(words =>
+    words.every((word, index) =>
+      index === 0 ? programName(unquote(tokens[start] ?? '')) === word : tokens[start + index] === word
+    )
+  );
   return match?.length ?? 0;
 }
 
 /** Where the program starts in `tokens` once leading wrappers and launchers (and their options) are skipped. */
-function skipWrappers(tokens: readonly string[]): { start: number; wrapped: boolean; launched: boolean } {
+function skipWrappers(tokens: readonly string[]): {
+  start: number;
+  wrapped: boolean;
+  launched: boolean;
+  launchers: number[];
+} {
   let start = 0;
   let wrapped = false;
   let launched = false;
+  const launchers: number[] = [];
   for (;;) {
     const launcher = launcherLength(tokens, start);
-    if (launcher === 0 && !WRAPPERS.has(basename(tokens[start] ?? ''))) break;
-    if (launcher === 0) wrapped = true;
-    else launched = true;
-    start += Math.max(launcher, 1);
-    while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+    if (launcher > 0) {
+      launched = true;
+      launchers.push(start);
+      start += launcher;
+      while (start < tokens.length && /^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(tokens[start])) start++;
+    } else if (start < tokens.length && isWrapper(tokens[start])) {
+      wrapped = true;
+      start = pastWrapper(tokens, start);
+    } else {
+      break;
+    }
   }
-  return { start, wrapped, launched };
+  return { start, wrapped, launched, launchers };
 }
 
 /** A git config key that names a program git runs, set on the command line. */
@@ -362,6 +378,22 @@ export async function sessionScriptRun(
 
 type FoundRuns = Map<string, { name: string; generation: number | '*' }>;
 
+const inSameDistro = (a: string, b: string): boolean =>
+  wslLocation(a)?.distro.toLowerCase() === wslLocation(b)?.distro.toLowerCase();
+
+/** `target` with every symlink followed, except one in a WSL distro other than `base`'s, which would have to be started to look. */
+async function physicalFrom(base: string, target: string): Promise<string> {
+  if (wslLocation(target) && !inSameDistro(base, target)) return target;
+  return hostPhysicalTarget(target).catch(() => target);
+}
+
+/** `path` as an operand of a command in `from`, relative to it; by Linux rules in a WSL folder. */
+function operandFrom(from: string, path: string): string {
+  const base = wslLocation(from);
+  const target = base && inSameDistro(from, path) ? parseWslPath(path) : null;
+  return base && target ? posix.relative(base.linuxPath, target.linuxPath) : relative(from, path);
+}
+
 /** Adds what `command` runs to `found` and `hooks`; a nested `sh -c` string adds to the same maps. */
 async function scanScripts(
   command: string,
@@ -381,6 +413,7 @@ async function scanScripts(
   // An unparsable command is already asked about by shellApproval.
   if (!tree) return;
 
+  const { home } = await shellHome(startDirectory);
   let cwd = startDirectory;
 
   const treeGeneration = async (physical: string): Promise<number | undefined> => {
@@ -393,17 +426,19 @@ async function scanScripts(
 
   // Also resolved from the starting folder, since a `cd` inside a subshell is not undone here.
   const consider = async (raw: string, directory: string, exact = false): Promise<void> => {
-    const text = expandHome(unquote(raw));
+    const text = expandHome(unquote(raw), home);
     if (!text || text.includes('$') || text.includes('`')) return;
     for (const base of new Set(exact ? [directory] : [directory, startDirectory])) {
-      const physical = await physicalTarget(resolve(base, text)).catch(() => resolve(base, text));
-      if (found.has(physical)) continue;
-      const own = written.get(physical);
-      const inTree = await treeGeneration(physical);
-      const generation = own === undefined ? inTree : Math.max(own, inTree ?? own);
-      if (generation !== undefined) found.set(physical, { name: text, generation });
-      else if (overflowed && (await stat(physical).catch(() => null))?.isFile()) {
-        found.set(physical, { name: text, generation: '*' });
+      for (const target of operandTargets(base, text)) {
+        const physical = await physicalFrom(base, target);
+        if (found.has(physical)) continue;
+        const own = written.get(physical);
+        const inTree = await treeGeneration(physical);
+        const generation = own === undefined ? inTree : Math.max(own, inTree ?? own);
+        if (generation !== undefined) found.set(physical, { name: text, generation });
+        else if (overflowed && (await stat(physical).catch(() => null))?.isFile()) {
+          found.set(physical, { name: text, generation: '*' });
+        }
       }
     }
   };
@@ -418,7 +453,7 @@ async function scanScripts(
 
   const gitHooks = async (directories: string[]): Promise<void> => {
     for (const directory of directories) {
-      const physical = await physicalTarget(directory).catch(() => directory);
+      const physical = await hostPhysicalTarget(directory).catch(() => directory);
       for (const [repository, generation] of record?.hooks ?? []) {
         if (isWithin(repository, physical)) hooks.set(repository, generation);
       }
@@ -427,23 +462,28 @@ async function scanScripts(
 
   const visitCommand = async (node: Node, piped: boolean): Promise<void> => {
     const tokens = words(node).map(unquote);
-    const { start, wrapped, launched } = skipWrappers(tokens);
+    const split = splitString(words(node));
+    if (split) await scanScripts(split.command, cwd, sessionId, found, hooks);
+    const { start, wrapped, launched, launchers } = skipWrappers(tokens);
+    // A launcher spelled as a path (`./npx`) may be a file this session wrote.
+    for (const index of launchers) if (/[/\\]/.test(tokens[index])) await consider(tokens[index], cwd);
     const [executable, ...args] = tokens.slice(start);
     if (executable === undefined) return;
     const program = basename(executable);
     if (!wrapped && (program === 'cd' || program === 'pushd')) {
-      const target = args.find(arg => !arg.startsWith('-'));
-      if (target && !target.includes('$')) cwd = resolve(cwd, expandHome(target));
+      const target = expandHome(args.find(arg => !arg.startsWith('-')) ?? '', home);
+      if (target && !target.includes('$')) cwd = resolveOperand(cwd, target);
       return;
     }
-    if (program === 'git') {
-      await gitHooks([cwd, ...directoryOptionValues(tokens.slice(start)).map(value => resolve(cwd, value))]);
+    const name = programName(executable);
+    if (name === 'git') {
+      await gitHooks([cwd, ...directoryOptionValues(tokens.slice(start)).map(value => resolveOperand(cwd, value))]);
       for (const value of leadingOptionValues(args, ['-c']))
         for (const path of pathsIn(value)) await consider(path, cwd);
     }
     if (executable.includes('/') || launched) await consider(executable, cwd);
-    const module = /^python[\d.]*$/.test(program) ? leadingOptionValues(args, ['-m'])[0] : undefined;
-    const runner = module ?? program;
+    const module = /^python[\d.]*$/.test(name) ? leadingOptionValues(args, ['-m'])[0] : undefined;
+    const runner = module ?? name;
     if (CONFIGURED_RUNNERS.has(runner) || args.some(arg => CONFIGURED_RUNNERS.has(arg))) {
       for (const value of optionValues(args, ['--config', '-c'])) await consider(value, cwd);
       for (const plugin of optionValues(args, ['-p'])) {
@@ -451,7 +491,7 @@ async function scanScripts(
       }
     }
     // A test runner's operands are test files, which edit-and-rerun loops change all the time.
-    const runs = !TEST_RUNNERS.has(runner) && (wrapped || piped || INTERPRETER.test(program));
+    const runs = !TEST_RUNNERS.has(runner) && (wrapped || piped || INTERPRETER.test(name));
     // A launcher's own tool (`npx prettier src.ts`) only reads its operands; an interpreter runs them.
     const operands = wrapped ? tokens : args;
     if (runs) {
@@ -459,35 +499,35 @@ async function scanScripts(
       for (const word of operands) for (const path of pathsIn(word)) await consider(path, cwd);
       for (const target of inputRedirects(node)) await consider(target, cwd);
     }
-    if (runs || PROJECT_FILES[program]) {
+    if (runs || PROJECT_FILES.has(name)) {
       for (const child of node.namedChildren) {
         if (child?.type !== 'variable_assignment') continue;
         for (const path of pathsIn(child.childForFieldName('value')?.text ?? '')) await consider(path, cwd);
       }
     }
-    const inline = SHELLS.test(program) ? args.findIndex(arg => /^[-+][a-z]*c[a-z]*$/.test(arg)) : -1;
+    const inline = SHELLS.test(name) ? args.findIndex(arg => /^[-+][a-z]*c[a-z]*$/.test(arg)) : -1;
     if (inline !== -1 && args[inline + 1] !== undefined) {
       await scanScripts(args[inline + 1], cwd, sessionId, found, hooks);
     }
-    const project = PROJECT_FILES[runner];
+    const project = PROJECT_FILES.get(runner);
     if (project) {
       const named = [...directoryOptionValues(tokens.slice(start)), ...cwdOptionValues(args)];
-      for (const directory of [cwd, ...named.map(value => resolve(cwd, value))]) {
+      for (const directory of [cwd, ...named.map(value => resolveOperand(cwd, value))]) {
         for (const file of project)
-          await consider(relative(startDirectory, join(directory, file)), startDirectory, true);
+          await consider(operandFrom(startDirectory, join(directory, file)), startDirectory, true);
       }
       // pytest also loads a conftest.py from any folder below the one it starts in.
       if (project === PYTEST_FILES) {
-        const below = await physicalTarget(cwd).catch(() => cwd);
+        const below = await hostPhysicalTarget(cwd).catch(() => cwd);
         for (const file of written.keys()) {
           if (basename(file) === 'conftest.py' && isWithin(below, file)) {
-            await consider(relative(startDirectory, file), startDirectory, true);
+            await consider(operandFrom(startDirectory, file), startDirectory, true);
           }
         }
       }
     }
     // `$(./x.sh)` and `<(cat x.sh)` run inside the command; a process substitution handed to an interpreter is its script.
-    const interprets = wrapped || INTERPRETER.test(program);
+    const interprets = wrapped || INTERPRETER.test(name);
     for (const substitution of node.descendantsOfType(['command_substitution', 'process_substitution'])) {
       for (const child of substitution?.namedChildren ?? []) {
         if (child) await visit(child, piped || (interprets && substitution?.type === 'process_substitution'));
@@ -503,7 +543,7 @@ async function scanScripts(
       node.namedChildren.some(child => {
         if (child?.type !== 'command') return false;
         const tokens = words(child).map(unquote);
-        return INTERPRETER.test(basename(tokens[skipWrappers(tokens).start] ?? ''));
+        return splitString(tokens) !== null || INTERPRETER.test(programName(tokens[skipWrappers(tokens).start] ?? ''));
       });
     for (const child of node.namedChildren) if (child) await visit(child, piped || feedsInterpreter);
   };

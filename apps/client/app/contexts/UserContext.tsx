@@ -73,7 +73,9 @@ export interface UserContextProps {
   isDeveloper: boolean;
   isCustomer: boolean;
   setCurrentUser: (value: IUserDocument | null) => void;
-  refreshUser: () => Promise<void>;
+  /** Bumped by each `fresh` refresh so UI keyed on it re-requests an image whose first load failed. */
+  avatarVersion: number;
+  refreshUser: (options?: { fresh?: boolean }) => Promise<void>;
 }
 
 export interface UserProviderProps {
@@ -243,7 +245,7 @@ let refreshUserInFlight: Promise<void> | null = null;
 
 export const useUser = create<UserContextProps>()(
   persist(
-    set => ({
+    (set, get) => ({
       currentUser: null,
       isHydrated: false,
       isAdmin: false,
@@ -251,6 +253,7 @@ export const useUser = create<UserContextProps>()(
       isModerated: false,
       isDeveloper: false,
       isCustomer: false,
+      avatarVersion: 0,
       setCurrentUser: (currentUser: IUserDocument | null) => {
         set({
           currentUser,
@@ -264,12 +267,19 @@ export const useUser = create<UserContextProps>()(
           isCustomer: userIsCustomer(currentUser),
         });
       },
-      refreshUser: async () => {
+      refreshUser: async options => {
         // Single-flight: unlike probeIdentity (sessionBootstrap.ts) this imperative
         // /api/identify call had no dedup, so an effect that re-runs each render could fire
         // one identify per render. Concurrent callers share the one in-flight request; the
         // guard clears on settle so a later, genuinely-new refresh still runs.
-        if (refreshUserInFlight) return refreshUserInFlight;
+        if (refreshUserInFlight) {
+          if (!options?.fresh) return refreshUserInFlight;
+          // A post-mutation refresh must start after any pre-mutation read settles.
+          await refreshUserInFlight;
+          await get().refreshUser();
+          set(state => ({ avatarVersion: state.avatarVersion + 1 }));
+          return;
+        }
         refreshUserInFlight = (async () => {
           try {
             // 10s bound matches the two sibling single-flight guards (refreshPromise in
@@ -285,6 +295,7 @@ export const useUser = create<UserContextProps>()(
               isModerated: !!response.data.user?.isModerated,
               isDeveloper: userIsDeveloper(response.data.user),
               isCustomer: userIsCustomer(response.data.user),
+              ...(options?.fresh ? { avatarVersion: get().avatarVersion + 1 } : {}),
             });
           } catch (error) {
             console.error('Error refreshing user:', error);

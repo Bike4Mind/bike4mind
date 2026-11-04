@@ -1,33 +1,25 @@
-import { CreditHolderType, settingsMap } from '@bike4mind/common';
-import {
-  adminSettingsRepository,
-  CreditTransaction,
-  creditLotRepository,
-  creditTransactionRepository,
-  User,
-  userRepository,
-} from '@bike4mind/database';
+import { CreditHolderType, REFERRAL_REWARD_REASON, settingsMap, type SignupGrant } from '@bike4mind/common';
+import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
+import { adminSettingsRepository, CreditTransaction, User } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
-import { accountBlockReasons, type AccountStateFields } from '@bike4mind/services/userService/accountState';
+import { isRewardRecipientBlocked, REFERRED_USER_ID_METADATA_KEY } from '@bike4mind/services/creditService';
+import type { AccountStateFields } from '@bike4mind/services/userService/accountState';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
 import { Logger } from '@bike4mind/observability';
 
-export const REFERRAL_REWARD_REASON = 'referral_reward';
+export { REFERRAL_REWARD_REASON };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type RewardParty = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
+  signupGrant?: Pick<SignupGrant, 'blocked'> | null;
 } & AccountStateFields;
 
-// Stricter than accountBlockReasons: a money path also skips suspend_pending.
-export const isBlockedInviter = (inviter: RewardParty) =>
-  !!inviter.deletedAt ||
-  !!inviter.isSynthetic ||
-  accountBlockReasons(inviter).length > 0 ||
-  inviter.moderation?.status === 'suspend_pending';
+// Shared with the release-time gate in creditService.payCreditReward, so a queued reward is never looser.
+export const isBlockedInviter = (inviter: RewardParty) => isRewardRecipientBlocked(inviter);
 
 /**
  * Pays the inviter once their friend has both a first answer and a verified email. Called from both
@@ -58,39 +50,48 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
 
     const inviterId = String(friend.referredByUserId);
     const inviter = await User.findById(inviterId)
-      .select('isSynthetic deletedAt isBanned disputePending moderation.status')
+      .select('isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked')
       .lean<RewardParty>();
     if (!inviter || isBlockedInviter(inviter)) return;
 
-    const { creditTransactionId } = await creditService.addCreditsWithLedgerRow(
+    // Paid from the trickle pool; a dry pool queues it for the hourly release.
+    const result = await creditService.payCreditReward(
       {
-        ownerId: inviterId,
-        ownerType: CreditHolderType.User,
-        credits: amount,
-        type: 'generic_add',
         transactionId: `referral-first-answer:${inviterId}:${friendId}`,
+        userId: inviterId,
+        credits: amount,
+        source: 'referral_first_answer',
         reason: REFERRAL_REWARD_REASON,
         description: 'Referral reward: first answer from an invited friend',
-        metadata: { step: 'first_answer', referredUserId: friendId },
+        metadata: { step: 'first_answer', [REFERRED_USER_ID_METADATA_KEY]: friendId },
       },
-      {
-        db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
-        creditHolderMethods: userRepository,
-      }
+      buildCreditRewardAdapters()
     );
-    if (!creditTransactionId) return;
+    if (result.outcome !== 'paid') return;
+    const { creditTransactionId } = result;
 
-    await alertIfRewardsSpike(
-      creditTransactionId,
-      getSettingsValue(
-        'ReferralAlertRewardsPerDay',
-        settings,
-        settingsMap.ReferralAlertRewardsPerDay.schema.parse(undefined)
-      )
-    );
+    await alertIfRewardsSpike(creditTransactionId, spikeThreshold(settings));
   } catch (err) {
     Logger.error('[referral] first-answer reward failed', err, { friendId });
   }
+}
+
+const spikeThreshold = (settings: Awaited<ReturnType<typeof getSettingsMap>>) =>
+  getSettingsValue(
+    'ReferralAlertRewardsPerDay',
+    settings,
+    settingsMap.ReferralAlertRewardsPerDay.schema.parse(undefined)
+  );
+
+/** Runs the spike alert for referral rewards the held-reward release paid (creditService.releaseHeldCreditRewards). */
+export async function alertForReleasedReferralRewards(creditTransactionIds: string[]): Promise<void> {
+  if (creditTransactionIds.length === 0) return;
+  const settings = await getSettingsMap(
+    { adminSettings: adminSettingsRepository },
+    { names: ['ReferralAlertRewardsPerDay'], skipCache: true }
+  );
+  const threshold = spikeThreshold(settings);
+  for (const id of creditTransactionIds) await alertIfRewardsSpike(id, threshold);
 }
 
 // Only the reward ranked one past the threshold alerts. Each reward counts the earlier ones by _id

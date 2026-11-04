@@ -334,6 +334,17 @@ describe('processExecution iteration-gate wiring', () => {
   });
 });
 
+describe('processExecution billing wiring', () => {
+  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
+
+  it('charges iterations at the requested model only on a substituted run', () => {
+    const call = source.match(/await billIteration\(\{([\s\S]*?)\n {6}\}\);/);
+    expect(call).not.toBeNull();
+    expect(call![1]).toContain('modelInfo: resolvedModelInfo,');
+    expect(call![1]).toContain('chargedModelInfo: shadowModelInfo ? modelInfo : undefined,');
+  });
+});
+
 describe('aggregationGraceReasonOf', () => {
   it.each([
     [false, true, false, true, undefined],

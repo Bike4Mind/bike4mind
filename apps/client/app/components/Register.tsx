@@ -24,6 +24,7 @@ import { useNavigate, useRouter } from '@tanstack/react-router';
 import Link from '@mui/joy/Link';
 import Image from 'next/image';
 import GitHubIcon from '@mui/icons-material/GitHub';
+import AppleSignInButton from './AppleSignInButton';
 import OktaIcon from './svgs/flags/OktaIcon';
 import GoogleColorIcon from './svgs/flags/GoogleColorIcon';
 import ErrorAlert from './common/ErrorAlert';
@@ -353,7 +354,7 @@ const Register: React.FC = () => {
     return 'Unknown';
   };
 
-  const handleSocialLogin = (provider: 'google' | 'github' | 'okta') => {
+  const handleSocialLogin = (provider: 'google' | 'github' | 'okta' | 'apple') => {
     startOAuthSignIn(`/api/auth/${provider}`).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
     });
@@ -504,6 +505,14 @@ const Register: React.FC = () => {
                     </Box>
                   </Button>
                 </Box>
+                {publicConfig?.appleSignInEnabled && (
+                  <AppleSignInButton
+                    data-testid="register-apple-btn"
+                    label="Sign up with Apple"
+                    disabled={isSendingOTC}
+                    onClick={() => handleSocialLogin('apple')}
+                  />
+                )}
                 <Divider sx={dividerStyles}>or</Divider>
               </Box>
 

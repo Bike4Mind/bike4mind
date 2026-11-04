@@ -151,8 +151,18 @@ describe('useAdminTabUrlSync', () => {
 
     act(() => result.current.setActiveTab(AdminTab.AuditLog));
 
-    const previous = { tab: 'admin-settings', section: 'security', q: 'slack', category: 'credits', entryId: 'e1' };
-    expect(lastNavigation().search(previous)).toEqual({ tab: 'audit-log', category: 'credits', entryId: 'e1' });
+    const previous = {
+      tab: 'admin-settings',
+      section: 'security',
+      q: 'slack',
+      category: 'credits',
+      entryId: 'cccccccccccccccccccccccc',
+    };
+    expect(lastNavigation().search(previous)).toEqual({
+      tab: 'audit-log',
+      category: 'credits',
+      entryId: 'cccccccccccccccccccccccc',
+    });
   });
 
   it('leaves an Audit Log deep link, filters included, untouched', () => {
@@ -165,15 +175,16 @@ describe('useAdminTabUrlSync', () => {
   });
 
   it('keeps feedbackId on the Feedback tab and drops it elsewhere', () => {
-    routerMock.search = { feedbackId: 'abc' };
+    const FEEDBACK_ID = 'abcabcabcabcabcabcabcabc';
+    routerMock.search = { feedbackId: FEEDBACK_ID };
     const { result } = renderHook(() => useHarness(AdminTab.Feedback));
 
-    expect(lastNavigation().search({ feedbackId: 'abc' })).toEqual({ tab: 'feedback', feedbackId: 'abc' });
+    expect(lastNavigation().search({ feedbackId: FEEDBACK_ID })).toEqual({ tab: 'feedback', feedbackId: FEEDBACK_ID });
 
     routerMock.navigate.mockClear();
     act(() => result.current.setActiveTab(AdminTab.Users));
 
-    expect(lastNavigation().search({ tab: 'feedback', feedbackId: 'abc' })).toEqual({ tab: 'users' });
+    expect(lastNavigation().search({ tab: 'feedback', feedbackId: FEEDBACK_ID })).toEqual({ tab: 'users' });
   });
 
   it('corrects a slug that names no known tab', () => {
@@ -241,6 +252,13 @@ describe('useAdminTabUrlSync', () => {
     expect(result.current.activeTab).toBe(AdminTab.Users);
     expect(seen).not.toContain(AdminTab.LiveOpsTriage);
     expect(lastNavigation().search({ tab: 'live-ops-triage' }).tab).toBe('users');
+  });
+
+  it("falls back to the first sidebar tab it can render when Users is not one (a delegated admin's console)", () => {
+    const { result } = renderHook(() => useHarness(AdminTab.Dashboard, tab => tab === AdminTab.Modals));
+
+    expect(result.current.activeTab).toBe(AdminTab.Modals);
+    expect(lastNavigation().search({}).tab).toBe('modals');
   });
 
   // The gate can resolve after a deep link has already selected the tab.

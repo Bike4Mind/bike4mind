@@ -77,6 +77,7 @@ import {
   type HubSearchRequest,
   type HubSearchResult,
   type InstalledModelsResult,
+  type LoadedModelState,
   type ModelFit,
   type ModelHubError,
   type ModelHubErrorKind,
@@ -96,7 +97,10 @@ import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/
 import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
 import { serverHardware, withEnteredSpecs } from './enteredHardware';
 import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
+import { loadedStateOf, loadedStateTarget } from './loadedState';
 import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
+import { catalogSampling } from './catalogSampling';
+import type { CatalogSampling } from '@shared/generation';
 
 export interface ModelRuntimePort {
   readonly baseUrl: string;
@@ -994,6 +998,11 @@ export class ModelHubService {
     return pinnedProjectorSizes(this.#deps.curated());
   }
 
+  /** The curated family sampling for a local model matched by name on any local server; chat sends it as a seed. */
+  catalogSampling(ollamaName: string): CatalogSampling | undefined {
+    return catalogSampling(this.#deps.curated(), ollamaName);
+  }
+
   /**
    * The list's source status is the caller's to add; this service only sees the manifest. Fit and picks rate the
    * server's entered hardware, or this computer when it has none; `serverId` also sets which Ollama version decides
@@ -1281,6 +1290,18 @@ export class ModelHubService {
       };
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
+    }
+  }
+
+  /** Polled by the composer while idle on a local model, so any failure is `unknown` rather than an error. */
+  async loadedState(modelId: string): Promise<LoadedModelState> {
+    const where = loadedStateTarget(modelId);
+    const target = where ? this.#target(where.serverId) : null;
+    if (!where || !target || target.management === 'unsupported') return { kind: 'unsupported' };
+    try {
+      return loadedStateOf(await target.runtime.loaded(), where.model);
+    } catch {
+      return { kind: 'unknown' };
     }
   }
 

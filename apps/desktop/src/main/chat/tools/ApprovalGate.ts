@@ -268,6 +268,7 @@ export class ApprovalGate {
         // not list as rememberable - see ApprovalRequestOptions.rememberable.
         const keep =
           remember &&
+          !options.always?.ungranted?.length &&
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {

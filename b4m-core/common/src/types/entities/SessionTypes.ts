@@ -956,6 +956,12 @@ export interface ISession {
    * refund and debit against the hold goes to this user, never to whoever sends the closing frame.
    */
   voiceHoldUserId?: string | null;
+
+  /**
+   * The UserApiKey that opened the voice hold, set and cleared with voiceHoldUserId. Stamped on every
+   * ledger row billed against the hold, for per-key spend rollups; absent for a JWT caller.
+   */
+  voiceHoldApiKeyId?: string | null;
 }
 
 ///////////
@@ -1317,7 +1323,7 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
     sessionId: string,
     startedAt: Date,
     options?: { realtimeOnly?: boolean }
-  ) => Promise<{ billedCredits: number | null; payerId: string | null } | null>;
+  ) => Promise<{ billedCredits: number | null; payerId: string | null; apiKeyId: string | null } | null>;
 
   /**
    * Write a fresh call's hold, only while the session still holds `priorStartedAt` (the hold read
@@ -1327,6 +1333,12 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   openVoiceHold: (
     sessionId: string,
     priorStartedAt: Date | null,
-    hold: { voiceReservedCredits: number | null; voiceSessionStartedAt: Date; realtime: boolean; payerId: string }
+    hold: {
+      voiceReservedCredits: number | null;
+      voiceSessionStartedAt: Date;
+      realtime: boolean;
+      payerId: string;
+      apiKeyId?: string;
+    }
   ) => Promise<boolean>;
 }

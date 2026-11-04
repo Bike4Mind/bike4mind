@@ -13,11 +13,11 @@ export type ServerToolName = 'weather_info' | 'web_search' | 'web_fetch' | 'deci
 
 /**
  * Implementations the host supplies for server tools whose code lives in the app tier (the
- * decision runner needs its credit hold, which b4m-core cannot import). Absent, that tool fails
- * with a clear error instead of running un-billed.
+ * decision runner and the paid web tools need the credit hold, which b4m-core cannot import).
+ * Absent, that tool fails with a clear error instead of running un-billed.
  */
 export type ServerToolExecutor = (request: ToolExecutionRequest) => Promise<string>;
-export type ServerToolExecutors = Partial<Record<'decide', ServerToolExecutor>>;
+export type ServerToolExecutors = Partial<Record<'decide' | 'web_search' | 'web_fetch', ServerToolExecutor>>;
 
 /**
  * Error categories for analytics and monitoring
@@ -62,6 +62,8 @@ export interface ToolExecutionResult {
   error?: string;
   /** Error category for analytics (if failed) */
   errorType?: ToolErrorType;
+  /** Billing classifier from the failure (e.g. `insufficient_credits`), when the error carried one. */
+  errorCode?: string;
   /** Execution time in milliseconds */
   executionTimeMs?: number;
 }

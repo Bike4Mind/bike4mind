@@ -1,5 +1,10 @@
 import { promises as dns } from 'node:dns';
-import { emailDomainCandidates, emailDomainOf, isEmailInDomains } from '@bike4mind/common';
+import {
+  DISPOSABLE_AGGREGATE_HOLD_REASON,
+  emailDomainCandidates,
+  emailDomainOf,
+  isEmailInDomains,
+} from '@bike4mind/common';
 import type { DisposableListSource, DomainIntel, SignupProtectionRepository } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { isDisposableEmail, REJECT_TIER_SOURCES } from './disposableEmail';
@@ -198,7 +203,7 @@ export async function domainHoldReason(
   const domain = registrableDomain(emailDomainOf(email), { allowPrivateDomains: true });
   try {
     const sources = (await repository.disposableSources?.(emailDomainCandidates(email))) ?? [];
-    if (sources.length) return isAggregateOnly(sources) ? 'disposable-aggregate' : 'disposable-list';
+    if (sources.length) return isAggregateOnly(sources) ? DISPOSABLE_AGGREGATE_HOLD_REASON : 'disposable-list';
     if (isDisposableEmail(email)) return 'disposable-list';
     if (!domain || !repository.findDomainIntel || !repository.saveDomainIntel) return null;
 

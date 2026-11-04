@@ -14,15 +14,28 @@ export const thresholdSchema = z.object({
 });
 export const thresholdsSchema = z.record(z.string(), thresholdSchema);
 export type Thresholds = z.infer<typeof thresholdsSchema>;
+export type MetricContributor = { label: string; value: number };
 export type Metric = {
   name: string;
   values: Array<number | null>;
-  contributors: Array<{ label: string; value: number }>;
+  contributors: MetricContributor[];
 };
+/**
+ * One threshold crossing. Numbers are raw metric units (USD, credits, minor currency units,
+ * counts); rendering belongs to businessMetricSlackMessage.ts. Contributors are the rows that
+ * moved in the anomaly's direction, largest change first, so a renderer can count or cap them.
+ */
 export type BusinessMetricAnomaly = {
   metricName: string;
   direction: 'increase' | 'decrease';
-  message: string;
+  current: number;
+  previous: number;
+  delta: number;
+  /** Null when the previous period was zero. */
+  percent: number | null;
+  /** Null until seven comparable periods exist. */
+  median: number | null;
+  contributors: MetricContributor[];
 };
 export type ComparisonWindow = { end: Date; duration: number; mode: 'daily' | 'intraday' };
 
@@ -63,33 +76,27 @@ export function compareMetric(metric: Metric, thresholds: Thresholds) {
   return { ...metric, current, previous, delta, percent, median };
 }
 
-const escapeSlack = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-export function anomalyAlerts(
-  metrics: Metric[],
-  window: ComparisonWindow,
-  thresholds: Thresholds
-): BusinessMetricAnomaly[] {
+export function anomalyAlerts(metrics: Metric[], thresholds: Thresholds): BusinessMetricAnomaly[] {
   return metrics.flatMap<BusinessMetricAnomaly>(metric => {
     const anomaly = compareMetric(metric, thresholds);
     if (!anomaly) return [];
-    const change = anomaly.percent === null ? 'new activity (previously zero)' : `${anomaly.percent.toFixed(1)}%`;
+    const rising = anomaly.delta > 0;
     const contributors = metric.contributors
-      .filter(row => (anomaly.delta > 0 ? row.value > 0 : row.value < 0))
-      .sort((a, b) => (anomaly.delta > 0 ? b.value - a.value : a.value - b.value))
-      .slice(0, 5);
-    const message =
-      `Business metric anomaly: ${escapeSlack(metric.name)}\n` +
-      `${window.mode}, UTC through ${window.end.toISOString()} (${window.duration / HOUR_MS}h)\n` +
-      `Current ${anomaly.current.toFixed(2)}; previous ${anomaly.previous.toFixed(2)}; change ${change}; ` +
-      `7-day median ${anomaly.median === null ? 'warming up' : anomaly.median.toFixed(2)}\n` +
-      `Top contributors: ${contributors.map(row => `${escapeSlack(row.label)}=${row.value > 0 ? '+' : ''}${row.value.toFixed(2)}`).join(', ') || 'none'}`;
-    return [{ metricName: metric.name, direction: anomaly.delta > 0 ? 'increase' : 'decrease', message }];
+      .filter(row => (rising ? row.value > 0 : row.value < 0))
+      .sort((a, b) => (rising ? b.value - a.value : a.value - b.value));
+    return [
+      {
+        metricName: metric.name,
+        direction: rising ? 'increase' : 'decrease',
+        current: anomaly.current,
+        previous: anomaly.previous,
+        delta: anomaly.delta,
+        percent: anomaly.percent,
+        median: anomaly.median,
+        contributors,
+      },
+    ];
   });
-}
-
-export function anomalyMessages(metrics: Metric[], window: ComparisonWindow, thresholds: Thresholds): string[] {
-  return anomalyAlerts(metrics, window, thresholds).map(anomaly => anomaly.message);
 }
 
 export function createMetricAccumulator() {

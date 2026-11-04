@@ -17,6 +17,7 @@ import type {
 import { REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { isMcpConfigToolName, MCP_UPDATE_SERVER_TOOL_NAME, parseMcpServerRequest } from '@shared/mcp';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
+import { own } from '@shared/ownKeys';
 import { WEB_FETCH_TOOL_NAME } from '@shared/webSearch';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { describeApproval } from './approvalAttribution';
@@ -221,6 +222,7 @@ function ApprovalPrompt({
   // No undo behind it, so the card is red and offers no way to stop being asked. Answering
   // "always" would be a single click standing in for consent to a later, different deletion.
   const irreversible = call.approvalIrreversible === true;
+  const noAlways = irreversible || call.approvalOnceOnly === true;
   const choice = call.approvalChoice;
 
   return (
@@ -236,8 +238,8 @@ function ApprovalPrompt({
           ? diffs.length > 1
             ? `Apply this patch to ${diffs.length} files?`
             : APPROVAL_QUESTION[diff.operation]
-          : (HOST_QUESTION[call.name] ??
-            READ_QUESTION[call.name] ??
+          : (own(HOST_QUESTION, call.name) ??
+            own(READ_QUESTION, call.name) ??
             (isGeneration(call.name)
               ? 'Generate this? It costs credits.'
               : call.name === 'bash_background'
@@ -300,7 +302,7 @@ function ApprovalPrompt({
                     ? 'Generate it'
                     : 'Allow once'}
             </Button>
-            {!irreversible && (
+            {!noAlways && (
               <Button
                 size="sm"
                 variant="soft"
@@ -311,7 +313,7 @@ function ApprovalPrompt({
                 Allow in this chat
               </Button>
             )}
-            {!irreversible && call.approvalRules && call.approvalRules.length > 0 && (
+            {!noAlways && call.approvalRules && call.approvalRules.length > 0 && (
               <Button
                 size="sm"
                 variant="soft"
@@ -339,7 +341,7 @@ function ApprovalPrompt({
                     : "Don't run"}
             </Button>
           </Stack>
-          {!irreversible && <AlwaysScopeLine call={call} />}
+          {!noAlways && <AlwaysScopeLine call={call} />}
         </>
       )}
     </Sheet>

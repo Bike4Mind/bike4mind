@@ -27,3 +27,7 @@ export const parseStringList = (value: unknown): string[] | undefined => {
   const strings = items.filter((item): item is string => typeof item === 'string' && item !== '');
   return strings.length > 0 ? strings : undefined;
 };
+
+// For a record id the page interpolates into an API path: only a Mongo ObjectId may come in from a link.
+export const parseObjectId = (value: unknown): string | undefined =>
+  typeof value === 'string' && /^[0-9a-f]{24}$/i.test(value) ? value.toLowerCase() : undefined;

@@ -31,6 +31,7 @@ import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import './businessMetricAlerts';
+import './imageModerationReviewSweep';
 
 const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
@@ -112,6 +113,26 @@ const signupBaselineReport = runsScheduledJobs
         },
         logging: {
           retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Auto-confirms Signup Domain Holds that need no judgment (it never releases one). A failed hold
+// throws so signupDomainHoldTriageLambdaErrors in alarms.ts sees it; the next run retries.
+const signupDomainHoldTriageCron = runsScheduledJobs
+  ? new sst.aws.Cron('signupDomainHoldTriage', {
+      schedule: 'rate(10 minutes)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/signupDomainHoldTriage.handler',
+        runtime: 'nodejs24.x',
+        timeout: '2 minutes',
+        memory: '512 MB',
+        retries: 0,
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
         },
       },
     })
@@ -314,6 +335,27 @@ const usagePatternSignals = runsScheduledJobs
     })
   : undefined;
 
+// Advisory abuse assessments of unreviewed shadow detections; a no-op until an operator enables
+// abuseAssessmentEnabled and the sweep in abuseAssessmentConfig.
+const abuseAssessmentSweep = runsScheduledJobs
+  ? new sst.aws.Cron('abuseAssessmentSweep', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/abuseAssessmentSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
 // Email campaign scheduler - runs every 5 minutes to check for scheduled campaigns
 const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
   schedule: 'rate(5 minutes)',
@@ -419,6 +461,23 @@ const signupRiskSweepCron = runsScheduledJobs
             resources: ['*'],
           },
         ],
+      },
+    })
+  : undefined;
+
+// Account campaign sweep - correlates the last 72h of signups into candidate coordinated-account
+// groups and records them as shadow detections for admin review. Observation only: no rescoring,
+// reviewState change or account action.
+const accountCampaignSweepCron = runsScheduledJobs
+  ? new sst.aws.Cron('accountCampaignSweep', {
+      schedule: 'cron(45 * * * ? *)', // Hourly at :45
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/accountCampaignSweep.handler',
+        runtime: 'nodejs24.x',
+        timeout: '5 minutes',
+        link: [...allSecrets],
+        environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       },
     })
   : undefined;
@@ -1487,6 +1546,7 @@ export {
   oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,
   disposableDomainRefreshCron,
+  signupDomainHoldTriageCron,
   dataLakeVectorIndexKeepWarmCron,
   modelDiscoveryCronEnabled,
   dailyUserActivityReport,
@@ -1498,6 +1558,7 @@ export {
   scheduleTaskCron,
   apiKeyBaselineCalculation,
   usagePatternSignals,
+  abuseAssessmentSweep,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
   liveopsTriageDispatcherCron,
@@ -1510,6 +1571,7 @@ export {
   telemetryCleanupCron,
   signupIpRetentionCron,
   signupRiskSweepCron,
+  accountCampaignSweepCron,
   creditLotSweepCron,
   voiceHoldSweepCron,
   creditHoldSweepCron,

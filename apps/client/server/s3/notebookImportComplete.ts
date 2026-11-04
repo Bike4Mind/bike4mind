@@ -37,7 +37,11 @@ import { parseNotebookImportKey } from '@server/utils/notebookImportKeys';
 import { Resource } from 'sst';
 import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { v4 as uuidv4 } from 'uuid';
-import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
+import {
+  updateImportProgress,
+  markImportComplete,
+  markImportFailed,
+} from '@bike4mind/server-utils/utils/importHistoryProgress';
 
 const { NotebookImportService } = notebookImportService;
 

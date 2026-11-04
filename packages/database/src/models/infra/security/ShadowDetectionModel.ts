@@ -1,6 +1,11 @@
 import mongoose, { Document, Model, model, Schema, Types } from 'mongoose';
 import {
+  accountCampaignGroupSchema,
+  accountCampaignSignals,
+  accountCampaignSummary,
+  withoutCampaignMember,
   SHADOW_DETECTION_ACTIONS,
+  type AccountCampaignGroup,
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
   type ShadowDetectionAction,
@@ -12,6 +17,7 @@ import {
   type ShadowDetectionVerdictEntry,
   type ShadowDetector,
 } from '@bike4mind/common';
+import { User } from '../../auth/UserModel';
 
 /**
  * What an abuse detector would have done, recorded without acting (contract and rationale in
@@ -27,6 +33,7 @@ export interface IShadowDetectionDocument extends Document {
   network: ShadowDetectionNetwork | null;
   signals: ShadowDetectionSignal[];
   windowMinutes: number | null;
+  group: AccountCampaignGroup | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
   verdicts: ShadowDetectionVerdictEntry[];
@@ -78,6 +85,9 @@ export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
     network: { type: NetworkSchema, default: null },
     signals: { type: [SignalSchema], default: [] },
     windowMinutes: { type: Number, default: null },
+    // Validated against accountCampaignGroupSchema on write (recordCampaignGroup); Mixed because the
+    // nested evidence lists are read whole and never queried field by field.
+    group: { type: Schema.Types.Mixed, default: null },
     detectedAt: { type: Date, required: true },
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
     verdicts: { type: [VerdictEntrySchema], default: [] },
@@ -97,6 +107,65 @@ export const ShadowDetectionModel: Model<IShadowDetectionDocument> =
   model<IShadowDetectionDocument>('ShadowDetection', ShadowDetectionSchema);
 
 export type RecordShadowDetectionInput = Omit<ShadowDetectionItem, 'id' | 'verdict' | 'verdicts' | 'revision'>;
+
+export type RecordCampaignGroupResult = 'created' | 'updated' | 'unchanged' | 'skipped';
+
+/** An open campaign record stops absorbing re-observations once it has not been seen for this long. */
+const CAMPAIGN_REOPEN_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+
+const directUserIds = (group: AccountCampaignGroup) =>
+  group.members.filter(member => member.membership === 'direct').map(member => member.userId);
+
+/** Recent records sharing a direct member that one sweep's group is matched against. */
+const CAMPAIGN_MATCH_CANDIDATES = 20;
+
+/**
+ * The record a re-observed group continues: the one sharing the most direct members, provided they are
+ * at least two and at least half of the smaller direct set. Two clusters that meet at one account, or a
+ * group that drifted to new accounts, get records of their own. Candidates come newest first, so a tie
+ * goes to the newest.
+ */
+function matchingCampaignRecord(candidates: LeanShadowDetection[], direct: string[]): LeanShadowDetection | null {
+  const directSet = new Set(direct);
+  let best: { record: LeanShadowDetection; overlap: number } | null = null;
+  for (const record of candidates) {
+    if (!record.group) continue;
+    const recordDirect = directUserIds(record.group);
+    const overlap = recordDirect.filter(userId => directSet.has(userId)).length;
+    const continues = overlap >= 2 && overlap * 2 >= Math.min(direct.length, recordDirect.length);
+    if (continues && overlap > (best?.overlap ?? 0)) best = { record, overlap };
+  }
+  return best?.record ?? null;
+}
+
+/** Bounds removeUser's re-read when sweeps keep rewriting the same record under it. */
+const REMOVE_USER_ATTEMPTS = 3;
+
+/**
+ * The group without members whose account has been deleted since the sweep scanned it, or null once
+ * too few direct members are left. Deletion purges the account from stored records, so a sweep write
+ * that lands after the purge must not put it back.
+ */
+async function withoutDeletedMembers(group: AccountCampaignGroup): Promise<AccountCampaignGroup | null> {
+  const deleted = await User.find(
+    { _id: { $in: group.members.map(member => member.userId) }, deletedAt: { $ne: null } },
+    { _id: 1 }
+  )
+    .lean<{ _id: Types.ObjectId }[]>()
+    .exec();
+  let live: AccountCampaignGroup | null = group;
+  for (const { _id } of deleted) live = live && withoutCampaignMember(live, _id.toString());
+  return live;
+}
+
+const sameMembers = (left: AccountCampaignGroup, right: AccountCampaignGroup) => {
+  const key = (group: AccountCampaignGroup) =>
+    group.members
+      .map(member => `${member.userId}:${member.membership}`)
+      .sort()
+      .join();
+  return key(left) === key(right);
+};
 
 export type AddShadowDetectionVerdictResult =
   | { status: 'updated'; item: ShadowDetectionItem }
@@ -135,6 +204,7 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
     threshold: signal.threshold ?? null,
   })),
   windowMinutes: doc.windowMinutes ?? null,
+  group: doc.group ?? null,
   detectedAt: doc.detectedAt,
   verdict: doc.verdict ?? null,
   verdicts: (doc.verdicts ?? []).map(entry => ({
@@ -152,6 +222,136 @@ class ShadowDetectionRepository {
     return doc._id.toString();
   }
 
+  /**
+   * Records one sweep's view of an account campaign group. A group re-observed while its record is
+   * still ungraded updates that record in place (keeping firstObservedAt and detectedAt); the revision
+   * moves only when membership changed, so a reviewer grading the old membership gets a conflict. A
+   * graded record is never rewritten: the same membership just marks it seen, and new direct members
+   * (including a transitive member promoted into the core) open a fresh record for a fresh review.
+   */
+  async recordCampaignGroup(input: RecordShadowDetectionInput): Promise<RecordCampaignGroupResult> {
+    if (input.detector !== 'accountCampaign' || !input.group) {
+      throw new Error('recordCampaignGroup records accountCampaign detections with group evidence only');
+    }
+    const scanned = accountCampaignGroupSchema.parse(input.group);
+    const candidates = await ShadowDetectionModel.find({
+      detector: 'accountCampaign',
+      policyVersion: input.policyVersion,
+      userIds: { $in: directUserIds(scanned) },
+      'group.lastObservedAt': { $gte: new Date(scanned.lastObservedAt.getTime() - CAMPAIGN_REOPEN_AFTER_MS) },
+    })
+      .sort({ 'group.lastObservedAt': -1, _id: -1 })
+      .limit(CAMPAIGN_MATCH_CANDIDATES)
+      .lean<LeanShadowDetection[]>();
+    // After the candidate read: a purge that lands from here on bumps the revision the update below is
+    // conditional on.
+    const group = await withoutDeletedMembers(scanned);
+    if (!group) return 'skipped';
+    const record =
+      group === scanned
+        ? { ...input, group }
+        : {
+            ...input,
+            group,
+            userIds: group.members.map(member => member.userId),
+            summary: accountCampaignSummary(group),
+            signals: accountCampaignSignals(group),
+          };
+    const direct = directUserIds(group);
+    const existing = matchingCampaignRecord(candidates, direct);
+
+    if (!existing?.group) {
+      await ShadowDetectionModel.create(record);
+      return 'created';
+    }
+
+    if (existing.verdict) {
+      const reviewed = new Set(directUserIds(existing.group));
+      if (direct.some(userId => !reviewed.has(userId))) {
+        await ShadowDetectionModel.create(record);
+        return 'created';
+      }
+      await ShadowDetectionModel.updateOne(
+        { _id: existing._id },
+        { $max: { 'group.lastObservedAt': group.lastObservedAt } }
+      );
+      return 'unchanged';
+    }
+
+    const membershipChanged = !sameMembers(existing.group, group);
+    const updated = await ShadowDetectionModel.updateOne(
+      { _id: existing._id, revision: existing.revision, verdict: null },
+      {
+        $set: {
+          summary: record.summary,
+          userIds: record.userIds,
+          signals: record.signals,
+          windowMinutes: record.windowMinutes,
+          wouldAction: record.wouldAction,
+          group: { ...group, firstObservedAt: existing.group.firstObservedAt },
+        },
+        ...(membershipChanged ? { $inc: { revision: 1 } } : {}),
+      }
+    );
+    // A verdict landed between the read and the write: leave it; the next sweep sees a graded record.
+    if (updated.matchedCount === 0) return 'skipped';
+    return membershipChanged ? 'updated' : 'unchanged';
+  }
+
+  /**
+   * Account deletion: removes the user from every detection that names them. A detection left with no
+   * accounts is deleted; a campaign group is pruned with withoutCampaignMember (summary and signals
+   * rebuilt, revision bumped so an open grading dialog conflicts) or deleted when fewer than three
+   * direct members remain, or when its stored group no longer parses. Returns how many records were deleted.
+   */
+  async removeUser(userId: string): Promise<number> {
+    const touched = await ShadowDetectionModel.find({ userIds: userId }).lean<LeanShadowDetection[]>();
+    const deleteIds: Types.ObjectId[] = [];
+    let deletedCampaigns = 0;
+    for (const doc of touched) {
+      if (!doc.group) {
+        if ((doc.userIds ?? []).every(id => id === userId)) deleteIds.push(doc._id);
+        else await ShadowDetectionModel.updateOne({ _id: doc._id }, { $pull: { userIds: userId } });
+        continue;
+      }
+      if (await this.removeCampaignMember(doc, userId)) deletedCampaigns += 1;
+    }
+    if (deleteIds.length === 0) return deletedCampaigns;
+    const deleted = await ShadowDetectionModel.deleteMany({ _id: { $in: deleteIds } });
+    return deletedCampaigns + deleted.deletedCount;
+  }
+
+  /**
+   * Prunes one campaign record, or deletes it; true when it was deleted. Each write is conditional on
+   * the revision it was computed from, so a sweep rewrite in between is re-read and pruned again.
+   */
+  private async removeCampaignMember(doc: LeanShadowDetection, userId: string): Promise<boolean> {
+    let current: LeanShadowDetection | null = doc;
+    for (let attempt = 0; attempt < REMOVE_USER_ATTEMPTS; attempt++) {
+      if (!current?.userIds.includes(userId)) return false;
+      const parsed = accountCampaignGroupSchema.safeParse(current.group);
+      const pruned = parsed.success ? withoutCampaignMember(parsed.data, userId) : null;
+      const filter = { _id: current._id, revision: current.revision };
+      if (!pruned) {
+        const { deletedCount } = await ShadowDetectionModel.deleteOne(filter);
+        if (deletedCount === 1) return true;
+      } else {
+        const { matchedCount } = await ShadowDetectionModel.updateOne(filter, {
+          $set: {
+            group: pruned,
+            userIds: pruned.members.map(member => member.userId),
+            summary: accountCampaignSummary(pruned),
+            signals: accountCampaignSignals(pruned),
+          },
+          $inc: { revision: 1 },
+        });
+        if (matchedCount === 1) return false;
+      }
+      current = await ShadowDetectionModel.findById(doc._id).lean<LeanShadowDetection>();
+    }
+    throw new Error(`Shadow detection ${doc._id.toString()} kept changing while removing a deleted user`);
+  }
+
   /** Newest first; `truncated` is true when more than `limit` records match. */
   async list(query: {
     detector?: ShadowDetector;
@@ -166,6 +366,21 @@ class ShadowDetectionRepository {
       .limit(query.limit + 1)
       .lean<LeanShadowDetection[]>();
     return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
+  }
+
+  async findById(id: string): Promise<ShadowDetectionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await ShadowDetectionModel.findById(id).lean<LeanShadowDetection>();
+    return doc ? toItem(doc) : null;
+  }
+
+  /** Ungraded detections recorded at or after `since`, newest first. */
+  async listUnreviewedSince(since: Date, limit: number): Promise<ShadowDetectionItem[]> {
+    const docs = await ShadowDetectionModel.find({ verdict: null, detectedAt: { $gte: since } })
+      .sort({ detectedAt: -1, _id: -1 })
+      .limit(limit)
+      .lean<LeanShadowDetection[]>();
+    return docs.map(toItem);
   }
 
   /**

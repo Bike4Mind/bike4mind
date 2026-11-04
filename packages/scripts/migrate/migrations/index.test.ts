@@ -38,6 +38,12 @@ describe('AvailableMigrations (real, unmocked)', () => {
     }
   });
 
+  // A fail-closed migration throws until an operator confirms it; anything sorting after it would be blocked too.
+  it('keeps the fail-closed OAuth client backfill as the highest core id', () => {
+    const coreIds = AvailableMigrations.filter(m => !premiumMigrations.includes(m)).map(m => m.id);
+    expect(Math.max(...coreIds)).toBe(20260922000001);
+  });
+
   it('every migration exposes the MigrationFile contract', () => {
     for (const migration of AvailableMigrations) {
       expect(typeof migration.id).toBe('number');

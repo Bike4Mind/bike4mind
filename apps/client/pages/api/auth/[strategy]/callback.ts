@@ -1,5 +1,7 @@
-// POST /api/auth/<strategy>/callback
+// GET /api/auth/<strategy>/callback
 //   - Authenticate using any service
+// POST /api/auth/apple/callback
+//   - Apple's form_post return; bounces to the GET form (see below)
 
 import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository } from '@bike4mind/database';
@@ -28,6 +30,7 @@ import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureLoginErrorCode } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
 import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
+import { APPLE_DISPLAY_NAME_MAX_LENGTH, APPLE_USER_FIELD_MAX_LENGTH } from '@bike4mind/server-utils/auth/appleConfig';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
 /**
@@ -41,6 +44,33 @@ function isReplayedOrExpiredCode(err: unknown): boolean {
   return name === 'TokenError' && code === 'invalid_grant';
 }
 
+/** The form fields Apple's form_post response may carry; anything else is dropped. */
+const APPLE_FORM_POST_FIELDS = ['code', 'state', 'user', 'error', 'error_description'] as const;
+
+/**
+ * Apple's first-authorization `user` field also carries the email. Only the name is read from it (the
+ * email comes from the verified id_token), so forward just the name and keep the address out of the URL.
+ */
+function appleUserNameOnly(rawUser: string): string | undefined {
+  if (rawUser.length > APPLE_USER_FIELD_MAX_LENGTH) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawUser);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const name: unknown = (parsed as { name?: unknown }).name;
+  if (typeof name !== 'object' || name === null) return undefined;
+  const { firstName, lastName } = name as { firstName?: unknown; lastName?: unknown };
+  return JSON.stringify({
+    name: {
+      ...(typeof firstName === 'string' ? { firstName: firstName.slice(0, APPLE_DISPLAY_NAME_MAX_LENGTH) } : {}),
+      ...(typeof lastName === 'string' ? { lastName: lastName.slice(0, APPLE_DISPLAY_NAME_MAX_LENGTH) } : {}),
+    },
+  });
+}
+
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
     // Validate if the strategy is valid
@@ -51,6 +81,26 @@ const handler = baseApi({ auth: false })
     next();
   })
   .use(checkBlockedIP())
+  // Apple answers with a cross-site form POST (response_mode=form_post), which withholds the Lax nonce
+  // cookie the state store binds the login to and which passport-oauth2 cannot read from a body. Hand
+  // the fields to the same-site GET form with a 303, so everything downstream is the Google/GitHub path.
+  // It sits ahead of the rate limits so only the GET hop counts against them.
+  .post((req, res) => {
+    if (req.query.strategy !== AuthStrategy.Apple) {
+      throw new BadRequestError('Invalid auth strategy');
+    }
+    const body: Record<string, unknown> = typeof req.body === 'object' && req.body !== null ? req.body : {};
+    const params = new URLSearchParams();
+    for (const field of APPLE_FORM_POST_FIELDS) {
+      const value = body[field];
+      if (typeof value !== 'string') continue;
+      const forwarded = field === 'user' ? appleUserNameOnly(value) : value;
+      if (forwarded !== undefined) params.set(field, forwarded);
+    }
+    // passport-oauth2 treats only `access_denied` as a cancelled consent; Apple names it differently.
+    if (params.get('error') === 'user_cancelled_authorize') params.set('error', 'access_denied');
+    res.redirect(303, `/api/auth/${AuthStrategy.Apple}/callback?${params.toString()}`);
+  })
   .use(rateLimit({ limit: 10, windowMs: 60 * 1000, bucket: 'oauth-callback' }))
   .use(oauthIpRateLimit('oauth-callback'))
   .get(async (req: Request<{}, unknown, unknown, { strategy: AuthStrategy; state: string }>, res, next) => {
@@ -211,6 +261,7 @@ const handler = baseApi({ auth: false })
             id: user.id,
             acquisition: signupFunnel.acquisition,
             isSynthetic: isSyntheticSignup,
+            isInternal: signupFunnel.isInternal,
           };
           await emitSignupFunnelEvents({
             user: funnelUser,
@@ -226,6 +277,7 @@ const handler = baseApi({ auth: false })
               userId: user.id,
               touches: readConsentedAcquisitionTouches(req),
               method: strategy,
+              account: signupFunnel,
             });
           }
         }

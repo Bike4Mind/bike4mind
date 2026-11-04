@@ -112,6 +112,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
         if (!(await claimModerationScan(fabFile._id, claimedAt))) return settleOnOwnerVerdict('claim lost on retry');
         result = await scan();
       }
+      if (result.moderationStatus === 'pending') {
+        // The uploader's moderation allowance is spent: not a failure, so no attempt is counted and a
+        // call after the window resets scans the file.
+        await releaseModerationClaim(fabFile._id, claimedAt, { countAttempt: false });
+        return res.json({ moderationStatus: 'pending' });
+      }
       // The byte-sniffed type rides in the guarded write: the S3 handler persists it through its own
       // save, but it will have lost the claim and skipped the scan by now.
       const landed = await writeModerationVerdict(fabFile._id, claimedAt, {

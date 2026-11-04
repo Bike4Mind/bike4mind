@@ -72,4 +72,18 @@ describe('signupGrantBudgetRepository', () => {
     expect(await repo.markAlerted(DAY, 50)).toBe(false);
     expect(await repo.markAlerted(DAY, 100)).toBe(true);
   });
+
+  it('marks the missing-setting alert once, on its own flag', async () => {
+    expect(await repo.markAlerted(DAY, 'missing')).toBe(true);
+    expect(await repo.markAlerted(DAY, 'missing')).toBe(false);
+    const row = await SignupGrantBudgetDayModel.findById(DAY).lean();
+    expect(row).toMatchObject({ alertedMissing: true, alerted50: false, alerted100: false });
+  });
+
+  it('keeps pool counters for the same day apart', async () => {
+    await repo.reserve(`signup:${DAY}`, 'tx-1', 20, 25);
+    expect(await repo.reserve(`trickle:${DAY}`, 'tx-2', 20, 25)).toEqual({ spent: 20, fresh: true });
+    expect(await repo.getSpent(`signup:${DAY}`)).toBe(20);
+    expect(await repo.getSpent(`trickle:${DAY}`)).toBe(20);
+  });
 });

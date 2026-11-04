@@ -1,4 +1,5 @@
 import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
+import { own } from '@shared/ownKeys';
 import { parseDirectoryOutcome, REQUEST_DIRECTORY_TOOL_NAME } from '@shared/directoryRequest';
 import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { WEB_FETCH_TOOL_NAME, hostOf } from '@shared/webSearch';
@@ -216,8 +217,8 @@ const PHRASES: Record<string, ToolPhrases> = {
     active: 'Generating a sound effect...',
   },
   session_list: {
-    didAlone: 'Listed the sessions in this project',
-    toAlone: 'list the sessions in this project',
+    didAlone: 'Listed sessions',
+    toAlone: 'list sessions',
     many: n => `Listed the sessions ${n} times`,
     active: 'Listing sessions...',
   },
@@ -355,7 +356,7 @@ function unknownPhrases(name: string): ToolPhrases {
 }
 
 function phrasesFor(name: string): ToolPhrases {
-  return PHRASES[name] ?? unknownPhrases(name);
+  return own(PHRASES, name) ?? unknownPhrases(name);
 }
 
 /**
@@ -411,7 +412,7 @@ export function summarizeInput(call: ChatToolCall): string {
   }
   // The host, not the URL: what was read is the site, and a query string is not a name.
   if (call.name === WEB_FETCH_TOOL_NAME && typeof input.url === 'string') return hostOf(input.url) || input.url;
-  const keys = [...(ARGUMENT_PRIORITY[call.name] ?? []), ...DEFAULT_ARGUMENT_PRIORITY];
+  const keys = [...(own(ARGUMENT_PRIORITY, call.name) ?? []), ...DEFAULT_ARGUMENT_PRIORITY];
   for (const key of keys) {
     const value = input[key];
     if (typeof value !== 'string' || value.length === 0) continue;

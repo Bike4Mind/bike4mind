@@ -1,4 +1,4 @@
-// `disposable-email-domains` ships its list as index.json (its package `main`).
+// `disposable-domains` (the UserCheck list) ships its list as index.json (its package `main`).
 // The `with { type: 'json' }` attribute is required for two independent reasons:
 //   1. Node 24 (which runs the CLI) rejects a bare ESM JSON import without it
 //      (ERR_IMPORT_ATTRIBUTE_MISSING) - the CLI's rolldown bundle keeps this
@@ -8,19 +8,47 @@
 //      A createRequire/readFileSync form is invisible to a static tracer and
 //      drops the file, 500-ing registration on deploy (isDisposableEmail runs
 //      by default).
-import disposableDomains from 'disposable-email-domains' with { type: 'json' };
+import disposableDomains from 'disposable-domains' with { type: 'json' };
 import {
   emailDomainCandidates,
+  emailDomainOf,
   IAdminSettingsRepository,
   isEmailInDomains,
   parseInternalStaffDomains,
   partitionDomainList,
   settingsMap,
 } from '@bike4mind/common';
-import type { DisposableListSource, SignupProtection } from '@bike4mind/common';
+import type { DisposableListSource, DisposableRefusalSource, SignupProtection } from '@bike4mind/common';
 
-// ~4.5k entries from the maintained `disposable-email-domains` list.
-const DISPOSABLE_DOMAINS = new Set<string>(disposableDomains as string[]);
+/**
+ * Privacy alias forwarders: real users hide a real inbox behind them, so they are never treated as
+ * disposable even though some upstream lists (tompec among them) carry them. Matched on parent
+ * domains too, since some hand out per-user subdomains (x@alias.33mail.com). The refresh job in
+ * apps/workers/src/cron/disposableDomainRefresh.ts drops these from every list it ingests.
+ */
+export const PRIVACY_RELAY_DOMAINS: ReadonlySet<string> = new Set([
+  '33mail.com',
+  'addy.io',
+  'aleeas.com',
+  'anonaddy.com',
+  'anonaddy.me',
+  'duck.com',
+  'mozmail.com',
+  'privaterelay.appleid.com',
+  'simplelogin.co',
+  'simplelogin.com',
+  'simplelogin.fr',
+  'slmail.me',
+]);
+
+/** True when the domain is a privacy relay or one of its subdomains. */
+export const isPrivacyRelayDomain = (domain: string): boolean =>
+  emailDomainCandidates(`x@${domain}`).some(candidate => PRIVACY_RELAY_DOMAINS.has(candidate));
+
+// ~135k domain suffixes; the same list the refresh job pulls as the `tompec` source.
+const DISPOSABLE_DOMAINS = new Set<string>(
+  (disposableDomains as string[]).filter(domain => !isPrivacyRelayDomain(domain))
+);
 
 /**
  * True when the email's domain - or any parent domain - is a known disposable
@@ -28,15 +56,20 @@ const DISPOSABLE_DOMAINS = new Set<string>(disposableDomains as string[]);
  * accept mail on arbitrary subdomains (x@anything.mailinator.com), while the
  * list only carries the registrable domain.
  */
-export const isDisposableEmail = (email: string): boolean =>
-  emailDomainCandidates(email).some(domain => DISPOSABLE_DOMAINS.has(domain));
+export const isDisposableEmail = (email: string): boolean => {
+  const candidates = emailDomainCandidates(email);
+  return (
+    !candidates.some(domain => PRIVACY_RELAY_DOMAINS.has(domain)) &&
+    candidates.some(domain => DISPOSABLE_DOMAINS.has(domain))
+  );
+};
 
 /**
- * Refreshed lists precise enough to reject on: the human-curated list and fakefilter (observed on
- * live temp-mail services). The `aggregate` list also scrapes, so a domain only there is held for
- * review instead (see domainIntelligence.ts).
+ * Refreshed lists precise enough to reject on: the human-curated list, fakefilter (observed on
+ * live temp-mail services) and tompec (UserCheck, maintained weekly). The `aggregate` list also
+ * scrapes, so a domain only there is held for review instead (see domainIntelligence.ts).
  */
-export const REJECT_TIER_SOURCES: ReadonlySet<DisposableListSource> = new Set(['curated', 'fakefilter']);
+export const REJECT_TIER_SOURCES: ReadonlySet<DisposableListSource> = new Set(['curated', 'fakefilter', 'tompec']);
 
 export const blockedDomainsFrom = (settingValue: unknown): Set<string> => {
   const parsed = settingsMap.blockedEmailDomains.schema.safeParse(settingValue);
@@ -74,20 +107,49 @@ export const isAdminBlockedEmailDomain = async (
  */
 export const shouldBlockDisposableEmail = async (
   email: string,
-  { adminSettings, signupProtection }: { adminSettings: IAdminSettingsRepository; signupProtection?: SignupProtection }
+  deps: { adminSettings: IAdminSettingsRepository; signupProtection?: SignupProtection }
 ): Promise<boolean> => {
-  if (await isAdminBlockedEmailDomain(email, { adminSettings })) return true;
+  const sources = await disposableRefusalSources(email, deps);
+  if (!sources) return false;
+  await recordRefusal(email, sources, deps.signupProtection);
+  return true;
+};
+
+/** Why the email is refused (every matching source), or null when it is allowed. */
+const disposableRefusalSources = async (
+  email: string,
+  { adminSettings, signupProtection }: { adminSettings: IAdminSettingsRepository; signupProtection?: SignupProtection }
+): Promise<DisposableRefusalSource[] | null> => {
+  if (await isAdminBlockedEmailDomain(email, { adminSettings })) return ['admin'];
   const listed = isDisposableEmail(email);
   const repository = signupProtection?.repository;
-  if (!listed && !repository?.disposableSources) return false;
+  if (!listed && !repository?.disposableSources) return null;
   // The toggle is read before the list query so switching it off also bypasses a failing list read.
   const setting = await adminSettings.findBySettingName('blockDisposableEmails');
-  if (!blockDisposableFrom(setting?.settingValue)) return false;
-  if (listed || !repository?.disposableSources) return listed;
-  const sources = await repository.disposableSources(emailDomainCandidates(email));
-  if (!sources.some(source => REJECT_TIER_SOURCES.has(source))) return false;
+  if (!blockDisposableFrom(setting?.settingValue)) return null;
+  if (listed || !repository?.disposableSources) return listed ? ['static'] : null;
+  const rejectTier = (await repository.disposableSources(emailDomainCandidates(email))).filter(source =>
+    REJECT_TIER_SOURCES.has(source)
+  );
+  if (!rejectTier.length) return null;
   const staffDomains = new Set(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS));
-  return !isEmailInDomains(email, staffDomains) && !(await repository.isOrganizationDomain(email));
+  if (isEmailInDomains(email, staffDomains) || (await repository.isOrganizationDomain(email))) return null;
+  return rejectTier;
+};
+
+/** One log line per refusal, plus the app's metric hook, so a false positive is traceable to its list. */
+const recordRefusal = async (
+  email: string,
+  sources: DisposableRefusalSource[],
+  signupProtection: SignupProtection | undefined
+): Promise<void> => {
+  const domain = emailDomainOf(email) ?? '';
+  console.log(JSON.stringify({ event: 'disposable-email-refused', domain, sources }));
+  try {
+    await signupProtection?.recordDisposableRefusal?.({ domain, sources });
+  } catch (error) {
+    console.warn('Disposable refusal record failed', { domain, error: String(error) });
+  }
 };
 
 /**
