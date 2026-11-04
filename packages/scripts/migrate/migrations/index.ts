@@ -288,7 +288,7 @@ import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-ind
 import AllowGpt4oMiniTtsWhereTts1IsFree from './20260921238800_allow-gpt-4o-mini-tts-where-tts-1-is-free';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
-import EnsureFabFilePendingUploadIndex from './20260921239600_ensure-fabfile-pending-upload-index';
+import EnsureFabFilePendingUploadIndex from './20260921239700_ensure-fabfile-pending-upload-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 

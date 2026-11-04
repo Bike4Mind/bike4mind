@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const models = vi.hoisted(() => ({ fabFileIndexes: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ FabFile: { createIndexes: models.fabFileIndexes } }));
-import migration from './20260921239600_ensure-fabfile-pending-upload-index';
+import migration from './20260921239700_ensure-fabfile-pending-upload-index';
 
 describe('fabfile pending upload index migration', () => {
   beforeEach(() => {

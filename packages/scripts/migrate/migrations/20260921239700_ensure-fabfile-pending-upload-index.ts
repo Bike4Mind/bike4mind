@@ -9,7 +9,7 @@ import { type MigrationFile } from './index';
  * indexes that already exist.
  */
 const migration: MigrationFile = {
-  id: 20260921239600,
+  id: 20260921239700,
   name: 'ensure fabfile pending upload index',
 
   up: async () => {
