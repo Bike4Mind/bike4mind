@@ -1,6 +1,6 @@
 /**
  * Gears discovery modal - which unused gears to suggest and when. Pure apart from
- * the localStorage helpers; the hook is app/hooks/useGearsDiscovery.ts.
+ * the localStorage helpers and the landing capture; the hook is app/hooks/useGearsDiscovery.ts.
  */
 
 import type { GearKey } from '@client/lib/gears/keys';
@@ -50,6 +50,36 @@ export const DISCOVERY_PRIORITY: readonly GearKey[] = [
   'hearth',
   'clidocs',
 ];
+
+/**
+ * Routes the modal never opens over: pages that own their first screen, and the gears page itself.
+ * Leaving one of them keeps the decision open, so the modal can still show on the next page.
+ */
+export const DISCOVERY_SKIPPED_PATHS: readonly string[] = ['/admin', '/gears', '/bob'];
+
+export function isDiscoverySkippedPath(pathname: string): boolean {
+  return DISCOVERY_SKIPPED_PATHS.some(p => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+/** A load whose URL carries utm_* params is a visitor arriving from a landing page or campaign. */
+export function isCampaignLanding(search: string): boolean {
+  return [...new URLSearchParams(search).keys()].some(k => k.toLowerCase().startsWith('utm_'));
+}
+
+let campaignLanding = false;
+
+/**
+ * Remembers whether this page load arrived from a campaign. Must run at app bootstrap, next to
+ * captureUtmParams() in app/router.tsx: the router's first resolve strips the query string.
+ */
+export function captureDiscoveryLanding(): void {
+  if (typeof window === 'undefined') return;
+  campaignLanding = isCampaignLanding(window.location.search);
+}
+
+export function wasCampaignLanding(): boolean {
+  return campaignLanding;
+}
 
 export interface DiscoveryState {
   lastShownAt: number;

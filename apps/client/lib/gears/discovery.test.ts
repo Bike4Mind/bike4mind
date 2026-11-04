@@ -3,10 +3,14 @@ import {
   DISCOVERY_COOLDOWN_MS,
   DISCOVERY_PRIORITY,
   EMPTY_DISCOVERY_STATE,
+  captureDiscoveryLanding,
   discoveryCandidates,
+  isCampaignLanding,
+  isDiscoverySkippedPath,
   pickDiscoveryGears,
   readDiscoveryState,
   shouldShowDiscovery,
+  wasCampaignLanding,
   writeDiscoveryState,
 } from './discovery';
 
@@ -102,5 +106,38 @@ describe('discovery storage', () => {
     });
     expect(readDiscoveryState('u1')).toEqual(EMPTY_DISCOVERY_STATE);
     expect(() => writeDiscoveryState('u1', EMPTY_DISCOVERY_STATE)).not.toThrow();
+  });
+});
+
+describe('isDiscoverySkippedPath', () => {
+  it.each(['/admin', '/admin/users', '/gears', '/bob', '/bob/runs/r1'])('skips %s', path => {
+    expect(isDiscoverySkippedPath(path)).toBe(true);
+  });
+
+  it.each(['/', '/new', '/bobcat', '/administrator', '/notebooks/gears'])('allows %s', path => {
+    expect(isDiscoverySkippedPath(path)).toBe(false);
+  });
+});
+
+describe('isCampaignLanding', () => {
+  it('is true when any utm_ param is present, whatever its case', () => {
+    expect(isCampaignLanding('?utm_source=x')).toBe(true);
+    expect(isCampaignLanding('?ref=a&UTM_Medium=b')).toBe(true);
+  });
+
+  it('is false without one', () => {
+    expect(isCampaignLanding('')).toBe(false);
+    expect(isCampaignLanding('?ref=utm_source')).toBe(false);
+  });
+});
+
+describe('captureDiscoveryLanding', () => {
+  it('records the landing URL and re-reads it on each call', () => {
+    window.history.replaceState(null, '', '/bob?utm_campaign=launch');
+    captureDiscoveryLanding();
+    expect(wasCampaignLanding()).toBe(true);
+    window.history.replaceState(null, '', '/');
+    captureDiscoveryLanding();
+    expect(wasCampaignLanding()).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import { FirstRunEvents } from '@bike4mind/common';
 import {
   DISCOVERY_RECHECK_MS,
   DISCOVERY_SETTLE_MS,
+  captureDiscoveryLanding,
   readDiscoveryState,
   writeDiscoveryState,
 } from '@client/lib/gears/discovery';
@@ -78,6 +79,8 @@ beforeEach(() => {
   vi.setSystemTime(Date.UTC(2026, 9, 26));
   localStorage.clear();
   resetWhatsNewShownForTests();
+  window.history.replaceState(null, '', '/');
+  captureDiscoveryLanding();
   h.gears = ['image', 'agents', 'websearch', 'video', 'models', 'slack', 'mcp'].map(k => gear(k));
   h.isPending = false;
   h.isError = false;
@@ -122,6 +125,8 @@ describe('useGearsDiscovery', () => {
     ['no user yet', () => (h.user = null)],
     ['on an admin page', () => (h.pathname = '/admin/users')],
     ['on the gears page', () => (h.pathname = '/gears')],
+    ['on the Bob start screen', () => (h.pathname = '/bob')],
+    ['inside Bob', () => (h.pathname = '/bob/runs/r1')],
     [
       'inside the cooldown',
       () => writeDiscoveryState('u1', { lastShownAt: Date.now() - DAY / 2, dismissed: false, rotation: 0 }),
@@ -134,6 +139,29 @@ describe('useGearsDiscovery', () => {
     act(() => vi.advanceTimersByTime(DISCOVERY_RECHECK_MS * 3));
     expect(result.current.open).toBe(false);
     expect(localStorage.getItem('gears_discovery_u1')).toBe(before);
+  });
+
+  it('opens once the user leaves a skipped route in the same page load', () => {
+    h.pathname = '/bob';
+    const { result, rerender } = renderHook(() => useGearsDiscovery());
+    settle();
+    expect(result.current.open).toBe(false);
+    h.pathname = '/new';
+    rerender();
+    expect(result.current.open).toBe(true);
+  });
+
+  it('holds for the whole page load when it arrived from a campaign link', () => {
+    window.history.replaceState(null, '', '/bob?utm_source=landing&utm_campaign=bob');
+    captureDiscoveryLanding();
+    window.history.replaceState(null, '', '/');
+    const { result, rerender } = renderHook(() => useGearsDiscovery());
+    settle();
+    h.pathname = '/new';
+    rerender();
+    act(() => vi.advanceTimersByTime(DISCOVERY_RECHECK_MS * 3));
+    expect(result.current.open).toBe(false);
+    expect(localStorage.getItem('gears_discovery_u1')).toBeNull();
   });
 
   it('waits while another dialog is visible, then opens', () => {
