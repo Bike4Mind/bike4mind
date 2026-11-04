@@ -533,6 +533,54 @@ describe('ModelDefaultsDialog load options', () => {
     expect(byTestId('model-defaults-context-note')?.textContent).toContain('May not load');
   });
 
+  const autoOffer = (loads16: boolean): ModelLoadOffer => ({
+    context: {
+      kind: 'ollama',
+      settings: 16384,
+      auto: 16384,
+      ceiling: 32768,
+      sizes: [
+        { size: 16384, tokens: 16384, autoTokens: 16384, loads: loads16 },
+        { size: 32768, tokens: 32768, autoTokens: 16384, loads: false },
+      ],
+    },
+  });
+
+  it('warns when Auto falls back to a floor size that may not load', async () => {
+    offer = autoOffer(false);
+    stored = { context: { mode: 'auto' } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe(
+      "Runs at 16K tokens. May not load in this computer's memory."
+    );
+  });
+
+  it('does not warn when Auto runs at a size that loads', async () => {
+    offer = autoOffer(true);
+    stored = { context: { mode: 'auto' } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 16K tokens.');
+  });
+
+  it('warns under Same as Settings when Settings is a size that may not load', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 32768,
+        ceiling: 32768,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+          { size: 32768, tokens: 32768, autoTokens: 32768, loads: false },
+        ],
+      },
+    };
+    stored = {};
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe(
+      "Runs at 32K tokens. May not load in this computer's memory."
+    );
+  });
+
   it('shows a stored size a budget server no longer lists, and labels sizes that are not whole K exactly', async () => {
     offer = { context: { kind: 'budget', server: 65536, sizes: [16384] } };
     stored = { context: { mode: 'fixed', tokens: 512 } };
@@ -618,7 +666,7 @@ describe('ModelDefaultsDialog load options', () => {
 
   it('keeps the stored load options on save when the offer cannot be read, and clears them with Clear all', async () => {
     getModelLoadOffer.mockRejectedValue(new Error('offline'));
-    stored = { context: { mode: 'fixed', tokens: 65536 }, keepAlive: 3600 };
+    stored = { context: { mode: 'fixed', tokens: 65536 }, draftTokens: 2, keepAlive: 3600 };
     await render(QWEN);
     expect(byTestId('model-defaults-context-select')).toBeNull();
     await click('model-defaults-save-btn');

@@ -581,9 +581,7 @@ function LoadOptionRows({
     sent !== loadedContext &&
     !sameContext(context, saved?.context ?? null);
   const tooLarge =
-    offered?.kind === 'ollama' &&
-    context?.mode === 'fixed' &&
-    offered.sizes.find(candidate => candidate.tokens === sent)?.loads === false;
+    offered?.kind === 'ollama' && offered.sizes.find(candidate => candidate.tokens === sent)?.loads === false;
   return (
     <>
       <Divider sx={{ my: 1 }} />
