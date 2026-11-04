@@ -157,4 +157,22 @@ describe('buildSignupGrantSizingReport', () => {
       ].sort()
     );
   });
+
+  it('counts an account the daily drip completed as in flight and keeps blocked ones on their own line', async () => {
+    const reopened = await insertUser({
+      signupGrant: grant({ stage: 'unlocked', creditsReleased: 1400, unlockedBy: 'activity_drip' }),
+    });
+    await insertLedger(reopened, `verify-grant:${reopened}`, 1000);
+    await insertLedger(reopened, `unlock-grant:activity:${reopened}:2026-11-01`, 400);
+    const blocked = await insertUser({ isBanned: true, signupGrant: grant({ creditsReleased: 1000 }) });
+    await insertLedger(blocked, `verify-grant:${blocked}`, 1500);
+
+    const report = await buildSignupGrantSizingReport({ now });
+
+    expect(report.staged.inFlight).toBe(1);
+    expect(report.staged.inFlightReceived).toBe(1400);
+    expect(report.staged.inFlightLedgerMismatch).toBe(0);
+    expect(report.staged.remainingToDrip).toBe(9000 - 400);
+    expect(report.staged.inFlightBlocked).toBe(1);
+  });
 });

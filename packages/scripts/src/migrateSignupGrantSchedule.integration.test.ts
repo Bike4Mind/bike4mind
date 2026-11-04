@@ -7,6 +7,20 @@ import { AdminSettings, CreditTransaction, User } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 import { migrateSignupGrantSchedule, parseMigrationArgs } from './migrateSignupGrantSchedule';
 
+// Lets a test change an account after the plan has read the ledger and before the guarded write.
+let afterLedgerRead: (() => Promise<void>) | undefined;
+vi.mock('./signupGrantLedger', async importOriginal => {
+  const actual = await importOriginal<typeof import('./signupGrantLedger')>();
+  return {
+    ...actual,
+    readReceivedCredits: async (...args: Parameters<typeof actual.readReceivedCredits>) => {
+      const received = await actual.readReceivedCredits(...args);
+      await afterLedgerRead?.();
+      return received;
+    },
+  };
+});
+
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -22,6 +36,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  afterLedgerRead = undefined;
   await User.collection.deleteMany({});
   await CreditTransaction.collection.deleteMany({});
   await AdminSettings.collection.deleteMany({});
@@ -311,5 +326,120 @@ describe('migrateSignupGrantSchedule', () => {
     expect(report.changes).toHaveLength(1);
     expect(report.changes[0]).toMatchObject({ userId: String(id), after: { creditsReleased: 1700 } });
     await expect(migrateSignupGrantSchedule({ reportPath: path, log: silent })).rejects.toThrow(/EEXIST/);
+  });
+
+  it('migrates an account the daily drip completed and keeps it unlocked', async () => {
+    const id = await insertUser({
+      signupGrant: grant({
+        stage: 'unlocked',
+        creditsReleased: 9000,
+        unlockCredits: 8000,
+        unlockedBy: 'activity_drip',
+      }),
+    });
+    await insertLedger(id, `verify-grant:${id}`, 1000);
+    await insertLedger(id, `unlock-grant:activity:${id}:2026-11-01`, 8500);
+
+    const result = await migrateSignupGrantSchedule({
+      apply: true,
+      maxUsers: 10,
+      maxCredits: 100_000,
+      reportPath: reportPath(),
+      log: silent,
+    });
+
+    expect(result.inFlight).toBe(1);
+    expect(result.migrated).toBe(1);
+    expect(await grantOf(id)).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'activity_drip',
+      creditsReleased: 9500,
+      dripCredits: 8500,
+      unlockCredits: 8500,
+    });
+  });
+
+  it('leaves an account that changed after the plan for the next run and marks it unwritten', async () => {
+    const dripped = await insertLaggingAccount();
+    const banned = await insertLaggingAccount();
+    afterLedgerRead = async () => {
+      await User.collection.updateOne({ _id: dripped }, { $set: { 'signupGrant.creditsReleased': 1100 } });
+      await User.collection.updateOne({ _id: banned }, { $set: { isBanned: true } });
+    };
+    const messages: string[] = [];
+    const path = reportPath();
+
+    const result = await migrateSignupGrantSchedule({
+      apply: true,
+      maxUsers: 10,
+      maxCredits: 100_000,
+      reportPath: path,
+      log: message => messages.push(message),
+    });
+
+    expect(result.changes).toHaveLength(2);
+    expect(result.migrated).toBe(0);
+    expect(messages).toContain('Wrote 0 of 2 planned account(s); the rest changed since the plan.');
+    expect(await grantOf(dripped)).toMatchObject({ creditsReleased: 1100 });
+    expect(await grantOf(dripped)).not.toHaveProperty('dripCredits');
+    expect(await grantOf(banned)).toMatchObject({ creditsReleased: 1000 });
+    expect(await grantOf(banned)).not.toHaveProperty('dripCredits');
+    const plan = JSON.parse(readFileSync(path, 'utf8'));
+    expect(plan.status).toBe('applied');
+    expect(plan.changes.map((change: { written: boolean }) => change.written)).toEqual([false, false]);
+  });
+
+  it('records a refused run in the plan file', async () => {
+    await insertLaggingAccount();
+    const path = reportPath();
+
+    await expect(
+      migrateSignupGrantSchedule({ apply: true, maxUsers: 1, maxCredits: 100, reportPath: path, log: silent })
+    ).rejects.toThrow(/max-credits/);
+
+    expect(JSON.parse(readFileSync(path, 'utf8')).status).toBe('refused');
+  });
+
+  it.each([
+    ['a negative creditsReleased', { creditsReleased: -5 }],
+    ['a fractional creditsReleased', { creditsReleased: 1.5 }],
+    ['a non-numeric dripCredits', { dripCredits: 'many' }],
+    ['more released than the pool holds', { creditsReleased: 20_000 }],
+  ])('skips a grant with %s and leaves it unchanged', async (_label, extra) => {
+    const id = await insertUser({ signupGrant: grant(extra) });
+    await insertLedger(id, `verify-grant:${id}`, 1000);
+    await insertLedger(id, `unlock-grant:activity:${id}:2026-11-01`, 300);
+    const before = await User.collection.findOne({ _id: id });
+
+    const result = await migrateSignupGrantSchedule({
+      apply: true,
+      maxUsers: 10,
+      maxCredits: 100_000,
+      reportPath: reportPath(),
+      log: silent,
+    });
+
+    expect(result.skipped['invalid-grant']).toBe(1);
+    expect(result.changes).toHaveLength(0);
+    expect(await User.collection.findOne({ _id: id })).toEqual(before);
+  });
+
+  it('rejects malformed CLI arguments', () => {
+    const parse =
+      (...args: string[]) =>
+      () =>
+        parseMigrationArgs(['node', 'x', ...args]);
+
+    expect(parse('--report')).toThrow(/--report needs a file path/);
+    expect(parse('--report', '--dry')).toThrow(/--report needs a file path/);
+    expect(parse('--report=')).toThrow(/--report needs a file path/);
+    expect(parse('--max-users', '1.5')).toThrow(/positive integer/);
+    expect(parse('--max-credits', 'abc')).toThrow(/positive integer/);
+    expect(parse('--max-credits')).toThrow(/positive integer/);
+    expect(parseMigrationArgs(['node', 'x', '--report', '/tmp/plan.json']).reportPath).toBe('/tmp/plan.json');
+    expect(parseMigrationArgs(['node', 'x', '--report=/tmp/plan.json']).reportPath).toBe('/tmp/plan.json');
+    expect(parseMigrationArgs(['node', 'x']).reportPath).toMatch(
+      new RegExp(`^${join(tmpdir(), 'signup-grant-schedule-').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\d+\\.json$`)
+    );
   });
 });
