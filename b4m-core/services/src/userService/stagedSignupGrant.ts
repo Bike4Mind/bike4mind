@@ -198,6 +198,7 @@ async function releaseStage(
             policy = undefined;
           }
           const parsedPolicy = signupRiskPolicySchema.safeParse(policy);
+          let recordSignals = true;
           if (adapters.collectRiskSignals && parsedPolicy.success && parsedPolicy.data.enabled) {
             try {
               signals = await adapters.collectRiskSignals(user);
@@ -207,8 +208,20 @@ async function releaseStage(
               console.warn('[signup-risk] Observation collection failed; signup grant remains pending for retry');
               throw new Error('Signup risk observation collection unavailable; retry the signup grant');
             }
+          } else if (adapters.collectRiskSignals && parsedPolicy.success) {
+            // Shadow collection under a disabled policy: the values only feed offline replay of candidate
+            // policies (replaySignupRisk), so a failure records nothing rather than delaying the grant.
+            try {
+              signals = await adapters.collectRiskSignals(user);
+            } catch {
+              recordSignals = false;
+              console.warn('[signup-risk] Shadow observation collection failed; signals not recorded');
+            }
           }
-          assessment = evaluateSignupRisk(policy, signals, grant.signupCredits);
+          assessment = {
+            ...evaluateSignupRisk(policy, signals, grant.signupCredits),
+            ...(recordSignals ? { signals } : {}),
+          };
           assessedBand = assessment.band;
           if (assessment.status === 'unavailable') {
             console.warn('[signup-risk] Assessment unavailable; holding signup grant');

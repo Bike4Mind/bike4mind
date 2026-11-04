@@ -447,7 +447,9 @@ describe('staged signup ledger', () => {
     );
     expect((await userService.releaseSignupTranche(user.id, retryAdapters)).creditsGranted).toBe(12);
     expect((await userService.releaseSignupTranche(user.id, retryAdapters)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.signupGrantAssessment?.status).toBe('evaluated');
+    const evaluated = (await User.findById(user.id))?.signupGrantAssessment;
+    expect(evaluated?.status).toBe('evaluated');
+    expect(evaluated?.signals).toEqual({ datacenter: false });
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
   });
 
@@ -541,7 +543,20 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(40);
   });
 
-  it('skips signal collection for a disabled policy', async () => {
+  it('records shadow signals under a disabled policy without changing the grant', async () => {
+    const collectRiskSignals = vi.fn(async () => ({ datacenter: true, ipSignups: 4, challengeVerified: null }));
+    const user = await createUser();
+    expect((await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals })).creditsGranted).toBe(
+      12
+    );
+    expect(collectRiskSignals).toHaveBeenCalledOnce();
+    const assessment = (await User.findById(user.id))?.signupGrantAssessment;
+    expect(assessment).toMatchObject({ band: 'full', status: 'disabled', credits: 12 });
+    expect(assessment?.signals).toEqual({ datacenter: true, ipSignups: 4, challengeVerified: null });
+  });
+
+  it('grants in full and records no signals when shadow collection fails under a disabled policy', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const failingCollector = vi.fn(async () => {
       throw new Error('lookup timeout');
     });
@@ -550,7 +565,13 @@ describe('staged signup ledger', () => {
       (await userService.releaseSignupTranche(user.id, { ...adapters, collectRiskSignals: failingCollector }))
         .creditsGranted
     ).toBe(12);
-    expect(failingCollector).not.toHaveBeenCalled();
+    expect(failingCollector).toHaveBeenCalledOnce();
+    const assessment = (await User.findById(user.id))?.signupGrantAssessment;
+    expect(assessment?.status).toBe('disabled');
+    expect(assessment).not.toHaveProperty('signals');
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      '[signup-risk] Shadow observation collection failed; signals not recorded'
+    );
   });
 
   it('rejects unbounded validator entitlements and banned accounts', async () => {

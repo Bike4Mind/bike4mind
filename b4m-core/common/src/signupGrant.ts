@@ -35,6 +35,12 @@ export interface SignupGrantAssessment {
   missing: string[];
   policyVersion: string | null;
   status: 'evaluated' | 'disabled' | 'unavailable';
+  /**
+   * The observed signal values the band was computed from, keyed by signup risk signal. Recorded even
+   * while the policy is disabled so a candidate policy can be replayed against real signups before it
+   * is switched on. Absent on assessments that predate it, or when collection failed under a disabled policy.
+   */
+  signals?: Partial<Record<string, boolean | number | null>>;
 }
 
 export interface SignupGrant {
