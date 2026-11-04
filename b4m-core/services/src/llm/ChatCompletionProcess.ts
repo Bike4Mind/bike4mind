@@ -5869,7 +5869,7 @@ export class ChatCompletionProcess {
                 }
 
                 const streamedChars = streamedTexts.reduce((sum, text) => sum + (text?.length ?? 0), 0);
-                if (creditLimiter?.recordStreamed(streamedChars) && !abortController.signal.aborted) {
+                if (!abortController.signal.aborted && creditLimiter?.recordStreamed(streamedChars)) {
                   logger.info('[CREDIT_CAP] Stream stopped: the answer reached what the balance can pay for', {
                     questId,
                     model: currentModel.id,
