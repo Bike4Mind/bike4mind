@@ -113,3 +113,55 @@ describe('/add-dir', () => {
     expect(conversation.session?.project?.contextDirectories).toEqual(['/work/shared']);
   });
 });
+
+describe("the chip's Add directory after the user moved to another session", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let conversation: ConversationController;
+  let answer: (result: ShareDirectoryResult) => void;
+
+  function Harness({ sessionId }: { sessionId: string }) {
+    conversation = useConversation(sessionId, () => undefined);
+    return null;
+  }
+
+  beforeEach(async () => {
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    vi.stubGlobal('cancelAnimationFrame', () => undefined);
+    (window as unknown as { b4m: unknown }).b4m = {
+      chat: {
+        getSession: async (id: string) => ({ id, mode: 'code', messages: [], project: PROJECT }),
+        getQueuedMessages: async () => [],
+        onSessionSummary: () => () => undefined,
+        onQueueChanged: () => () => undefined,
+        onStreamEvent: () => () => undefined,
+        addContextDirectory: () => new Promise<ShareDirectoryResult>(resolve => (answer = resolve)),
+      },
+    };
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => root.render(<Harness sessionId={SESSION} />));
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it('settles quietly when main refuses the folder', async () => {
+    let outcome: Promise<string> | undefined;
+    await act(async () => {
+      outcome = conversation.project.addContextDirectory().then(
+        () => 'resolved',
+        () => 'rejected'
+      );
+    });
+    await act(async () => root.render(<Harness sessionId="s2" />));
+    await act(async () => answer({ status: 'refused', error: 'Not a folder.' }));
+
+    expect(await outcome).toBe('resolved');
+    expect(conversation.sendError).toBeNull();
+  });
+});

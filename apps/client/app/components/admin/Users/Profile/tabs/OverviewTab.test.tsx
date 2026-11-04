@@ -57,6 +57,24 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('OverviewTab internal account row', () => {
+  it.each([
+    [{ isInternal: false }, 'Customer'],
+    [{ isInternal: true }, 'Internal account'],
+    [{ isInternal: false, isAdmin: true }, 'Internal account (admin)'],
+  ])('shows %o as %s and opens the internal-account action', (flags, text) => {
+    const onAction = vi.fn();
+    render(
+      <OverviewTab user={buildProfile(flags)} onAction={onAction} onViewActivity={vi.fn()} onViewCredits={vi.fn()} />,
+      { wrapper: ProfileTestWrapper }
+    );
+
+    expect(screen.getByTestId('user-profile-fact-internal')).toHaveTextContent(text);
+    fireEvent.click(screen.getByTestId('user-profile-internal-btn'));
+    expect(onAction).toHaveBeenCalledWith('internalAccount');
+  });
+});
+
 describe('OverviewTab recent activity', () => {
   it('lists the recent timeline entries from every source', async () => {
     mocks.get.mockResolvedValue({ data: { entries: [adminRow, creditRow], nextCursor: null } });

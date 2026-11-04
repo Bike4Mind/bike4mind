@@ -192,6 +192,8 @@ import ReplaceCreditTransactionOwnerIndex from './20260921235957_replace-credit-
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 import EnsureFabFileFilePathIndex from './20260921235981_ensure-fabfile-filepath-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EncryptSensitiveAdminSettings from './20260921235955_encrypt-sensitive-admin-settings';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureFabFileDerivedFromIndex from './20260921235976_ensure-fabfile-derived-from-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
@@ -270,7 +272,10 @@ import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-sign
 import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
 import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
+import BackfillUserLaneFlags from './20260921238100_backfill-user-lane-flags';
 import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
+import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes';
+import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -417,6 +422,7 @@ const coreMigrations: MigrationFile[] = [
   ReplaceCreditTransactionOwnerIndex,
   EnsureFabFileOwnedKeysetIndex,
   EnsureFabFileFilePathIndex,
+  EncryptSensitiveAdminSettings,
   EnsureFabFileDerivedFromIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
@@ -475,7 +481,10 @@ const coreMigrations: MigrationFile[] = [
   SeedSignupGrantSchedule,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
+  BackfillUserLaneFlags,
   EnsureAnalyticsHopIndexes,
+  EnsureSpendAlertIndexes,
+  EnsureReferralInviterIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

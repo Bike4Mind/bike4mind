@@ -205,7 +205,7 @@ describe('fetchYoungAccountSpenders', () => {
     const logs = client([{ queryId: 'q1' }, { status: 'Running' }, { status: 'Complete', results: rows }]);
     const sleep = vi.fn(async () => {});
     const { spenders, truncated } = await fetchYoungAccountSpenders(window, {
-      logGroup: '/sst/chat',
+      logGroups: ['/sst/chat', '/aws/lambda/cli'],
       client: logs,
       sleep,
     });
@@ -213,7 +213,7 @@ describe('fetchYoungAccountSpenders', () => {
     expect(truncated).toBe(false);
     expect(logs.sent[0]).toBeInstanceOf(StartQueryCommand);
     expect(logs.sent[0].input).toMatchObject({
-      logGroupName: '/sst/chat',
+      logGroupNames: ['/sst/chat', '/aws/lambda/cli'],
       startTime: 1793405820,
       endTime: 1793409420,
       queryString: YOUNG_ACCOUNT_SPEND_QUERY,
@@ -225,23 +225,26 @@ describe('fetchYoungAccountSpenders', () => {
   it('flags a result that filled the row limit as truncated', async () => {
     const full = Array.from({ length: 500 }, (_, i) => row({ userId: `u${i}`, model: 'm', spend: '0.01', calls: '1' }));
     const logs = client([{ queryId: 'q1' }, { status: 'Complete', results: full }]);
-    const result = await fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs });
+    const result = await fetchYoungAccountSpenders(window, {
+      logGroups: ['/sst/chat', '/aws/lambda/cli'],
+      client: logs,
+    });
     expect(result.truncated).toBe(true);
   });
 
   it('throws when the query fails, without stopping a query that already ended', async () => {
     const logs = client([{ queryId: 'q1' }, { status: 'Failed' }]);
-    await expect(fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs })).rejects.toThrow(
-      'Logs Insights query failed'
-    );
+    await expect(
+      fetchYoungAccountSpenders(window, { logGroups: ['/sst/chat', '/aws/lambda/cli'], client: logs })
+    ).rejects.toThrow('Logs Insights query failed');
     expect(logs.sent.some(c => c instanceof StopQueryCommand)).toBe(false);
   });
 
   it('stops the query when a poll throws', async () => {
     const logs = client([{ queryId: 'q1' }, new Error('ThrottlingException'), {}]);
-    await expect(fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs })).rejects.toThrow(
-      'ThrottlingException'
-    );
+    await expect(
+      fetchYoungAccountSpenders(window, { logGroups: ['/sst/chat', '/aws/lambda/cli'], client: logs })
+    ).rejects.toThrow('ThrottlingException');
     expect(logs.sent[logs.sent.length - 1]).toBeInstanceOf(StopQueryCommand);
   });
 
@@ -255,7 +258,7 @@ describe('fetchYoungAccountSpenders', () => {
       ) as unknown as LogsClient['send'],
     };
     await expect(
-      fetchYoungAccountSpenders(window, { logGroup: '/sst/chat', client: logs, deadlineMs: 20 })
+      fetchYoungAccountSpenders(window, { logGroups: ['/sst/chat', '/aws/lambda/cli'], client: logs, deadlineMs: 20 })
     ).rejects.toThrow('did not finish in time');
   });
 
@@ -267,7 +270,7 @@ describe('fetchYoungAccountSpenders', () => {
     });
     await expect(
       fetchYoungAccountSpenders(window, {
-        logGroup: '/sst/chat',
+        logGroups: ['/sst/chat', '/aws/lambda/cli'],
         client: logs,
         sleep,
         deadlineMs: 15_000,
@@ -279,19 +282,19 @@ describe('fetchYoungAccountSpenders', () => {
 });
 
 describe('youngAccountSpendSection', () => {
-  it('renders the accounts for the alarm window using the configured log group', async () => {
-    vi.stubEnv('LLM_SPEND_LOG_GROUP', '/sst/chat');
+  it('renders the accounts for the alarm window across every configured log group', async () => {
+    vi.stubEnv('LLM_SPEND_LOG_GROUPS', '/sst/chat, /aws/lambda/cli');
     const fetch = vi.fn(async () => ({ spenders: aggregateSpenders(rows), truncated: false }));
     const text = await youngAccountSpendSection(hourly, { appUrl: 'https://app.example.com', fetch });
     expect(fetch).toHaveBeenCalledWith(
       { start: new Date('2026-10-31T00:17:00.000Z'), end: windowEnd },
-      { logGroup: '/sst/chat' }
+      { logGroups: ['/sst/chat', '/aws/lambda/cli'] }
     );
     expect(text).toContain('<https://app.example.com/admin/users/u1|admin>');
   });
 
   it('says why when no log group is configured, and never queries', async () => {
-    vi.stubEnv('LLM_SPEND_LOG_GROUP', '');
+    vi.stubEnv('LLM_SPEND_LOG_GROUPS', ' , ');
     const fetch = vi.fn(async () => ({ spenders: [], truncated: false }));
     expect(await youngAccountSpendSection(hourly, { fetch })).toBe(
       `${SECTION_TITLE}\nNot available: the alarm relay has no spend log group configured.`
@@ -303,7 +306,7 @@ describe('youngAccountSpendSection', () => {
     const fetch = vi.fn(async () => ({ spenders: [], truncated: false }));
     const text = await youngAccountSpendSection(
       { ...hourly, NewStateReason: 'Set by hand', Trigger: undefined },
-      { logGroup: '/sst/chat', fetch }
+      { logGroups: ['/sst/chat', '/aws/lambda/cli'], fetch }
     );
     expect(text).toBe(`${SECTION_TITLE}\nNot available: the alarm did not say which window breached.`);
     expect(fetch).not.toHaveBeenCalled();
@@ -314,9 +317,9 @@ describe('youngAccountSpendSection', () => {
     const fetch = vi.fn(async () => {
       throw new Error('AccessDeniedException <denied>');
     });
-    const text = await youngAccountSpendSection(hourly, { logGroup: '/sst/chat', fetch });
+    const text = await youngAccountSpendSection(hourly, { logGroups: ['/sst/chat', '/aws/lambda/cli'], fetch });
     expect(text).toBe(
-      `${SECTION_TITLE}\nCould not be loaded (AccessDeniedException &lt;denied&gt;). Query the ChatCompletion log group for the window instead.`
+      `${SECTION_TITLE}\nCould not be loaded (AccessDeniedException &lt;denied&gt;). Query the LLM spend log groups for the window instead.`
     );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('bike4mind-dev-young-account-spend-rate'));
   });
