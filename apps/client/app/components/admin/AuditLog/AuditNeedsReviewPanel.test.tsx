@@ -15,11 +15,18 @@ const mocks = vi.hoisted(() => ({
   toReview: [] as unknown[],
   toReviewTotal: 0,
   all: [] as unknown[],
+  batchMax: 100,
   markAsync: vi.fn(),
   unmarkAsync: vi.fn(),
   queueCalls: [] as Array<{ status: string; options: { from?: string; enabled?: boolean } }>,
 }));
 
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  get AUDIT_REVIEW_BATCH_MAX() {
+    return mocks.batchMax;
+  },
+}));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: mocks.currentUser }) }));
 vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
   useAuditSummary: () => ({ isError: false, data: { windowDays: 30, since: '2026-09-19T00:00:00.000Z' } }),
@@ -78,6 +85,8 @@ describe('AuditNeedsReviewPanel', () => {
     mocks.currentUser = { id: 'me', isAdmin: true, adminPermissions: [] };
     mocks.all = [];
     mocks.queueCalls = [];
+    mocks.batchMax = 100;
+    mocks.markAsync.mockReset();
     setQueue([makeReviewQueueEntry({ id: 'c1' }), makeReviewQueueEntry({ id: 'c2' })]);
     mocks.markAsync.mockImplementation(async ({ entryIds }: { entryIds: string[] }) => ({
       reviewed: entryIds,
@@ -155,6 +164,25 @@ describe('AuditNeedsReviewPanel', () => {
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
     await waitFor(() => expect(mocks.unmarkAsync).toHaveBeenCalledWith({ entryIds: ['c1'] }));
     expect(mocks.unmarkAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('still offers Undo for the batches committed before a later batch failed', async () => {
+    mocks.batchMax = 1;
+    mocks.markAsync
+      .mockImplementationOnce(async ({ entryIds }: { entryIds: string[] }) => ({ reviewed: entryIds, skipped: [] }))
+      .mockRejectedValueOnce(new Error('boom'));
+    renderPanel();
+    for (const id of ['c1', 'c2']) {
+      fireEvent.click(within(screen.getByTestId(`audit-needs-review-table-row-${id}`)).getAllByRole('checkbox')[0]);
+    }
+    fireEvent.click(screen.getByTestId('audit-needs-review-bulk-mark-btn'));
+
+    expect((await screen.findByTestId('undo-toast-message')).textContent).toBe('Marked 1 as reviewed.');
+    expect(mocks.markAsync).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('audit-needs-review-bulk-mark-btn')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
+    await waitFor(() => expect(mocks.unmarkAsync).toHaveBeenCalledWith({ entryIds: ['c1'] }));
   });
 
   it('words every skip reason in the toast, including entries about the viewer', async () => {

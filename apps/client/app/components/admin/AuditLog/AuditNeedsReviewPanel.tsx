@@ -181,6 +181,7 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
 
   const markReviewed = async (ids: string[]) => {
     const result: MarkAuditReviewedResult = { reviewed: [], skipped: [] };
+    let failed = false;
     try {
       for (const batch of chunk(ids, AUDIT_REVIEW_BATCH_MAX)) {
         const batchResult = await mark.mutateAsync({ entryIds: batch });
@@ -189,10 +190,12 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
       }
     } catch {
       // The mutation's onError already told the admin what to do; keep the selection so they can retry.
-      return;
+      failed = true;
     }
-    setSelection(noSelection);
     const { reviewed, skipped } = result;
+    // Earlier batches are committed even when a later one fails, so they still get a toast with Undo.
+    if (failed && reviewed.length === 0) return;
+    if (!failed) setSelection(noSelection);
     const skippedNote = skipped.length > 0 ? ` ${describeSkips(skipped)}.` : '';
     if (reviewed.length === 0) {
       showUndo({ message: `Nothing was marked as reviewed.${skippedNote}` });
