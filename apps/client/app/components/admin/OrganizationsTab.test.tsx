@@ -21,7 +21,6 @@ vi.mock('@client/app/hooks/data/adminOrganizations', () => ({
   useAdminOrgGrants: useAdminOrgGrantsMock,
   useConvertOrgToPaid: idleMutation,
   useGrantOrganization: idleMutation,
-  useReconcileOrgSeats: idleMutation,
   useRevokeOrganization: idleMutation,
   useTopUpOrganization: idleMutation,
 }));

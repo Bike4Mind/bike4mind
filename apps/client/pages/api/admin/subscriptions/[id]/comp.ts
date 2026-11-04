@@ -3,7 +3,6 @@ import { withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
-  SubscriptionOwnerType,
   SubscriptionSource,
   isCancellableSubscriptionStatus,
   resolveSubscriptionSource,

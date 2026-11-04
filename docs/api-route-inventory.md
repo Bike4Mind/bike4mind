@@ -41,7 +41,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [...unmatchedApiPath] | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 266 | 0 | 203 | 56 | 0 | 7 | 41 |
+| admin | 266 | 0 | 202 | 57 | 0 | 7 | 42 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -278,7 +278,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/organizations/[id]/group-types` | PUT | jwt+key | `admin:*` | no | - | 1: `utils/groupsAPICalls.ts` |
 | `/api/admin/organizations/[id]/members` | POST | jwt | - | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserOrgMembership.ts` |
 | `/api/admin/organizations/[id]/members/[userId]` | PATCH, DELETE | jwt | - | no | - | 0 |
-| `/api/admin/organizations/[id]/reconcile-seats` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
 | `/api/admin/organizations/[id]/revoke` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
 | `/api/admin/organizations/[id]/seats` | PATCH | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
 | `/api/admin/organizations/[id]/top-up` | POST | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminOrganizations.ts` |
@@ -362,6 +361,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/subscriptions` | GET | jwt | `admin:*` | no | - | 2: `components/admin/Subscriptions/subscriptionsLastSeen.ts`, `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
 | `/api/admin/subscriptions/[id]` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminSubscriptionDetail.ts` |
 | `/api/admin/subscriptions/[id]/admin-log` | GET | jwt | `admin:*` | no | - | 0 |
+| `/api/admin/subscriptions/[id]/sync` | GET, POST | jwt | `admin:*` | no | - | 0 |
 | `/api/admin/subscriptions/[id]/comp` | POST | jwt | `admin:*` | no | - | 0 |
 | `/api/admin/subscriptions/by-stripe/[stripeSubscriptionId]` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminSubscriptionDetail.ts` |
 | `/api/admin/subscriptions/export` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Subscriptions/useAdminSubscriptionsList.ts` |
