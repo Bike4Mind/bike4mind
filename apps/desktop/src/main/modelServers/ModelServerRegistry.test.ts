@@ -1568,7 +1568,7 @@ describe('ModelServerRegistry', () => {
     });
   });
 
-  it('still lists the thinking switch a model earned before Desktop restarted', async () => {
+  it('still remembers a model that reasoned before Desktop restarted', async () => {
     const fetchFor = (): FetchLike => async input => {
       if (new URL(String(input)).pathname === '/v1/models')
         return json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model' }] });
@@ -1599,7 +1599,8 @@ describe('ModelServerRegistry', () => {
     await first.chatFor(model!.id.split(':')[1]!)!.stream({ model: model!.id, messages: [] }, () => undefined);
 
     const [relaunched] = await open().models();
-    expect(relaunched).toMatchObject({ id: model!.id, thinkingToggle: true });
+    expect(relaunched).toMatchObject({ id: model!.id, thinkingAlwaysOn: true });
+    expect(relaunched.thinkingToggle).toBeUndefined();
   });
 
   describe('credentials on a saved http host name that has not been checked yet', () => {
