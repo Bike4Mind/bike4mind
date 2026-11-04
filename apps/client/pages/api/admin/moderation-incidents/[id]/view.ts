@@ -34,13 +34,12 @@ const handler = adminApi({
 
   const image = await signIncidentImage(incident);
   res.setHeader('Cache-Control', 'no-store');
+  // Detection and review-trail metadata only: no owner, origin or reviewer references.
   return res.status(200).json({
     id: incident.id,
     createdAt: incident.createdAt,
     surface: incident.surface ?? null,
     reviewStatus: incident.reviewStatus ?? 'pending_review',
-    // What a reviewer needs when no image was stored. No user, session, quest or file references,
-    // and no reviewer ids: only what the detection and the review trail say.
     provider: incident.provider,
     model: incident.model,
     labels: (incident.labels ?? []).map(({ name, parentName, confidence }) => ({ name, parentName, confidence })),
