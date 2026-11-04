@@ -40,10 +40,19 @@ const QUEUE_SUBSCRIBERS = [
   ),
 ].map(([, handlerModule, block]) => ({ handlerModule: `${handlerModule}.ts`, block }));
 
-const PUSHING_QUEUE_SUBSCRIBERS = QUEUE_SUBSCRIBERS.filter(
-  ({ handlerModule }) =>
-    existsSync(path.join(REPO_ROOT, handlerModule)) && readRepo(handlerModule).includes(PUBLISH_CALL)
-);
+// Follows relative imports, so a handler that publishes only through a helper module
+// (as agentExecutor.ts does via agentExecutor.push.ts) is still discovered.
+const publishesPush = (module: string, seen = new Set<string>()): boolean => {
+  if (seen.has(module) || !existsSync(path.join(REPO_ROOT, module))) return false;
+  seen.add(module);
+  const source = readRepo(module);
+  if (source.includes(PUBLISH_CALL)) return true;
+  return [...source.matchAll(/from '(\.{1,2}\/[^']+)'/g)].some(([, spec]) =>
+    publishesPush(path.join(path.dirname(module), `${spec}.ts`), seen)
+  );
+};
+
+const PUSHING_QUEUE_SUBSCRIBERS = QUEUE_SUBSCRIBERS.filter(({ handlerModule }) => publishesPush(handlerModule));
 
 describe('push publishers link the event bus', () => {
   it('discovers the queue subscribers that publish pushes', () => {
