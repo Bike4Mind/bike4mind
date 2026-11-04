@@ -5714,6 +5714,7 @@ export class ChatCompletionProcess {
               ? gateEveryRound(currentLlm, async (roundMessages, roundOptions, round) => {
                   const roundInputTokens =
                     inputTokens + (round === 0 ? 0 : estimateAddedInputTokens(roundMessages.slice(hopMessageCount)));
+                  // Earlier hops' spend is not carried into round 0; the settlement floor bounds the charge.
                   const budget = creditLimiter.beginRound({
                     modelInfo: attemptLedgerModel,
                     inputTokens: roundInputTokens,
