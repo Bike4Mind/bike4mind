@@ -200,21 +200,10 @@ export function Composer({
   // A caret position to restore once a programmatic draft change has rendered.
   const pendingCaret = useRef<number | null>(null);
 
-  /**
-   * The draft, held per conversation.
-   *
-   * This component is NOT remounted on a switch - the thread, the session panel and the image
-   * menu beside it are all keyed on the session id, and the box the user types in was the one
-   * that was not - so text typed in one conversation stayed in the box and was sent to the
-   * next one. The window's Cmd+1-9 jumps make that the common case rather than a rare one:
-   * they are bound with no text-field guard, precisely because the user is expected to be
-   * typing here when they fire (see SessionList).
-   *
-   * Kept rather than cleared, which a key on this component would have done instead: a
-   * half-written message is the user's own work, and switching away and back has to give it
-   * back. Attachments deliberately do NOT work this way - see useAttachmentDraft, where the
-   * bytes belong to the session they were stored under.
-   */
+  // Per-conversation draft: this component is not keyed on the session (unlike the thread beside
+  // it), so it saves and restores text across switches. Cmd+1-9 (SessionList) has no text-field
+  // guard, so switching mid-draft is routine. Attachments deliberately do not work this way; see
+  // useAttachmentDraft.
   const drafts = useRef(new Map<string, string>());
   const latest = useRef(text);
   latest.current = text;
