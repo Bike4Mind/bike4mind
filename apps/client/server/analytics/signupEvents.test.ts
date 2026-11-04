@@ -318,6 +318,53 @@ describe('emitPurchaseEvents', () => {
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
+  describe('the end of the period a subscription payment bought', () => {
+    it('sends it as an ISO 8601 UTC string on a subscription purchase', async () => {
+      await emitPurchaseEvents(invoice({ periodEnd: new Date(Date.UTC(2027, 10, 3, 10)) }));
+      expect(mockEmit.mock.calls[0][0].metadata).toEqual({
+        touch: 'first',
+        attribution: 'self-reported',
+        kind: 'subscription',
+        value: 29.99,
+        currency: 'USD',
+        billingReason: 'subscription_create',
+        periodEnd: '2027-11-03T10:00:00.000Z',
+        userAction: false,
+      });
+    });
+
+    it('sends it on the host copy too', async () => {
+      mockKeyFor.mockImplementation((p: string) => (p === 'widgets' || p === 'bike4mind' ? 'key' : undefined));
+      await emitPurchaseEvents(invoice({ periodEnd: new Date('2026-12-03T10:00:00.000Z') }));
+      expect(mockEmit.mock.calls.map(([c]) => [c.productId, c.metadata.periodEnd])).toEqual([
+        ['bike4mind', '2026-12-03T10:00:00.000Z'],
+        ['widgets', '2026-12-03T10:00:00.000Z'],
+      ]);
+    });
+
+    it('sends none for a credit pack, which buys no period, whatever the caller passes', async () => {
+      await emitPurchaseEvents(
+        invoice({
+          paymentId: 'pi_9',
+          kind: 'credits',
+          billingReason: undefined,
+          periodEnd: new Date('2026-12-03T10:00:00.000Z'),
+        })
+      );
+      expect(mockEmit).toHaveBeenCalledTimes(1);
+      expect(mockEmit.mock.calls[0][0].metadata).not.toHaveProperty('periodEnd');
+    });
+
+    it.each([
+      ['no period', undefined],
+      ['a null period', null],
+      ['an invalid date', new Date(Number.NaN)],
+    ])('sends none, and still sends the purchase, for %s', async (_label, periodEnd) => {
+      await expect(emitPurchaseEvents(invoice({ periodEnd }))).resolves.toEqual(['widgets']);
+      expect(mockEmit.mock.calls[0][0].metadata).not.toHaveProperty('periodEnd');
+    });
+  });
+
   it('sends nothing without a payment id or a currency', async () => {
     await expect(emitPurchaseEvents(invoice({ paymentId: '' }))).resolves.toEqual([]);
     await expect(emitPurchaseEvents(invoice({ currency: null }))).resolves.toEqual([]);
