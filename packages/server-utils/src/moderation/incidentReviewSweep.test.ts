@@ -184,7 +184,7 @@ describe('runIncidentReviewSweep', () => {
     expect(result).toMatchObject({ alerted: 1, failed: 1 });
     expect(deps.incidents.markAlerted).toHaveBeenCalledTimes(1);
     expect(deps.incidents.markAlerted).toHaveBeenCalledWith('inc-6', NOW);
-    expect(deps.logger.error).toHaveBeenCalledWith(expect.any(String), { incidentId: 'inc-5' });
+    expect(deps.logger.error).toHaveBeenCalledWith(expect.any(String), { incidentId: 'inc-5', errorName: 'Error' });
   });
 
   it('logs when a delivered alert could not be stamped, and still counts it as sent', async () => {
@@ -196,7 +196,9 @@ describe('runIncidentReviewSweep', () => {
     expect(result.alerted).toBe(1);
     expect(deps.logger.error).toHaveBeenCalledWith(expect.stringContaining('alertedAt was not recorded'), {
       incidentId: 'inc-7',
+      errorName: 'Error',
     });
+    expect(JSON.stringify(vi.mocked(deps.logger.error).mock.calls)).not.toContain('write failed');
   });
 
   it('reports the oldest pending age even when everything is alerted', async () => {

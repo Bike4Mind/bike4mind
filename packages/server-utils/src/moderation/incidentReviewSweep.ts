@@ -50,6 +50,9 @@ export interface IncidentReviewSweepResult {
   pendingWithoutReviewers: boolean;
 }
 
+// The error name only: a mailer error message can carry recipient addresses, which never reach logs.
+const errorName = (error: unknown) => (error instanceof Error ? error.name : typeof error);
+
 const ageMinutes = (incident: RecordedIncident | undefined, now: Date) =>
   incident ? Math.max(0, Math.floor((now.getTime() - new Date(incident.createdAt).getTime()) / MINUTE_MS)) : 0;
 
@@ -138,8 +141,11 @@ export async function runIncidentReviewSweep(
 async function sendAlert(incident: RecordedIncident, deps: IncidentReviewSweepDeps): Promise<boolean> {
   try {
     return (await deliverIncidentAlert(incident, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS })) === 'delivered';
-  } catch {
-    deps.logger.error('[ImageModeration] review sweep alert failed', { incidentId: incident.id });
+  } catch (error) {
+    deps.logger.error('[ImageModeration] review sweep alert failed', {
+      incidentId: incident.id,
+      errorName: errorName(error),
+    });
     return false;
   }
 }
@@ -150,8 +156,11 @@ async function sendDigest(
 ): Promise<boolean> {
   try {
     return (await deliverReminderDigest(digest, deps, { timeoutMs: REVIEW_SWEEP_SEND_TIMEOUT_MS })) === 'delivered';
-  } catch {
-    deps.logger.error('[ImageModeration] review sweep reminder failed', { pendingCount: digest.pendingCount });
+  } catch (error) {
+    deps.logger.error('[ImageModeration] review sweep reminder failed', {
+      pendingCount: digest.pendingCount,
+      errorName: errorName(error),
+    });
     return false;
   }
 }
@@ -164,7 +173,10 @@ async function stamp(
 ): Promise<void> {
   try {
     await write();
-  } catch {
-    deps.logger.error(`[ImageModeration] review sweep sent but ${field} was not recorded`, meta);
+  } catch (error) {
+    deps.logger.error(`[ImageModeration] review sweep sent but ${field} was not recorded`, {
+      ...meta,
+      errorName: errorName(error),
+    });
   }
 }
