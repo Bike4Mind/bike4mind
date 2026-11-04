@@ -1,3 +1,4 @@
+import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
@@ -31,6 +32,7 @@ import {
   completionUsd,
   createModelAdmission,
   reserveCompletionCredits,
+  resolveShadowSubstitute,
   settleCompletion,
 } from '@server/billing/meterPlatformCompletion';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
@@ -184,7 +186,7 @@ async function handleRlmAnswer(req: Request, res: Response) {
 
   // --- Resolve API keys ---
   // Root LLM is routed through whatever provider getLlmByModel picks for the
-  // requested modelId - for `global.anthropic.*` that's Bedrock (no Anthropic
+  // model that runs - for `global.anthropic.*` that's Bedrock (no Anthropic
   // API key needed; AWS creds handle it). For sub-LLM calls inside the REPL,
   // tools.ts uses the Anthropic SDK directly, so we need a direct Anthropic
   // key. Fall back to env if the user-scoped key isn't configured (spike
@@ -221,7 +223,7 @@ async function handleRlmAnswer(req: Request, res: Response) {
   const admission = await createModelAdmission(req.user, models);
   let modelInfo: ModelInfo | undefined;
   if (parsed.model) {
-    // An explicitly requested model is never silently swapped for another one.
+    // Unrestricted callers run the requested model; restricted ones run the substitute resolved below.
     modelInfo = models.find(m => m.id === parsed.model);
     if (!modelInfo) throw new BadRequestError(`Model "${parsed.model}" is not available`);
     await admission.assert(modelInfo.id);
@@ -243,7 +245,8 @@ async function handleRlmAnswer(req: Request, res: Response) {
     }
     if (!modelInfo) throw new ForbiddenError('No available model is accessible for data-lake answers');
   }
-  const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
+  const runModelInfo = (await resolveShadowSubstitute(req, modelInfo, models, { requireTools: true })) ?? modelInfo;
+  const llm = getLlmByModel(apiKeyTable, { modelInfo: runModelInfo, logger: req.logger, endUserId: req.user?.id });
   if (!llm) {
     return res.status(500).json({ error: `Failed to construct backend for model ${modelInfo.id}` });
   }
@@ -266,6 +269,7 @@ async function handleRlmAnswer(req: Request, res: Response) {
     { role: 'user', content: parsed.query },
   ];
   const rootCeiling = rootCeilingUsd(modelInfo, baseMessages, maxIterations, maxExecutions);
+  const runRootCeiling = rootCeilingUsd(runModelInfo, baseMessages, maxIterations, maxExecutions);
   const reservation = await reserveCompletionCredits(req, rootCeiling + maxCostUsd, 'data-lake answers');
 
   // --- Construct a per-request ReplSession ---
@@ -351,12 +355,13 @@ async function handleRlmAnswer(req: Request, res: Response) {
       userId,
       logger: req.logger,
       llm,
-      model: modelInfo.id,
+      model: runModelInfo.id,
       tools: [codeExecuteTool],
       maxIterations,
       systemPrompt,
       temperature: 0.4,
       maxTokens: ROOT_MAX_TOKENS,
+      ...shadowIdentityOptions(modelInfo, runModelInfo),
       ...(thinkingVisibility && { thinkingVisibility }),
     });
   } catch (e) {
@@ -414,22 +419,25 @@ async function handleRlmAnswer(req: Request, res: Response) {
   const rootUnreported =
     !!result && !rootUsage.totalInputTokens && !rootUsage.totalOutputTokens && !rootUsage.turnUsage?.length;
   if (rootUnreported) {
-    req.logger.warn(`[rlm-answer] ${modelInfo.id} reported no usage; charging the root ceiling`);
+    req.logger.warn(`[rlm-answer] ${runModelInfo.id} reported no usage; charging the root ceiling`);
   }
+  const rootUsd = (priced: ModelInfo, unreportedCeiling: number) =>
+    rootUnreported
+      ? unreportedCeiling
+      : completionUsd(priced, {
+          inputTokens: rootUsage.totalInputTokens,
+          outputTokens: rootUsage.totalOutputTokens,
+          cacheReadInputTokens: rootUsage.totalCacheReadTokens,
+          cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
+          turnUsage: rootUsage.turnUsage,
+        });
   await settleCompletion(reservation, req, {
     sessionId,
     model: modelInfo.id,
     provider: modelInfo.backend,
-    usd:
-      (rootUnreported
-        ? rootCeiling
-        : completionUsd(modelInfo, {
-            inputTokens: rootUsage.totalInputTokens,
-            outputTokens: rootUsage.totalOutputTokens,
-            cacheReadInputTokens: rootUsage.totalCacheReadTokens,
-            cacheCreationInputTokens: rootUsage.totalCacheWriteTokens,
-            turnUsage: rootUsage.turnUsage,
-          })) + replUsage.totalCostUsd,
+    usd: rootUsd(modelInfo, rootCeiling) + replUsage.totalCostUsd,
+    costUsd: rootUsd(runModelInfo, runRootCeiling) + replUsage.totalCostUsd,
+    executed: runModelInfo,
     inputTokens: (rootUsage.totalInputTokens ?? 0) + replUsage.promptTokens,
     outputTokens: (rootUsage.totalOutputTokens ?? 0) + replUsage.completionTokens,
     cacheReadInputTokens: rootUsage.totalCacheReadTokens,

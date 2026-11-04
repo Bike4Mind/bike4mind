@@ -70,8 +70,10 @@ import {
   createRequestCompletionMeter,
   isCreditsEnforced,
   reserveCompletionCredits,
+  resolveShadowSubstitute,
   settleCompletion,
 } from './meterPlatformCompletion';
+import { loadShadowTierSettings } from '@bike4mind/services/llm/shadowTier';
 
 const logger = { error: vi.fn(), warn: vi.fn() };
 const model = { id: 'sonnet', pricing: { 200_000: { input: 3 / 1e6, output: 15 / 1e6 } } } as unknown as ModelInfo;
@@ -154,6 +156,52 @@ describe('meterPlatformCompletion credits', () => {
         apiKeyId: 'k1',
       })
     );
+  });
+
+  it('prices credits on the requested model and cost on the run model', async () => {
+    const reservation = await reserveCompletionCredits(req(), 0.1, 'Lattice chat');
+    const charged = await settleCompletion(reservation, req(), {
+      model: 'premium',
+      provider: 'anthropic',
+      usd: 0.01,
+      costUsd: 0.001,
+      executed: { id: 'cheap', backend: 'openai' },
+      inputTokens: 10,
+      outputTokens: 5,
+    });
+
+    const raw = 0.01 * CREDITS_PER_USD_COST;
+    expect([Math.floor(raw), Math.ceil(raw)]).toContain(charged);
+    expect(m.deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'premium', credits: charged }),
+      expect.anything(),
+      expect.anything()
+    );
+    expect(m.recordUsageEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'premium',
+        provider: 'anthropic',
+        costUsd: 0.001,
+        executedModel: 'cheap',
+        executedProvider: 'openai',
+      })
+    );
+  });
+
+  it('records no executed fields when the run model is the requested one', async () => {
+    const reservation = await reserveCompletionCredits(req(), 0.1, 'Lattice chat');
+    await settleCompletion(reservation, req(), {
+      model: 'premium',
+      provider: 'anthropic',
+      usd: 0.01,
+      executed: { id: 'premium', backend: 'anthropic' },
+      inputTokens: 10,
+      outputTokens: 5,
+    });
+    const event = m.recordUsageEvent.mock.calls[0][0];
+    expect(event.costUsd).toBe(0.01);
+    expect(event).not.toHaveProperty('executedModel');
+    expect(event).not.toHaveProperty('executedProvider');
   });
 
   it('refunds in full and writes no row on a provider failure', async () => {
@@ -342,6 +390,48 @@ describe('meterPlatformCompletion for a restricted-tier caller', () => {
     m.recordUsageEvent.mockResolvedValue(undefined);
     m.userFindById.mockResolvedValue({ id: 'u1', isAdmin: false });
     m.tokenCounter.mockResolvedValue({ success: true, count: 1, expiresAt: new Date() });
+  });
+
+  describe('resolveShadowSubstitute', () => {
+    const text = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'text', ...extra }) as ModelInfo;
+    const premium = text('premium');
+    const cheapA = text('cheap-a');
+    const cheapB = text('cheap-b', { supportsTools: true });
+    const catalog = [premium, cheapA, cheapB];
+    const allow = () =>
+      vi.mocked(loadShadowTierSettings).mockResolvedValueOnce({
+        allowlist: ['cheap-a', 'cheap-b'],
+        dailyTokenCap: 20000,
+        requestsPerMin: 60,
+      });
+
+    it('picks the first allowlisted model, or the first tool-capable one when tools are required', async () => {
+      allow();
+      await expect(resolveShadowSubstitute(restrictedReq(), premium, catalog)).resolves.toBe(cheapA);
+      allow();
+      await expect(resolveShadowSubstitute(restrictedReq(), premium, catalog, { requireTools: true })).resolves.toBe(
+        cheapB
+      );
+    });
+
+    it('returns undefined without reading settings for an unrestricted caller', async () => {
+      vi.mocked(loadShadowTierSettings).mockClear();
+      await expect(resolveShadowSubstitute(req(), premium, catalog)).resolves.toBeUndefined();
+      expect(loadShadowTierSettings).not.toHaveBeenCalled();
+    });
+
+    it('returns undefined when the requested model is already allowlisted', async () => {
+      allow();
+      await expect(resolveShadowSubstitute(restrictedReq(), cheapA, catalog)).resolves.toBeUndefined();
+    });
+
+    it('returns undefined for a stored admin with a withheld role', async () => {
+      const owner = withholdAdminRole({ id: 'u1', isAdmin: true, tags: [], throttle: { tier: 'shadow' as const } });
+      allow();
+      await expect(
+        resolveShadowSubstitute({ user: owner, logger, headers: {} } as never, premium, catalog)
+      ).resolves.toBeUndefined();
+    });
   });
 
   it('does not reserve or record restricted tokens for a stored admin with a withheld role', async () => {

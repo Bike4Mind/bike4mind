@@ -15,9 +15,12 @@ type CounterCache = { cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindo
 const TOKEN_WINDOW_TTL_MS = 26 * 60 * 60 * 1000;
 const NO_LIMIT = Number.MAX_SAFE_INTEGER;
 
+/** `requireTools` limits substitutes to models that support tool calls, for routes that run a tool loop. */
+type CandidateOptions = { requireTools?: boolean };
+
 /**
  * The substitute's ModelInfo for a restricted user whose requested text model is not allowlisted: the
- * first allowlisted enabled text model. Undefined when the request runs as asked (including when no
+ * first allowlisted enabled text model (tool-capable when requireTools). Undefined when the request runs as asked (including when no
  * allowlisted model is available). Callers keep the requested id on client-visible fields.
  */
 export function resolveShadowModelInfo(
@@ -25,10 +28,11 @@ export function resolveShadowModelInfo(
   requested: ModelInfo,
   models: ModelInfo[],
   allowlist: string[],
-  logger?: Pick<Logger, 'warn'>
+  logger?: Pick<Logger, 'warn'>,
+  opts: CandidateOptions = {}
 ): ModelInfo | undefined {
   if (requested.type !== 'text' || !isShadowTier(user) || allowlist.includes(requested.id)) return undefined;
-  const substitute = shadowCandidates(models, allowlist)[0];
+  const substitute = shadowCandidates(models, allowlist, opts)[0];
   if (!substitute) {
     logger?.warn('[ModelRouting] no allowlisted model available; running the requested model', {
       requested: requested.id,
@@ -38,8 +42,12 @@ export function resolveShadowModelInfo(
 }
 
 /** The enabled allowlisted text models, in allowlist order: the substitute, then its silent fallbacks. */
-export function shadowCandidates(models: ModelInfo[], allowlist: string[]): ModelInfo[] {
-  const runnable = models.filter(m => m.type === 'text' && !m.disabled);
+export function shadowCandidates(
+  models: ModelInfo[],
+  allowlist: string[],
+  { requireTools = false }: CandidateOptions = {}
+): ModelInfo[] {
+  const runnable = models.filter(m => m.type === 'text' && !m.disabled && (!requireTools || m.supportsTools));
   return allowlist.flatMap(id => runnable.find(m => m.id === id) ?? []);
 }
 
@@ -51,6 +59,14 @@ export function executedModelFields(
   return executed && executed.id !== recorded.id
     ? { executedProvider: executed.backend, executedModel: executed.id }
     : {};
+}
+
+/** Client-visible identity options keeping the requested model's id and name when a substitute ran. */
+export function shadowIdentityOptions(
+  requested: { id: string; name: string },
+  run: { id: string }
+): { modelIdentityId?: string; modelDisplayName?: string } {
+  return run.id === requested.id ? {} : { modelIdentityId: requested.id, modelDisplayName: requested.name };
 }
 
 export type ShadowTierSettings = Awaited<ReturnType<typeof loadShadowTierSettings>>;

@@ -1,3 +1,4 @@
+import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
@@ -33,6 +34,7 @@ import {
   hasReportedUsage,
   latchUsage,
   reserveCompletionCredits,
+  resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
 } from '@server/billing/meterPlatformCompletion';
@@ -167,28 +169,34 @@ const handler = baseApi()
           throw new ForbiddenError(`Model "${candidates[0].id}" is not accessible and no fallback available`);
         }
 
-        const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: userId });
+        const runModelInfo = (await resolveShadowSubstitute(req, modelInfo, models)) ?? modelInfo;
+
+        const llm = getLlmByModel(apiKeyTable, { modelInfo: runModelInfo, logger: req.logger, endUserId: userId });
         if (!llm) {
           throw new BadRequestError(`Model "${modelInfo.id}" is not available.`);
         }
 
         const history: IMessage[] = conversationHistory.map(msg => ({ role: msg.role, content: msg.content }));
-        const ceilingUsd =
+        const ceilingFor = (priced: ModelInfo) =>
           completionRequestCeilingUsd(
-            modelInfo,
+            priced,
             [{ role: 'system', content: buildSystemPrompt('') }, ...history, { role: 'user', content: question }],
             MAX_RESPONSE_TOKENS
-          ) + getTextModelCost(modelInfo, HELP_CONTEXT_TOKEN_ALLOWANCE, 0);
+          ) + getTextModelCost(priced, HELP_CONTEXT_TOKEN_ALLOWANCE, 0);
+        const ceilingUsd = ceilingFor(modelInfo);
+        const runCeilingUsd = ceilingFor(runModelInfo);
         const reservation = await reserveCompletionCredits(req, ceilingUsd, 'help chat');
 
         let responseText = '';
         let relevantArticles: RelevantArticle[];
         const usage: CompletionUsage = {};
-        const settleUsage = (usd: number) =>
+        const settleUsage = (usd: number, costUsd: number) =>
           settleCompletion(reservation, req, {
             model: modelInfo.id,
             provider: modelInfo.backend,
             usd,
+            costUsd,
+            executed: runModelInfo,
             inputTokens: usage.inputTokens ?? 0,
             outputTokens: usage.outputTokens ?? 0,
           });
@@ -249,11 +257,12 @@ const handler = baseApi()
             maxTokens: MAX_RESPONSE_TOKENS,
             temperature: 0.7,
             stream: false,
+            ...shadowIdentityOptions(modelInfo, runModelInfo),
           };
 
           await llm.complete(
             // any: modelInfo.id is a dynamic string that can't be narrowed to the union of model ID literals
-            modelInfo.id as any,
+            runModelInfo.id as any,
             messages,
             options,
             async (streamedTexts: (string | null | undefined)[], info) => {
@@ -267,7 +276,7 @@ const handler = baseApi()
         } catch (error) {
           // A stream can report billable usage before a later provider failure.
           if (hasReportedUsage(usage)) {
-            await settleUsage(completionUsd(modelInfo, usage));
+            await settleUsage(completionUsd(modelInfo, usage), completionUsd(runModelInfo, usage));
           } else {
             await reservation.refund();
           }
@@ -276,7 +285,10 @@ const handler = baseApi()
 
         // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
         const reported = hasReportedUsage(usage);
-        await settleUsage(reported ? completionUsd(modelInfo, usage) : ceilingUsd);
+        await settleUsage(
+          reported ? completionUsd(modelInfo, usage) : ceilingUsd,
+          reported ? completionUsd(runModelInfo, usage) : runCeilingUsd
+        );
 
         const latency = Date.now() - startTime;
         req.logger.info(`[HelpChat] Completed in ${latency}ms`);

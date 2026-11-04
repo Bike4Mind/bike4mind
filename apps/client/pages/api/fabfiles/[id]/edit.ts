@@ -1,3 +1,4 @@
+import { shadowIdentityOptions } from '@bike4mind/services/llm/shadowTier';
 import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQuota';
 import {
   ChatModels,
@@ -43,6 +44,7 @@ import {
   hasReportedUsage,
   latchUsage,
   reserveCompletionCredits,
+  resolveShadowSubstitute,
   settleCompletion,
   type CompletionUsage,
 } from '@server/billing/meterPlatformCompletion';
@@ -238,8 +240,14 @@ const handler = baseApi()
           // A platform-picked fallback (no request model) is not a user choice, so it skips the user-facing gates.
           await (await createModelAdmission(user, models, !model)).assert(modelInfo.id);
 
+          const runModelInfo = (await resolveShadowSubstitute(req, modelInfo, models)) ?? modelInfo;
+
           // Initialize LLM backend
-          const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: req.logger, endUserId: req.user?.id });
+          const llm = getLlmByModel(apiKeyTable, {
+            modelInfo: runModelInfo,
+            logger: req.logger,
+            endUserId: req.user?.id,
+          });
           if (!llm) {
             throw new BadRequestError(`Failed to initialize model "${modelToUse}". Please check your API keys.`);
           }
@@ -291,18 +299,20 @@ Return only the edited content without any markdown code blocks or explanations.
             await fabFilesService.assertRewriteFits(file, worstCaseSize, rewriteStorageDb, user);
           }
           const ceilingUsd = completionRequestCeilingUsd(modelInfo, messages, maxTokens);
+          const runCeilingUsd = completionRequestCeilingUsd(runModelInfo, messages, maxTokens);
           const reservation = await reserveCompletionCredits(req, ceilingUsd, 'AI file editing');
 
           let editedContent = '';
           const usage: CompletionUsage = {};
           try {
             await llm.complete(
-              modelInfo.id,
+              runModelInfo.id,
               messages,
               {
                 temperature: 0.3,
                 maxTokens,
                 stream: false,
+                ...shadowIdentityOptions(modelInfo, runModelInfo),
               },
               async (chunks: (string | null | undefined)[], info) => {
                 // When stream=false, we get the complete response in one callback
@@ -320,6 +330,8 @@ Return only the edited content without any markdown code blocks or explanations.
                 model: modelInfo.id,
                 provider: modelInfo.backend,
                 usd: completionUsd(modelInfo, usage),
+                costUsd: completionUsd(runModelInfo, usage),
+                executed: runModelInfo,
                 inputTokens: usage.inputTokens ?? 0,
                 outputTokens: usage.outputTokens ?? 0,
                 cacheReadInputTokens: usage.cacheReadInputTokens,
@@ -339,11 +351,13 @@ Return only the edited content without any markdown code blocks or explanations.
           // An adapter that reports no usage is charged the reservation ceiling rather than nothing.
           const reported = hasReportedUsage(usage);
           if (!reported)
-            req.logger.warn(`[Edit API] ${modelInfo.id} reported no usage; charging the reservation ceiling`);
+            req.logger.warn(`[Edit API] ${runModelInfo.id} reported no usage; charging the reservation ceiling`);
           await settleCompletion(reservation, req, {
             model: modelInfo.id,
             provider: modelInfo.backend,
             usd: reported ? completionUsd(modelInfo, usage) : ceilingUsd,
+            costUsd: reported ? completionUsd(runModelInfo, usage) : runCeilingUsd,
+            executed: runModelInfo,
             inputTokens: usage.inputTokens ?? 0,
             outputTokens: usage.outputTokens ?? 0,
             cacheReadInputTokens: usage.cacheReadInputTokens,

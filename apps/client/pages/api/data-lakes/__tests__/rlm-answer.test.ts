@@ -30,6 +30,7 @@ const {
     refund: vi.fn(),
     reserve: vi.fn(),
     settle: vi.fn(),
+    substitute: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
     replCostUsd: 0,
     replPromptTokens: 0,
     replCompletionTokens: 0,
@@ -110,8 +111,9 @@ vi.mock('@server/billing/meterPlatformCompletion', () => ({
     },
   }),
   reserveCompletionCredits: (...args: unknown[]) => meter.reserve(...args),
-  completionUsd: (_model: unknown, u: { inputTokens?: number; outputTokens?: number }) =>
-    (u.inputTokens ?? 0) * 0.001 + (u.outputTokens ?? 0) * 0.002,
+  resolveShadowSubstitute: (...args: unknown[]) => meter.substitute(...args),
+  completionUsd: (model: { id: string }, u: { inputTokens?: number; outputTokens?: number }) =>
+    ((u.inputTokens ?? 0) * 0.001 + (u.outputTokens ?? 0) * 0.002) * (model.id === 'cheap' ? 0.1 : 1),
   settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => meter.settle(charge),
 }));
 
@@ -303,6 +305,7 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    meter.substitute.mockResolvedValue(undefined);
     meter.denied.clear();
     meter.replCostUsd = 0.25;
     meter.replPromptTokens = 0;
@@ -444,9 +447,71 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
       usd: 1000 * 0.001 + 300 * 0.002 + 0.25,
       inputTokens: 1000,
       outputTokens: 300,
+      costUsd: 1000 * 0.001 + 300 * 0.002 + 0.25,
+      executed: expect.objectContaining({ id: MODEL }),
       cacheReadInputTokens: undefined,
       cacheCreationInputTokens: undefined,
     });
+  });
+
+  describe('for a restricted caller whose model is substituted', () => {
+    const cheap = {
+      id: 'cheap',
+      backend: 'openai',
+      type: 'text',
+      supportsTools: true,
+      pricing: { 200_000: { input: 3e-7, output: 15e-7 } },
+    };
+
+    it('runs an explicit body model on the tool-capable substitute and bills the requested model', async () => {
+      meter.substitute.mockResolvedValue(cheap);
+      const { getLlmByModel } = await import('@bike4mind/llm-adapters');
+
+      const res = await call({ authorization: 'Bearer t' }, { query: 'q', model: MODEL });
+
+      expect(res.statusCode).toBe(200);
+      expect(meter.substitute).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ id: MODEL }),
+        expect.any(Array),
+        { requireTools: true }
+      );
+      expect(getLlmByModel).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ modelInfo: cheap }));
+      expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ model: 'cheap', modelIdentityId: MODEL }));
+      expect(meter.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          model: MODEL,
+          usd: expect.closeTo(1000 * 0.001 + 300 * 0.002 + 0.25, 12),
+          costUsd: expect.closeTo((1000 * 0.001 + 300 * 0.002) * 0.1 + 0.25, 12),
+          executed: cheap,
+        })
+      );
+      expect(res.body?.model).toBe(MODEL);
+    });
+
+    it('splits the root ceiling and keeps sub-LLM spend whole when no root usage is reported', async () => {
+      meter.substitute.mockResolvedValue(cheap);
+      mockAgentRun.mockResolvedValueOnce({
+        finalAnswer: 'ok',
+        steps: [],
+        completionInfo: { iterations: 1, toolCalls: 0, reachedMaxIterations: false },
+      });
+
+      await call({ authorization: 'Bearer t' });
+
+      const reservedUsd = meter.reserve.mock.calls[0][1] as number;
+      const charge = meter.settle.mock.calls[0][0];
+      expect(charge.usd).toBeCloseTo(reservedUsd - 5 + 0.25, 9);
+      expect(charge.costUsd).toBeCloseTo((reservedUsd - 5) * 0.1 + 0.25, 9);
+    });
+  });
+
+  it('runs the requested model when nothing is substituted', async () => {
+    const res = await call({ authorization: 'Bearer t' }, { query: 'q', model: MODEL });
+
+    expect(mockAgentCtor).toHaveBeenCalledWith(expect.objectContaining({ model: MODEL }));
+    expect(mockAgentCtor.mock.calls[0][0]).not.toHaveProperty('modelIdentityId');
+    expect(res.body?.model).toBe(MODEL);
   });
 
   it.each(['success', 'failure'] as const)('records root cache and sub-LLM tokens after %s', async outcome => {
@@ -473,6 +538,28 @@ describe('POST /api/data-lakes/rlm-answer - metering', () => {
         outputTokens: 800,
         cacheReadInputTokens: 200,
         cacheCreationInputTokens: 50,
+      })
+    );
+  });
+
+  it('settles a substituted run that fails after reporting usage with the cost split', async () => {
+    meter.substitute.mockResolvedValue({
+      id: 'cheap',
+      backend: 'openai',
+      type: 'text',
+      supportsTools: true,
+      pricing: { 200_000: { input: 3e-7, output: 15e-7 } },
+    });
+    meter.checkpoint = { totalInputTokens: 1000, totalOutputTokens: 300 };
+    mockAgentRun.mockRejectedValueOnce(new Error('provider down'));
+
+    await call({ authorization: 'Bearer t' });
+
+    expect(meter.settle).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        usd: expect.closeTo(1000 * 0.001 + 300 * 0.002 + 0.25, 12),
+        costUsd: expect.closeTo((1000 * 0.001 + 300 * 0.002) * 0.1 + 0.25, 12),
+        executed: expect.objectContaining({ id: 'cheap' }),
       })
     );
   });

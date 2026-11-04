@@ -6,6 +6,7 @@ import {
   reserveShadowTokenBudget,
   resolveShadowModelInfo,
   shadowCandidates,
+  shadowIdentityOptions,
   shadowTokenKey,
 } from './shadowTier';
 
@@ -41,6 +42,23 @@ describe('resolveShadowModelInfo', () => {
     expect(resolveShadowModelInfo(shadow, models[1], models, allowlist)).toBeUndefined();
   });
 
+  it('skips a non-tool candidate when tools are required', () => {
+    const models = [model('premium'), model('cheap-a'), model('cheap-b', { supportsTools: true })];
+    expect(resolveShadowModelInfo(shadow, models[0], models, allowlist, undefined, { requireTools: true })?.id).toBe(
+      'cheap-b'
+    );
+    expect(resolveShadowModelInfo(shadow, models[0], models, allowlist)?.id).toBe('cheap-a');
+  });
+
+  it('runs the requested model and warns when no candidate supports tools', () => {
+    const models = [model('premium'), model('cheap-a')];
+    const logger = { warn: vi.fn() };
+    expect(
+      resolveShadowModelInfo(shadow, models[0], models, allowlist, logger, { requireTools: true })
+    ).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores disabled allowlisted models and leaves non-text requests alone', () => {
     const models = [model('premium'), model('cheap-a', { disabled: true }), model('image', { type: 'image' })];
     expect(resolveShadowModelInfo(shadow, models[0], models, allowlist)).toBeUndefined();
@@ -50,6 +68,12 @@ describe('resolveShadowModelInfo', () => {
 
 describe('shadowCandidates', () => {
   const model = (id: string, extra: Partial<ModelInfo> = {}) => ({ id, type: 'text', ...extra }) as ModelInfo;
+
+  it('filters to tool-capable models only when asked', () => {
+    const models = [model('cheap-a'), model('cheap-b', { supportsTools: true })];
+    expect(shadowCandidates(models, allowlist, { requireTools: true }).map(m => m.id)).toEqual(['cheap-b']);
+    expect(shadowCandidates(models, allowlist).map(m => m.id)).toEqual(['cheap-a', 'cheap-b']);
+  });
 
   it('lists the runnable allowlisted models in allowlist order', () => {
     const models = [model('cheap-b'), model('premium'), model('cheap-a')];
@@ -118,5 +142,18 @@ describe('executedModelFields', () => {
     });
     expect(executedModelFields(requested, requested)).toEqual({});
     expect(executedModelFields(requested, undefined)).toEqual({});
+  });
+});
+
+describe('shadowIdentityOptions', () => {
+  const requested = { id: 'premium', name: 'Premium' };
+  it('is empty when the requested model ran', () => {
+    expect(shadowIdentityOptions(requested, { id: 'premium' })).toEqual({});
+  });
+  it('names the requested model when a substitute ran', () => {
+    expect(shadowIdentityOptions(requested, { id: 'cheap' })).toEqual({
+      modelIdentityId: 'premium',
+      modelDisplayName: 'Premium',
+    });
   });
 });

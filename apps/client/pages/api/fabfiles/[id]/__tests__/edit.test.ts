@@ -50,6 +50,7 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ Oper
 vi.mock('@server/billing/meterPlatformCompletion', async () => ({
   ...(await import('@bike4mind/services/billing/completionMeter')),
   createModelAdmission: async () => ({ admits: async () => true, assert: async () => {} }),
+  resolveShadowSubstitute: async () => undefined,
   completionRequestCeilingUsd: () => 0,
   reserveCompletionCredits: async () => ({ reservedCredits: 0, refund: async () => {} }),
   latchUsage: () => {},

@@ -21,6 +21,8 @@ const m = vi.hoisted(() => ({
   complete: vi.fn(),
   findById: vi.fn(),
   assertRewriteFits: vi.fn(),
+  substitute: vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined),
+  getLlm: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -63,8 +65,9 @@ vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: async () => [
     { id: 'model-a', backend: 'anthropic' },
     { id: ChatModels.CLAUDE_4_6_SONNET_BEDROCK, backend: 'anthropic' },
+    { id: 'premium', backend: 'anthropic' },
   ],
-  getLlmByModel: () => ({ complete: m.complete }),
+  getLlmByModel: (...args: unknown[]) => (m.getLlm(...args), { complete: m.complete }),
 }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModelConfig: async () => null },
@@ -80,16 +83,18 @@ vi.mock('@server/billing/meterPlatformCompletion', async () => ({
       },
     };
   },
-  completionRequestCeilingUsd: () => 1,
+  completionRequestCeilingUsd: (model: { id: string }) => (model.id === 'cheap' ? 0.1 : 1),
   reserveCompletionCredits: (...args: unknown[]) => m.reserve(...args),
+  resolveShadowSubstitute: (...args: unknown[]) => m.substitute(...args),
   completionUsd: (
-    _model: unknown,
+    model: { id: string },
     u: { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }
   ) =>
-    (u.inputTokens ?? 0) * 0.001 +
-    (u.outputTokens ?? 0) * 0.002 +
-    (u.cacheReadInputTokens ?? 0) * 0.0001 +
-    (u.cacheCreationInputTokens ?? 0) * 0.00125,
+    ((u.inputTokens ?? 0) * 0.001 +
+      (u.outputTokens ?? 0) * 0.002 +
+      (u.cacheReadInputTokens ?? 0) * 0.0001 +
+      (u.cacheCreationInputTokens ?? 0) * 0.00125) *
+    (model.id === 'cheap' ? 0.1 : 1),
   settleCompletion: (_reservation: unknown, _req: unknown, charge: unknown) => m.settle(charge),
 }));
 
@@ -113,6 +118,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.denied.clear();
   m.admissionFlags.length = 0;
+  m.substitute.mockResolvedValue(undefined);
   const file = {
     id: FILE_ID,
     fileName: 'a.txt',
@@ -197,6 +203,8 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
       model: 'model-a',
       provider: 'anthropic',
       usd: 200 * 0.001 + 10 * 0.002,
+      costUsd: 200 * 0.001 + 10 * 0.002,
+      executed: { id: 'model-a', backend: 'anthropic' },
       inputTokens: 200,
       outputTokens: 10,
     });
@@ -249,5 +257,70 @@ describe('POST /api/fabfiles/{id}/edit metering', () => {
     await call(false);
 
     expect(m.assertRewriteFits).not.toHaveBeenCalled();
+  });
+
+  describe('for a restricted caller whose model is substituted', () => {
+    const cheap = { id: 'cheap', backend: 'openai' };
+
+    it('runs the substitute, prices credits on the requested model and cost on the run model', async () => {
+      m.substitute.mockResolvedValue(cheap);
+
+      await call(false, 'premium');
+
+      expect(m.getLlm).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ modelInfo: cheap }));
+      expect(m.complete).toHaveBeenCalledWith('cheap', expect.anything(), expect.anything(), expect.anything());
+      expect(m.complete.mock.calls[0][2]).toMatchObject({ modelIdentityId: 'premium' });
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          model: 'premium',
+          provider: 'anthropic',
+          usd: expect.closeTo(0.22, 12),
+          costUsd: expect.closeTo(0.022, 12),
+          executed: cheap,
+        })
+      );
+    });
+
+    it('splits credits and cost on the reservation ceiling when no usage is reported', async () => {
+      m.substitute.mockResolvedValue(cheap);
+      m.complete.mockImplementation(async (_model, _messages, _opts, cb) => cb(['hello world']));
+
+      await call(false, 'premium');
+
+      expect(m.settle).toHaveBeenCalledWith(expect.objectContaining({ usd: 1, costUsd: 0.1, executed: cheap }));
+    });
+
+    it('splits credits and cost when the provider throws after reporting usage', async () => {
+      m.substitute.mockResolvedValue(cheap);
+      m.complete.mockImplementation(async (_model, _messages, _options, callback) => {
+        await callback(['partial'], { inputTokens: 100, outputTokens: 0 });
+        throw new Error('stream disconnected');
+      });
+
+      await expect(call(false, 'premium')).rejects.toThrow('stream disconnected');
+
+      expect(m.settle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ model: 'premium', usd: expect.closeTo(0.1, 12), costUsd: expect.closeTo(0.01, 12) })
+      );
+    });
+
+    it('admits the requested model, not the substitute', async () => {
+      m.substitute.mockResolvedValue(cheap);
+      m.denied.add('cheap');
+
+      const res = await call(false, 'premium');
+
+      expect(res._getStatusCode()).toBe(200);
+    });
+  });
+
+  it('runs the requested model with cost equal to credits when nothing is substituted', async () => {
+    await call(false, 'premium');
+
+    expect(m.complete).toHaveBeenCalledWith('premium', expect.anything(), expect.anything(), expect.anything());
+    expect(m.complete.mock.calls[0][2]).not.toHaveProperty('modelIdentityId');
+    const charge = m.settle.mock.calls[0][0];
+    expect(charge.costUsd).toBe(charge.usd);
+    expect(charge.executed).toMatchObject({ id: 'premium' });
   });
 });
