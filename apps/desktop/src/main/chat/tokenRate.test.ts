@@ -95,6 +95,7 @@ describe('estimatedRate', () => {
       evalTokens: 100,
       evalMs: 4000,
       estimated: true,
+      untimedTokens: 1,
     });
   });
 
@@ -103,6 +104,7 @@ describe('estimatedRate', () => {
       evalTokens: 80,
       evalMs: 4000,
       estimated: true,
+      untimedTokens: 21,
     });
   });
 
@@ -155,6 +157,16 @@ describe('addTokenRate', () => {
       evalTokens: 20,
       evalMs: 200,
       estimated: true,
+    });
+  });
+
+  it('sums the tokens left untimed across estimated rounds', () => {
+    const round = { evalTokens: 10, evalMs: 100, estimated: true, untimedTokens: 2 };
+    expect(addTokenRate(round, { ...round, untimedTokens: 3 })).toEqual({
+      evalTokens: 20,
+      evalMs: 200,
+      estimated: true,
+      untimedTokens: 5,
     });
   });
 
