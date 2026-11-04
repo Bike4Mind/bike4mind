@@ -118,7 +118,7 @@ export const MrrMovementChart: React.FC<{ periods: readonly RevenuePeriod[] }> =
 );
 
 // One hue (DESIGN_GUIDE: plans are not statuses), stepped down by size; "Other plans" is the comparison grey.
-const PLAN_OPACITY = [1, 0.7, 0.45, 0.25];
+const PLAN_OPACITY = [1, 0.75, 0.55, 0.4, 0.25];
 
 export const planColor = (series: readonly PlanSeries[], key: string): { color: string; opacity: number } =>
   key === OTHER_PLANS_KEY
