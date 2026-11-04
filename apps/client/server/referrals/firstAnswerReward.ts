@@ -1,8 +1,8 @@
-import { CreditHolderType, settingsMap } from '@bike4mind/common';
+import { CreditHolderType, settingsMap, type SignupGrant } from '@bike4mind/common';
 import { buildCreditRewardAdapters } from '@server/credits/creditRewardAdapters';
 import { adminSettingsRepository, CreditTransaction, User } from '@bike4mind/database';
 import { creditService } from '@bike4mind/services';
-import { isRewardPartyBlocked, REFERRED_USER_ID_METADATA_KEY } from '@bike4mind/services/creditService';
+import { isRewardRecipientBlocked, REFERRED_USER_ID_METADATA_KEY } from '@bike4mind/services/creditService';
 import type { AccountStateFields } from '@bike4mind/services/userService/accountState';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
@@ -15,10 +15,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export type RewardParty = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
+  signupGrant?: Pick<SignupGrant, 'blocked'> | null;
 } & AccountStateFields;
 
 // Shared with the release-time gate in creditService.payCreditReward, so a queued reward is never looser.
-export const isBlockedInviter = (inviter: RewardParty) => isRewardPartyBlocked(inviter);
+export const isBlockedInviter = (inviter: RewardParty) => isRewardRecipientBlocked(inviter);
 
 /**
  * Pays the inviter once their friend has both a first answer and a verified email. Called from both
@@ -49,7 +50,7 @@ export async function rewardInviterForFirstAnswer(friendId: string): Promise<voi
 
     const inviterId = String(friend.referredByUserId);
     const inviter = await User.findById(inviterId)
-      .select('isSynthetic deletedAt isBanned disputePending moderation.status')
+      .select('isSynthetic deletedAt isBanned disputePending moderation.status signupGrant.blocked')
       .lean<RewardParty>();
     if (!inviter || isBlockedInviter(inviter)) return;
 
