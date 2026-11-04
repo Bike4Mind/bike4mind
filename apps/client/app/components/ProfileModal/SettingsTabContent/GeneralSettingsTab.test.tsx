@@ -155,6 +155,7 @@ describe('GeneralSettingsTab delete account', () => {
     renderTab();
     expect(screen.getByTestId('settings-delete-account-btn')).toBeTruthy();
     expect(screen.getByTestId('download-account-data-stub')).toBeTruthy();
+    expect(screen.getByTestId('settings-danger-zone').textContent).toContain('first use Download your data above');
   });
 
   it('hides the delete account button while impersonating', () => {
@@ -163,5 +164,6 @@ describe('GeneralSettingsTab delete account', () => {
     expect(screen.queryByTestId('settings-delete-account-btn')).toBeNull();
     expect(screen.queryByTestId('download-account-data-stub')).toBeNull();
     expect(screen.getByTestId('settings-delete-all-notebooks-btn')).toBeTruthy();
+    expect(screen.getByTestId('settings-danger-zone').textContent).not.toContain('Download your data');
   });
 });

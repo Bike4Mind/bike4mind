@@ -497,8 +497,9 @@ const GeneralSettingsTab = () => {
           }}
         >
           <Typography level="body-sm">
-            These can&apos;t be undone. To keep a copy, first use Export All on the Notebooks and Knowledge Files cards
-            above.
+            {impersonating
+              ? 'These can’t be undone. To keep a copy, first use Export All on the Notebooks and Knowledge Files cards above.'
+              : 'These can’t be undone. To keep a full copy of your account, first use Download your data above. Export All on the Notebooks and Knowledge Files cards copies just those.'}
           </Typography>
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
             <Button
