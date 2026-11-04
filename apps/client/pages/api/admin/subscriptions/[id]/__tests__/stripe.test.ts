@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: (config?: unknown) => {
+vi.mock('@server/middlewares/adminApi', () => ({
+  adminApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -44,12 +44,8 @@ describe('GET /api/admin/subscriptions/[id]/stripe', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
+      adminPermissions: { GET: 'support:read' },
     });
-  });
-
-  it('refuses a non-admin before reading anything', async () => {
-    await expect(call({ id: ID }, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
-    expect(mockRead).not.toHaveBeenCalled();
   });
 
   it('404s a malformed id without reading', async () => {
