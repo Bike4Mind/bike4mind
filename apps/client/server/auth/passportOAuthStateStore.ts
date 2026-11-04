@@ -73,6 +73,8 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
       const clientId = clientIdFromAuthorizeRedirect(redirectTo);
       const nonceHash = (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY];
       // A registration invite code typed on /register, redeemed if this login creates an account.
+      // The state is signed, not encrypted, so the provider and browser can read the code; codes are
+      // email-bound and single-use.
       const inviteCode = sanitizeOAuthInviteCode(req.query?.inviteCode);
       const token = createStateToken(
         { audience: this.audience },
