@@ -166,6 +166,7 @@ describe('spendReconciliation cron', () => {
         expect(mockOpenAIFetch).not.toHaveBeenCalled();
         expect(mockAppend).not.toHaveBeenCalled();
         expect(mockConnectDB).not.toHaveBeenCalled();
+        expect(mockMonthlyCogsByProvider).not.toHaveBeenCalled();
       } finally {
         cfg.ANTHROPIC_ADMIN_API_KEY = 'sk-ant-admin01-test';
         cfg.OPENAI_ADMIN_API_KEY = 'sk-openai-test';

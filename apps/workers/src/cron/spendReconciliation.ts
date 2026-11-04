@@ -75,14 +75,11 @@ export async function runSpendReconciliation({
   logger: Logger;
   now?: Date;
 }): Promise<SpendReconciliationResult> {
-  const months = getReconcileMonths(now);
-  // getReconcileMonths() only ever uses the current and previous month.
-  const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
-
   let reconciled = 0;
   let skipped = 0;
   let failed = 0;
 
+  const configured: { providerConfig: ProviderConfig; key: string }[] = [];
   for (const providerConfig of PROVIDERS) {
     const key = providerConfig.getKey();
     if (!key || key === 'not-configured') {
@@ -90,7 +87,19 @@ export async function runSpendReconciliation({
       skipped++;
       continue;
     }
+    configured.push({ providerConfig, key });
+  }
 
+  if (configured.length === 0) {
+    logger.log(`[SpendReconciliation] Done: no provider admin key configured, ${skipped} skipped`);
+    return { reconciled, skipped, failed };
+  }
+
+  const months = getReconcileMonths(now);
+  // getReconcileMonths() only ever uses the current and previous month.
+  const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
+
+  for (const { providerConfig, key } of configured) {
     for (const month of months) {
       try {
         const result = await providerConfig.fetch(key, month);
