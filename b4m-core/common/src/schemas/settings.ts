@@ -3934,15 +3934,14 @@ export const settingsMap = {
     key: 'BedrockNewsApiUrl',
     name: 'BedrockNews Headword: API URL',
     defaultValue: '',
-    description:
-      'BedrockNews API base URL for Headword claim tickets, e.g. https://api.dev.vibeswire.com. Empty disables claiming.',
+    description: 'BedrockNews API base URL for Headword claim tickets (https). Empty disables claiming.',
     category: 'Referrals',
   }),
   BedrockNewsAppUrl: makeStringSetting({
     key: 'BedrockNewsAppUrl',
     name: 'BedrockNews Headword: Site URL',
     defaultValue: '',
-    description: 'BedrockNews site URL players are sent back to after claiming, e.g. https://dev.bedrocknews.com.',
+    description: 'BedrockNews site URL players are sent back to after claiming.',
     category: 'Referrals',
     userReadable: true,
   }),
