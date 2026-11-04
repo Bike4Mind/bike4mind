@@ -22,6 +22,13 @@ export const WhatsNewHighlightsPayloadSchema = z.object({
 
 export type WhatsNewHighlightsPayload = z.infer<typeof WhatsNewHighlightsPayloadSchema>;
 
+/** Highlights message as it travels on the merged What's New queue, which routes on `kind`. */
+export const WhatsNewHighlightsJobSchema = WhatsNewHighlightsPayloadSchema.extend({
+  kind: z.literal('highlights'),
+});
+
+export type WhatsNewHighlightsJob = z.infer<typeof WhatsNewHighlightsJobSchema>;
+
 /**
  * Configuration for highlights generation stored in AdminSettings
  */

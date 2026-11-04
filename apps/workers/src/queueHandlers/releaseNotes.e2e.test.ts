@@ -31,10 +31,11 @@ vi.mock('./releaseNotes/generate', () => ({
   writeReleaseNotes: h.writeReleaseNotes,
   createReleaseNotesCompleter: vi.fn(async () => ({ complete: vi.fn(), modelId: 'gpt-4o-mini' })),
 }));
+vi.mock('./whatsNewHighlights', () => ({ runHighlightsJob: vi.fn() }));
 vi.stubGlobal('fetch', h.fetch);
 
 import { ReleaseNote, slackDevWorkspaceRepository } from '@bike4mind/database';
-import { dispatch } from './releaseNotes';
+import { dispatch } from './whatsNewJob';
 
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() };
 const payload = {

@@ -484,7 +484,8 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Release notes generation queue (keeps the retired What's New generator's resource names)
+// Release notes and What's New highlights queue. Messages carry a `kind` that whatsNewJob.dispatch routes on.
+// Keeps the retired What's New generator's resource names: the release workflow holds this queue's URL in an external secret.
 const whatsNewGenerationQueueDLQ = new sst.aws.Queue('whatsNewGenerationQueueDLQ', {
   transform: {
     queue: {
@@ -507,7 +508,7 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
 });
 const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
-    handler: 'apps/workers/src/queueHandlers/releaseNotes.dispatch',
+    handler: 'apps/workers/src/queueHandlers/whatsNewJob.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],
