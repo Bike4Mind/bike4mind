@@ -2,7 +2,7 @@ name: Dependency Audit Gate
 
 # pnpm audit checks (logic in scripts/audit-gate.mjs, fix steps in
 # CONTRIBUTING.md#fixing-a-dependency-advisory).
-# - PRs and merge queue (audit-gate): diff-based. Audits both the base commit and
+# - PRs (audit-gate): diff-based. Audits both the base commit and
 #   the head, and fails only on high/critical GHSAs the change introduces that are
 #   not in scripts/audit-allowlist.json. Advisories already on base are warnings,
 #   so a new advisory against an existing dependency doesn't turn every PR red.
@@ -10,8 +10,6 @@ name: Dependency Audit Gate
 #   one tracking issue on new findings (comments only when the finding set
 #   changes), opens or updates one auto-fix PR (scripts/audit-autofix.mjs) for a
 #   human to merge, and closes both once main is clean.
-# The existing packages-audit.yml sends a full report to the Security Dashboard
-# and remains workflow_dispatch-only; this workflow is independent of it.
 
 on:
   pull_request:
@@ -29,8 +27,6 @@ on:
       - 'vitest.config.ts'
       - 'vitest.shared.ts'
       - '.github/workflows/audit-gate.yml'
-  merge_group:
-    branches: [main]
   schedule:
     - cron: '0 */6 * * *'
   workflow_dispatch: {}
@@ -45,8 +41,8 @@ concurrency:
 jobs:
   audit-gate:
     name: Dependency Audit Gate
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -75,12 +71,11 @@ jobs:
         run: bash scripts/audit-report.sh . "$GITHUB_WORKSPACE/audit-report.json"
 
       # Audit the base commit's manifest, lockfile and workspace file only (pnpm
-      # audit needs no install). Uses the event's base sha, not HEAD^1, which is
-      # wrong for merge-queue groups.
+      # audit needs no install), at the PR's base sha.
       - name: Run pnpm audit on base
         timeout-minutes: 5
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -o pipefail
           for i in 1 2 3; do

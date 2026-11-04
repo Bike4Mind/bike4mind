@@ -1,4 +1,9 @@
-import { signupActiveSeconds } from '@bike4mind/common';
+import {
+  signupActiveSeconds,
+  signupGrantDripOpen,
+  signupGrantDripRemaining,
+  type SignupGrant,
+} from '@bike4mind/common';
 import { formatCreditBalance } from '@client/app/utils/formatCredits';
 
 export interface StarterPrompt {
@@ -64,19 +69,22 @@ export function activeTimeCopy(minActiveSeconds: unknown): string {
 }
 
 /**
- * The drip pays from the unlock pool only, so it is advertised just when the account's enrolled unlock
- * credits are positive, the feature is on and a daily amount is set. Returns 0 otherwise.
+ * What the next drip would pay: the daily amount, capped by what the live drip cap still leaves after
+ * what this account has already dripped. Mirrors the server drip in stagedSignupGrant.ts; 0 when off.
  */
 export function advertisedDripCredits({
-  enabled,
   dailyCredits,
-  unlockCredits,
+  dripCap,
+  grant,
 }: {
-  enabled: unknown;
   dailyCredits: number;
-  unlockCredits: number | undefined;
+  dripCap: number;
+  grant: (Pick<SignupGrant, 'dripCredits'> & Partial<Pick<SignupGrant, 'stage' | 'unlockedBy'>>) | undefined;
 }): number {
-  return (enabled === true || enabled === 'true') && dailyCredits > 0 && (unlockCredits ?? 0) > 0 ? dailyCredits : 0;
+  // A verification unlock closes the drip for good; pending_email still advertises what verifying will start.
+  if (grant?.stage === 'unlocked' && !signupGrantDripOpen({ stage: grant.stage, unlockedBy: grant.unlockedBy }))
+    return 0;
+  return dailyCredits > 0 ? Math.min(dailyCredits, signupGrantDripRemaining(grant ?? {}, dripCap)) : 0;
 }
 
 /** The self-serve unlock paths we advertise; org invites and admin releases also unlock but are not offered here. */

@@ -7,8 +7,10 @@ const h = vi.hoisted(() => ({
   findOrganization: vi.fn(),
   assertCanWriteDataLakeTags: vi.fn(),
   reconcileDataLakeFallbackTags: vi.fn(),
+  consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
 }));
 
+vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -91,6 +93,21 @@ describe('createPresignedUpload - owning organization', () => {
     // Marks the row for the landed-size gate, which judges only client uploads.
     expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });
+
+  it('stamps the API key that requested the upload, so its later indexing charge is attributed to it', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+    const keyReq = { user: { id: 'u1' }, ability: {}, logger: { warn: vi.fn() }, apiKeyInfo: { keyId: 'key-1' } };
+    await createPresignedUpload(keyReq as never, upload() as never);
+
+    expect(h.createFabFile.mock.calls[0][0]).toMatchObject({ apiKeyId: 'key-1' });
+  });
+
+  it('stamps no API key on a JWT upload', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+    await createPresignedUpload(req, upload() as never);
+
+    expect(created()).not.toHaveProperty('apiKeyId');
+  });
 });
 
 describe('createPresignedUpload - quota owner', () => {
@@ -120,5 +137,42 @@ describe('createPresignedUpload - quota owner', () => {
     await createPresignedUpload(req, upload() as never);
 
     expect(h.findOrganization).not.toHaveBeenCalled();
+  });
+});
+
+describe('createPresignedUpload - upload allowance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockResolvedValue({ id: 'f1' });
+    h.findOrganization.mockImplementation(async (id: string) => ({ id, currentStorageSize: 0 }));
+    h.reconcileDataLakeFallbackTags.mockImplementation(async (tags: unknown) => tags);
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+  });
+
+  it('spends one unit of the allowance for the upload', async () => {
+    await createPresignedUpload(req, upload() as never);
+
+    expect(h.consumeFileUploadBudget).toHaveBeenCalledTimes(1);
+    expect(h.consumeFileUploadBudget.mock.calls[0][1]).toBe(1);
+  });
+
+  it('creates no file and presigns nothing when the allowance refuses the upload', async () => {
+    h.consumeFileUploadBudget.mockRejectedValueOnce(new Error('Upload limit reached'));
+
+    await expect(createPresignedUpload(req, upload() as never)).rejects.toThrow('Upload limit reached');
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the allowance on an upload an earlier gate refuses', async () => {
+    await expect(
+      createPresignedUpload(req, {
+        ...upload(),
+        fileName: 'malware.exe',
+        mimeType: 'application/x-msdownload',
+      } as never)
+    ).rejects.toThrow(/unsupported file type/);
+
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
   });
 });

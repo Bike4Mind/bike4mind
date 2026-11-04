@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FitRuntime, HardwareProfile } from '../modelHub/fit';
-import { HUB_RUNTIMES, KV_CACHE_TYPES } from './modelHub';
+import { HfRepoSchema, HUB_RUNTIMES, KV_CACHE_TYPES, OllamaLibRefSchema, Sha256Schema } from './modelHub';
 
 /** Bounds keep a hostile model host from making clients allocate without limit; a host clamps to them before parsing. */
 export const MODEL_HOST_LIMITS = {
@@ -186,3 +186,145 @@ export type ModelHostHello = z.infer<typeof ModelHostHelloSchema>;
 /** Every non-2xx body from a model host. */
 export const ModelHostErrorSchema = z.object({ code: TextSchema, message: z.string().max(L.path) });
 export type ModelHostError = z.infer<typeof ModelHostErrorSchema>;
+
+// A Hugging Face build id is its file path without `.gguf`, with at most one folder.
+const HubBuildIdSchema = z
+  .string()
+  .max(256)
+  .regex(/^(?:\w[\w.-]*\/)?\w[\w.-]*$/);
+const HubPullRefSchema = z
+  .string()
+  .max(400)
+  .regex(/^(?:hf\.co|huggingface\.co)\/[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*:[\w][\w.-]*$/);
+const CuratedIdSchema = z
+  .string()
+  .max(128)
+  .regex(/^[a-z0-9][a-z0-9._-]*$/);
+const LicenseIdsSchema = z
+  .array(
+    z
+      .string()
+      .max(128)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._+-]*$/)
+  )
+  .max(16);
+/** Printable text: no control, format or line-separator characters, and not blank. */
+const LabelSchema = z
+  .string()
+  .max(128)
+  .regex(/^[^\p{C}\p{Zl}\p{Zp}]+$/u, 'must not contain control characters')
+  .refine(value => value.trim().length > 0, 'must not be blank');
+
+/** The device that asked, as it names itself; a label until devices hold tokens. */
+export const PullDeviceSchema = z.object({ id: LabelSchema, name: LabelSchema });
+
+/** The layer digests the user reviewed for a curated build; null or missing means the build pins none of that kind. */
+export const PullApprovedLayersSchema = z.object({
+  model: Sha256Schema,
+  template: Sha256Schema.nullable().optional(),
+  params: Sha256Schema.nullable().optional(),
+  license: Sha256Schema.nullable().optional(),
+  projector: Sha256Schema.nullable().optional(),
+  draft: Sha256Schema.nullable().optional(),
+});
+export type PullApprovedLayers = z.infer<typeof PullApprovedLayersSchema>;
+
+/** A curated build, named in the host's own curated list. */
+export const PullApprovedCuratedSchema = z.object({
+  entryId: CuratedIdSchema,
+  buildId: HubBuildIdSchema,
+  layers: PullApprovedLayersSchema,
+});
+
+/**
+ * `POST /v1/jobs`: what the pull dialog showed. `licenses` are the ids it listed: the Hub card's for a Hugging Face
+ * repo, the curated entry's `license.id` for a library build. `ref` and `sha256` are what the client proved.
+ */
+export const PullJobRequestSchema = z.discriminatedUnion('source', [
+  z.object({
+    source: z.literal('hf'),
+    repo: HfRepoSchema,
+    buildId: HubBuildIdSchema,
+    revision: z.string().regex(/^[0-9a-f]{40}$/),
+    ref: HubPullRefSchema,
+    sha256: Sha256Schema,
+    sizeBytes: z.number().int().positive().max(L.bytes),
+    licenses: LicenseIdsSchema,
+    licenseAccepted: z.boolean(),
+    accessConfirmed: z.boolean(),
+    curated: PullApprovedCuratedSchema.nullable().optional(),
+    device: PullDeviceSchema,
+  }),
+  z.object({
+    source: z.literal('library'),
+    ref: OllamaLibRefSchema,
+    manifestDigest: Sha256Schema,
+    sizeBytes: z.number().int().positive().max(L.bytes),
+    licenses: LicenseIdsSchema,
+    licenseAccepted: z.boolean(),
+    curated: PullApprovedCuratedSchema,
+    device: PullDeviceSchema,
+  }),
+]);
+export type PullJobRequest = z.infer<typeof PullJobRequestSchema>;
+
+/** Optional body of a job's cancel, pause and resume, naming the device that asked. */
+export const PullJobActionSchema = z.object({ device: PullDeviceSchema.optional() });
+
+export const PULL_JOB_STATES = [
+  'queued',
+  'checking',
+  'downloading',
+  'verifying',
+  'done',
+  'failed',
+  'cancelled',
+  'paused',
+  'interrupted',
+] as const;
+export type PullJobState = (typeof PULL_JOB_STATES)[number];
+/** States that hold a reservation on the store's disk. */
+export const PULL_JOB_ACTIVE_STATES = ['queued', 'checking', 'downloading', 'verifying'] as const;
+export const PULL_JOB_FINAL_STATES = ['done', 'failed', 'cancelled'] as const;
+
+/** `user` is the login `dial-stdio` reported; `via` is `local` for a client on the socket directly. */
+export const PullJobActorSchema = z.object({
+  device: TextSchema,
+  user: TextSchema.nullable(),
+  via: z.enum(['ssh', 'local']),
+});
+export type PullJobActor = z.infer<typeof PullJobActorSchema>;
+
+const TimestampSchema = z.string().max(64);
+
+export const PullJobSchema = z.object({
+  id: z.string().regex(/^[0-9a-f-]{36}$/),
+  state: z.enum(PULL_JOB_STATES),
+  source: z.enum(['hf', 'library']),
+  /** The Hugging Face repo, or the library ref. */
+  repo: z.string().max(200),
+  buildId: z.string().max(256),
+  /** What Ollama pulls. */
+  ref: z.string().max(L.modelName),
+  sizeBytes: ByteCountSchema,
+  progress: z.object({ status: TextSchema, completedBytes: ByteCountSchema, totalBytes: ByteCountSchema.nullable() }),
+  startedBy: PullJobActorSchema,
+  cancelledBy: PullJobActorSchema.nullable(),
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  finishedAt: TimestampSchema.nullable(),
+  error: z.object({ code: TextSchema, message: z.string().max(L.path) }).nullable(),
+  /** Something the user should know that is not a failure, such as a resumed pull that may start over. */
+  notice: z.string().max(L.path).nullable(),
+});
+export type PullJob = z.infer<typeof PullJobSchema>;
+
+export const PullJobListSchema = z.object({ jobs: z.array(PullJobSchema).max(1024) });
+
+/** `GET /v1/ollama/key`: the key Hugging Face needs for gated repos; `message` says how to read it when unreadable. */
+export const OllamaKeySchema = z.object({
+  path: PathSchema.nullable(),
+  publicKey: z.string().max(1024).nullable(),
+  message: z.string().max(L.path).nullable(),
+});
+export type OllamaKey = z.infer<typeof OllamaKeySchema>;

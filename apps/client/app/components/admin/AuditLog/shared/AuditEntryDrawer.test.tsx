@@ -26,6 +26,19 @@ describe('AuditEntryDrawer', () => {
     expect(screen.getByText('{"seats":5}')).toBeTruthy();
   });
 
+  it('lays Reason and Request context out at full card width, not in a definition-list grid', () => {
+    const entry = makeAuditEntry({
+      reason: 'Customer requested a refund after a duplicate charge',
+      context: { ip: '10.0.0.1', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', requestId: 'req-123' },
+    });
+    render(<AuditEntryDrawer entry={entry} onClose={vi.fn()} />, { wrapper: TestWrapper });
+    for (const text of ['Customer requested a refund after a duplicate charge', /Mozilla\/5\.0/, /req-123/]) {
+      const el = screen.getByText(text);
+      expect(el.closest('dl')).toBeNull();
+      expect(el.closest('[data-testid="audit-drawer-section-body"]')).not.toBeNull();
+    }
+  });
+
   it('renders nothing visible when entry is null', () => {
     render(<AuditEntryDrawer entry={null} onClose={vi.fn()} />, { wrapper: TestWrapper });
     expect(screen.queryByTestId('audit-drawer')).toBeNull();

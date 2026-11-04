@@ -20,9 +20,9 @@ No Node.js, pnpm, or source checkout is required.
    and launch it. Some distributions require FUSE support to run AppImages.
 3. On Windows, download `setup.exe` and run it. The one installer covers x64 and ARM64
    Windows and installs the build native to the PC. It is not code signed yet,
-   so SmartScreen shows a warning on first run. In-app updates work on Windows. The local
-   tool layer (shell commands, file access, sandboxing) is built around a POSIX shell and
-   is not yet verified on Windows.
+   so SmartScreen shows a warning on first run. In-app updates work on Windows. Shell commands
+   run in Git Bash, so Code projects need [Git for Windows](https://git-scm.com/download/win).
+   The rest of the local tool layer (file access, sandboxing) is not yet verified on Windows.
 
 New distribution releases require Developer ID signing and notarization. Legacy unsigned
 builds in the source repository do not gain an updater retroactively: install the first signed
@@ -101,6 +101,13 @@ example after rollover or a top-up, fills the ring while the tooltip keeps the a
 Accounts without a monthly personal allowance show the balance without a percentage.
 If the balance or allowance is unavailable, check that you are signed in and can reach the
 backend; older backends may not report an allowance. The separate Context panel shows context usage.
+
+A second ring, left of the credits ring, shows how full the conversation's context is. Its
+tooltip adds how long the last reply's prompt cache stays warm, for models Desktop caches. For an
+Ollama model on this computer or a saved Ollama server, it says whether the model is loaded and
+when keep-alive unloads it, checked every 20 seconds while the conversation is idle. If the
+server cannot be reached, checks pause until you hover the ring or return to the window. A
+loaded model can still have lost its prompt cache. OpenAI-compatible servers show no cache state.
 
 Chat shows the credits reported by the server while a reply streams, after it finishes, and
 in the composer's usage details. Missing credit usage is left blank rather than shown as zero.
@@ -325,7 +332,7 @@ Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the r
 The override is ignored in packaged apps and builds without test keys. Test-key
 builds use a separate cache directory and are rejected by `curated:check-build`;
 never enable the dev flag for a release.
-The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release and feature-branch snapshot publish: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
+The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
 A dev build that cached a list under the old signature format drops it on next start, and a republish at a lower sequence is refused until the `curated-test-keys/` directory is deleted.
 
 The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual

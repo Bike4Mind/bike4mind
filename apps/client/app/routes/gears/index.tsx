@@ -1,6 +1,7 @@
 import { Box, Button, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { isAxiosError } from 'axios';
 import { useClaimGear, type GearKey, type GearStatus } from '@client/app/hooks/useGearsStatus';
 import { useVisibleGears } from '@client/app/hooks/useVisibleGears';
 import { useGearCta } from '@client/app/hooks/useGearCta';
@@ -19,6 +20,7 @@ import {
   ClaimButton,
   creditText,
   PendingRewardNote,
+  QUEUED_PAYOUT_TEXT,
   RewardChip,
   rewardState,
 } from '@client/app/components/gears/gearReward';
@@ -103,8 +105,16 @@ const GearsPage = () => {
     claimGear(gear.key, {
       onSuccess: result => {
         if (result.creditsAwarded) toast.success(`Reward claimed - ${creditText(gear)} for ${gear.title}`);
+        else if (result.queued)
+          toast.success(`Reward queued - ${creditText(gear)} for ${gear.title} ${QUEUED_PAYOUT_TEXT}`);
       },
-      onError: () => toast.error("Couldn't claim the reward. Try again."),
+      onError: error =>
+        toast.error(
+          // Keyed on the route's error code: other 403s (an impersonation session) are not a refused account.
+          isAxiosError(error) && error.response?.data?.error === 'account_blocked'
+            ? "This reward isn't available for your account."
+            : "Couldn't claim the reward. Try again."
+        ),
     });
   };
 

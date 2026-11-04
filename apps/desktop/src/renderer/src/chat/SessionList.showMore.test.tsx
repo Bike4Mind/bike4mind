@@ -95,6 +95,7 @@ function render({
           onTogglePin={() => {}}
           onToggleArchived={() => {}}
           onRename={() => {}}
+          onDownload={() => {}}
           userSections={userSections}
           sectionActions={{ create: () => {}, rename: () => {}, remove: () => {}, move: () => {} }}
         />

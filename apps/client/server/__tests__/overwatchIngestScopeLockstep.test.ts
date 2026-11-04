@@ -6,12 +6,12 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { stripComments } from './scopeCoverageHelpers';
 
 /**
- * The Overwatch ingest route names its scope twice on purpose: once as the `baseApi`
- * gate, which is what confines an ingest key to this one route (CONFINED_SCOPES in
- * apiKeyScopeGate.ts), and once in-handler, which is what gives the route its own error
+ * The Overwatch ingest routes name their scope twice on purpose: once as the `baseApi`
+ * gate, which is what confines an ingest key to these routes (CONFINED_SCOPES in
+ * apiKeyScopeGate.ts), and once in-handler, which is what gives each route its own error
  * shape and still guards callers that never traverse `baseApi`. Nothing else fails when
  * the two drift - change one and the other keeps enforcing the old scope - so this scan
- * is what backs the "must stay in sync" comment in events.ts.
+ * is what backs the "must stay in sync" comments in events.ts and hops.ts.
  *
  * Scanned as source rather than imported because `baseApi` closes over its options and
  * returns a bare next-connect handler: the declared scope is unreachable at runtime.
@@ -19,7 +19,8 @@ import { stripComments } from './scopeCoverageHelpers';
  * eslint guard on tree-walking in pages/ tests names this directory by hand, and the
  * sibling scope-coverage scans are here for the same reason.
  */
-const EVENTS_ROUTE = path.join(__dirname, '..', '..', 'pages', 'api', 'overwatch', 'v1', 'events.ts');
+const INGEST_ROUTE_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'overwatch', 'v1');
+const INGEST_ROUTES = ['events.ts', 'hops.ts'];
 
 /** Bodies of each `requiredScopes: [...]` array literal. More than one is itself a finding. */
 function declaredScopeBlocks(source: string): string[] {
@@ -40,14 +41,14 @@ function scopeNames(block: string): string[] {
 
 const sortedUnique = (names: string[]): string[] => [...new Set(names)].sort();
 
-describe('overwatch ingest route: declared scope and in-handler check stay in lockstep', () => {
-  const source = readFileSync(EVENTS_ROUTE, 'utf8');
+describe.each(INGEST_ROUTES)('ingest route %s: scope gate and handler check in lockstep', route => {
+  const source = readFileSync(path.join(INGEST_ROUTE_DIR, route), 'utf8');
   const blocks = declaredScopeBlocks(source);
 
   it('declares exactly one requiredScopes array literal', () => {
     // A named constant (`requiredScopes: OVERWATCH_SCOPES`) would match zero here. That is
     // deliberate: this guard should fail loudly and be re-pointed, not silently scan nothing.
-    expect(blocks, 'events.ts must declare requiredScopes as a single inline array literal').toHaveLength(1);
+    expect(blocks, 'requiredScopes must be a single inline array literal').toHaveLength(1);
   });
 
   it('names the same scope at the baseApi gate and in the handler', () => {

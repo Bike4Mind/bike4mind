@@ -26,9 +26,11 @@ import { BadRequestError, HttpStatus } from '@bike4mind/common';
 
 const mockGetSettingsValue = vi.fn();
 const mockUserUpdate = vi.fn();
+const mockRecordCheckoutStart = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: (...args: unknown[]) => mockGetSettingsValue(...args) },
   userRepository: { update: (...args: unknown[]) => mockUserUpdate(...args) },
+  paymentAttemptRepository: { recordCheckoutStart: (...args: unknown[]) => mockRecordCheckoutStart(...args) },
 }));
 
 const mockFindUserSubByPrice = vi.fn();
@@ -550,5 +552,60 @@ describe('POST /api/subscriptions/subscribe - 3-D Secure on first purchase', () 
     await (handler as HandlerFn)(req, res);
 
     expect(mockSessionsCreate.mock.calls[0][0]).not.toHaveProperty('payment_method_options');
+  });
+});
+
+describe('POST /api/subscriptions/subscribe - the visit checkout was opened in', () => {
+  const visitId = 'a'.repeat(32);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_open', active: true });
+    mockSessionsCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/session' });
+    mockRecordCheckoutStart.mockResolvedValue(undefined);
+  });
+
+  it('keeps it under the Checkout session id in core, and never sends it to Stripe', async () => {
+    const { req, res } = makeReq('price_open');
+    req.headers.cookie = `b4m_vid=${visitId}`;
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockRecordCheckoutStart).toHaveBeenCalledExactlyOnceWith({
+      checkoutSessionId: 'cs_1',
+      userId: 'user_1',
+      visitId,
+    });
+    expect(JSON.stringify(mockSessionsCreate.mock.calls)).not.toContain(visitId);
+  });
+
+  it.each([undefined, 'b4m_vid=forged-visit'])(
+    'records nothing without a visit this server minted (%s)',
+    async cookie => {
+      const { req, res } = makeReq('price_open');
+      if (cookie) req.headers.cookie = cookie;
+
+      await (handler as HandlerFn)(req, res);
+
+      expect(res.statusCode).toBe(200);
+      expect(mockRecordCheckoutStart).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still returns the checkout when the record cannot be written', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockRecordCheckoutStart.mockRejectedValue(new Error('db down'));
+    const { req, res } = makeReq('price_open');
+    req.headers.cookie = `b4m_vid=${visitId}`;
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res._getData()).toEqual({ sessionUrl: 'https://checkout.stripe/session' });
+    warnSpy.mockRestore();
   });
 });

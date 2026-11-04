@@ -116,7 +116,7 @@ import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafReadPermissions, wafStageWebAcl, wafWebAclArn } from './waf';
+import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time — no IAM statements generated, no env var size concerns. The wildcard SQS
@@ -413,12 +413,21 @@ export const web = new sst.aws.Nextjs(
         ],
       },
       {
-        // Read-only CloudWatch metrics access used by the WAF Traffic Overview panel.
-        // Scoped to AWS/WAFV2 namespace metrics only.
+        // Read-only CloudWatch metrics for the WAF Traffic panel and the incident view; neither action is resource-scopable.
         actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
         resources: ['*'],
       },
       ...wafReadPermissions,
+      // Incident view: lists this stage's alarms by name prefix.
+      { actions: ['cloudwatch:DescribeAlarms'], resources: ['*'] },
+      // Incident view: reads the router WebACL's rules and the size of each IP set they reference.
+      { actions: ['wafv2:GetWebACL'], resources: [wafQueryWebAclArn] },
+      {
+        actions: ['wafv2:GetIPSet'],
+        resources: [
+          $interpolate`arn:${aws.getPartitionOutput().partition}:wafv2:us-east-1:${aws.getCallerIdentityOutput().accountId}:global/ipset/*/*`,
+        ],
+      },
       ...providerFederation.permissions,
     ],
     environment: {
@@ -442,8 +451,8 @@ export const web = new sst.aws.Nextjs(
       ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
         ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
         : {}),
-      // Only the stage-owned ACL carries the label-forward rules; an externally managed ACL does not.
-      ...(wafStageWebAcl ? { WAF_LABEL_FORWARDING: 'true' } : {}),
+      // Set only when the attached ACL inserts the label headers (see resolveWafLabelForwarding).
+      ...(wafLabelForwarding ? { WAF_LABEL_FORWARDING: 'true' } : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.

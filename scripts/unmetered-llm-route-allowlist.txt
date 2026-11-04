@@ -14,12 +14,10 @@
 
 apps/client/pages/api/admin/modal-tool.ts  # admin-only: ADMIN-scoped key plus isAdmin
 apps/client/pages/api/admin/operations-model.ts  # admin-only: ADMIN-scoped key plus isAdmin; a config test call
-apps/client/pages/api/admin/security-dashboard/ai-assessment.ts  # admin-only: ADMIN-scoped key plus isAdmin
 apps/client/pages/api/agents/[id]/enhance-field.ts  # not yet metered; follow-up
 apps/client/pages/api/agents/[id]/generate-avatar.ts  # not yet metered; follow-up
 apps/client/pages/api/agents/[id]/generate-description.ts  # not yet metered; follow-up
 apps/client/pages/api/agents/[id]/generate-system-prompt.ts  # not yet metered; follow-up
 apps/client/pages/api/publish/[publicId]/revise.ts  # not yet metered; follow-up
-apps/client/pages/api/security/behavioral-summary.ts  # not yet metered; follow-up
 apps/client/pages/api/sessions/[id]/auto-rename.ts  # not yet metered; follow-up
 apps/client/pages/api/users/counterLogs.ts  # admin-only: ADMIN-scoped key

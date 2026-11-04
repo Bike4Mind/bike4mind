@@ -15,6 +15,8 @@ on:
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
     # changes, while still reporting the required CI Complete/Run Tests checks (a
     # paths-ignore-skipped workflow never reports them and hangs the PR).
+  # A queue entry re-proves integration only (build, typecheck, tests). Jobs that
+  # check the PR's own diff already passed on the PR head and skip on merge_group.
   merge_group:
     branches: [main]
 
@@ -142,8 +144,8 @@ jobs:
   # parallel and still gate merges through `CI Complete`.
   repo-guards:
     needs: changes
-    if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Repo Guards
     timeout-minutes: 10
     permissions:
@@ -198,6 +200,21 @@ jobs:
       - name: Check workflows pass values through env, not run-body interpolation
         run: python3 scripts/check-no-run-interpolation.py
 
+      # shellcheck and pyflakes stay off: the existing run bodies predate them. Bump the
+      # version and checksum together (from the release's checksums.txt).
+      - name: Lint workflows with actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+        run: |
+          set -euo pipefail
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSfL -o "$RUNNER_TEMP/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes= -color
+
       # ComposeIntegrationTests self-skips with a visible reason when docker is
       # unavailable; the rest of the suite needs nothing but the stdlib.
       - name: Run self-host production preflight tests
@@ -225,13 +242,14 @@ jobs:
           fi
 
   # Blocking secret scan of the commits a change adds, so a `--no-verify` commit is still caught
-  # before merge. secrets-scan.yml only feeds a dashboard (--exit-code=0, manual dispatch).
+  # before merge.
   #
   # Deliberately NOT inside `repo-guards` and NOT gated on `changes`: a non-deployable change
   # (docs, `**/*.md`, `**/.env.example`, docs-site/) skips repo-guards, and those are exactly the
   # paths a pasted credential lands in. checkSecretScanJobWired.test.ts pins this.
   secret-scan:
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: github.event_name != 'merge_group'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Secret Scan
     timeout-minutes: 10
     permissions:
@@ -252,7 +270,7 @@ jobs:
 
       - name: Install gitleaks CLI
         env:
-          # Keep in sync with secrets-scan.yml and gitleaks-config-guard.yml.
+          # Keep in sync with gitleaks-config-guard.yml.
           GITLEAKS_VERSION: 8.24.3
         run: |
           echo "Installing gitleaks ${GITLEAKS_VERSION}..."
@@ -288,7 +306,8 @@ jobs:
   # The restricted-term list is not available here (it is a git-ignored local file), so that rule
   # is skipped and the Restricted Terms workflow remains the authority for it.
   leak-shapes:
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: github.event_name != 'merge_group'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Leak Shapes
     timeout-minutes: 10
     permissions:
@@ -390,10 +409,11 @@ jobs:
 
   lint:
     needs: core-build
+    if: github.event_name != 'merge_group'
     # MEDIUM, not the 2-core tier: typed linting (b4m/no-raw-entity-response) holds the client
     # TypeScript program, so ESLint needs 3-4 GB of heap - past Node's RAM-derived default on a
     # 2-core runner. The heap is pinned in the root lint:* scripts, not inherited from the runner.
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_MEDIUM_QUEUE || vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
     permissions:
@@ -464,8 +484,8 @@ jobs:
   # core-build artifact nor SST types - it depends on `changes` directly.
   openapi:
     needs: changes
-    if: needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    if: needs.changes.outputs.deployable == 'true' && github.event_name != 'merge_group'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: OpenAPI Spec
     timeout-minutes: 10
     permissions:
@@ -914,9 +934,10 @@ jobs:
   cli-e2e:
     name: CLI e2e harness
     needs: core-build
+    if: github.event_name != 'merge_group'
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
-    runs-on: ${{ github.event_name == 'merge_group' && vars.RUNNER_LABEL_QUEUE || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -1283,7 +1304,7 @@ jobs:
             exit 1
           fi
           # A CI leg that genuinely failed flips the check red. Skipped
-          # (non-deployable change) is treated as passing.
+          # (non-deployable change, or a PR-only job on merge_group) is treated as passing.
           for r in "$CHANGES" "$CORE_BUILD" "$REPO_GUARDS" "$SECRET_SCAN" "$LEAK_SHAPES" "$TYPECHECK" "$LINT" "$OPENAPI" "$CLI_E2E" "$HELP_DOCS" "$VERIFY_DOCS" "$DOCS_SCAN" "$PUBLISHED_DTS"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."

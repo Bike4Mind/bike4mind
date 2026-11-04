@@ -170,9 +170,19 @@ export function paymentNetworkOf(network: Pick<INetworkMeta, 'ip' | 'isDatacente
   return { ipHash: hashSignupNetwork(network.ip).ipHash, hostingNetwork: hostingNetworkOf(network) };
 }
 
-/** Called by start-payment; best-effort, so a failed write never blocks a purchase. */
+/**
+ * Called by start-payment; best-effort, so a failed write never blocks a purchase. `visitId` is
+ * read back by the `purchase` event (see billingEventDetails.ts).
+ */
 export async function recordPaymentStart(
-  input: { paymentIntentId: string; userId: string; amount: number; currency: string; network: INetworkMeta },
+  input: {
+    paymentIntentId: string;
+    userId: string;
+    amount: number;
+    currency: string;
+    network: INetworkMeta;
+    visitId?: string;
+  },
   logger: Logger
 ): Promise<void> {
   try {
@@ -183,6 +193,7 @@ export async function recordPaymentStart(
       amount: input.amount,
       currency: input.currency,
       ...paymentNetworkOf(input.network),
+      visitId: input.visitId ?? null,
     });
   } catch (error) {
     logger.error('[PaymentRisk] failed to record payment start', {

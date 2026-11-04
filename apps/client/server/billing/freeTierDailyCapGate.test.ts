@@ -174,6 +174,25 @@ describe('checkFreeTierDailySpendCap', () => {
     expect(findDailySpendByUserMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['exempts a credit buyer with no plan', new Date('2026-10-01T00:00:00Z'), false],
+    ['caps an account with no plan and no purchase', null, true],
+  ])('%s: the purchase stamp reaches the paid-standing tier', async (_label, lastCreditsPurchasedAt, capped) => {
+    getSettingsValueMock.mockImplementation((key: string) => {
+      if (key === 'enforceCredits') return true;
+      if (key === 'freeTierDailySpendCapCredits') return 200;
+      return undefined;
+    });
+    resolveUserRateTierMock.mockImplementation(async (user: { lastCreditsPurchasedAt?: Date | null }) =>
+      user.lastCreditsPurchasedAt ? 'basic' : 'free'
+    );
+    findDailySpendByUserMock.mockResolvedValue(500);
+    const call = callGate({ ...makeUser(10 * DAY_MS), lastCreditsPurchasedAt } as unknown as IUserDocument);
+
+    if (capped) await expect(call).rejects.toThrow('Daily free-tier credit limit reached');
+    else await expect(call).resolves.toBeUndefined();
+  });
+
   it('skips when steady-state cap is 0', async () => {
     getSettingsValueMock.mockImplementation((key: string) => {
       if (key === 'enforceCredits') return true;

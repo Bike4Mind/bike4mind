@@ -94,7 +94,7 @@ describe('formatAlarmSlackMessage on production', () => {
         label: 'Open in CloudWatch',
         url: 'https://us-east-2.console.aws.amazon.com/cloudwatch/home?region=us-east-2#alarmsV2:alarm/bike4mind-production-signup-code-send-burst',
       },
-      { label: 'Signup activity', url: 'https://app.example.com/admin?tab=users&recentSignups=hour' },
+      { label: 'Signup activity', url: 'https://app.example.com/admin?tab=users&signedUp=hour' },
       { label: 'WAF block list', url: 'https://app.example.com/admin?tab=security-dashboard' },
     ]);
     expect(contextOf(message)).toBe(

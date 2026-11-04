@@ -6,6 +6,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export type ApiKeyTrustSettings = {
   gateEnabled: boolean;
   minAccountAgeDays: number;
+  /** False drops the account-age path for API keys (see resolveApiKeyTrust); omitted means true. */
+  accountAgeTrustsKeys?: boolean;
   maxActiveKeysUntrusted: number;
   untrustedRateLimitPerMinute: number;
   /** The quotas below are off at 0 or when omitted by an existing caller. */
@@ -21,6 +23,7 @@ export const loadApiKeyTrustSettings = async (db: {
     names: [
       'apiKeyTrustGateEnabled',
       'apiKeyMinAccountAgeDays',
+      'apiKeyAccountAgeTrustsKeys',
       'maxActiveKeysUntrusted',
       'apiKeyUntrustedRateLimitPerMin',
       'apiKeyUntrustedRequestsPerDay',
@@ -39,6 +42,11 @@ export const loadApiKeyTrustSettings = async (db: {
       'apiKeyMinAccountAgeDays',
       settings,
       settingsMap.apiKeyMinAccountAgeDays.schema.parse(undefined)
+    ),
+    accountAgeTrustsKeys: getSettingsValue(
+      'apiKeyAccountAgeTrustsKeys',
+      settings,
+      settingsMap.apiKeyAccountAgeTrustsKeys.schema.parse(undefined)
     ),
     maxActiveKeysUntrusted: getSettingsValue(
       'maxActiveKeysUntrusted',
@@ -93,30 +101,43 @@ const accountCreatedMs = (user: ApiKeyTrustSubject): number | null => {
  * - `exempt`: the caller already authorized the mint on the user's behalf (an admin minting).
  * - `trusted`: the account passes, or the gate is off.
  * - `untrusted`: `email_unverified` may not mint at all; `not_yet_trusted` may hold up to
- *   `maxActiveKeys` active keys until `trustedAfter` or a purchase / admin approval.
+ *   `maxActiveKeys` active keys until `trustedAfter` or a purchase / admin approval;
+ *   `paid_standing_required` (account age not counted) holds the same cap until a purchase / admin approval.
  */
 export type ApiKeyTrustAssessment =
   | { status: 'exempt' }
   | { status: 'trusted' }
   | { status: 'untrusted'; reason: 'email_unverified' }
-  | { status: 'untrusted'; reason: 'not_yet_trusted'; maxActiveKeys: number; trustedAfter: Date };
+  | { status: 'untrusted'; reason: 'not_yet_trusted'; maxActiveKeys: number; trustedAfter: Date }
+  | { status: 'untrusted'; reason: 'paid_standing_required'; maxActiveKeys: number };
 
 export type UntrustedApiKeyAssessment = Extract<ApiKeyTrustAssessment, { status: 'untrusted' }>;
 
 /**
  * Trusted = platform admin, or emailVerified AND (purchase or active plan OR account age >= minAccountAgeDays OR
  * admin-approved). Account age comes from createdAt, then the id's ObjectId timestamp; with neither the account
- * counts as new. `hasActivePlan` is lazy because it is the only check that hits the database,
+ * counts as new. `honorAccountAge: false` skips the age path, leaving paid standing as the only way out.
+ * `hasActivePlan` is lazy because it is the only check that hits the database,
  * and the cheap user-field checks settle most accounts first.
  */
 export const assessApiKeyTrust = async (
   user: ApiKeyTrustSubject,
-  options: { settings: ApiKeyTrustSettings; hasActivePlan: () => Promise<boolean>; now?: Date }
+  options: {
+    settings: ApiKeyTrustSettings;
+    hasActivePlan: () => Promise<boolean>;
+    honorAccountAge?: boolean;
+    now?: Date;
+  }
 ): Promise<ApiKeyTrustAssessment> => {
-  const { settings, hasActivePlan, now = new Date() } = options;
+  const { settings, hasActivePlan, honorAccountAge = true, now = new Date() } = options;
   if (!settings.gateEnabled || user.isAdmin) return { status: 'trusted' };
   if (!user.emailVerified) return { status: 'untrusted', reason: 'email_unverified' };
   if (user.apiKeyTrustApproved || user.lastCreditsPurchasedAt) return { status: 'trusted' };
+
+  if (!honorAccountAge) {
+    if (await hasActivePlan()) return { status: 'trusted' };
+    return { status: 'untrusted', reason: 'paid_standing_required', maxActiveKeys: settings.maxActiveKeysUntrusted };
+  }
 
   const trustedAfter = new Date((accountCreatedMs(user) ?? now.getTime()) + settings.minAccountAgeDays * MS_PER_DAY);
   if (now >= trustedAfter) return { status: 'trusted' };
@@ -147,19 +168,23 @@ export const hasPaidStanding = async (
  * more. The single rule behind both the mint (create.ts) and the eligibility route the UI reads.
  */
 export const untrustedOwnerMayMint = (assessment: UntrustedApiKeyAssessment, activePersonalKeys: number): boolean =>
-  assessment.reason === 'not_yet_trusted' && activePersonalKeys < assessment.maxActiveKeys;
+  assessment.reason !== 'email_unverified' && activePersonalKeys < assessment.maxActiveKeys;
 
 /** User-facing explanation naming what would unlock key creation. */
 export const describeApiKeyTrustRequirement = (assessment: UntrustedApiKeyAssessment): string => {
   if (assessment.reason === 'email_unverified') {
     return 'Verify your email address to create API keys.';
   }
-  const unlock = `purchase credits or a plan, wait until ${assessment.trustedAfter.toISOString().slice(0, 10)}, or contact support`;
+  const accounts = assessment.reason === 'not_yet_trusted' ? 'New accounts' : 'Free accounts';
+  const unlock =
+    assessment.reason === 'not_yet_trusted'
+      ? `purchase credits or a plan, wait until ${assessment.trustedAfter.toISOString().slice(0, 10)}, or contact support`
+      : 'purchase credits or a plan, or contact support';
   if (assessment.maxActiveKeys <= 0) {
-    return `New accounts cannot create API keys yet. To unlock them, ${unlock}.`;
+    return `${accounts} cannot create API keys yet. To unlock them, ${unlock}.`;
   }
   const plural = assessment.maxActiveKeys === 1 ? '' : 's';
-  return `New accounts may hold ${assessment.maxActiveKeys} active API key${plural}. To create more, ${unlock}.`;
+  return `${accounts} may hold ${assessment.maxActiveKeys} active API key${plural}. To create more, ${unlock}.`;
 };
 
 /** 403 tagged `api_key_trust_required`; the reason fields let a client render its own copy. */
@@ -167,8 +192,6 @@ export const apiKeyTrustRequiredError = (assessment: UntrustedApiKeyAssessment):
   new ForbiddenError(describeApiKeyTrustRequirement(assessment), {
     errorCode: API_KEY_TRUST_REQUIRED_ERROR_CODE,
     trustReason: assessment.reason,
-    ...(assessment.reason === 'not_yet_trusted' && {
-      maxActiveKeys: assessment.maxActiveKeys,
-      trustedAfter: assessment.trustedAfter.toISOString(),
-    }),
+    ...(assessment.reason !== 'email_unverified' && { maxActiveKeys: assessment.maxActiveKeys }),
+    ...(assessment.reason === 'not_yet_trusted' && { trustedAfter: assessment.trustedAfter.toISOString() }),
   });

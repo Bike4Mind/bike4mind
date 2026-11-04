@@ -3,6 +3,7 @@ import {
   CustomMcpPolicySchema,
   SettingScopeLevel,
   evaluateCustomMcpPolicy,
+  getMcpPresetHost,
   orgAclRowConfersMembership,
   toMcpConnectionPublic,
   type IMcpConnectionPublic,
@@ -124,6 +125,7 @@ export async function listOrgMemberConnections(
         : evaluateCustomMcpPolicy({
             urlHost: connection.urlHost,
             authKind: connection.auth?.kind ?? 'none',
+            presetRemoteHost: getMcpPresetHost(connection.presetId),
             policy: view.policy,
             platformBlockedHosts,
           })

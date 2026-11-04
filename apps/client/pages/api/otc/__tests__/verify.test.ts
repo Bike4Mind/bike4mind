@@ -454,6 +454,70 @@ describe('/api/otc/verify per-email budget', () => {
   });
 });
 
+describe('/api/otc/verify request body validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTryIncrement.mockResolvedValue({ success: true, count: 1, expiresAt: new Date(Date.now() + 60_000) });
+    mockValidateNonce.mockResolvedValue({ otcHash: 'hash', riskSignals: [] });
+    mockVerifyPendingOTC.mockResolvedValue(false);
+  });
+
+  const expectRejectedBeforeAnyLookup = (req: any, res: any) => {
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toEqual({ error: 'Invalid request' });
+    expect(req.logger.warn).toHaveBeenCalledWith('OTC verify rejected a malformed request body', expect.anything());
+    expect(mockTryIncrement).not.toHaveBeenCalled();
+    expect(mockValidateNonce).not.toHaveBeenCalled();
+    expect(mockFindByEmail).not.toHaveBeenCalled();
+  };
+
+  it.each([
+    ['an array', [NON_DOMAIN_EMAIL]],
+    ['a number', 42],
+    ['an operator object', { $ne: null }],
+    ['a regex operator object', { $regex: '.*' }],
+    ['a non-address string', 'not-an-email'],
+    ['an over-long string', `${'a'.repeat(250)}@example.com`],
+    ['missing', undefined],
+  ])('answers 400 when the email is %s', async (_label, email) => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.email = email;
+    await handler(req, res);
+    expectRejectedBeforeAnyLookup(req, res);
+  });
+
+  it.each([
+    ['an array', ['123456']],
+    ['a number', 123456],
+    ['an operator object', { $gt: '' }],
+    ['an over-long string', '1'.repeat(33)],
+    ['blank', '   '],
+  ])('answers 400 when the code is %s', async (_label, code) => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.code = code;
+    await handler(req, res);
+    expectRejectedBeforeAnyLookup(req, res);
+  });
+
+  it('answers 400 when the body is not an object', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body = 'email=nobody@example.com';
+    await handler(req, res);
+    expectRejectedBeforeAnyLookup(req, res);
+  });
+
+  it('normalizes a padded, mixed-case address and code before verifying', async () => {
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.email = '  Nobody@Example.COM ';
+    req.body.code = ' 123456 ';
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockValidateNonce).toHaveBeenCalledWith(NON_DOMAIN_EMAIL, 'jti-1', expect.any(String));
+    expect(mockVerifyPendingOTC).toHaveBeenCalledWith('123456', 'hash');
+  });
+});
+
 describe('/api/otc/verify — domain-grant signup credits (Register now flow)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

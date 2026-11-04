@@ -63,6 +63,7 @@ beforeEach(async () => {
     noCardUnlockMaxCredits: 15,
     noCardUnlockGithubMinAgeDays: 30,
     noCardUnlockGithubMinRepos: 1,
+    signupGrantSignupPoolDaily: 1_000,
   };
   for (const [settingName, settingValue] of Object.entries(settings)) {
     await AdminSettings.create({ settingName, settingValue });

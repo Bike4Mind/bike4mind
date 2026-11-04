@@ -26,6 +26,12 @@ export const secrets = {
   GOOGLE_CLIENT_SECRET: new sst.Secret('GOOGLE_CLIENT_SECRET', 'not-configured'),
   GITHUB_CLIENT_ID: new sst.Secret('GITHUB_CLIENT_ID', 'not-configured'),
   GITHUB_CLIENT_SECRET: new sst.Secret('GITHUB_CLIENT_SECRET', 'not-configured'),
+  // Sign in with Apple. Client id is the Services ID; the private key is the .p8 PEM (newlines kept or
+  // escaped as \n) used to sign the JWT client secret. Unconfigured = the Apple strategy is not registered.
+  APPLE_CLIENT_ID: new sst.Secret('APPLE_CLIENT_ID', 'not-configured'),
+  APPLE_TEAM_ID: new sst.Secret('APPLE_TEAM_ID', 'not-configured'),
+  APPLE_KEY_ID: new sst.Secret('APPLE_KEY_ID', 'not-configured'),
+  APPLE_PRIVATE_KEY: new sst.Secret('APPLE_PRIVATE_KEY', 'not-configured'),
   // Read-only GitHub App that feeds data lakes (contents:read + metadata:read, installed on selected
   // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
   // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the
@@ -103,23 +109,6 @@ export const secrets = {
   SECOPS_ZAP_DISPATCH_TOKEN: new sst.Secret('SECOPS_ZAP_DISPATCH_TOKEN', 'not-configured'),
   SECOPS_ZAP_INGEST_TOKEN: new sst.Secret('SECOPS_ZAP_INGEST_TOKEN', 'not-configured'),
   GITHUB_ZAP_REF: new sst.Secret('GITHUB_ZAP_REF', 'main'),
-  // Secrets for Code Analysis (Semgrep) integration
-  // Configure these per environment using `sst secret set` and mirror them
-  // into the corresponding GitHub environment secrets.
-  SECOPS_CODE_INGEST_URL: new sst.Secret('SECOPS_CODE_INGEST_URL', 'not-configured'),
-  SECOPS_CODE_INGEST_TOKEN: new sst.Secret('SECOPS_CODE_INGEST_TOKEN', 'not-configured'),
-  // Secrets for Packages / Dependencies security integration
-  // Configure these per environment using `sst secret set` and mirror them
-  // into the corresponding GitHub environment secrets.
-  SECOPS_PACKAGES_INGEST_URL: new sst.Secret('SECOPS_PACKAGES_INGEST_URL', 'not-configured'),
-  SECOPS_PACKAGES_INGEST_TOKEN: new sst.Secret('SECOPS_PACKAGES_INGEST_TOKEN', 'not-configured'),
-  SECOPS_PACKAGES_DISPATCH_TOKEN: new sst.Secret('SECOPS_PACKAGES_DISPATCH_TOKEN', 'not-configured'),
-  // Secrets for Secrets / Password & Key Protection integration
-  // Configure these per environment using `sst secret set` and mirror them
-  // into the corresponding GitHub environment secrets.
-  SECOPS_SECRETS_INGEST_URL: new sst.Secret('SECOPS_SECRETS_INGEST_URL', 'not-configured'),
-  SECOPS_SECRETS_INGEST_TOKEN: new sst.Secret('SECOPS_SECRETS_INGEST_TOKEN', 'not-configured'),
-  SECOPS_SECRETS_DISPATCH_TOKEN: new sst.Secret('SECOPS_SECRETS_DISPATCH_TOKEN', 'not-configured'),
   // Secrets for Cloud Security (Prowler) integration
   // Configure these per environment using `sst secret set` and mirror them
   // into the corresponding GitHub environment secrets.
@@ -127,10 +116,6 @@ export const secrets = {
   // GitHub PAT (workflow scope) used to dispatch the prowler-only.yml workflow on demand.
   // Scope required: workflow. Generate at https://github.com/settings/tokens
   SECOPS_PROWLER_WORKFLOW_TOKEN: new sst.Secret('SECOPS_PROWLER_WORKFLOW_TOKEN', 'not-configured'),
-  // Secrets for Firewall / WAF Security Dashboard integration
-  // Explicit WebACL ARNs and CloudFront distribution IDs; can be comma-separated lists.
-  SECOPS_WAF_WEBACL_ARN: new sst.Secret('SECOPS_WAF_WEBACL_ARN', 'not-configured'),
-  SECOPS_WAF_DISTRIBUTION_ID: new sst.Secret('SECOPS_WAF_DISTRIBUTION_ID', 'not-configured'),
   // Secret for Active Defense (in-product attack simulation) ingest endpoint.
   // Set per stage: sst secret set SECOPS_ATTACK_SIMULATION_INGEST_TOKEN <value> --stage <stage>
   SECOPS_ATTACK_SIMULATION_INGEST_TOKEN: new sst.Secret('SECOPS_ATTACK_SIMULATION_INGEST_TOKEN', 'not-configured'),

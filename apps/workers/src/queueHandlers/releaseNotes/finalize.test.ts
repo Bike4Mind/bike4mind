@@ -118,6 +118,49 @@ describe('finalizeReleaseNote', () => {
     expect(result.kind === 'ok' && result.note.items).toEqual([item('Keep me.')]);
   });
 
+  it.each([
+    'Session quest history is listed',
+    'Adds listSessionQuests to the API',
+    'A reaction queue for replies',
+    'Organization queue limits',
+  ])('keeps an item where a denylisted term only spans a word boundary: %j', text => {
+    const result = run(draft({ items: [item(text), item('Keep me.')] }), { embargoHours: 12, denylist: ['onque'] });
+
+    expect(result.kind === 'ok' && result.note.items).toEqual([item(text), item('Keep me.')]);
+  });
+
+  it.each([
+    'Built with Onque',
+    'Built with On Que',
+    'Built with onque-corp',
+    'Built with ONQUE',
+    'Built with Onques',
+    'Built with Onque2',
+    'Built with onquecloud',
+    'Built with ONQUECorp',
+    'Built with GPUOnque',
+    'Built with v2Onque',
+    'Built with 2onque',
+    'Built with myonque',
+    'Built with XONQUE',
+    `Built with ${String.fromCharCode(0x3164)}Onque`,
+    `Built with x${String.fromCharCode(0x200b)}Onque`,
+    `Built with ${String.fromCharCode(0x65e5)}Onque`,
+  ])('still drops an item where the denylisted term starts or ends a word: %j', text => {
+    const result = run(draft({ items: [item(text), item('Keep me.')] }), { embargoHours: 12, denylist: ['onque'] });
+
+    expect(result.kind === 'ok' && result.note.items).toEqual([item('Keep me.')]);
+  });
+
+  it('does not request a repair when the summary only contains a denylisted term across words', () => {
+    const result = run(draft({ summary: 'Session quest history is now listed.' }), {
+      embargoHours: 12,
+      denylist: ['onque'],
+    });
+
+    expect(result.kind).toBe('ok');
+  });
+
   it('matches a multi-word denylist term regardless of its own spacing', () => {
     const result = run(draft({ items: [item('Uses project-falcon now'), item('Keep me.')] }), {
       embargoHours: 12,

@@ -225,6 +225,44 @@ describe('reserveVoiceHold on a real replica set', () => {
     expect(session?.voiceReservedCredits ?? null).toBeNull();
   });
 
+  it.each([
+    ['the API key that opened the hold', 'key-1'],
+    ['no API key for a JWT caller', undefined],
+  ])('stamps %s on the settlement ledger row', async (_label, apiKeyId) => {
+    const ids = await seedSession();
+    const startedAt = new Date(Date.now() - 120_000);
+    const opened = await reserveVoiceHold({
+      ...ids,
+      priorStartedAt: null,
+      reservedCredits: HOLD_CREDITS,
+      startedAt,
+      realtime: false,
+      apiKeyId,
+      unaffordable: () => new Error('insufficient credits'),
+    });
+    expect(opened).toBe(true);
+    const connectedAt = new Date(startedAt.getTime() + 5_000);
+    await Session.updateOne({ _id: ids.sessionId }, { $set: { voiceConnectedAt: connectedAt } });
+
+    const hold: VoiceHold = {
+      id: ids.sessionId,
+      userId: ids.userId,
+      voiceReservedCredits: HOLD_CREDITS,
+      voiceSessionStartedAt: startedAt,
+      voiceConnectedAt: connectedAt,
+    };
+    expect(await settleVoiceHold(hold, new Date(), 'end')).toMatchObject({ settled: true });
+
+    const row = await CreditTransaction.findOne({
+      transactionId: voiceHoldSettleTransactionId(hold.id, startedAt),
+    }).lean<{ apiKeyId?: string }>();
+    expect(row).not.toBeNull();
+    expect(row?.apiKeyId).toBe(apiKeyId);
+    // The key leaves the session with the hold, so a later JWT call on it is not attributed to the key.
+    const session = await Session.findById(ids.sessionId).lean<{ voiceHoldApiKeyId?: string }>();
+    expect(session?.voiceHoldApiKeyId).toBeUndefined();
+  });
+
   it('of two concurrent calls the balance covers once, only one takes a reserve', async () => {
     const first = await seedSession();
     await User.updateOne({ _id: first.userId }, { $set: { currentCredits: HOLD_CREDITS + 1 } });

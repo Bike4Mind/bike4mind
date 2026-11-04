@@ -142,7 +142,7 @@ describe('free credits service', () => {
       const repository = { reserve: vi.fn(), refund: vi.fn(), markAlerted: vi.fn(), getSpent: vi.fn() };
       repository.reserve.mockResolvedValue(null);
       adapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => ({
-        settingValue: name === 'signupGrantDailyBudget' ? '50' : '100',
+        settingValue: name === 'signupGrantSignupPoolDaily' ? '50' : '100',
       }));
       adapters.db.users.claimFreeCreditGrant.mockResolvedValue(false);
       const users = Object.assign(adapters.db.users, { addTagsToUser: vi.fn(), update: vi.fn() });
@@ -160,7 +160,7 @@ describe('free credits service', () => {
     const exhaustedBudget = (adapters: ReturnType<typeof buildAdapters>) => {
       const repository = { reserve: vi.fn().mockResolvedValue(null), refund: vi.fn(), markAlerted: vi.fn() };
       adapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => ({
-        settingValue: name === 'signupGrantDailyBudget' ? '50' : '100',
+        settingValue: name === 'signupGrantSignupPoolDaily' ? '50' : '100',
       }));
       const users = Object.assign(adapters.db.users, { addTagsToUser: vi.fn(), update: vi.fn() });
       Object.assign(adapters.db, { signupProtection: { repository: {}, grantBudget: { repository } } });

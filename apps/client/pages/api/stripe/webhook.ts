@@ -51,6 +51,7 @@ import { reverseSubscriptionRewardForRefund } from '@server/referrals/subscripti
 import {
   creditBuyerForEvents,
   planDetails,
+  purchaseVisitId,
   rowTimestamps,
   subscriptionEventUser,
   wholeDaysBetween,
@@ -203,6 +204,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         kind: 'credits',
         amountMinor: intent.amount_received ?? intent.amount,
         currency: intent.currency,
+        visitId: await purchaseVisitId(intent.id),
       });
 
       if (outcome === 'already_granted') {

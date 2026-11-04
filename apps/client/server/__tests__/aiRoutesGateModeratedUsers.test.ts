@@ -34,8 +34,6 @@ const GATE =
 const EXEMPT = new Set([
   'admin/modal-tool.ts', // admin
   'admin/operations-model.ts', // admin
-  'admin/security-dashboard/ai-assessment.ts', // admin
-  'users/counterLogs.ts', // admin
 ]);
 
 function sourceFiles(dir: string): string[] {

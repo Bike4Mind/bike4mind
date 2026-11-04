@@ -22,6 +22,7 @@ const EXPECTED_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.QA_INGEST,
   ApiKeyScope.SKILLS_READ,
   ApiKeyScope.RELEASE_NOTES_WRITE,
+  ApiKeyScope.REWARDS_GRANT,
   ApiKeyScope.SLACK_POST,
 ]);
 
@@ -123,6 +124,7 @@ describe('public API reference scope classification', () => {
     ApiKeyScope.OVERWATCH_INGEST_WRITE,
     ApiKeyScope.QA_INGEST,
     ApiKeyScope.RELEASE_NOTES_WRITE,
+    ApiKeyScope.REWARDS_GRANT,
     ApiKeyScope.OPTIHASHI_READ,
     ApiKeyScope.OPTIHASHI_COMPUTE,
   ]);

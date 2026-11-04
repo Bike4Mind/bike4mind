@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   HubAccessError,
   HubRateLimitError,
@@ -21,12 +24,13 @@ import {
   type OllamaRegistryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
-import type { HubBuild, HubManifest } from '@bike4mind/common';
+import { ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
 import type { ModelServerSpecs } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
+import { fitFromArch } from './fit';
 import { ServerUnreachableError } from '../modelServers/errors';
 import { HuggingFaceTokenStore } from './HuggingFaceTokenStore';
 import {
@@ -1086,7 +1090,35 @@ describe('ModelHubService entered hardware', () => {
     expect(remote.runtime.inspect).toHaveBeenCalledWith('small:latest', { tags: false });
     expect(local.runtime.inspect).not.toHaveBeenCalled();
     const detailed = await service.detail(REPO, 'a');
-    expect(detailed.ok && detailed.model.builds[0].fit?.detail).toContain('16 GiB');
+    // The 16 GiB GPU less its 2 GiB margin.
+    expect(detailed.ok && detailed.model.builds[0].fit?.detail).toContain('14 GiB');
+  });
+
+  it("words a saved server's verdicts for that server, and sizes its installed projector from the pins", async () => {
+    const { service, remote } = rated({ a: { ramGiB: 16, gpuMemoryGiB: null, bandwidthGBps: null, unified: true } });
+    const list = await service.curated('a');
+    const fits = list.entries.flatMap(entry => entry.builds.map(build => ({ entry: entry.id, ...build })));
+    const tight = fits.filter(build => build.fit.level === 'tight');
+    const tooLarge = fits.filter(build => build.fit.level === 'too-large');
+    expect(tight.length).toBeGreaterThan(0);
+    expect(tooLarge.length).toBeGreaterThan(0);
+    for (const build of tight)
+      expect(build.fit.detail).toMatch(/ Close other apps on that server first, or it may slow down\.$/);
+    for (const build of tooLarge) expect(build.fit.detail).toContain('that server can hold for a model');
+    for (const build of fits) expect(build.fit.detail).not.toContain('this computer');
+
+    const entry = CURATED.entries.find(candidate => candidate.id === 'qwen3-8-27b-gsq')!;
+    const reviewed = entry.builds.find(candidate => candidate.id === 'iq2-xs')!;
+    const { weightsBytes, mmprojBytes } = ollamaBuildBytes(reviewed);
+    remote.runtime.list.mockResolvedValue([
+      { ...installedModel, name: refOf(reviewed), sizeBytes: weightsBytes + mmprojBytes },
+    ]);
+    const shown = remote.runtime.inspect.getMockImplementation()!;
+    const arch = entry.arch as ModelArch;
+    remote.runtime.inspect.mockImplementation(async (name, options) => ({ ...(await shown(name, options)), arch }));
+    const installed = await service.installed('a');
+    const row = fits.find(build => build.entry === entry.id && build.id === reviewed.id);
+    expect(installed.ok && installed.models[0].fit).toEqual(row?.fit);
   });
 
   it("puts this computer's entered memory in place of its probe", async () => {
@@ -1110,6 +1142,28 @@ describe('ModelHubService entered hardware', () => {
     const list = await service.curated();
     expect(list.rating).toBe('probe');
     expect(list.machine).toMatchObject({ memoryKind: 'cpu', totalMemoryBytes: 62 * GIB });
+  });
+
+  const curatedFit = (list: Awaited<ReturnType<ModelHubService['curated']>>, entryId: string) =>
+    list.entries.find(entry => entry.id === entryId)?.builds[0].fit;
+
+  it("adds a reply speed from this computer's entered bandwidth, sizing MoE reads by the active share", async () => {
+    const { service } = rated({ local: { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: 256, unified: false } });
+    const list = await service.curated();
+    // 256 GB/s at 0.8 efficiency, over library weights less the pinned projector. MoE: 14.44 GB * (3.8 / 25.2) * 2 reads
+    // 4.35 GB, so 204.8 / 4.35 is 47. Dense: 16.81 GB gives 12.2.
+    expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('Replies at about 47 tokens/s early in a chat.');
+    expect(curatedFit(list, 'qwen3-8-27b')?.detail).toContain('Replies at about 12 tokens/s early in a chat.');
+    const unrated = await rated({}).service.curated();
+    expect(curatedFit(unrated, 'gemma-4-26b')?.detail).not.toContain('Replies');
+  });
+
+  it("adds a reply speed from a saved server's entered bandwidth only for a model that loads whole", async () => {
+    const list = await rated({ a: GPU_16 }).service.curated('a');
+    // 448 GB/s at 0.8 efficiency over the 7.15 GB layer less its 0.18 GB projector: 358.4 / 6.98 is 51.
+    expect(curatedFit(list, 'gemma-4-12b')?.detail).toContain('Replies at about 51 tokens/s early in a chat.');
+    expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('system RAM');
+    expect(curatedFit(list, 'gemma-4-26b')?.detail).not.toContain('Replies');
   });
 });
 
@@ -1169,6 +1223,37 @@ describe('ModelHubService fit', () => {
     runtime.list.mockResolvedValue([installed({ modifiedAt: '2026-10-02T00:00:00Z' })]);
     await service.installed();
     expect(runtime.inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it('sizes an installed MoE model without layer widths from the expert tensor stats Ollama reports', async () => {
+    const MOE_ARCH: ModelArch = {
+      contextMax: 131072,
+      blockCount: 48,
+      headCount: 32,
+      full: { layers: 48, kvHeads: 4, keyLength: 128, valueLength: 128 },
+      moe: { experts: 128, used: 8, moeLayers: 48 },
+      mtpLayers: 0,
+    };
+    const sizeBytes = 18 * GIB;
+    const expertBytesPerLayer = 0.33 * GIB;
+    const hardware = { ...machine('unified', 64), platform: 'darwin', arch: 'arm64', chip: 'Apple M4 Pro' };
+    const fitWith = async (tensorStats: ModelInspection['tensorStats']) => {
+      const { service, runtime } = harness({ hardware });
+      runtime.list.mockResolvedValue([installed({ name: 'moe:latest', sizeBytes })]);
+      const base = await runtime.inspect('x');
+      runtime.inspect.mockResolvedValue({ ...base, arch: MOE_ARCH, tensorStats });
+      const result = await service.installed();
+      return result.ok ? result.models[0].fit : null;
+    };
+
+    const withStats = await fitWith({ expertBytesPerLayer, nonExpertBytes: sizeBytes - 48 * expertBytesPerLayer });
+    const without = await fitWith(null);
+    expect(withStats).toEqual(fitFromArch(MOE_ARCH, sizeBytes, hardware, withStats!.context, { expertBytesPerLayer }));
+    expect(without).toEqual(fitFromArch(MOE_ARCH, sizeBytes, hardware, without!.context));
+    // The stats size both the compute buffer, in place of the widths, and the weights one decode step reads.
+    expect(withStats?.detail).toContain('Replies at about');
+    expect(without?.detail).not.toContain('Replies');
+    expect(withStats?.detail.split(' Replies')[0]).not.toBe(without?.detail);
   });
 
   it('reads only a few installed models from Ollama at once', async () => {
@@ -1269,6 +1354,39 @@ describe('ModelHubService fit', () => {
     hub.getModel.mockResolvedValueOnce(detail({ id: 'someone/Bare-GGUF' }));
     const bare = await service.detail('someone/Bare-GGUF');
     expect(bare.ok && bare.model.builds[0].fit?.detail).toContain('(up to 16K)');
+  });
+
+  it.each([
+    ['gemma-4-12b', 'qat-q4-0'],
+    ['qwen3-8-27b-gsq', 'iq2-xs'],
+  ])('rates an installed %s %s, a vision build, as its curated row does', async (entryId, buildId) => {
+    const entry = CURATED.entries.find(candidate => candidate.id === entryId)!;
+    const reviewed = entry.builds.find(candidate => candidate.id === buildId)!;
+    const { weightsBytes, mmprojBytes } = ollamaBuildBytes(reviewed);
+    expect(mmprojBytes).toBeGreaterThan(0);
+    // The projector blob as Ollama keeps it in its model folder on this computer.
+    const storeDir = await mkdtemp(join(tmpdir(), 'b4m-store-'));
+    await mkdir(join(storeDir, 'blobs'));
+    const blob = join(storeDir, 'blobs', `sha256-${pinsOf(reviewed)!.projector}`);
+    await writeFile(blob, '');
+    await truncate(blob, mmprojBytes);
+    try {
+      const { service, runtime } = harness({ hardware: machine('unified', 16) });
+      runtime.list.mockResolvedValue([installed({ name: refOf(reviewed), sizeBytes: weightsBytes + mmprojBytes })]);
+      const shown = runtime.inspect.getMockImplementation()!;
+      runtime.inspect.mockImplementation(async (name, options) => {
+        const inspection = await shown(name, options);
+        const arch = entry.arch as ModelArch;
+        return { ...inspection, arch, contents: inspection.contents && { ...inspection.contents, storeDir } };
+      });
+
+      const curated = await service.curated();
+      const row = curated.entries.find(candidate => candidate.id === entryId)?.builds.find(b => b.id === buildId);
+      const result = await service.installed();
+      expect(result.ok && result.models[0].fit).toEqual(row?.fit);
+    } finally {
+      await rm(storeDir, { recursive: true, force: true });
+    }
   });
 
   it('uses a size estimate when a same-sized curated file has different weights', async () => {

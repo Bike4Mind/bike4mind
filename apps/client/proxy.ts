@@ -11,6 +11,7 @@ import {
 } from '@client/server/utils/deploymentMediaOrigins';
 import type { NextRequest } from 'next/server';
 import { allowsUsercontentRequest } from '@bike4mind/server-utils/utils/usercontentRequest';
+import { HOP_PARAM } from '@bike4mind/server-utils/lib/hopNames';
 
 // Blocks path traversal and null-byte injection before reaching the ISR cache layer (#7190)
 const PATH_TRAVERSAL_PATTERN = /(\.\.[/\\])|([/\\]\.\.)|(\.\.%2[fF])|(%2[fF]\.\.)/;
@@ -282,8 +283,14 @@ export function proxy(request: NextRequest) {
   // `/a/*` share links set their own `Referrer-Policy: no-referrer` (the token must not
   // leak via Referer on author outbound links) - don't clobber it with the app default.
   // `/embed/*` likewise: its URL carries the embed key in the query string.
+  // A verified-hop landing carries a single-use token in its query until the page takes it off the
+  // URL at bootstrap (visitBeacon.ts). `strict-origin` keeps it out of the Referer of everything the
+  // page requests before then, same-origin requests included, which the default would send in full.
   if (!pathname.startsWith('/a/') && !pathname.startsWith('/embed/')) {
-    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    response.headers.set(
+      'Referrer-Policy',
+      request.nextUrl.searchParams.has(HOP_PARAM) ? 'strict-origin' : 'strict-origin-when-cross-origin'
+    );
   }
   if (!request.nextUrl.hostname.includes('localhost')) {
     // preload omitted until subdomain audit confirms all *.bike4mind.com subdomains

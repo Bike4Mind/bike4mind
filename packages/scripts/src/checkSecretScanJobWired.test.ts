@@ -12,7 +12,8 @@ import { readJobCondition, readJobs, readNeeds, readSteps } from './ciWorkflowTe
  *
  * - it must run on EVERY change. Gating it on `changes` (directly, or by moving it back into
  *   `repo-guards`) skips it on a docs / `**\/*.md` / `**\/.env.example` change, which is where a
- *   pasted credential is most likely to land;
+ *   pasted credential is most likely to land. The one allowed condition skips merge_group, whose
+ *   commits the PR run already scanned;
  * - the scan must exit non-zero on a finding and nothing may swallow that;
  * - it is aggregated through `ci-complete`'s `needs`, env mapping and result loop.
  *
@@ -22,6 +23,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const CI_WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'ci.yml');
 
 const ci = fs.readFileSync(CI_WORKFLOW, 'utf8');
+const PR_ONLY = "github.event_name != 'merge_group'";
 
 function jobBody(source: string, name: string): string {
   return readJobs(source).find(job => job.name === name)?.body ?? '';
@@ -48,8 +50,8 @@ describe('secret-scan job in ci.yml', () => {
     expect(body, 'ci.yml has no secret-scan job').not.toBe('');
   });
 
-  it('runs on every change: no condition and no dependency on the changes gate', () => {
-    expect(readJobCondition(body)).toBe('');
+  it('runs on every change: only the merge-queue skip, and no dependency on the changes gate', () => {
+    expect(readJobCondition(body)).toBe(PR_ONLY);
     expect(readNeeds(body)).toEqual([]);
   });
 
@@ -99,7 +101,7 @@ describe('the secret-scan checks reject a broken workflow', () => {
     );
     const body = jobBody(broken, 'secret-scan');
     expect(readNeeds(body)).toEqual(['changes']);
-    expect(readJobCondition(body)).not.toBe('');
+    expect(readJobCondition(body)).not.toBe(PR_ONLY);
   });
 
   it('sees secret-scan dropped from the ci-complete result loop', () => {
