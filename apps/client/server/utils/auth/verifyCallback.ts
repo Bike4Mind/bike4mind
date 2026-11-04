@@ -74,6 +74,8 @@ async function prepareOAuthReferral(code: string, verifiedEmail: string): Promis
     }
     // Resolve credits before claiming: a failed read must leave the code available.
     const grantCredits = await userService.referralInviteCredits(resolved.invite, adminSettingsRepository);
+    // No transaction: a crash before the account is created strands the claim (code used, no usedbyId).
+    // An admin reopens a stranded claim by setting the invite back to open (/api/reg-invites/update).
     const claim = await userService.claimRegistrationInvite(resolved, registrationInviteRepository);
     if (!claim) {
       console.warn('[oauth signup] invite already redeemed; signing up uninvited');
