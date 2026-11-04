@@ -1291,8 +1291,10 @@ describe('extraction output caps', () => {
 
   const allText = (chunks: Chunk[]): string => chunks.map(c => c.text).join(' ');
 
-  /** 65MB of XML comment: deflates to almost nothing, inflates past the 64MB OOXML budget. */
-  const OVER_BUDGET_XML = `<?xml version="1.0"?><!--${'x'.repeat(65 * 1024 * 1024)}-->`;
+  /** Deflates to almost nothing and inflates past the 128MB container budget. */
+  const OVER_BUDGET_BULK = 'x'.repeat(129 * 1024 * 1024);
+  /** Under the budget alone; two of them are over it together. */
+  const HALF_BUDGET_BULK = 'x'.repeat(70 * 1024 * 1024);
 
   async function buildDocx(bodyText: string, extraEntries: Record<string, string> = {}): Promise<Buffer> {
     const zip = new JSZip();
@@ -1340,8 +1342,13 @@ describe('extraction output caps', () => {
     return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
   }
 
-  /** A structurally valid PDF whose page N shows `pageText(N)`. */
-  function buildMultiPagePdf(pageCount: number, pageText: (pageNumber: number) => string): Buffer {
+  /**
+   * A structurally valid PDF whose page N shows `pageText(N)`, then `fillerLines` lines of 999
+   * characters each. pdf.js extracts only glyphs that land on the page, so the filler is set in a
+   * 0.1pt font for ~1M characters to fit on one page.
+   */
+  function buildMultiPagePdf(pageCount: number, pageText: (pageNumber: number) => string, fillerLines = 0): Buffer {
+    const filler = `(${'w'.repeat(999)}) Tj T* `.repeat(fillerLines);
     // Objects: 1 catalog, 2 pages tree, 3 font, then a (page, content) pair per page.
     const pageObjectNumber = (i: number) => 4 + i * 2;
     const objects: string[] = [
@@ -1350,7 +1357,7 @@ describe('extraction output caps', () => {
       '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
     ];
     for (let i = 0; i < pageCount; i++) {
-      const content = `BT /F1 12 Tf 72 700 Td (${pageText(i + 1)}) Tj ET`;
+      const content = `BT /F1 0.1 Tf 0.2 TL 10 780 Td (${pageText(i + 1)}) Tj T* ${filler}ET`;
       objects.push(
         `<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents ${pageObjectNumber(i) + 1} 0 R/Resources<</Font<</F1 3 0 R>>>>>>`,
         `<</Length ${content.length}>>\nstream\n${content}\nendstream`
@@ -1371,12 +1378,20 @@ describe('extraction output caps', () => {
 
   describe('DOCX', () => {
     it('does not hand mammoth a container whose XML inflates past the budget', async () => {
-      // The bulk sits in a part mammoth never reads, which is the point: mammoth inflates the whole
-      // container in one call, so every XML part counts toward the budget, not just document.xml.
-      const docx = await buildDocx('BODY_MARKER', { 'word/bulk.xml': OVER_BUDGET_XML });
+      // Not an .xml name: the parsers read parts by relationship target, not by extension, so every
+      // entry counts toward the budget whatever it is called.
+      const docx = await buildDocx('BODY_MARKER', { 'word/media/bulk.bin': OVER_BUDGET_BULK });
       const chunks = await chunker.chunkFile(docx, DOCX_MIME);
       expect(chunks).toEqual([]);
       expect(chunker.getExtractedText()).toBeUndefined();
+    }, 60_000);
+
+    it('charges every entry against one shared budget, not each against its own', async () => {
+      const docx = await buildDocx('BODY_MARKER', {
+        'word/media/a.bin': HALF_BUDGET_BULK,
+        'word/media/b.bin': HALF_BUDGET_BULK,
+      });
+      expect(await chunker.chunkFile(docx, DOCX_MIME)).toEqual([]);
     }, 60_000);
 
     it('chunks a DOCX whose XML fits the budget', async () => {
@@ -1396,10 +1411,29 @@ describe('extraction output caps', () => {
   describe('XLSX', () => {
     it('does not hand SheetJS a container whose XML inflates past the budget', async () => {
       const zip = await JSZip.loadAsync(await buildXlsx([['CELL_MARKER']]));
-      zip.file('xl/bulk.xml', OVER_BUDGET_XML);
+      zip.file('xl/media/bulk.bin', OVER_BUDGET_BULK);
       const xlsx = Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
       const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(chunks).toEqual([]);
+    }, 60_000);
+
+    it('refuses a PK-led workbook the measuring reader rejects, rather than letting SheetJS open it', async () => {
+      // Rewriting every local-header signature leaves a file SheetJS's own zip reader still
+      // accepts but JSZip does not; the budget cannot measure it, so it is not parsed.
+      const xlsx = await buildXlsx([['CELL_MARKER']]);
+      const mangled = Buffer.from(xlsx.toString('latin1').split('PK\x03\x04').join('PK\x01\x01'), 'latin1');
+      expect(await chunker.chunkFile(mangled, XLSX_MIME)).toEqual([]);
+    });
+
+    it('keeps every row of a sparse sheet whose declared range overstates its columns', async () => {
+      // 50k rows of one column declared as 52 columns wide: 2.6M declared cells against a 2M-cell
+      // budget. Trimming to the populated columns keeps all rows; counting declared cells would not.
+      const rows = Array.from({ length: 50_000 }, (_, i) => [`R${i}`]);
+      const xlsx = await withDeclaredDimension(await buildXlsx(rows), 'A1:AZ50000');
+      await chunker.chunkFile(xlsx, XLSX_MIME);
+      const text = chunker.getExtractedText() ?? '';
+      expect(text).toContain('["R0"]');
+      expect(text).toContain('["R49999"]');
     }, 60_000);
 
     it('clamps a spoofed sheet dimension to the cell budget instead of walking it', async () => {
@@ -1432,6 +1466,17 @@ describe('extraction output caps', () => {
       expect(text.indexOf('PAGE_1_MARKER')).toBeLessThan(text.indexOf('PAGE_2_MARKER'));
       expect(text.indexOf('PAGE_2_MARKER')).toBeLessThan(text.indexOf('PAGE_3_MARKER'));
     });
+
+    it('truncates the extracted text at the character cap, stopping mid-document', async () => {
+      // Three pages of ~1M characters: the cap falls inside page 2, so page 3 is never read.
+      const pdf = buildMultiPagePdf(3, n => `PAGE_${n}_MARKER`, 1_000);
+      await chunker.chunkFile(pdf, PDF_MIME);
+      const text = chunker.getExtractedText() ?? '';
+      expect(text).toContain('PAGE_2_MARKER');
+      expect(text).not.toContain('PAGE_3_MARKER');
+      // The cap counts page text; the one extra character is the newline joining the two pages.
+      expect(text.length).toBe(2_000_001);
+    }, 60_000);
 
     it('stops at the page cap', async () => {
       const pdf = buildMultiPagePdf(2_001, n => `PAGE_${n}_MARKER`);

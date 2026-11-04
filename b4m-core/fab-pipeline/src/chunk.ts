@@ -14,7 +14,6 @@ import {
   VoyageAIEmbeddingModel,
   readZipEntryBounded,
   type BoundedZipEntry,
-  type BoundedZipEntryResult,
 } from '@bike4mind/common';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
@@ -26,8 +25,9 @@ import {
   type ExtractedDocumentDate,
 } from './documentDate';
 import { parseLenientJson, stripBom } from './lenientJson';
+import { measureZipContainer } from './zipBudget';
 import type { Tiktoken } from 'tiktoken';
-import type { WorkBook } from 'xlsx';
+import type { WorkBook, WorkSheet } from 'xlsx';
 import { getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
 import {
@@ -75,22 +75,19 @@ const MAX_EXTRACTED_TEXT_CHARS = 2_000_000;
 const MAX_CHUNKS_PER_FILE = 10_000;
 
 /**
- * Budget on the XML a DOCX or XLSX may inflate to before its parser is allowed to run. Unlike the
- * PPTX walk, mammoth and SheetJS each inflate the whole container in one call, so a cap applied to
- * their OUTPUT comes too late to bound memory: every XML part is measured first, as it inflates,
- * and a container over budget is not parsed at all. Real documents run a few MB of XML (media lives
- * in separate entries, which are not counted); 64 MB is generous for both.
+ * Budget on what a DOCX or XLSX container may inflate to, across every entry, before its parser is
+ * allowed to run. Unlike the PPTX walk, mammoth and SheetJS each inflate the whole container in one
+ * call, so a cap applied to their OUTPUT comes too late to bound memory: the container is measured
+ * first (measureZipContainer) and one over budget is not parsed at all. Media entries count too and
+ * inflate to roughly their stored size, so this leaves room for an upload at several times the
+ * default size limit on top of the few MB of XML a real document carries.
  */
-const MAX_OOXML_TOTAL_XML_BYTES = 64 * 1024 * 1024;
-
-/** Media entries hold no text and are never read by the text extractors, so only these count. */
-const OOXML_XML_PART_RE = /\.(xml|rels)$/i;
+const MAX_OOXML_INFLATED_BYTES = 128 * 1024 * 1024;
 
 /**
- * Caps the cells read out of a workbook, across all sheets. SheetJS walks a sheet over its
- * declared `!ref` range, which comes from the file's own dimension tag, so a near-empty sheet can
- * declare a 17-billion-cell range. Each sheet's range is clamped to what is left of this budget
- * before it is walked.
+ * Caps the cells read out of a workbook, across all sheets. Each sheet's walked range is first
+ * trimmed to its populated extent where that does not change the output, then clamped to what is
+ * left of this budget.
  */
 const MAX_XLSX_CELLS = 2_000_000;
 
@@ -116,10 +113,72 @@ function isZipContainer(content: Buffer): boolean {
   );
 }
 
+/**
+ * Would SheetJS read these bytes as a zip? Its format sniff routes `PK` followed by two bytes below
+ * 9 to its zip reader without checking the full local-header signature, so this is deliberately
+ * looser than isZipContainer: any `PK` lead counts.
+ */
+function startsLikeZip(content: Buffer): boolean {
+  return content.length >= 2 && content[0] === 0x50 && content[1] === 0x4b;
+}
+
 /** unpdf's document proxy, named here so the metadata side-read reads as one thing. */
 type PdfDocumentProxy = Awaited<ReturnType<typeof getDocumentProxy>>;
+type PdfPageProxy = Awaited<ReturnType<PdfDocumentProxy['getPage']>>;
+
+/** A pdf.js text item; marked-content items carry no `str` and contribute no text. */
+const isPdfTextItem = (item: unknown): item is { str: string; hasEOL?: boolean } =>
+  typeof item === 'object' && item !== null && typeof (item as { str?: unknown }).str === 'string';
+
+const pdfTextChunkItems = (value: unknown): unknown[] => {
+  const items = (value as { items?: unknown } | null)?.items;
+  return Array.isArray(items) ? items : [];
+};
+
+/**
+ * One page's text, joined as unpdf's `getPageText` joins it, read from pdf.js's text-content stream
+ * so the read stops once `maxChars` is reached instead of materializing every item on the page.
+ * `getTextContent` is this same stream collected in full, so the text is identical under the cap.
+ */
+async function readPdfPageTextBounded(page: PdfPageProxy, maxChars: number): Promise<string> {
+  const reader = page.streamTextContent().getReader();
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    for (const item of pdfTextChunkItems(value)) {
+      if (isPdfTextItem(item)) text += item.str + (item.hasEOL ? '\n' : '');
+    }
+    if (text.length >= maxChars) {
+      // pdf.js rejects a cancel without an Error reason.
+      await reader.cancel(new Error('Extracted text cap reached'));
+      break;
+    }
+  }
+  return text;
+}
 
 type XlsxUtils = typeof import('xlsx').utils;
+type XlsxRange = ReturnType<XlsxUtils['decode_range']>;
+
+/** Length of `--- Sheet:  ---\n` plus `\n--- End of Sheet:  ---` plus the join newline, sans names. */
+const SHEET_MARKER_OVERHEAD_CHARS = 40;
+
+/**
+ * The last populated row and column of a (sparse-mode) sheet, read from its cell keys rather than
+ * its declared `!ref`. Bounded by the cells actually present, which the container budget bounds.
+ */
+function populatedExtent(sheet: WorkSheet, utils: XlsxUtils): { maxRow: number; maxColumn: number } | undefined {
+  let maxRow = -1;
+  let maxColumn = -1;
+  for (const key of Object.keys(sheet)) {
+    if (key.startsWith('!')) continue;
+    const { r, c } = utils.decode_cell(key);
+    maxRow = Math.max(maxRow, r);
+    maxColumn = Math.max(maxColumn, c);
+  }
+  return maxRow < 0 ? undefined : { maxRow, maxColumn };
+}
 type BoundedSheetRow = { cells: unknown[]; json: string };
 type BoundedSheet = { name: string; rows: BoundedSheetRow[] };
 
@@ -471,32 +530,6 @@ export class SmartChunker {
     return validated;
   }
 
-  /**
-   * Inflates every XML part of an OOXML container against one shared budget, without keeping the
-   * text, so a parser that inflates the whole container itself (mammoth, SheetJS) is only handed one
-   * that fits. Measured as each entry inflates, never from the self-declared sizes in the zip's own
-   * headers (see readZipEntryBounded). An entry that fails to inflate is skipped uncounted: the
-   * parser cannot inflate it past the same error either, and an auxiliary part (core.xml) being
-   * damaged must not cost the file its text.
-   */
-  private async ooxmlXmlFitsBudget(zip: JSZip, maxTotalBytes: number): Promise<boolean> {
-    let totalBytes = 0;
-    for (const entry of Object.values(zip.files)) {
-      if (entry.dir || !OOXML_XML_PART_RE.test(entry.name)) continue;
-      // `internalStream` is documented ZipObject API but is missing from the `jszip` types.
-      let read: BoundedZipEntryResult;
-      try {
-        read = await readZipEntryBounded(entry as unknown as BoundedZipEntry, maxTotalBytes - totalBytes);
-      } catch (error) {
-        this.logger.warn(`Could not inflate ${entry.name} to measure it: ${(error as Error).message}`);
-        continue;
-      }
-      if (!read.ok) return false;
-      totalBytes += read.byteLength;
-    }
-    return true;
-  }
-
   /** Truncates `text` at MAX_EXTRACTED_TEXT_CHARS, warning when it does. */
   private capExtractedText(text: string, format: string): string {
     if (text.length <= MAX_EXTRACTED_TEXT_CHARS) return text;
@@ -596,8 +629,7 @@ export class SmartChunker {
     let totalChars = 0;
     for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
       const page = await pdf.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const pageText = content.items.map(item => ('str' in item ? item.str + (item.hasEOL ? '\n' : '') : '')).join('');
+      const pageText = await readPdfPageTextBounded(page, MAX_EXTRACTED_TEXT_CHARS - totalChars);
       page.cleanup();
       const kept = pageText.slice(0, MAX_EXTRACTED_TEXT_CHARS - totalChars);
       pageTexts.push(kept);
@@ -663,24 +695,31 @@ export class SmartChunker {
   }
 
   /**
-   * Whether SheetJS may parse this workbook. A .xlsx is measured against MAX_OOXML_TOTAL_XML_BYTES
-   * before `read()`, which inflates the whole container at once. Anything JSZip cannot open is let
-   * through only when it does not claim to be a zip: a legacy OLE .xls or a CSV is not compressed,
-   * so what SheetJS holds is bounded by the upload itself. A zip the bound cannot open is refused,
-   * since SheetJS's own zip reader might still inflate it.
+   * The bytes SheetJS may parse for this workbook, or undefined when it must not be parsed. SheetJS
+   * `read()` inflates a zip container in one call with its own zip reader, so a zip is measured with
+   * JSZip against MAX_OOXML_INFLATED_BYTES and SheetJS is handed a STORE repack of exactly the
+   * entries JSZip measured: whatever its reader would accept beyond them (other signatures,
+   * duplicate names, misdeclared sizes) never reaches it. Entries that failed to inflate are dropped
+   * from the repack. Anything JSZip cannot open passes through unchanged only when SheetJS would not
+   * read it as a zip either (`PK` lead bytes): a legacy OLE .xls or a CSV is not compressed, so what
+   * SheetJS holds is bounded by the upload itself.
    */
-  private async workbookFitsXmlBudget(content: Buffer): Promise<boolean> {
+  private async boundedWorkbookBytes(content: Buffer): Promise<Buffer | undefined> {
     let zip: JSZip;
     try {
       zip = await JSZip.loadAsync(content);
     } catch (error) {
-      if (!isZipContainer(content)) return true;
+      if (!startsLikeZip(content)) return content;
       this.logger.warn(`Workbook zip could not be opened to bound its size; not chunked: ${(error as Error).message}`);
-      return false;
+      return undefined;
     }
-    if (await this.ooxmlXmlFitsBudget(zip, MAX_OOXML_TOTAL_XML_BYTES)) return true;
-    this.logger.warn(`Workbook XML exceeds the ${MAX_OOXML_TOTAL_XML_BYTES}-byte decompressed budget; not chunked`);
-    return false;
+    const measured = await measureZipContainer(zip, MAX_OOXML_INFLATED_BYTES);
+    if (!measured.ok) {
+      this.logger.warn(`Workbook exceeds the ${MAX_OOXML_INFLATED_BYTES}-byte decompressed budget; not chunked`);
+      return undefined;
+    }
+    for (const name of measured.failedEntries) zip.remove(name);
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
   }
 
   /**
@@ -694,28 +733,28 @@ export class SmartChunker {
     let cellBudget = MAX_XLSX_CELLS;
     let charBudget = MAX_EXTRACTED_TEXT_CHARS;
     for (const name of workbook.SheetNames) {
+      // The sheet's start and end marker lines in the extracted text, charged like its rows.
+      const headerChars = 2 * name.length + SHEET_MARKER_OVERHEAD_CHARS;
+      if (headerChars > charBudget) {
+        this.logger.warn(`Workbook text reached the ${MAX_EXTRACTED_TEXT_CHARS}-character cap before sheet "${name}"`);
+        break;
+      }
+      charBudget -= headerChars;
+
       const sheet = workbook.Sheets[name];
       const ref = sheet?.['!ref'];
       if (!ref) {
         sheets.push({ name, rows: [] });
         continue;
       }
-      const range = utils.decode_range(ref);
-      const columns = range.e.c - range.s.c + 1;
-      const rowsInBudget = Math.floor(cellBudget / columns);
-      if (rowsInBudget === 0) {
+      const range = this.budgetedSheetRange(sheet, utils.decode_range(ref), cellBudget, utils);
+      if (!range) {
         this.logger.warn(
           `Workbook reached the ${MAX_XLSX_CELLS}-cell cap at sheet "${name}"; remaining sheets are not chunked`
         );
         break;
       }
-      if (range.e.r - range.s.r + 1 > rowsInBudget) {
-        this.logger.warn(
-          `Sheet "${name}" exceeds the ${MAX_XLSX_CELLS}-cell cap; only its first ${rowsInBudget} rows are chunked`
-        );
-        range.e.r = range.s.r + rowsInBudget - 1;
-      }
-      cellBudget -= (range.e.r - range.s.r + 1) * columns;
+      cellBudget -= (range.e.r - range.s.r + 1) * (range.e.c - range.s.c + 1);
 
       const rows: BoundedSheetRow[] = [];
       let charCapReached = false;
@@ -739,6 +778,36 @@ export class SmartChunker {
       }
     }
     return sheets;
+  }
+
+  /**
+   * The range to walk for one sheet within `cellBudget`, or undefined when not even one row fits.
+   * Columns past the last populated one are always trimmed: `sheet_to_json` emits nothing for them,
+   * so the output is unchanged. Rows past the last populated one are trimmed only when the declared
+   * range would not fit, because each emits an empty row that ordinary output keeps.
+   */
+  private budgetedSheetRange(
+    sheet: WorkSheet,
+    declared: XlsxRange,
+    cellBudget: number,
+    utils: XlsxUtils
+  ): XlsxRange | undefined {
+    const range = { s: { ...declared.s }, e: { ...declared.e } };
+    const extent = populatedExtent(sheet, utils);
+    range.e.c = Math.max(range.s.c, Math.min(range.e.c, extent?.maxColumn ?? range.s.c));
+    const columns = range.e.c - range.s.c + 1;
+    if ((range.e.r - range.s.r + 1) * columns > cellBudget) {
+      range.e.r = Math.max(range.s.r, Math.min(range.e.r, extent?.maxRow ?? range.s.r));
+    }
+    const rowsInBudget = Math.floor(cellBudget / columns);
+    if (rowsInBudget === 0) return undefined;
+    if (range.e.r - range.s.r + 1 > rowsInBudget) {
+      this.logger.warn(
+        `A sheet exceeds the ${MAX_XLSX_CELLS}-cell cap; only its first ${rowsInBudget} rows are chunked`
+      );
+      range.e.r = range.s.r + rowsInBudget - 1;
+    }
+    return range;
   }
 
   /**
@@ -953,8 +1022,8 @@ export class SmartChunker {
     // bounded first. mammoth reads the zip with this same library, so a container that fails to
     // open here would fail there too. The same open serves the date: mammoth has no metadata API.
     const zip = await JSZip.loadAsync(content);
-    if (!(await this.ooxmlXmlFitsBudget(zip, MAX_OOXML_TOTAL_XML_BYTES))) {
-      this.logger.warn(`DOCX XML exceeds the ${MAX_OOXML_TOTAL_XML_BYTES}-byte decompressed budget; not chunked`);
+    if (!(await measureZipContainer(zip, MAX_OOXML_INFLATED_BYTES)).ok) {
+      this.logger.warn(`DOCX exceeds the ${MAX_OOXML_INFLATED_BYTES}-byte decompressed budget; not chunked`);
       return [];
     }
     const result = await mammoth.extractRawText({ buffer: content });
@@ -1160,9 +1229,10 @@ export class SmartChunker {
     // Lazy load XLSX to improve initial load time
     const { read, utils } = await import('xlsx');
 
-    if (!(await this.workbookFitsXmlBudget(content))) return [];
+    const workbookBytes = await this.boundedWorkbookBytes(content);
+    if (!workbookBytes) return [];
 
-    const workbook = read(content, { type: 'buffer' });
+    const workbook = read(workbookBytes, { type: 'buffer' });
 
     this.lastDocumentDate = await this.readWorkbookDocumentDate(content, workbook.Props?.CreatedDate);
 
