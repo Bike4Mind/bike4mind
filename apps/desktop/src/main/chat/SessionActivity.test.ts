@@ -130,4 +130,17 @@ describe('SessionActivity', () => {
     expect(activity.snapshot()).toEqual([]);
     expect(events).toEqual([]);
   });
+
+  it('shows a session with a held relay as needs-action until it is cleared', () => {
+    const { activity, events } = track();
+
+    activity.heldChanged('a', true);
+    expect(activity.statusOf('a')).toBe('needs-action');
+    expect(activity.snapshot()).toEqual([{ sessionId: 'a', status: 'needs-action' }]);
+
+    activity.heldChanged('a', false);
+    expect(activity.statusOf('a')).toBe('done');
+    expect(activity.snapshot()).toEqual([]);
+    expect(events.map(event => event.status)).toEqual(['needs-action', 'done']);
+  });
 });

@@ -37,6 +37,7 @@ import type {
   ChatModelCatalog,
   CreationTool,
   ChatMoveToBackgroundResult,
+  ChatHeldRelay,
   ChatQueueEvent,
   ChatQueuedMessage,
   ChatSession,
@@ -210,6 +211,8 @@ export const IPC_CHANNELS = {
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
+  chatGetHeldRelays: 'chat:get-held-relays',
+  chatResolveHeldRelay: 'chat:resolve-held-relay',
   chatSendQueuedNow: 'chat:send-queued-now',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
@@ -862,6 +865,13 @@ export interface DesktopApi {
      * message. Unlike `stopReply`, the queue is NOT handed back.
      */
     sendQueuedMessageNow(sessionId: string, queuedId: string): Promise<void>;
+    /**
+     * Messages from other conversations waiting for this one's user to let them in. Read on
+     * open; changes arrive as the 'held-relays' stream event carrying the whole list.
+     */
+    getHeldRelays(sessionId: string): Promise<ChatHeldRelay[]>;
+    /** Let a held message in (it runs like any relay) or decline it (its sender is told). */
+    resolveHeldRelay(sessionId: string, heldId: string, deliver: boolean): Promise<void>;
     /** Subscribe to queue changes; returns the unsubscribe. */
     onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
     /**

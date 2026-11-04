@@ -10,6 +10,7 @@ import type {
   ChatStreamEvent,
   SpawnSuggestionResult,
 } from '@shared/chat';
+import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, describeSuggestionOutcome, RUN_HERE_PREAMBLE } from './ChatService';
 import { MessageQueue } from './MessageQueue';
@@ -423,6 +424,31 @@ describe('ChatService spawn suggestions', () => {
       true
     );
     expect(queueEvents.some(event => event.sent?.message.content.startsWith(RUN_HERE_PREAMBLE))).toBe(true);
+  });
+
+  it('does not let a session mention in a suggestion run here open another project to session_read', async () => {
+    const elsewhere = await service.createCodeSession({
+      directory: await realpath(await mkdtemp(join(tmpdir(), 'b4m-suggest-other-'))),
+      branch: '',
+      workspace: false,
+    });
+    if (!elsewhere.ok) throw new Error(elsewhere.error);
+    const { parent, suggestion } = await suggestedBy(
+      `summarise ${formatSessionMention(elsewhere.session.id, 'Elsewhere')}`
+    );
+
+    const result = await service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      placement: 'here',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    expect(result.ok).toBe(true);
+    const index = await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+    callTool(streams[index], 'r1', 'session_read', { session_id: elsewhere.session.id });
+    const read = await vi.waitUntil(() => settled('session_read')[0], { timeout: 5000, interval: 5 });
+    expect(read?.error).toMatch(/another project/);
   });
 
   it('queues a run-here message when another turn starts while the send reads the session', async () => {

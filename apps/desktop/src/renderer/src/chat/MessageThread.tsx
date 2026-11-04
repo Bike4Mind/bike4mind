@@ -24,7 +24,8 @@ import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
-import { automaticSummary, displayText, relaySummary } from './relayRows';
+import { automaticSummary, displayText, relaySummaryParts } from './relayRows';
+import { MentionedText, SessionLink } from './SessionLink';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
@@ -197,7 +198,7 @@ const UserTurn = memo(function UserTurn({ message, sessionId }: { message: ChatM
               sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
               data-testid="chat-message-user-text"
             >
-              <LinkifiedText text={message.content} />
+              <MentionedText text={message.content} />
             </Typography>
           )
         )}
@@ -412,7 +413,22 @@ const SystemTurn = memo(function SystemTurn({ message }: { message: ChatMessage 
  * full text one click away.
  */
 const RelayTurn = memo(function RelayTurn({ message }: { message: ChatMessage }) {
-  return <CollapsedTurn message={message} summary={relaySummary(message)} kind="relay" />;
+  const { lead, sender, tail } = relaySummaryParts(message);
+  const fromSessionId = message.relay?.fromSessionId;
+  const summary = (
+    <>
+      {lead}
+      {fromSessionId ? (
+        <SessionLink sessionId={fromSessionId} testId="relay-sender-link">
+          {sender}
+        </SessionLink>
+      ) : (
+        sender
+      )}
+      {tail}
+    </>
+  );
+  return <CollapsedTurn message={message} summary={summary} kind="relay" />;
 });
 
 /**
@@ -430,7 +446,7 @@ function CollapsedTurn({
   kind,
 }: {
   message: ChatMessage;
-  summary: string;
+  summary: ReactNode;
   kind: 'relay' | 'automatic';
 }) {
   const [open, setOpen] = useState(false);
