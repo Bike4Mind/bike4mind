@@ -9,7 +9,7 @@ tags: [admin, analytics]
 
 The Analytics page (**Overview > Analytics**) shows who uses Bike4Mind, how often, and whether they come back. It is a trend page: the Dashboard answers "is anything wrong right now?", Analytics answers "are we growing?".
 
-All days are UTC days, and every chart says so. Counts exclude admin accounts, system accounts, accounts flagged as automated test accounts, accounts on your internal staff email domains, accounts tagged Developer, and test personas (a `persona-` username or an email on a configured test domain). Active users and real signups also exclude banned accounts and accounts whose AI access is held (moderated, awaiting review, suspended or under a payment dispute). Every other account is counted.
+All days are UTC days, and every chart says so. Counts exclude admin accounts, system accounts, accounts flagged as automated test accounts, accounts on your internal staff email domains, accounts tagged Developer, and test personas (a `persona-` username or an email on a configured test domain). Active users and real signups also exclude banned accounts and accounts whose AI access is held (moderated, awaiting review, suspended or under a payment dispute). Every other account is counted. The activation funnel and its user lists follow the same rule, so banned or held accounts do not appear in any step.
 
 ## Toolbar
 

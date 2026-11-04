@@ -181,8 +181,8 @@ describe('listAdminUsers', () => {
 });
 
 describe('analytics drill-down filters', () => {
-  const seedActiveDay = (userId: unknown, day: string) =>
-    AnalyticsUserDay.collection.insertOne({ day, userId: String(userId), ownerType: 'User', suspected: false });
+  const seedActiveDay = (userId: unknown, day: string, active = true) =>
+    AnalyticsUserDay.collection.insertOne({ day, userId: String(userId), ownerType: 'User', suspected: false, active });
   const usernames = (result: { users: { username?: string }[] }) => result.users.map(user => user.username).sort();
 
   it('filters to users with rolled-up activity in the inclusive active window', async () => {
@@ -208,6 +208,22 @@ describe('analytics drill-down filters', () => {
     expect(day.users.map(user => user.username)).toEqual(['late']);
   });
 
+  it('leaves API-only users out of the active window', async () => {
+    const web = await seedUser('web');
+    const apiOnly = await seedUser('apiOnly');
+    await seedActiveDay(web._id, '2026-06-02');
+    await seedActiveDay(apiOnly._id, '2026-06-02', false);
+
+    const result = await listAdminUsers(
+      { ...params, activeFrom: '2026-06-01', activeTo: '2026-06-05' },
+      viewer,
+      { logError },
+      NOW
+    );
+
+    expect(usernames(result)).toEqual(['web']);
+  });
+
   it('exports only the users active in the window', async () => {
     const early = await seedUser('early');
     const late = await seedUser('late');
@@ -231,6 +247,7 @@ describe('analytics drill-down filters', () => {
         userId: `active${i}`,
         ownerType: 'User',
         suspected: false,
+        active: true,
       }))
     );
     const active = { activeFrom: '2026-06-01', activeTo: '2026-06-05' };
@@ -285,6 +302,8 @@ describe('analytics drill-down filters', () => {
     const abandoned = await seedJourney('abandoned', ['2026-05-12']);
     await seedSubscription('User', abandoned, { status: 'incomplete_expired' });
     await seedJourney('staffer', [], { isAdmin: true });
+    // Banned after using AI: the rollup writes no rows for them, so they must leave the funnel, not land in signedUp.
+    await seedJourney('banned', [], { isBanned: true });
     await seedUser('tooNew', { createdAt: new Date('2026-06-10T00:00:00Z') });
     await seedUser('outside', { createdAt: new Date('2026-04-20T00:00:00Z') });
 
