@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  resource: { App: { stage: 'production' } },
+  resource: {
+    App: { stage: 'production' },
+    SLACK_ALARMS_WEBHOOK_URL: { value: 'https://hooks.example.com/alarms' },
+    SLACK_ERROR_REPORTING_WEBHOOK_URL: { value: 'https://hooks.example.com/errors' },
+  },
   connect: vi.fn(),
   findYoungAccountSpend: vi.fn(),
   getSettingsMap: vi.fn(),
-  resolveSlackWebhookUrl: vi.fn(),
-  post: vi.fn(),
+  fetch: vi.fn(),
+  readAlarmMention: vi.fn(),
   recordShadowDetections: vi.fn(),
   log: vi.fn(),
   error: vi.fn(),
@@ -26,10 +30,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 vi.mock('./youngAccountSpendShadowDetections', () => ({
   recordYoungAccountSpendShadowDetections: mocks.recordShadowDetections,
 }));
-vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({
-  resolveSlackWebhookUrl: mocks.resolveSlackWebhookUrl,
-}));
-vi.mock('axios', () => ({ default: { post: mocks.post } }));
+vi.mock('../events/alarmSlackMention', () => ({ readAlarmMention: mocks.readAlarmMention }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     withMetadata() {
@@ -39,7 +40,7 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 import {
-  formatYoungAccountSpendMessage,
+  buildYoungAccountSpendMessage,
   handler,
   readYoungAccountSpendThresholds,
   shouldAlertYoungAccountSpend,
@@ -61,12 +62,18 @@ const summary = (totalCredits: number, accountCount: number) => ({
   ],
 });
 
+const postedTo = () => mocks.fetch.mock.calls[0][0] as string;
+const postedBody = () => JSON.stringify(JSON.parse(mocks.fetch.mock.calls[0][1].body as string));
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
+  vi.stubGlobal('fetch', mocks.fetch);
   mocks.resource.App.stage = 'production';
+  mocks.resource.SLACK_ALARMS_WEBHOOK_URL.value = 'https://hooks.example.com/alarms';
+  mocks.fetch.mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
+  mocks.readAlarmMention.mockResolvedValue(undefined);
   mocks.getSettingsMap.mockResolvedValue({});
-  mocks.resolveSlackWebhookUrl.mockReturnValue('https://hooks.example.com/x');
   mocks.recordShadowDetections.mockResolvedValue(1);
 });
 
@@ -110,59 +117,74 @@ describe('young-account spend message', () => {
     ],
   };
   const thresholds = { credits: 5000, accounts: 25 };
+  const build = (stage = 'production', appUrl?: string, mention?: string) =>
+    JSON.stringify(buildYoungAccountSpendMessage(twoSpenders, thresholds, window, stage, appUrl, mention));
 
-  it('lists the window, counts and ranked emails with user ids', () => {
-    const text = formatYoungAccountSpendMessage(twoSpenders, thresholds, window, 'production', undefined);
+  it('is a production warning card with the window, counts and ranked accounts by email', () => {
+    const text = build();
+    expect(text).toContain('Production warning: Young accounts are spending a lot of credits');
+    expect(text).toContain('12,345 credits across 2 young accounts in the last hour');
     expect(text).toContain('2026-10-26T10:00:00.000Z to 2026-10-26T11:00:00.000Z');
-    expect(text).toContain('12,345 credits across 2 accounts');
-    expect(text).toContain('1. a@example.com `user-a` 12,000 credits');
-    expect(text).toContain('2. no email `user-b` 345 credits');
+    expect(text).toContain('*Credits (ceiling)*\\n12,345 (5,000)');
+    expect(text).toContain('*Accounts (ceiling)*\\n2 (25)');
+    expect(text).toContain('1. a@example.com 12,000 credits');
     expect([...text].every(char => char.charCodeAt(0) < 128)).toBe(true);
   });
 
+  it('falls back to the user id when the account has no email', () => {
+    expect(build()).toContain('2. `user-b` 345 credits');
+  });
+
   it('links each account to the admin profile and the live Stripe customer, or marks it as unbilled', () => {
-    const lines = formatYoungAccountSpendMessage(
-      twoSpenders,
-      thresholds,
-      window,
-      'production',
-      'https://app.example.com'
-    ).split('\n');
-    expect(lines).toContain(
-      '1. a@example.com `user-a` 12,000 credits (created 2026-10-25T00:00:00.000Z) - ' +
+    const text = build('production', 'https://app.example.com');
+    expect(text).toContain(
+      '1. a@example.com 12,000 credits (created 2026-10-25T00:00:00.000Z) - ' +
         '<https://app.example.com/admin/users/user-a|admin> | <https://dashboard.stripe.com/customers/cus_a|Stripe>'
     );
-    expect(lines).toContain(
-      '2. no email `user-b` 345 credits (created 2026-10-25T00:00:00.000Z) - ' +
+    expect(text).toContain(
+      '2. `user-b` 345 credits (created 2026-10-25T00:00:00.000Z) - ' +
         '<https://app.example.com/admin/users/user-b|admin> | no Stripe customer'
     );
+    expect(text).toContain('https://app.example.com/admin?tab=credit-analytics');
   });
 
   it('links the Stripe test-mode dashboard outside production', () => {
-    const text = formatYoungAccountSpendMessage(twoSpenders, thresholds, window, 'staging', undefined);
-    expect(text).toContain('<https://dashboard.stripe.com/test/customers/cus_a|Stripe>');
+    expect(build('staging')).toContain('<https://dashboard.stripe.com/test/customers/cus_a|Stripe>');
   });
 
-  it('omits the admin link when the app URL is unknown', () => {
-    const text = formatYoungAccountSpendMessage(twoSpenders, thresholds, window, 'production', undefined);
+  it('omits the admin links and button when the app URL is unknown', () => {
+    const text = build();
     expect(text).not.toContain('/admin/users/');
+    expect(text).not.toContain('credit-analytics');
     expect(text).toContain('- <https://dashboard.stripe.com/customers/cus_a|Stripe>');
   });
 
-  it('keeps ids from breaking out of their Slack links', () => {
-    const text = formatYoungAccountSpendMessage(
-      {
-        ...twoSpenders,
-        topSpenders: [
-          { ...twoSpenders.topSpenders[0], userId: 'a|b>c', stripeCustomerId: 'cus|x', email: 'x<y&z@example.com' },
-        ],
-      },
-      thresholds,
-      window,
-      'production',
-      'https://app.example.com'
+  it('mentions only when the setting extends to warnings', () => {
+    expect(build('production', undefined, 'channel')).not.toContain('<!channel>');
+    expect(build('production', undefined, 'channel warn')).toContain('<!channel>');
+  });
+
+  it('keeps emails and ids from breaking out of their lines and links', () => {
+    const text = JSON.stringify(
+      buildYoungAccountSpendMessage(
+        {
+          ...twoSpenders,
+          topSpenders: [
+            {
+              ...twoSpenders.topSpenders[0],
+              userId: 'a|b>c',
+              stripeCustomerId: 'cus|x',
+              email: 'x<y&z@example.com\nfake line',
+            },
+          ],
+        },
+        thresholds,
+        window,
+        'production',
+        'https://app.example.com'
+      )
     );
-    expect(text).toContain('x&lt;y&amp;z@example.com');
+    expect(text).toContain('x&lt;y&amp;z@example.com fake line');
     expect(text).toContain('<https://app.example.com/admin/users/a%7Cb%3Ec|admin>');
     expect(text).toContain('<https://dashboard.stripe.com/customers/cus%7Cx|Stripe>');
   });
@@ -187,12 +209,12 @@ describe('young-account spend handler', () => {
       'young-account-spend',
       expect.objectContaining({ windowStart: '2026-10-26T10:00:00.000Z', windowEnd: '2026-10-26T11:00:00.000Z' })
     );
-    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it('keeps the scheduled window on delayed delivery and retry', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
-    mocks.post.mockRejectedValueOnce(new Error('webhook unavailable'));
+    mocks.fetch.mockRejectedValueOnce(new Error('webhook unavailable'));
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-10-26T11:05:00Z'));
@@ -223,19 +245,34 @@ describe('young-account spend handler', () => {
     }
   );
 
-  it('posts to Slack when a ceiling is exceeded', async () => {
+  it('posts an alarm card to the alarms webhook when a ceiling is exceeded', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     expect(await handler(event)).toMatchObject({ status: 'alerted', totalCredits: 9000 });
-    expect(mocks.post).toHaveBeenCalledExactlyOnceWith('https://hooks.example.com/x', {
-      text: expect.stringContaining('`user-a`'),
-    });
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+    expect(postedTo()).toBe('https://hooks.example.com/alarms');
+    expect(postedBody()).toContain('Production warning: Young accounts are spending a lot of credits');
+    expect(postedBody()).toContain('1. a@example.com 9,000 credits');
+  });
+
+  it('falls back to the error-reporting webhook when the alarms secret is unset', async () => {
+    mocks.resource.SLACK_ALARMS_WEBHOOK_URL.value = 'not-configured';
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    await handler(event);
+    expect(postedTo()).toBe('https://hooks.example.com/errors');
+  });
+
+  it('passes the operator mention setting through', async () => {
+    mocks.readAlarmMention.mockResolvedValue('channel warn');
+    mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+    await handler(event);
+    expect(postedBody()).toContain('<!channel>');
   });
 
   it('still alerts, and logs the gap, when the deploy domain is unknown', async () => {
     vi.stubEnv('SERVER_DOMAIN', '');
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     expect(await handler(event)).toMatchObject({ status: 'alerted' });
-    expect(mocks.post).toHaveBeenCalledOnce();
+    expect(mocks.fetch).toHaveBeenCalledOnce();
     expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('SERVER_DOMAIN'));
   });
 
@@ -243,31 +280,29 @@ describe('young-account spend handler', () => {
     vi.stubEnv('SERVER_DOMAIN', 'example.com');
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     await handler(event);
-    expect(mocks.post).toHaveBeenCalledExactlyOnceWith('https://hooks.example.com/x', {
-      text: expect.stringContaining(
-        '<https://app.example.com/admin/users/user-a|admin> | <https://dashboard.stripe.com/customers/cus_a|Stripe>'
-      ),
-    });
+    expect(postedBody()).toContain(
+      '<https://app.example.com/admin/users/user-a|admin> | <https://dashboard.stripe.com/customers/cus_a|Stripe>'
+    );
   });
 
   it('propagates a failed spend query without reporting a quiet hour', async () => {
     const error = new Error('database unavailable');
     mocks.findYoungAccountSpend.mockRejectedValueOnce(error);
     await expect(handler(event)).rejects.toBe(error);
-    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it('propagates a failed Slack delivery for retry', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     const error = new Error('webhook unavailable');
-    mocks.post.mockRejectedValueOnce(error);
+    mocks.fetch.mockRejectedValueOnce(error);
     await expect(handler(event)).rejects.toBe(error);
   });
 
-  it('fails loudly when an alert has nowhere to go', async () => {
+  it('fails on a rejected webhook response so the run is retried', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
-    mocks.resolveSlackWebhookUrl.mockReturnValue('');
-    await expect(handler(event)).rejects.toThrow(/no Slack webhook/);
+    mocks.fetch.mockResolvedValueOnce({ ok: false, status: 500, statusText: 'Server Error' });
+    await expect(handler(event)).rejects.toThrow(/Slack webhook failed: 500/);
   });
 
   it('records shadow detections for the alerted window alongside the Slack alert', async () => {
@@ -281,7 +316,7 @@ describe('young-account spend handler', () => {
       logger: expect.anything(),
     });
     expect(mocks.log).toHaveBeenCalledWith('young-account-spend-shadow-detections', { recorded: 1, listed: 1 });
-    expect(mocks.post).toHaveBeenCalledOnce();
+    expect(mocks.fetch).toHaveBeenCalledOnce();
   });
 
   it('records nothing for a quiet hour', async () => {
@@ -290,10 +325,10 @@ describe('young-account spend handler', () => {
     expect(mocks.recordShadowDetections).not.toHaveBeenCalled();
   });
 
-  it('records before the Slack step, so a missing webhook still leaves the detection', async () => {
+  it('records before the Slack step, so a failed delivery still leaves the detection', async () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
-    mocks.resolveSlackWebhookUrl.mockReturnValue('');
-    await expect(handler(event)).rejects.toThrow(/no Slack webhook/);
+    mocks.fetch.mockRejectedValueOnce(new Error('webhook unavailable'));
+    await expect(handler(event)).rejects.toThrow('webhook unavailable');
     expect(mocks.recordShadowDetections).toHaveBeenCalledOnce();
   });
 
@@ -303,6 +338,6 @@ describe('young-account spend handler', () => {
     mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
     expect(await handler(event)).toMatchObject({ status: 'alerted' });
     expect(mocks.recordShadowDetections).not.toHaveBeenCalled();
-    expect(mocks.post).toHaveBeenCalledOnce();
+    expect(mocks.fetch).toHaveBeenCalledOnce();
   });
 });
