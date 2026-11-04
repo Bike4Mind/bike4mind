@@ -220,7 +220,7 @@ describe('generate_speech', () => {
   it('refuses text past the provider limit before asking the user to pay for a 422', async () => {
     const h = await harness();
     await expect(generateSpeechTool.run({ text: 'a'.repeat(5000) }, h.context)).rejects.toThrow(
-      /openai accepts at most 4096/
+      /openai accepts at most 2000/
     );
     expect(h.client.synthesizeSpeech).not.toHaveBeenCalled();
   });
