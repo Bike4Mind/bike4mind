@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONTENT_MAX_WIDTH } from './layout';
 import {
   parseReplyStatsPrefs,
@@ -142,5 +142,43 @@ describe('the stored prefs', () => {
     expect(replyStatsSummary(parseReplyStatsPrefs(null, null, null))).toBe(
       '7 of 11 stats, beside the conversation when the window is wide enough'
     );
+  });
+});
+
+describe('storage that throws', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const current = () => {
+    let seen: ReturnType<typeof useReplyStatsPrefs> | null = null;
+    function Probe() {
+      seen = useReplyStatsPrefs();
+      return null;
+    }
+    const root = createRoot(document.createElement('div'));
+    act(() => root.render(createElement(Probe)));
+    return { prefs: () => seen, unmount: () => act(() => root.unmount()) };
+  };
+
+  it('reads as the defaults when storage cannot be read', () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('denied');
+    });
+    expect(() => reloadReplyStatsPrefs()).not.toThrow();
+    const probe = current();
+    expect(probe.prefs()?.rail).toBe(true);
+    expect(probe.prefs()?.hidden).toEqual(parseReplyStatsPrefs(null, null, null).hidden);
+    probe.unmount();
+  });
+
+  it('keeps a change for this run when storage cannot be written', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    const probe = current();
+    expect(() => act(() => setReplyStatsRail(false))).not.toThrow();
+    expect(probe.prefs()?.rail).toBe(false);
+    expect(() => act(() => setReplyStatShown('speed', false))).not.toThrow();
+    expect(probe.prefs()?.hidden.has('speed')).toBe(true);
+    probe.unmount();
   });
 });
