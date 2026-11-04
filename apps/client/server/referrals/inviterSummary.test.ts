@@ -76,6 +76,12 @@ describe('getInviterSummary', () => {
     expect(m.aggregate).not.toHaveBeenCalled();
   });
 
+  it('reads the reward amounts past the settings cache so an admin switch shows at once', async () => {
+    await getInviterSummary('inviter1', NOW);
+
+    expect(m.getSettingsMap).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ skipCache: true }));
+  });
+
   it('is enabled as soon as any one reward amount is above 0', async () => {
     m.getSettingsMap.mockResolvedValue({ ReferralSecondPaymentCredits: '6000' });
     expect((await getInviterSummary('inviter1', NOW)).enabled).toBe(true);
