@@ -144,7 +144,7 @@ describe('admin bulk unblock signup grant', () => {
     h.run.mockResolvedValue({ dryRun: false, results: [], undoUserIds: [id(2)] });
     await h.handler!(request(), { json: vi.fn() });
 
-    expect(h.rerun).toHaveBeenCalledExactlyOnceWith(id(2));
+    expect(h.rerun).toHaveBeenCalledExactlyOnceWith(id(2), expect.anything());
   });
 
   it('does not re-run the domain grant on a dry run', async () => {
