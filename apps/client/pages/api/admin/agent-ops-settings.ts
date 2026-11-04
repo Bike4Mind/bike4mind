@@ -163,6 +163,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
     // Auto-activate the first version
     if (updatedSettings.versions.length === 1) {
       const activatedSettings = await agentOpsSettingsRepository.activateMetaPromptVersion(1);
+      await recordAdminActionFromRequest(req, {
+        action: 'settings.agent_ops.version_activated',
+        target: { kind: 'settings', id: 'agent_ops', displayName: 'Agent Ops settings' },
+        summary: 'activated Agent Ops meta-prompt version 1 (first version, activated automatically)',
+        details: { version: 1, automatic: true },
+      });
       return res.json(activatedSettings);
     }
 

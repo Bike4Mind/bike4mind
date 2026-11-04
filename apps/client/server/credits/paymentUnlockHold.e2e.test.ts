@@ -89,6 +89,14 @@ const subscribe = (userId: string) =>
     validators: { subscription: async user => user.emailVerified },
   });
 
+/** What payment_intent.succeeded does through unlockSignupGrantFromCreditPurchase. */
+const buyPack = (userId: string) =>
+  userService.unlockSignupGrant(userId, 'credit_purchase', {
+    db,
+    reason: 'Bought a credit pack',
+    validators: { credit_purchase: async user => user.emailVerified },
+  });
+
 /** What the hourly held-release job does. */
 const runRelease = (now: Date) =>
   userService.releaseDueHeldUnlocks(
@@ -165,6 +173,34 @@ describe('payment signup unlock hold', () => {
       expect(await forfeit(user.id, cause)).toMatchObject({ outcome: 'already_forfeited' });
     }
   );
+
+  it('holds a credit pack unlock and pays it once from the held-release job', async () => {
+    const user = await createSignupStageUser();
+    const result = await buyPack(user.id);
+    expect(result).toMatchObject({ creditsGranted: 0, withheld: true });
+    expect((await grantOf(user.id))?.heldUnlock).toMatchObject({ reason: 'credit_purchase' });
+    expect((await buyPack(user.id)).heldUntil).toEqual(result.heldUntil);
+
+    expect(await runRelease(result.heldUntil!)).toMatchObject({ released: 1, creditsPaid: 9000 });
+    expect(await grantOf(user.id)).toMatchObject({ stage: 'unlocked', unlockedBy: 'credit_purchase' });
+    expect(await CreditTransaction.countDocuments({ reason: 'signup_unlock:credit_purchase' })).toBe(1);
+  });
+
+  it('keeps the first payment hold when a credit pack follows a subscription', async () => {
+    const user = await createSignupStageUser();
+    const { heldUntil } = await subscribe(user.id);
+    expect((await buyPack(user.id)).heldUntil).toEqual(heldUntil);
+    expect((await grantOf(user.id))?.heldUnlock).toMatchObject({ reason: 'subscription', releaseAt: heldUntil });
+  });
+
+  it('cancels a held credit pack unlock on a refund', async () => {
+    const user = await createSignupStageUser();
+    const { heldUntil } = await buyPack(user.id);
+    expect(await forfeit(user.id, 'refund')).toEqual({ outcome: 'cancelled' });
+    expect(await runRelease(heldUntil!)).toMatchObject({ released: 0 });
+    expect(await buyPack(user.id)).toMatchObject({ creditsGranted: 0 });
+    expect(await creditsOf(user.id)).toBe(1000);
+  });
 
   it('leaves a bonus already paid to the dispute clawback', async () => {
     config.signupUnlockPaymentHoldHours = '0';

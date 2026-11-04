@@ -1162,6 +1162,7 @@ describe('ChatCompletionProcess', () => {
           substituteId: 'cheap-model',
           identityId: requested.id,
           displayName: requested.name,
+          chargedModel: requested,
         });
       } finally {
         buildTools.mockRestore();

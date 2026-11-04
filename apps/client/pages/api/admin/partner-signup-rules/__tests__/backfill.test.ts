@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   findOrg: vi.fn(),
   applyMembership: vi.fn(),
   audit: vi.fn(),
+  reserveRedemption: vi.fn(),
+  addCredits: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
@@ -37,9 +39,11 @@ vi.mock('@bike4mind/database', () => ({
   partnerSignupRuleRepository: { findById: h.findRule },
   userRepository: { find: h.findUsers },
   organizationRepository: { findById: h.findOrg },
+  grantPackageRepository: { reserveRedemption: h.reserveRedemption },
 }));
 vi.mock('@bike4mind/services', () => ({
   organizationService: { applyPartnerRuleMembership: h.applyMembership },
+  creditService: { addCredits: h.addCredits },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -100,5 +104,24 @@ describe('POST /api/admin/partner-signup-rules/backfill - admin audit', () => {
     const { res } = await run(false);
     expect(res._getJSONData()).toMatchObject({ dryRun: true, matched: 2 });
     expect(h.audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/admin/partner-signup-rules/backfill - grant package', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findRule.mockResolvedValue({ id: 'r1', domain: 'partner.com', organizationId: 'org-1', grantPackageId: 'pkg-1' });
+    h.findUsers.mockResolvedValue([{ id: 'u1', email: 'a@partner.com' }]);
+    h.findOrg.mockResolvedValue({ id: 'org-1', name: 'Partner Org', users: [], seats: 10 });
+    h.applyMembership.mockResolvedValue({ added: true, reason: 'added' });
+    h.audit.mockResolvedValue(null);
+  });
+
+  it('adds members without redeeming the linked package or granting credits', async () => {
+    const { res } = await run(true);
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.applyMembership).toHaveBeenCalledTimes(1);
+    expect(h.reserveRedemption).not.toHaveBeenCalled();
+    expect(h.addCredits).not.toHaveBeenCalled();
   });
 });

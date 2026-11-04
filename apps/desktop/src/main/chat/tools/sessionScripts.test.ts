@@ -300,6 +300,23 @@ describe('sessionScriptRun', () => {
     forgetSessionWrites(id);
     expect(await sessionScriptRun('bash setup.sh', root, id)).toBeNull();
   });
+
+  describe.each(['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty'])('a command named %s', name => {
+    const id = 'session-scripts-own-keys';
+    beforeAll(() => recordSessionWrite({ sessionId: id } as ToolContext, join(root, 'run.sh')));
+
+    it('is not a project-file runner', async () => {
+      expect(await runs(`${name} x`, id)).toBeNull();
+      expect(await runs(`${name} -C sub x`, id)).toBeNull();
+      expect(await runs(`FOO=./run.sh ${name}`, id)).toBeNull();
+    });
+
+    it('does not hide a session script run in the same command', async () => {
+      expect(await runs(`./run.sh; ${name}`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name}; ./run.sh`, id)).toEqual(['./run.sh']);
+      expect(await runs(`${name} && npx ${name} && ./run.sh`, id)).toEqual(['./run.sh']);
+    });
+  });
 });
 
 describe('session writes across a restart', () => {

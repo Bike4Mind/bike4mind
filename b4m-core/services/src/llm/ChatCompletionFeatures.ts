@@ -116,6 +116,8 @@ import {
 } from '../dataLakeService/lakeFairOrder';
 import { isVectorSearchReady, type VectorSearchReadinessFile } from '../dataLakeService/vectorSearchEligibility';
 import { atlasVectorSearch, isAtlasVectorSearchAvailable } from '../dataLakeService/atlasVectorSearch';
+import { retryOnceOnMongoNetworkError } from '../dataLakeService/retryOnceOnMongoNetworkError';
+import { isMongoNetworkError } from '@bike4mind/db-core';
 import type { AnnRankableFile } from '../dataLakeService/annVectorSearch';
 import {
   DeadlineExceededError,
@@ -3533,10 +3535,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           const want = Math.min(FORCED_RETRIEVAL_BATCH_CHUNK_CAP, remaining);
           // One row beyond what we will consume, so "exactly full" is distinguishable from
           // "more remains". Guessing from a full page reports truncation that never happened.
-          const rows = await db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
-            limit: want + 1,
-            afterChunkId: cursor,
-          });
+          // Keyset-paged, so re-reading a page after a dropped socket is exact, not approximate.
+          const rows = await retryOnceOnMongoNetworkError(
+            () =>
+              db.fabfilechunks.findVectorsByFabFileIds(batchIds, {
+                limit: want + 1,
+                afterChunkId: cursor,
+              }),
+            { label: '\u{1F512} Forced retrieval: chunk page read failed', logger: this.logger }
+          );
           if (rows.length === 0) break;
           const moreExist = rows.length > want;
           const usable = moreExist ? rows.slice(0, want) : rows;
@@ -4117,7 +4124,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // resolution itself is what threw) - a retrieval that threw must not look identical to one
       // that never ran.
       recordRetrieval('failed', attemptedDataLakeTags);
-      this.logger.error('🔒 Forced retrieval failed:', error);
+      // A Mongo network failure anywhere in this path (the chunk page read has already been retried
+      // once) is infrastructure, and the turn still answers (with the abstention below), so warn with
+      // the name only - the driver message carries the database host. Anything else is a bug in this
+      // path and stays at error with the full error.
+      if (isMongoNetworkError(error)) {
+        this.logger.warn(`\u{1F512} Forced retrieval failed: ${(error as Error).name}`);
+      } else {
+        this.logger.error('🔒 Forced retrieval failed:', error);
+      }
       return this.noContextMessages('unavailable');
     }
   }

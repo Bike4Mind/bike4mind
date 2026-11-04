@@ -10,7 +10,7 @@ import { recordLandedObject } from '@server/s3/moderationScan';
 import { admitLandedUpload } from '@bike4mind/server-utils/s3/uploadSizeGate';
 import { recordRejectedUploadBatch } from '@server/s3/recordRejectedUploadBatch';
 import { recomputeStatsForUploadedFile } from '@bike4mind/server-utils/dataLakes/recomputeStatsForUploadedFile';
-import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
+import { dispatch as historyUploadComplete } from '@bike4mind/server-utils/s3/historyUploadComplete';
 import { dispatch as notebookImportComplete } from '@server/s3/notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from '@bike4mind/server-utils/s3/moderateImportedKnowledgeFiles';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';

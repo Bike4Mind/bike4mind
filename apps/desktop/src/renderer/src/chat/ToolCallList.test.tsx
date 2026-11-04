@@ -200,6 +200,17 @@ describe('ToolCallList', () => {
     expect(html).toContain('Keep it');
   });
 
+  it('offers only allow-once and deny on a card main will honour once', () => {
+    const html = markup([
+      awaiting({ approvalOnceOnly: true, approvalRules: ['Bash(./run.sh)'], approvalAlways: 'run.sh' }),
+    ]);
+    expect(html).toContain('data-testid="chat-tool-approve-once"');
+    expect(html).toContain('data-testid="chat-tool-deny"');
+    expect(html).not.toContain('data-testid="chat-tool-approve-always"');
+    expect(html).not.toContain('data-testid="chat-tool-approve-everywhere"');
+    expect(html).not.toContain('data-testid="chat-tool-approval-scope"');
+  });
+
   /** The write variants keep their own wording either side of the restructured button row. */
   it('keeps the diff wording for one file and for a patch across several', () => {
     const diff = (path: string) => ({ path, operation: 'edit' as const, added: 1, removed: 0, lines: [] });

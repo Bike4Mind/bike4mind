@@ -3730,6 +3730,7 @@ export class ChatCompletionProcess {
               substituteId: this.shadowSubstitution.actual.id,
               identityId: this.shadowSubstitution.requested.id,
               displayName: this.shadowSubstitution.requested.name,
+              chargedModel: this.shadowSubstitution.requested,
             }
           : undefined,
         agentOnlyMcpServers,

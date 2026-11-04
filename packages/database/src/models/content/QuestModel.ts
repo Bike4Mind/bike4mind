@@ -938,6 +938,24 @@ function staleCallbackDispatchFilter({
   };
 }
 
+/**
+ * The filter findPageAfterBySessionId runs. Exported so its index test explains this filter
+ * rather than a hand-written copy that could drift from it.
+ * @internal
+ */
+export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date; id: string }) {
+  const filter: Record<string, unknown> = { sessionId, deletedAt: null };
+  if (after) {
+    // The $gte bound is implied by the $or but lets the planner range-scan sessionId_timestamp_id.
+    filter.timestamp = { $gte: after.timestamp };
+    filter.$or = [
+      { timestamp: { $gt: after.timestamp } },
+      { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
+    ];
+  }
+  return filter;
+}
+
 const AGENT_GENERATION_SLOT_FIELDS = {
   video: 'agentVideoClipsClaimed',
   music: 'agentMusicTracksClaimed',
@@ -1077,15 +1095,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     options: { limit: number; after?: { timestamp: Date; id: string } }
   ): Promise<IChatHistoryItemDocument[]> {
     const { limit, after } = options;
-    const filter: Record<string, unknown> = { sessionId, deletedAt: null };
-    if (after) {
-      filter.$or = [
-        { timestamp: { $gt: after.timestamp } },
-        { timestamp: after.timestamp, _id: { $gt: convertId(after.id) } },
-      ];
-    }
     const rows = await this.model
-      .find(filter)
+      .find(sessionKeysetFilter(sessionId, after))
       .select(`${SESSION_PAGE_FIELDS} createdAt pendingAction`)
       .sort({ timestamp: 1, _id: 1 })
       .limit(limit);
@@ -1709,6 +1720,9 @@ function initializeQuestModel() {
 
     // Index for findBySessionIdAndId operations
     ChatHistoryItemSchema.index({ sessionId: 1, _id: 1 }, { name: 'sessionId_id' });
+    // Keyset order of findPageAfterBySessionId (GET /api/v1/sessions/{id}/quests). Built in
+    // production by migration 20260921237700_ensure-quest-session-keyset-index; keep in sync.
+    ChatHistoryItemSchema.index({ sessionId: 1, timestamp: 1, _id: 1 }, { name: 'sessionId_timestamp_id' });
     // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
     // name and key in sync with it. Partial so the build and its entries cover only turns carrying
     // provenance, not every quest; the activity aggregate's equality on userId implies the filter.

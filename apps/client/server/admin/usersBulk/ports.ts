@@ -73,6 +73,8 @@ const UserUndoSnapshotSchema = z.object({
   /** Signed ledger delta this batch applied. */
   creditDelta: z.number().optional(),
   apiKeys: z.array(RevokedApiKeySchema).optional(),
+  /** Stripe subscription ids canceled after the ban committed. Kept so undo can say they stay canceled. */
+  canceledSubscriptions: z.array(z.string()).optional(),
 });
 export type UserUndoSnapshot = z.infer<typeof UserUndoSnapshotSchema>;
 
@@ -92,6 +94,8 @@ export const UNDO_RECORD_GRACE_MS = 60_000;
 export const UNDO_RECORD_TTL_MS = ADMIN_USERS_BULK_UNDO_WINDOW_MS + UNDO_RECORD_GRACE_MS;
 // ms. Execute stops starting new chunks after this and returns a partial result, well inside a request timeout.
 export const EXECUTE_BUDGET_MS = 40_000;
+// ms. Past the budget a chunk already started may still finish its Stripe cancels; the web Lambda's 60 s timeout leaves the rest.
+export const SUBSCRIPTION_CANCEL_GRACE_MS = 10_000;
 // ms. A user's owner entry must outlive any undo record that names them, which can be written up to a budget later.
 export const USER_OWNER_TTL_MS = EXECUTE_BUDGET_MS + UNDO_RECORD_TTL_MS;
 // ms. A replay inside this window returns the first result instead of acting again.

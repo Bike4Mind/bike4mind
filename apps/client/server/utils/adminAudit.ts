@@ -151,6 +151,12 @@ export const parseAdminActionReason = (value: unknown): string => {
   return parsed.data;
 };
 
+/** Non-throwing read of an optional reason, for audit writes made after the change has committed. */
+export const readAdminActionReason = (value: unknown): string | undefined => {
+  const parsed = AdminActionReasonSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+};
+
 export const definedKeys = (data: Record<string, unknown>): string[] =>
   Object.keys(data).filter(key => data[key] !== undefined);
 

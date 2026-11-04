@@ -82,25 +82,37 @@ function factSchema<T extends z.ZodTypeAny>(value: T) {
 
 const count = z.number().int().nonnegative();
 
+/** Each fact's value shape: counts and flags only. Advisory assessments copy values through these. */
+export const riskEvidenceFactValueSchemas = {
+  signupNetwork: z.object({
+    isDatacenter: z.boolean().nullable(),
+    asnKnown: z.boolean(),
+    challengeVerified: z.boolean(),
+  }),
+  edgeFingerprint: z.object({ ja4Present: z.boolean() }),
+  wafSignals: z.object({ anonIp: z.boolean(), botSignal: z.boolean() }),
+  authActivity: z.object({ logins: count, signups: count, distinctIps: count, distinctNetworks: count }),
+  apiKeys: z.object({ created: count, minutesToFirstKey: z.number().nonnegative().nullable() }),
+  usage: z.object({ events: count, completed: count, failed: count, creditsSpent: z.number() }),
+  concurrency: z.object({ activeAgentExecutions: count }),
+  sensitiveActions: z.object({
+    stepUpFailed: count,
+    stepUpSucceeded: count,
+    emailChangeFailed: count,
+    mfaDisabled: count,
+    sessionReuseRevoked: count,
+  }),
+};
+
 export const riskEvidenceFactsSchema = z.object({
-  signupNetwork: factSchema(
-    z.object({ isDatacenter: z.boolean().nullable(), asnKnown: z.boolean(), challengeVerified: z.boolean() })
-  ),
-  edgeFingerprint: factSchema(z.object({ ja4Present: z.boolean() })),
-  wafSignals: factSchema(z.object({ anonIp: z.boolean(), botSignal: z.boolean() })),
-  authActivity: factSchema(z.object({ logins: count, signups: count, distinctIps: count, distinctNetworks: count })),
-  apiKeys: factSchema(z.object({ created: count, minutesToFirstKey: z.number().nonnegative().nullable() })),
-  usage: factSchema(z.object({ events: count, completed: count, failed: count, creditsSpent: z.number() })),
-  concurrency: factSchema(z.object({ activeAgentExecutions: count })),
-  sensitiveActions: factSchema(
-    z.object({
-      stepUpFailed: count,
-      stepUpSucceeded: count,
-      emailChangeFailed: count,
-      mfaDisabled: count,
-      sessionReuseRevoked: count,
-    })
-  ),
+  signupNetwork: factSchema(riskEvidenceFactValueSchemas.signupNetwork),
+  edgeFingerprint: factSchema(riskEvidenceFactValueSchemas.edgeFingerprint),
+  wafSignals: factSchema(riskEvidenceFactValueSchemas.wafSignals),
+  authActivity: factSchema(riskEvidenceFactValueSchemas.authActivity),
+  apiKeys: factSchema(riskEvidenceFactValueSchemas.apiKeys),
+  usage: factSchema(riskEvidenceFactValueSchemas.usage),
+  concurrency: factSchema(riskEvidenceFactValueSchemas.concurrency),
+  sensitiveActions: factSchema(riskEvidenceFactValueSchemas.sensitiveActions),
 });
 export type RiskEvidenceFacts = z.infer<typeof riskEvidenceFactsSchema>;
 export type RiskEvidenceFactName = keyof RiskEvidenceFacts;

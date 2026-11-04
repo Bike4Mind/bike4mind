@@ -4,6 +4,17 @@ import { UnsupportedImageFormatError } from './index';
 /** More frames than this and an animated image is not moderated frame by frame: it is blocked. */
 export const MAX_MODERATED_FRAMES = 60;
 
+/** Frames of one animated image actually sent to the detector. */
+export const MAX_SAMPLED_FRAMES = 10;
+
+/** Up to `max` evenly spaced, ascending frame indices of `count`, always including the first and last. */
+export function sampleFrameIndices(count: number, max = MAX_SAMPLED_FRAMES): number[] {
+  if (count <= max) return Array.from({ length: count }, (_, i) => i);
+  // A step over 1 keeps the rounded indices strictly increasing, so there are no duplicates.
+  const step = (count - 1) / (max - 1);
+  return Array.from({ length: max }, (_, i) => Math.round(i * step));
+}
+
 type Rect = { x: number; y: number; width: number; height: number };
 
 interface OmgGifReader {
@@ -45,11 +56,12 @@ const encodeCanvas = async (canvas: Uint8Array, width: number, height: number): 
 };
 
 /**
- * The images a viewer actually shows for an animated GIF, APNG or animated WebP, one per frame, or
- * null for a still image (moderated as-is). GIF and APNG frames are composited the way a browser
- * draws them (offsets, transparency, disposal, blending), so content split across partial frames
- * is moderated as it is displayed. Animated WebP cannot be decoded here, so it is only accepted when
- * every frame is a full-canvas frame that replaces the last (each frame then is what is shown).
+ * The images a viewer actually shows for an animated GIF, APNG or animated WebP, sampled down to
+ * MAX_SAMPLED_FRAMES (see sampleFrameIndices), or null for a still image (moderated as-is). GIF
+ * and APNG frames are composited the way a browser draws them (offsets, transparency, disposal,
+ * blending), so content split across partial frames is moderated as it is displayed. Animated WebP
+ * cannot be decoded here, so it is only accepted when every frame is a full-canvas frame that
+ * replaces the last (each frame then is what is shown).
  * Anything over MAX_MODERATED_FRAMES, over the pixel budget or malformed throws
  * UnsupportedImageFormatError, which moderation treats as blocked.
  */
@@ -90,6 +102,7 @@ async function gifFrames(bytes: Buffer): Promise<Buffer[] | null> {
   const { width, height } = reader;
   assertBudget(count, width, height);
 
+  const sampled = new Set(sampleFrameIndices(count));
   const canvas = new Uint8Array(width * height * 4);
   const out: Buffer[] = [];
   for (let i = 0; i < count; i++) {
@@ -101,7 +114,8 @@ async function gifFrames(bytes: Buffer): Promise<Buffer[] | null> {
     } catch (err) {
       throw unsupported(`undecodable GIF frame ${i}: ${(err as Error).message}`);
     }
-    out.push(await encodeCanvas(canvas, width, height));
+    // Every frame is still blitted: later frames composite onto it.
+    if (sampled.has(i)) out.push(await encodeCanvas(canvas, width, height));
     if (info.disposal === 2) clearRect(canvas, width, info);
     else if (previous) canvas.set(previous);
   }
@@ -172,12 +186,13 @@ async function apngFrames(bytes: Buffer): Promise<Buffer[] | null> {
   }
 
   // The default image is shown by viewers without APNG support; when it is not frame 0 it is
-  // moderated as its own still image (the original bytes decode to it).
+  // moderated as its own still image (the original bytes decode to it), sampled as index 0.
   const extra = defaultIsFrame ? [] : [bytes];
   if (!animated || !ihdr || frames.length + extra.length <= 1) return null;
   const width = ihdr.readUInt32BE(0);
   const height = ihdr.readUInt32BE(4);
   assertBudget(frames.length + extra.length, width, height);
+  const sampled = new Set(sampleFrameIndices(frames.length + extra.length));
 
   const { Jimp } = await import('jimp');
   const canvas = new Uint8Array(width * height * 4);
@@ -220,7 +235,7 @@ async function apngFrames(bytes: Buffer): Promise<Buffer[] | null> {
         }
       }
     }
-    out.push(await encodeCanvas(canvas, width, height));
+    if (sampled.has(i + extra.length)) out.push(await encodeCanvas(canvas, width, height));
     if (frame.dispose === 1 || (frame.dispose === 2 && i === 0)) clearRect(canvas, width, frame);
     else if (previous) canvas.set(previous);
   }
@@ -253,7 +268,8 @@ function webpFrames(bytes: Buffer): Buffer[] | null {
   if (frames.length === 0 || !canvas) return null;
   assertBudget(frames.length, canvas.width, canvas.height);
 
-  return frames.map(frame => {
+  return sampleFrameIndices(frames.length).map(i => {
+    const frame = frames[i];
     // A still extended-format WebP: VP8X (alpha flag when the frame carries ALPH) + the frame's chunks.
     const vp8x = Buffer.alloc(18);
     vp8x.write('VP8X', 0, 'latin1');

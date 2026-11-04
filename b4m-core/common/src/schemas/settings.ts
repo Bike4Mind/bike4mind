@@ -51,6 +51,7 @@ import {
   TEAM_PLAN_SEATS_HARD_LIMIT,
 } from '../constants/organization';
 import { CHAT_MODELS, ChatModels } from '../models';
+import { DECISION_MODEL_IDS } from '../decisions/catalog';
 import {
   BedrockEmbeddingModel,
   defaultEmbeddingModelForEnv,
@@ -461,6 +462,8 @@ export const SettingKeySchema = z.enum([
   'gearRewardMinAccountAgeDays',
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
+  'abuseAssessmentEnabled',
+  'abuseAssessmentConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -729,6 +732,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
+  'imageModerationLimitFreePerDay',
+  'imageModerationLimitPaidPerDay',
   'apiKeyAccess',
   'shadowTierModelAllowlist',
   'shadowTierRequestsPerMin',
@@ -1172,6 +1177,13 @@ export const FILE_UPLOAD_LIMIT_FREE_PER_HOUR = 300;
 export const FILE_UPLOAD_LIMIT_PAID_PER_HOUR = 3000;
 
 /**
+ * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
+ * floor that apps/client/server/s3/imageModerationBudget.ts applies when the setting cannot be read.
+ */
+export const IMAGE_MODERATION_LIMIT_FREE_PER_DAY = 200;
+export const IMAGE_MODERATION_LIMIT_PAID_PER_DAY = 2000;
+
+/**
  * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
  * retrieval code that applies it cannot drift - `semanticDataLakeSearch` imports these same
  * constants for the case where no setting row exists.
@@ -1417,6 +1429,32 @@ export const UsagePatternSignalsConfigSchema = z.object({
 });
 
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
+
+/**
+ * Operator limits for advisory abuse assessments (apps/client/server/security/abuseAssessment/abuseAssessment.ts).
+ * Every default spends nothing: no model, a zero budget and the sweep off. `abuseAssessmentEnabled`
+ * gates all provider egress on top of this.
+ */
+export const AbuseAssessmentConfigSchema = z.object({
+  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
+  /** Provider calls per 24h window (opened by the first call), across admin, sweep and replay runs. */
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
+  /** Provider calls in flight at once, across all instances. */
+  maxConcurrency: z.number().int().min(1).max(10).prefault(2),
+  /** Lets the hourly sweep assess unreviewed shadow detections; the admin button works without it. */
+  sweepEnabled: z.boolean().prefault(false),
+  /** Share (0-100) of unreviewed detections the sweep assesses, chosen by a stable hash of the detection. */
+  sweepRolloutPercent: z.number().int().min(0).max(100).prefault(0),
+  /** Detections assessed per sweep run. */
+  maxAssessmentsPerSweep: z.number().int().min(1).max(500).prefault(20),
+  /** How far back the sweep looks for unreviewed detections. */
+  sweepLookbackHours: z.number().int().min(1).max(720).prefault(24),
+});
+
+export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2473,7 +2511,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitDefaultWriteMode', order: 6 },
       { key: 'fileUploadLimitFreePerHour', order: 7 },
       { key: 'fileUploadLimitPaidPerHour', order: 8 },
-      { key: 'apiKeyAccess', order: 9 },
+      { key: 'imageModerationLimitFreePerDay', order: 9 },
+      { key: 'imageModerationLimitPaidPerDay', order: 10 },
+      { key: 'apiKeyAccess', order: 11 },
     ],
   },
   API_KEY_TRUST: {
@@ -2593,6 +2633,16 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'usagePatternSignalsEnabled', order: 1 },
       { key: 'usagePatternSignalsConfig', order: 2 },
+    ],
+  },
+  ABUSE_ASSESSMENT: {
+    id: 'abuseAssessmentService',
+    name: 'Advisory Abuse Assessment',
+    description: 'Bounded model calls that add an advisory judgment to shadow detections for admin review',
+    icon: 'Security',
+    settings: [
+      { key: 'abuseAssessmentEnabled', order: 1 },
+      { key: 'abuseAssessmentConfig', order: 2 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3559,6 +3609,33 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 8,
   }),
+  // Both read by apps/client/server/s3/imageModerationBudget.ts.
+  imageModerationLimitFreePerDay: makeNumberSetting({
+    key: 'imageModerationLimitFreePerDay',
+    name: 'Uploaded Image Moderation Limit - Free (scans/day)',
+    defaultValue: IMAGE_MODERATION_LIMIT_FREE_PER_DAY,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 9,
+  }),
+  imageModerationLimitPaidPerDay: makeNumberSetting({
+    key: 'imageModerationLimitPaidPerDay',
+    name: 'Uploaded Image Moderation Limit - Basic and Pro (scans/day)',
+    defaultValue: IMAGE_MODERATION_LIMIT_PAID_PER_DAY,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Max content-moderation scans a Basic or Pro subscriber's uploaded images may use per 24 hours, counted like the Free limit. Admins and developer-tagged users are not limited. Set to 0 to hold every uploaded image for these users.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 10,
+  }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
   apiKeyAccess: makeStringSetting({
@@ -3572,7 +3649,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 9,
+    order: 11,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({
@@ -4388,6 +4465,28 @@ export const settingsMap = {
     dependsOn: 'usagePatternSignalsEnabled',
     schema: UsagePatternSignalsConfigSchema,
   }),
+  abuseAssessmentEnabled: makeBooleanSetting({
+    key: 'abuseAssessmentEnabled',
+    name: 'Advisory Abuse Assessment',
+    defaultValue: false,
+    description:
+      'Lets a Decisions model add an advisory judgment (abuse, legitimate automation or insufficient evidence) to shadow detections, from a pseudonymous summary of counts and flags. Paid from the platform key and budget, never from the assessed account. Advisory only: it never changes an account, its access, its credits or its review state. Off means no provider calls.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 1,
+  }),
+  abuseAssessmentConfig: makeObjectSetting({
+    key: 'abuseAssessmentConfig',
+    name: 'Advisory Abuse Assessment: Model and Limits',
+    defaultValue: AbuseAssessmentConfigSchema.parse({}),
+    description:
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, and the hourly sweep (on/off, rollout percent of unreviewed detections, detections per run, lookback hours). The defaults make no calls. Prefer a pinned model id (jev-1.13.0 over jev-latest): judgments are cached per model id, so an alias that moves keeps serving older judgments until the evidence changes.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 2,
+    dependsOn: 'abuseAssessmentEnabled',
+    schema: AbuseAssessmentConfigSchema,
+  }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
   freeTierModelGateEnabled: makeBooleanSetting({
@@ -4845,7 +4944,7 @@ export const settingsMap = {
     max: 720,
     int: true,
     description:
-      'Hours a subscription or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
+      'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

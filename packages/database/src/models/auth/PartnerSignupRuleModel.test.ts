@@ -131,3 +131,32 @@ describe('PartnerSignupRuleModel', () => {
     expect(filtered.data[0].domain).toBe('alpha.com');
   });
 });
+
+describe('PartnerSignupRuleRepository.countByGrantPackage', () => {
+  setupMongoTest();
+
+  beforeEach(async () => {
+    await PartnerSignupRule.deleteMany({});
+  });
+
+  const rule = (domain: string, grantPackageId: string | null, enabled = true) =>
+    partnerSignupRuleRepository.create({ domain, entitlements: [], signupCredits: 0, enabled, grantPackageId });
+
+  it('counts linked domains and the enabled ones per package', async () => {
+    await rule('a1.com', 'a');
+    await rule('a2.com', 'a', false);
+    await rule('b1.com', 'b');
+    await rule('none.com', null);
+
+    const counts = await partnerSignupRuleRepository.countByGrantPackage(['a', 'b', 'missing']);
+
+    expect(counts.get('a')).toEqual({ domains: 2, enabledDomains: 1 });
+    expect(counts.get('b')).toEqual({ domains: 1, enabledDomains: 1 });
+    expect(counts.has('missing')).toBe(false);
+  });
+
+  it('returns an empty map for no ids', async () => {
+    await rule('a1.com', 'a');
+    expect((await partnerSignupRuleRepository.countByGrantPackage([])).size).toBe(0);
+  });
+});

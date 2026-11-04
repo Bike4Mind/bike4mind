@@ -416,6 +416,14 @@ describe('ChatService.shareDirectory', () => {
 
     async function agentSession(parentSessionId: string, folder: string, directory = project) {
       await mkdir(folder, { recursive: true });
+      // The parent's record of starting it, which is what tells its scope to look for agents.
+      await store.appendMessage(parentSessionId, {
+        id: `spawn-${folder.split('/').pop()}`,
+        role: 'assistant',
+        content: '',
+        createdAt: new Date().toISOString(),
+        toolCalls: [{ id: 'spawn', name: 'session_spawn', input: { prompt: 'do a piece' }, status: 'done' }],
+      });
       return store.create(undefined, {
         mode: 'code',
         project: {

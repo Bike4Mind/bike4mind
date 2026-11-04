@@ -17,6 +17,7 @@ import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import type { WorkspaceOwner } from '@shared/worktreeRemoval';
 import { summarizeSession } from '@shared/agentOutcome';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
+import { normalizeGeneration, type GenerationSettings } from '@shared/generation';
 import { storedReasoningEffortSetting } from './reasoningEffort';
 import { isPromptCacheTtl, type PromptCacheTtl } from '@bike4mind/common';
 import type { SessionWritesStore, StoredSessionWrites } from './tools/sessionScripts';
@@ -694,6 +695,21 @@ export class SessionStore implements SessionWritesStore {
   }
 
   /**
+   * This conversation's sampling and output overrides, replaced whole. Kept as given across model
+   * switches: each turn sends only what its model's controls list (see requestGeneration). Leaves
+   * `updatedAt` alone, as setApprovalMode does.
+   */
+  async setGeneration(id: string, generation: GenerationSettings): Promise<ChatSessionSummary | null> {
+    const next = normalizeGeneration(generation);
+    return this.mutate(id, session => {
+      if (JSON.stringify(session.generation ?? null) === JSON.stringify(next ?? null)) return false;
+      if (next) session.generation = next;
+      else delete session.generation;
+      return true;
+    });
+  }
+
+  /**
    * How long this conversation's prompt cache lives, remembered as the lifetime of the next new
    * conversation. Leaves `updatedAt` alone, as setApprovalMode does.
    */
@@ -998,6 +1014,7 @@ export class SessionStore implements SessionWritesStore {
               approvalMode: existing.approvalMode,
               reasoningEffort: existing.reasoningEffort,
               ...(existing.promptCacheTtl ? { promptCacheTtl: existing.promptCacheTtl } : {}),
+              ...(existing.generation ? { generation: existing.generation } : {}),
             }
           : {};
         const imported = { ...existing, ...session, ...kept };
@@ -1189,6 +1206,7 @@ export class SessionStore implements SessionWritesStore {
     const origin = normalizeOrigin(parsed.origin);
     const importOrigin = normalizeImportOrigin(parsed.importOrigin);
     const suggestions = normalizeSuggestions(parsed.spawnSuggestions);
+    const generation = normalizeGeneration(parsed.generation);
     // Absolute only: a relative entry would resolve against wherever the app was launched from.
     const grantedDirectories = Array.isArray(parsed.grantedDirectories)
       ? parsed.grantedDirectories.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry))
@@ -1214,6 +1232,7 @@ export class SessionStore implements SessionWritesStore {
       // it takes the launch default, which is the environment variable or nothing at all.
       reasoningEffort: storedReasoningEffortSetting(parsed.reasoningEffort) ?? this.defaultReasoningEffort,
       ...(isPromptCacheTtl(parsed.promptCacheTtl) ? { promptCacheTtl: parsed.promptCacheTtl } : {}),
+      ...(generation ? { generation } : {}),
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),

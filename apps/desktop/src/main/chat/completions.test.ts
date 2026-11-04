@@ -53,6 +53,25 @@ describe('streamCompletion reasoning effort', () => {
     expect(await sentOptions({ ...REQUEST, cacheTtl: '1h' })).toMatchObject({ cacheTtl: '1h' });
     expect(await sentOptions(REQUEST)).not.toHaveProperty('cacheTtl');
   });
+
+  it('sends a temperature override under options, and none without one', async () => {
+    expect(await sentOptions({ ...REQUEST, generation: { temperature: 0.3 } })).toMatchObject({ temperature: 0.3 });
+    expect(await sentOptions({ ...REQUEST, thinking: true })).not.toHaveProperty('temperature');
+  });
+
+  it('puts a thinking budget on the thinking request, and nothing when thinking is off', async () => {
+    const budget = { ...REQUEST, generation: { thinkingBudgetTokens: 8192 } };
+    expect((await sentOptions({ ...budget, thinking: true })).thinking).toEqual({ enabled: true, budget_tokens: 8192 });
+    expect(await sentOptions(budget)).not.toHaveProperty('thinking');
+  });
+
+  it('never sends sampling fields the hosted API does not take', async () => {
+    const options = await sentOptions({
+      ...REQUEST,
+      generation: { topP: 0.5, topK: 10, minP: 0.1, repeatPenalty: 1.2 },
+    });
+    expect(Object.keys(options).sort()).toEqual(['stream', 'tools']);
+  });
 });
 
 describe('streamCompletion', () => {

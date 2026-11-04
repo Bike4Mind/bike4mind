@@ -81,3 +81,44 @@ describe('GET /api/mcp-servers/notion/callback - malformed state', () => {
     warnSpy.mockRestore();
   });
 });
+
+describe('GET /api/mcp-servers/notion/callback - authorization not completed', () => {
+  it('logs a declined consent at warn with only the RFC 6749 code', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await call({ error: 'access_denied', state: 'opaque-state' });
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&notion=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('oauth_error');
+    expect(warnSpy).toHaveBeenCalledWith('[Notion Callback] Authorization not completed', { error: 'access_denied' });
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('never logs a free-text error param verbatim', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await call({ error: 'call 555-0100' });
+
+    expect(warnSpy).toHaveBeenCalledWith('[Notion Callback] Authorization not completed', { error: 'unrecognized' });
+    warnSpy.mockRestore();
+  });
+
+  it('logs a callback with no code at all at warn', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await call({});
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&notion=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_code');
+    expect(warnSpy).toHaveBeenCalledWith('[Notion Callback] Missing authorization code');
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});

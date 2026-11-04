@@ -1189,7 +1189,7 @@ async function processExecution(
     const runModelInfo = shadowModelInfo ?? modelInfo;
     const agentModel = shadowModelInfo ? shadowModelInfo.id : execution.model;
     // Subagents fall back to the parent backend, so their reported model is the substitute too.
-    const visibleModelId = (id: string) => (shadowModelInfo && id === shadowModelInfo.id ? execution.model : id);
+    const visibleModelId = (id: string) => (shadowModelInfo && id === shadowModelInfo.id ? resolvedModelId : id);
     const llm = getLlmByModel(apiKeyTable as ApiKeyTable, {
       modelInfo: runModelInfo,
       logger,
@@ -1966,7 +1966,12 @@ async function processExecution(
       },
       subagentModels: shadowSettings && runModelInfo ? [runModelInfo] : runnableModels,
       substituteIdentity: shadowModelInfo
-        ? { substituteId: shadowModelInfo.id, identityId: execution.model, displayName: modelInfo?.name }
+        ? {
+            substituteId: shadowModelInfo.id,
+            identityId: execution.model,
+            displayName: modelInfo?.name,
+            chargedModel: modelInfo,
+          }
         : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // The delegation tools are injected as OBJECTS keyed on these two deps, never on
@@ -4220,7 +4225,12 @@ async function processSubagentDispatch(
       precomputed: { adminSettingsEnforceCredits: false, models },
       subagentModels: childRunnableModels,
       substituteIdentity: shadowModelInfo
-        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        ? {
+            substituteId: shadowModelInfo.id,
+            identityId: childModel,
+            displayName: modelInfo?.name,
+            chargedModel: modelInfo,
+          }
         : undefined,
       apiKeyTable: apiKeyTable as ApiKeyTable,
       // Same dependency gate as the top-level path: the delegate tool is injected as an
@@ -4528,7 +4538,12 @@ async function processSubagentDispatch(
       optInTools: subagentLatticeTools,
       availableModels: childRunnableModels,
       substituteIdentity: shadowModelInfo
-        ? { substituteId: shadowModelInfo.id, identityId: childModel, displayName: modelInfo?.name }
+        ? {
+            substituteId: shadowModelInfo.id,
+            identityId: childModel,
+            displayName: modelInfo?.name,
+            chargedModel: modelInfo,
+          }
         : undefined,
       // Mirrors the delegate_to_agent / coordinate_task wiring. Without it the
       // orchestrator cannot test whether a grandchild's model is serviceable and

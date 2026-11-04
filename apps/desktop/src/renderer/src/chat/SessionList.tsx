@@ -45,6 +45,7 @@ import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type P
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
 import { keepMenuOpen } from './keepMenuOpen';
+import { MessageSessionDialog } from './MessageSessionDialog';
 import {
   ArrowLeftIcon,
   ArtifactIcon,
@@ -309,6 +310,8 @@ interface RowActions {
   toggleArchived: (session: ChatSessionSummary) => void;
   rename: (session: ChatSessionSummary, title: string) => void;
   download: (session: ChatSessionSummary) => void;
+  /** Opens the dialog that sends a message into this session without opening it. */
+  message: (session: ChatSessionSummary) => void;
   /** Null takes the session out of its section. */
   moveToSection: (sessionId: string, sectionId: string | null) => void;
   /** Opens the name dialog for a section the session will be moved into. */
@@ -580,6 +583,13 @@ const SessionRow = memo(function SessionRow({
                       data-testid="chat-rename-session-btn"
                     >
                       Rename
+                    </MenuItem>
+                    <MenuItem
+                      disabled={!!session.archived}
+                      onClick={() => actions.message(session)}
+                      data-testid="session-row-message-action"
+                    >
+                      Message session...
                     </MenuItem>
                     {!session.pinned && !session.archived && (
                       <MenuItem
@@ -1043,6 +1053,7 @@ export function SessionList({
   const [revealId, setRevealId] = useState<string | null>(null);
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
+  const [messageTarget, setMessageTarget] = useState<ChatSessionSummary | null>(null);
   const requestRename = (section: SidebarSection) =>
     setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name });
 
@@ -1143,6 +1154,7 @@ export function SessionList({
       toggleArchived: session => target.current.onToggleArchived(session),
       rename: (session, title) => target.current.onRename(session, title),
       download: session => target.current.onDownload(session),
+      message: session => setMessageTarget(session),
       moveToSection: (sessionId, sectionId) => moveSession(sessionId, sectionId),
       requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
       drag: sessionId => {
@@ -1693,6 +1705,8 @@ export function SessionList({
       {nameRequest && (
         <SectionNameDialog request={nameRequest} onSubmit={submitSectionName} onClose={() => setNameRequest(null)} />
       )}
+
+      {messageTarget && <MessageSessionDialog session={messageTarget} onClose={() => setMessageTarget(null)} />}
 
       {footer}
     </Stack>

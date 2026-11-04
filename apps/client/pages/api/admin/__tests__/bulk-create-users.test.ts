@@ -9,6 +9,9 @@ const h = vi.hoisted(() => ({
   emitSignupFunnelEvents: vi.fn(),
   recordAccountLane: vi.fn(),
   recordAdminAction: vi.fn(),
+  requirePackage: vi.fn(),
+  reserve: vi.fn(),
+  claim: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -20,8 +23,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
   }),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { update: h.update } }));
-vi.mock('@bike4mind/services', () => ({ userService: { createUser: h.createUser } }));
+vi.mock('@bike4mind/database', () => ({
+  userRepository: { update: h.update, claimFreeCreditGrant: h.claim },
+  grantPackageRepository: { reserveRedemption: h.reserve },
+  withTransaction: (fn: () => Promise<unknown>) => fn(),
+}));
+vi.mock('@bike4mind/services', () => ({
+  userService: { createUser: h.createUser },
+  referService: { requireActiveGrantPackage: h.requirePackage },
+}));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
@@ -40,8 +50,8 @@ vi.mock('@server/utils/adminAudit', () => ({
 
 await import('../bulk-create-users');
 
-const makeReq = (users: unknown[]) => ({
-  body: { users },
+const makeReq = (users: unknown[], extra: Record<string, unknown> = {}) => ({
+  body: { users, ...extra },
   user: { id: 'admin-1', isAdmin: true },
   ability: {},
 });
@@ -74,6 +84,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 2,
             failedCount: 1,
             createdUserIds: expect.arrayContaining(['new-1', 'new-2']),
+            grantPackageId: null,
             credits: 0,
             startingCreditsTotal: 0,
             startingCreditsByUserId: { 'new-1': 0, 'new-2': 0 },
@@ -128,6 +139,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 1,
             failedCount: 1,
             createdUserIds: ['new-1'],
+            grantPackageId: null,
             credits: 50,
             startingCreditsTotal: 50,
             startingCreditsByUserId: { 'new-1': 50 },
@@ -286,5 +298,89 @@ describe('POST /api/admin/bulk-create-users', () => {
     expect(usernames).toContain('jo');
     expect(usernames.find(u => u !== 'jo')).toMatch(/^user-[0-9a-f]{8}$/);
     expect(h.createUser.mock.calls.every(([params]) => params.allowReservedUsername === undefined)).toBe(true);
+  });
+
+  describe('grant package', () => {
+    const res = () => ({ status: vi.fn().mockReturnThis(), json: vi.fn() });
+    const pkg = { id: 'pkg-1', credits: 250, storageMb: 400, active: true };
+    beforeEach(() => {
+      h.claim.mockResolvedValue(true);
+    });
+
+    it('creates each row with the package amounts and reserves one redemption per account', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      await h.handler!(makeReq([{ email: 'a@b.test', startingCredits: 9 }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ initialCredits: 250, record: expect.objectContaining({ storageLimit: 400 }) }),
+        expect.anything()
+      );
+      expect(h.reserve).toHaveBeenCalledWith('pkg-1', 'new-1');
+    });
+
+    it('stamps the package on the user, merges package and row tags, and audits the package', async () => {
+      h.requirePackage.mockResolvedValue({ ...pkg, tags: ['promo', 'x'] });
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      await h.handler!(makeReq([{ email: 'a@b.test', tags: ['x', 'y'] }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.update).toHaveBeenCalledWith({ id: 'new-1', grantPackageId: 'pkg-1' });
+      expect(h.update).toHaveBeenLastCalledWith({ id: 'new-1', tags: ['promo', 'x', 'y'] });
+      expect(h.recordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ grantPackageId: 'pkg-1' }) })
+      );
+    });
+
+    it('never stamps the package on a row the caps refused', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.reserve.mockResolvedValue({ outcome: 'refused', reason: 'daily_cap' });
+      await h.handler!(makeReq([{ email: 'a@b.test' }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.update).not.toHaveBeenCalledWith(expect.objectContaining({ grantPackageId: 'pkg-1' }));
+    });
+
+    it('fails a row whose inbox already took a package grant', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.createUser
+        .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a' })
+        .mockResolvedValueOnce({ id: 'new-2', email: 'a+1@b.test', name: 'a' });
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      h.claim.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      const r = res();
+      await h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'a+1@b.test' }], { grantPackageId: 'pkg-1' }), r);
+      const { results } = r.json.mock.calls[0][0] as { results: { success: boolean; error?: string }[] };
+      expect(results.map(row => row.success)).toEqual([true, false]);
+      expect(results[1].error).toBe('This inbox has already received a signup grant');
+      expect(h.reserve).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a capped row as a failure without failing the batch', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.createUser
+        .mockResolvedValueOnce({ id: 'new-1', email: 'a@b.test', name: 'a' })
+        .mockResolvedValueOnce({ id: 'new-2', email: 'c@b.test', name: 'c' });
+      h.reserve
+        .mockResolvedValueOnce({ outcome: 'reserved', release: vi.fn() })
+        .mockResolvedValueOnce({ outcome: 'refused', reason: 'total_cap' });
+      const r = res();
+      await h.handler!(makeReq([{ email: 'a@b.test' }, { email: 'c@b.test' }], { grantPackageId: 'pkg-1' }), r);
+      const { results } = r.json.mock.calls[0][0] as { results: { success: boolean; error?: string }[] };
+      expect(results.map(row => row.success)).toEqual([true, false]);
+      expect(results[1].error).toBe('This invite code has reached its signup limit');
+      expect(h.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects the batch before creating anyone when the package is unknown or inactive', async () => {
+      h.requirePackage.mockRejectedValue(new Error('Grant package is inactive'));
+      await expect(h.handler!(makeReq([{ email: 'a@b.test' }], { grantPackageId: 'pkg-1' }), res())).rejects.toThrow(
+        'Grant package is inactive'
+      );
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty package id', async () => {
+      await expect(h.handler!(makeReq([{ email: 'a@b.test' }], { grantPackageId: '' }), res())).rejects.toThrow(
+        'Invalid grant package id'
+      );
+      expect(h.createUser).not.toHaveBeenCalled();
+    });
   });
 });

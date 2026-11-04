@@ -1,4 +1,4 @@
-import { CreditHolderType, settingsMap } from '@bike4mind/common';
+import { CreditHolderType, isSignupGrantBlocked, settingsMap } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -30,6 +30,8 @@ const COUNTED_BILLING_REASONS = new Set<string | null>(['subscription_create', '
 const MAX_REVERSAL_ATTEMPTS = 3;
 
 const PARTY_FIELDS = 'isSynthetic deletedAt isBanned disputePending moderation.status';
+// An admin's grant block applies to the account the reward pays, never to the invited friend who paid.
+const INVITER_FIELDS = `${PARTY_FIELDS} signupGrant.blocked`;
 
 // In Stripe v22 the payment intent lives on invoice.payments (expand it when retrieving the invoice).
 const invoicePaymentIntentId = (invoice: Stripe.Invoice): string | undefined => {
@@ -107,11 +109,11 @@ export async function recordSubscriptionPaymentReward({
     const payer = await User.findById(payerId)
       .select(`referredByUserId ${PARTY_FIELDS}`)
       .lean<{ referredByUserId?: string | null } & RewardParty>();
-    if (!payer?.referredByUserId || isBlockedInviter(payer)) return;
+    if (!payer?.referredByUserId || creditService.isRewardPartyBlocked(payer)) return;
 
     const inviterId = String(payer.referredByUserId);
     if (inviterId === payerId) return;
-    const inviter = await User.findById(inviterId).select(PARTY_FIELDS).lean<RewardParty>();
+    const inviter = await User.findById(inviterId).select(INVITER_FIELDS).lean<RewardParty>();
     if (!inviter || isBlockedInviter(inviter)) return;
 
     if (await referralSubscriptionRewardRepository.findByInvoiceId(invoice.id)) return;
@@ -209,19 +211,21 @@ export async function releaseDueSubscriptionRewards({
   for (const candidate of due) {
     try {
       const [inviter, payer] = await Promise.all([
-        User.findById(candidate.inviterId).select(PARTY_FIELDS).lean<RewardParty>(),
+        User.findById(candidate.inviterId).select(INVITER_FIELDS).lean<RewardParty>(),
         User.findById(candidate.payerId).select(PARTY_FIELDS).lean<RewardParty>(),
       ]);
       const blocked: ReferralRewardCloseReason | null =
-        !inviter || isBlockedInviter(inviter)
+        !inviter || creditService.isRewardPartyBlocked(inviter)
           ? 'inviter_blocked'
-          : !payer || isBlockedInviter(payer)
+          : !payer || creditService.isRewardPartyBlocked(payer)
             ? 'payer_blocked'
             : null;
       if (blocked) {
         if (await referralSubscriptionRewardRepository.cancelPending(candidate.id, blocked, now)) result.cancelled++;
         continue;
       }
+      // Unblock lifts an admin grant block, so the reward stays pending instead of closing for good.
+      if (inviter && isSignupGrantBlocked(inviter)) continue;
 
       // A Stripe failure throws into the catch below, so the reward is retried next run rather than paid.
       const outcome = candidate.paymentIntentId ? await paymentOutcome(candidate.paymentIntentId) : 'paid';

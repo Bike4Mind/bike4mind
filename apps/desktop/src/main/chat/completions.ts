@@ -4,6 +4,7 @@ import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
 import { isToolChangeMessage, type PromptCacheTtl, type ReasoningEffort } from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
+import type { GenerationSettings } from '@shared/generation';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
@@ -103,6 +104,12 @@ export interface CompletionRequest {
   thinking?: boolean;
   /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * The conversation's overrides that the model's controls list (see requestGeneration); the output
+   * ceiling travels as `maxTokens`. Each transport sends what its backend takes. A conversation's
+   * turns only: titles, suggestions and compaction never set it.
+   */
+  generation?: Omit<GenerationSettings, 'maxOutputTokens'>;
   /** Prompt-cache lifetime the server's breakpoints take. Absent sends nothing, which is '5m'. */
   cacheTtl?: PromptCacheTtl;
   /**
@@ -197,7 +204,17 @@ async function streamOnce(
         options: {
           stream: true,
           tools: request.tools ?? [],
-          ...(request.thinking ? { thinking: { enabled: true } } : {}),
+          ...(request.generation?.temperature !== undefined ? { temperature: request.generation.temperature } : {}),
+          ...(request.thinking
+            ? {
+                thinking: {
+                  enabled: true,
+                  ...(request.generation?.thinkingBudgetTokens !== undefined
+                    ? { budget_tokens: request.generation.thinkingBudgetTokens }
+                    : {}),
+                },
+              }
+            : {}),
           ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
           ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },

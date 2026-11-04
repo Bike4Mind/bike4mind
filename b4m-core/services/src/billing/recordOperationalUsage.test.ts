@@ -111,6 +111,15 @@ describe('recordOperationalUsage', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100 });
   });
 
+  it('debits on chargedCostUsd and records costUsd unchanged', async () => {
+    setToggles({ bill: true, enforce: true });
+    const record = vi.fn().mockResolvedValue(null);
+
+    await recordOperationalUsage({ ...baseParams, chargedCostUsd: 0.002 }, { db: fullBillingDb(record), logger });
+
+    expect(record.mock.calls[0][0]).toMatchObject({ costUsd: 0.001, creditsCharged: 200 });
+  });
+
   it('records the authenticating API key on the debit', async () => {
     setToggles({ bill: true, enforce: true });
 

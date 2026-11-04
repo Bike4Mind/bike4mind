@@ -37,6 +37,7 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: async () => undefined }));
+vi.mock('@server/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: async () => undefined }));
 vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/analytics/emitActiveEvent')>()),
   isAnalyticsConfigured: () => true,
@@ -50,9 +51,10 @@ vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOrigina
 
 import mintRoute from '../../pages/api/overwatch/v1/hops';
 import visitBeacon from '../../pages/api/analytics/visit';
-import { AnalyticsHop, analyticsHopRepository } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { AnalyticsHop, analyticsHopRepository, User } from '@bike4mind/database';
+import { ApiKeyScope, type IUserAcquisition } from '@bike4mind/common';
 import { mintHop } from './hops';
+import { emitSignupFunnelEvents, recordSignupAcquisition } from './funnel';
 import { deriveHopKey, signHopToken } from './hopToken';
 import { readVisitId, VISIT_COOKIE } from './visitSession';
 
@@ -86,6 +88,28 @@ async function browserLands(token: string, opts: { cookie?: string } = {}) {
 
 const hopEvents = () => productEvents.filter(e => e.event === 'hop');
 
+/**
+ * A new account created in a browser carrying these cookies, through the shared signup write that
+ * every self-service signup path runs (OAuth callbacks, OTC verify): the stored acquisition and
+ * the account's signup_completed event.
+ */
+async function signsUp(cookie: string, username = `persona-hop-${Math.random().toString(36).slice(2, 10)}`) {
+  const account = await User.create({ name: 'Persona', username, password: null, hasUsablePassword: false });
+  productEvents.length = 0;
+  const visitId = readVisitId(cookie);
+  const funnel = await recordSignupAcquisition({ req: { headers: { cookie } }, user: account, method: 'otc' });
+  await emitSignupFunnelEvents({
+    user: { id: account.id, ...funnel },
+    method: 'otc',
+    emailVerified: true,
+    creditsGranted: 0,
+    ...(visitId && { visitId }),
+  });
+  const stored = await User.findById(account.id).lean<{ acquisition?: IUserAcquisition }>();
+  const signupCompleted = productEvents.find(e => e.event === 'signup_completed');
+  return { acquisition: stored?.acquisition, signupCompleted };
+}
+
 let mongod: MongoMemoryServer;
 
 beforeAll(async () => {
@@ -104,6 +128,106 @@ beforeEach(async () => {
   productEvents.length = 0;
   visitEvents.length = 0;
   await AnalyticsHop.deleteMany({});
+  await User.deleteMany({});
+});
+
+describe('the persona walk', () => {
+  it('mint -> redeem once -> replay, expired and wrong-destination refused -> signup carries verifiedTouch', async () => {
+    // 1. The source's /out endpoint mints, for a persona run.
+    const { hopId, token } = await sourceMints({ dest: 'bike4mind', path: '/new', lane: 'synthetic' });
+
+    // 2. The browser lands with the token, consent granted: redeemed, linked to the visit.
+    const landing = await browserLands(token, { cookie: 'b4m_consent=granted' });
+    expect(landing.hopCookie).toBe(`b4m_hop=${hopId}`);
+    expect(hopEvents()).toHaveLength(1);
+
+    // 3. The same token again is refused.
+    const replay = await browserLands(token, { cookie: 'b4m_consent=granted' });
+    expect(replay.hopCookie).toBeUndefined();
+
+    // 4. A token past its 10 minutes is refused.
+    const stale = await mintHop({ dest: 'bike4mind', srcProductId: SOURCE }, new Date(Date.now() - 11 * 60_000));
+    expect((await browserLands(stale!.token, { cookie: 'b4m_consent=granted' })).hopCookie).toBeUndefined();
+
+    // 5. A token minted for another destination is refused.
+    const exp = Math.floor(Date.now() / 1000) + 300;
+    const otherHop = 'e'.repeat(32);
+    await analyticsHopRepository.create({
+      hopId: otherHop,
+      srcProductId: SOURCE,
+      dest: 'bike4mind',
+      createdAt: new Date(),
+    });
+    const misdirected = signHopToken(deriveHopKey('e2e-salt'), { hopId: otherHop, exp, dest: 'another-product' });
+    expect((await browserLands(misdirected, { cookie: 'b4m_consent=granted' })).hopCookie).toBeUndefined();
+    expect(hopEvents()).toHaveLength(1);
+
+    // 6. The persona signs up in the same visit: the account carries the verified touch, and
+    // signup_completed carries the hop for Overwatch to count, in the synthetic lane.
+    const cookie = `${VISIT_COOKIE}=${landing.visitId}; ${landing.hopCookie}; b4m_consent=granted`;
+    const signup = await signsUp(cookie);
+    expect(signup.acquisition?.verifiedTouch).toEqual({ srcProductId: SOURCE, hopId, redeemedAt: expect.any(Date) });
+    expect(signup.signupCompleted).toMatchObject({
+      event: 'signup_completed',
+      sessionId: landing.visitId,
+      metadata: { method: 'otc', hopId, srcProductId: SOURCE, lane: 'synthetic' },
+    });
+    // The bound hop is evidence a payment may cite: no longer swept.
+    const bound = await analyticsHopRepository.findByHopId(hopId);
+    expect(bound?.boundAt).toBeInstanceOf(Date);
+    expect(bound).not.toHaveProperty('expiresAt');
+
+    // 7. A signup that followed no hop carries none.
+    const plain = await signsUp(`${VISIT_COOKIE}=${'b'.repeat(32)}; b4m_consent=granted`);
+    expect(plain.acquisition?.verifiedTouch).toBeUndefined();
+    expect(plain.signupCompleted?.metadata).not.toHaveProperty('hopId');
+    expect(plain.signupCompleted?.metadata).not.toHaveProperty('srcProductId');
+  });
+});
+
+describe('binding a signup to a hop', () => {
+  async function redeemedHop() {
+    const { hopId, token } = await sourceMints();
+    const landing = await browserLands(token, { cookie: 'b4m_consent=granted' });
+    return { hopId, landing, cookie: `${VISIT_COOKIE}=${landing.visitId}; ${landing.hopCookie}` };
+  }
+
+  it('binds one account per hop: a second signup in the same browser gets none', async () => {
+    const { hopId, cookie } = await redeemedHop();
+
+    const first = await signsUp(`${cookie}; b4m_consent=granted`, 'first-account');
+    const second = await signsUp(`${cookie}; b4m_consent=granted`, 'second-account');
+
+    expect(first.acquisition?.verifiedTouch?.hopId).toBe(hopId);
+    expect(second.acquisition?.verifiedTouch).toBeUndefined();
+    expect(second.signupCompleted?.metadata).not.toHaveProperty('hopId');
+  });
+
+  it('binds nothing in a later visit', async () => {
+    const { landing } = await redeemedHop();
+
+    const later = await signsUp(`${VISIT_COOKIE}=${'b'.repeat(32)}; ${landing.hopCookie}; b4m_consent=granted`);
+
+    expect(later.acquisition?.verifiedTouch).toBeUndefined();
+  });
+
+  it('binds nothing once consent is withdrawn', async () => {
+    const { cookie } = await redeemedHop();
+
+    const withdrawn = await signsUp(`${cookie}; b4m_consent=denied`);
+
+    expect(withdrawn.acquisition).toBeUndefined();
+  });
+
+  it('binds nothing to a hop redeemed without consent, even with a hand-made cookie', async () => {
+    const { hopId, token } = await sourceMints();
+    const landing = await browserLands(token);
+    expect(landing.hopCookie).toBeUndefined();
+
+    const forged = await signsUp(`${VISIT_COOKIE}=${landing.visitId}; b4m_hop=${hopId}; b4m_consent=granted`);
+
+    expect(forged.acquisition).toBeUndefined();
+  });
 });
 
 describe('a verified hop, minted by the source and redeemed by this app', () => {
