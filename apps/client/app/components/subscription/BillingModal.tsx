@@ -424,9 +424,15 @@ const BillingModal = ({ open, focus, entry = 'unknown', onClose }: BillingModalP
               !plansOffered ? (
                 creditsSection
               ) : plansFirst ? (
-                [plansSection, creditsSection]
+                <>
+                  {plansSection}
+                  {creditsSection}
+                </>
               ) : (
-                [creditsSection, plansSection]
+                <>
+                  {creditsSection}
+                  {plansSection}
+                </>
               )
             ) : (
               <Box aria-busy="true" sx={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
