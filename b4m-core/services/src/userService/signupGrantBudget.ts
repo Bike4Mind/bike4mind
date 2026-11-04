@@ -33,11 +33,14 @@ const refundScope = new AsyncLocalStorage<ScopeDraw[]>();
 const scopeDraws = new WeakMap<ScopeDraw[], Map<string, ScopeDraw>>();
 
 const ambientTransaction = () => callerTransactionSession()?.transaction;
+// The driver's TxnState enum is internal (absent from its typings and package index), so its aborted
+// value is mirrored here; apps/client/server/credits/signupGrantBudget.e2e.test.ts pins it to the driver.
+const DRIVER_TXN_STATE_ABORTED = 'TRANSACTION_ABORTED' as const;
+type DriverTransactionState = { state?: string };
 // The driver's public isCommitted is also true for an aborted transaction, so read its internal state.
 // A transaction still open when the scope returns is the caller's to settle.
-// apps/client/server/credits/signupGrantBudget.e2e.test.ts pins aborted and reused attempts against the driver.
 const attemptAborted = (txn?: mongoose.mongo.Transaction) =>
-  (txn as { state?: string } | undefined)?.state === 'TRANSACTION_ABORTED';
+  (txn as DriverTransactionState | undefined)?.state === DRIVER_TXN_STATE_ABORTED;
 
 /**
  * Hands back every budget draw made inside `fn` if it throws, and on success every draw whose own
