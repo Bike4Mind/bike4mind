@@ -327,6 +327,15 @@ describe('token endpoint failures', () => {
     ).resolves.toMatchObject({ accessToken: expect.any(String) });
   });
 
+  it('still succeeds on a 200 that carries a token alongside an error field', async () => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    f.setTokenMode('ok_with_error_field');
+    await expect(
+      refreshRemoteMcpTokens(discovery, { client, refreshToken: tokens.refreshToken ?? '', fetchFn: f.fetch })
+    ).resolves.toMatchObject({ accessToken: expect.any(String) });
+  });
+
   it('classifies a pinned-fetch timeout as unavailable and any other blocked request as refused', async () => {
     const f = await start();
     const { discovery, client, tokens } = await signedIn(f);

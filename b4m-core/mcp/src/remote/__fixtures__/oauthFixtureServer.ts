@@ -80,7 +80,8 @@ type TokenMode =
   | 'request_timeout'
   | 'temporarily_unavailable'
   | 'ok_error_bad_refresh_token'
-  | 'ok_error_invalid_grant';
+  | 'ok_error_invalid_grant'
+  | 'ok_with_error_field';
 
 const sha256b64url = (value: string) => createHash('sha256').update(value).digest('base64url');
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -245,6 +246,8 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
       if (tokenMode === 'ok_error_bad_refresh_token') return json(res, 200, { error: 'bad_refresh_token' });
       if (tokenMode === 'ok_error_invalid_grant') return json(res, 200, { error: 'invalid_grant' });
       if (!clientAuthenticated(req, form)) return json(res, 401, { error: 'invalid_client' });
+      const withErrorField = <T extends object>(body: T) =>
+        tokenMode === 'ok_with_error_field' ? { ...body, error: 'x' } : body;
       if (options.tokenDelayMs) await new Promise(resolve => setTimeout(resolve, options.tokenDelayMs));
       fixture.tokenResources.push(form.get('resource'));
       const grant = form.get('grant_type');
@@ -259,7 +262,7 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
         ) {
           return json(res, 400, { error: 'invalid_grant' });
         }
-        return json(res, 200, issue());
+        return json(res, 200, withErrorField(issue()));
       }
       if (grant === 'refresh_token') {
         fixture.counts.refresh += 1;
@@ -269,7 +272,7 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
           return json(res, 400, { error: 'invalid_grant' });
         }
         refreshTokens.delete(refreshToken);
-        return json(res, 200, issue());
+        return json(res, 200, withErrorField(issue()));
       }
       return json(res, 400, { error: 'unsupported_grant_type' });
     }

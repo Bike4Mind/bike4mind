@@ -2,7 +2,6 @@ import { randomUUID } from 'crypto';
 import type { IMcpConnectionDocument, McpOAuthTokenUpdate } from '@bike4mind/common';
 import { mcpConnectionRepository } from '@bike4mind/database';
 import {
-  RemoteMcpAuthFailedError,
   RemoteMcpAuthRequiredError,
   RemoteMcpError,
   RemoteMcpInvalidGrantError,
@@ -183,7 +182,13 @@ async function refreshWithLease(
       if (error.code === 'token_unavailable') {
         throw new OAuthRefreshUnavailableError('The authorization server did not answer', { cause: error });
       }
-      throw new RemoteMcpAuthFailedError('The authorization server refused the refresh');
+      // A definitive refusal other than invalid_grant: same holder guard, so a late answer cannot clobber a successor.
+      const marked = await mcpConnectionRepository.setNeedsReconnectIfHolder(connection.id, holder, {
+        code: 'auth_failed',
+        message: 'The server refused the credentials',
+      });
+      if (marked) throw new OAuthReconnectRequiredError();
+      return await tokenAfterLostLease(connection.id, owner, options);
     }
     if (error instanceof RemoteMcpError) throw error;
     // A network or storage failure: transient, and no reason to ask the user to sign in again.

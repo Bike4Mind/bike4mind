@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  RemoteMcpAuthFailedError,
-  RemoteMcpAuthRequiredError,
-  RemoteMcpInvalidGrantError,
-  RemoteMcpOAuthError,
-} from '@bike4mind/mcp/remote';
+import { RemoteMcpAuthRequiredError, RemoteMcpInvalidGrantError, RemoteMcpOAuthError } from '@bike4mind/mcp/remote';
 
 const h = vi.hoisted(() => ({
   repo: {
@@ -211,11 +206,34 @@ describe('getOAuthAccessToken', () => {
       expect(h.repo.releaseRefreshLease).toHaveBeenCalledTimes(1);
     });
 
-    it('a definitive refusal is an auth failure, not a timeout', async () => {
+    it('a definitive refusal marks reconnect with auth_failed, only while the caller holds the lease', async () => {
       acquired(connection());
       h.refresh.mockRejectedValue(new RemoteMcpOAuthError('token_failed', 'refused'));
-      await expect(getOAuthAccessToken(connection(), options())).rejects.toBeInstanceOf(RemoteMcpAuthFailedError);
-      expect(h.repo.setNeedsReconnectIfHolder).not.toHaveBeenCalled();
+      await expect(getOAuthAccessToken(connection(), options())).rejects.toBeInstanceOf(OAuthReconnectRequiredError);
+      const holder = h.repo.acquireRefreshLease.mock.calls[0]?.[2];
+      expect(h.repo.setNeedsReconnectIfHolder).toHaveBeenCalledWith(
+        'c1',
+        holder,
+        expect.objectContaining({ code: 'auth_failed' })
+      );
+    });
+
+    it('a late definitive refusal from a holder that lost its lease writes nothing and uses the successor token', async () => {
+      acquired(connection());
+      h.refresh.mockRejectedValue(new RemoteMcpOAuthError('token_failed', 'refused'));
+      h.repo.setNeedsReconnectIfHolder.mockResolvedValue(null);
+      h.repo.findByIdWithCredentials.mockResolvedValue(
+        connection({ accessTokenEnc: 'enc:winner', expiresAt: new Date(NOW + 3_600_000) })
+      );
+      expect(await getOAuthAccessToken(connection(), options())).toBe('winner');
+    });
+
+    it('a late definitive refusal with no usable successor token is a superseded grant', async () => {
+      acquired(connection());
+      h.refresh.mockRejectedValue(new RemoteMcpOAuthError('token_failed', 'refused'));
+      h.repo.setNeedsReconnectIfHolder.mockResolvedValue(null);
+      h.repo.findByIdWithCredentials.mockResolvedValue(null);
+      await expect(getOAuthAccessToken(connection(), options())).rejects.toBeInstanceOf(OAuthGrantSupersededError);
     });
   });
 
