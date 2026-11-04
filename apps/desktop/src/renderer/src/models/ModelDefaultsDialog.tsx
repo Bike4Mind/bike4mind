@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -6,6 +6,7 @@ import CircularProgress from '@mui/joy/CircularProgress';
 import DialogActions from '@mui/joy/DialogActions';
 import DialogContent from '@mui/joy/DialogContent';
 import DialogTitle from '@mui/joy/DialogTitle';
+import Divider from '@mui/joy/Divider';
 import Input from '@mui/joy/Input';
 import Modal from '@mui/joy/Modal';
 import ModalDialog from '@mui/joy/ModalDialog';
@@ -23,7 +24,15 @@ import {
   type GenerationSettings,
   type NumericControl,
 } from '@shared/generation';
-import type { ModelEffort, ModelSettings } from '@shared/modelSettings';
+import { contextSizeLabel, parseModelContextSetting, type ModelContextSetting } from '@shared/localContextSetting';
+import {
+  KEEP_ALIVE_CHOICES,
+  MAX_DRAFT_TOKENS,
+  type KeepAliveSeconds,
+  type ModelEffort,
+  type ModelLoadOffer,
+  type ModelSettings,
+} from '@shared/modelSettings';
 import { EFFORT_LABELS } from '../chat/ReasoningEffortPicker';
 
 const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 });
@@ -110,13 +119,69 @@ function draftsOf(generation: GenerationSettings | undefined): Drafts {
   return drafts;
 }
 
+const SAME_AS_SETTINGS = 'settings';
+
+/** The context Select's value for a stored choice; null is the Settings choice. */
+export function contextValue(context: ModelContextSetting | null): string {
+  if (!context) return SAME_AS_SETTINGS;
+  if (context.mode === 'fixed') return `fixed:${context.tokens}`;
+  return context.maxTokens === undefined ? 'auto' : `auto:${context.maxTokens}`;
+}
+
+function contextOf(value: string): ModelContextSetting | null {
+  const [mode, size] = value.split(':');
+  return parseModelContextSetting(
+    mode === 'fixed' ? { mode, tokens: Number(size) } : { mode, ...(size ? { maxTokens: Number(size) } : {}) }
+  );
+}
+
+/** The num_ctx a context choice sends, from the offer's ratings; undefined when the offer does not say. */
+export function contextSent(offer: ModelLoadOffer, context: ModelContextSetting | null): number | undefined {
+  const offered = offer.context;
+  if (offered?.kind !== 'ollama') return undefined;
+  if (!context) return offered.settings;
+  const tokens = context.mode === 'fixed' ? context.tokens : context.maxTokens;
+  const size = offered.sizes.find(candidate => candidate.size === tokens);
+  if (context.mode === 'fixed') return size?.tokens;
+  return context.maxTokens === undefined ? offered.auto : size?.autoTokens;
+}
+
+function sameContext(a: ModelContextSetting | null, b: ModelContextSetting | null): boolean {
+  return contextValue(a) === contextValue(b);
+}
+
+/** A draft count as typed, within its range; undefined for a blank field. */
+function draftOf(text: string, max: number): number | undefined {
+  const value = Number(text.trim());
+  if (!text.trim() || !Number.isFinite(value)) return undefined;
+  return Math.min(max, Math.max(0, Math.round(value)));
+}
+
+const KEEP_ALIVE_LABELS: Record<KeepAliveSeconds, string> = {
+  300: '5 minutes',
+  1800: '30 minutes',
+  3600: '1 hour',
+  14400: '4 hours',
+  [-1]: 'Until Ollama stops',
+};
+
 /**
  * One model's defaults: the per-request options its controls list. A blank field stores nothing,
  * so a turn sends the catalog's sampling for a reviewed build, else nothing and the model's own
- * default applies. A conversation's own settings override these.
+ * default applies. A conversation's own settings override these. Below them, the load-time options
+ * main offers for the model, which no conversation overrides.
  */
-export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOption | null; onClose: () => void }) {
-  return <ModelDefaultsForm key={option?.id ?? ''} option={option} onClose={onClose} />;
+export function ModelDefaultsDialog({
+  option,
+  onClose,
+  onSaved,
+}: {
+  option: ChatModelOption | null;
+  onClose: () => void;
+  /** After a save, so what rates the model (its fit badge) can read it again. */
+  onSaved?: () => void;
+}) {
+  return <ModelDefaultsForm key={option?.id ?? ''} option={option} onClose={onClose} onSaved={onSaved} />;
 }
 
 /** An IPC rejection arrives wrapped in Electron's "Error invoking remote method" text. */
@@ -125,16 +190,30 @@ function reasonText(reason: unknown): string {
   return text.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
 }
 
-function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null; onClose: () => void }) {
+function ModelDefaultsForm({
+  option,
+  onClose,
+  onSaved,
+}: {
+  option: ChatModelOption | null;
+  onClose: () => void;
+  onSaved?: () => void;
+}) {
   const [loaded, setLoaded] = useState<ModelSettings | null>(null);
   const [readFailed, setReadFailed] = useState(false);
   const [drafts, setDrafts] = useState<Drafts>({});
   // Each field's last parseable text, which a blur puts back over text the input cannot parse.
   const lastGood = useRef<Drafts>({});
   const [effort, setEffort] = useState<ModelEffort | null>(null);
+  const [context, setContext] = useState<ModelContextSetting | null>(null);
+  const [draftText, setDraftText] = useState('');
+  const [keepAlive, setKeepAlive] = useState<KeepAliveSeconds | null>(null);
+  const [offer, setOffer] = useState<ModelLoadOffer | null>(null);
+  const [loadedContext, setLoadedContext] = useState<number | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const modelId = option?.id ?? null;
+  const draftTokens = draftOf(draftText, offer?.draft?.max ?? MAX_DRAFT_TOKENS);
 
   useEffect(() => {
     setLoaded(null);
@@ -150,6 +229,9 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
         lastGood.current = draftsOf(current.generation);
         setDrafts({ ...lastGood.current });
         setEffort(current.effort ?? null);
+        setContext(current.context ?? null);
+        setDraftText(current.draftTokens !== undefined ? String(current.draftTokens) : '');
+        setKeepAlive(current.keepAlive ?? null);
       },
       (reason: unknown) => {
         if (!live) return;
@@ -163,6 +245,38 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
     };
   }, [modelId]);
 
+  useEffect(() => {
+    setLoadedContext(undefined);
+    if (!modelId) return;
+    let live = true;
+    window.b4m.models.getLoadedState(modelId).then(
+      state => {
+        if (live && state.kind === 'loaded') setLoadedContext(state.contextLength);
+      },
+      () => undefined
+    );
+    return () => {
+      live = false;
+    };
+  }, [modelId]);
+
+  // Rated again for the draft count typed, since a speculating model needs more memory at each size.
+  useEffect(() => {
+    if (!modelId) return;
+    let live = true;
+    window.b4m.chat.getModelLoadOffer(modelId, draftTokens).then(
+      next => {
+        if (live) setOffer(next ?? {});
+      },
+      () => {
+        if (live) setOffer(current => current ?? {});
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [modelId, draftTokens]);
+
   if (!option) return null;
   const fields = editableFields(option);
   const levels = option.controls?.effort?.levels ?? [];
@@ -175,15 +289,21 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
       const value = requestGeneration({ [field]: Number(text) }, { [field]: control })[field];
       if (value !== undefined) generation[field] = value;
     }
+    // Load-time choices are kept as read even when the offer could not be fetched, so a save never drops them.
     const next: ModelSettings = {
       ...(Object.keys(generation).length > 0 ? { generation } : {}),
       ...(effort && levels.includes(effort) ? { effort } : {}),
+      ...(context ? { context } : {}),
+      ...(draftTokens !== undefined ? { draftTokens } : {}),
+      ...(keepAlive !== null ? { keepAlive } : {}),
     };
     setSaving(true);
     try {
       const saved = await window.b4m.chat.setModelSettings(option.id, next);
-      if (saved) onClose();
-      else setError('Desktop could not save these settings.');
+      if (saved) {
+        onSaved?.();
+        onClose();
+      } else setError('Desktop could not save these settings.');
     } catch (reason) {
       setError(`Desktop could not save these settings: ${reasonText(reason)}`);
     } finally {
@@ -191,7 +311,12 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
     }
   };
 
-  const touched = fields.some(({ field }) => drafts[field]?.trim()) || effort !== null;
+  const touched =
+    fields.some(({ field }) => drafts[field]?.trim()) ||
+    effort !== null ||
+    context !== null ||
+    draftText.trim() !== '' ||
+    keepAlive !== null;
 
   return (
     <Modal open onClose={() => !saving && onClose()}>
@@ -309,6 +434,20 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
                   </Select>
                 </Stack>
               )}
+              {offer && (
+                <LoadOptionRows
+                  offer={offer}
+                  saved={loaded}
+                  context={context}
+                  onContext={setContext}
+                  draftText={draftText}
+                  onDraftText={setDraftText}
+                  keepAlive={keepAlive}
+                  onKeepAlive={setKeepAlive}
+                  loadedContext={loadedContext}
+                  disabled={saving}
+                />
+              )}
             </Stack>
           )}
         </DialogContent>
@@ -338,6 +477,9 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
               lastGood.current = {};
               setDrafts({});
               setEffort(null);
+              setContext(null);
+              setDraftText('');
+              setKeepAlive(null);
             }}
             sx={{ mr: 'auto' }}
             data-testid="model-defaults-clear-btn"
@@ -347,5 +489,210 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
         </DialogActions>
       </ModalDialog>
     </Modal>
+  );
+}
+
+function OptionRow({
+  label,
+  note,
+  testId,
+  children,
+}: {
+  label: string;
+  note: ReactNode;
+  testId: string;
+  children: ReactNode;
+}) {
+  return (
+    <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ py: 0.5 }}>
+      <Stack sx={{ minWidth: 0 }}>
+        <Typography level="body-sm">{label}</Typography>
+        <Typography level="body-xs" textColor="text.tertiary" id={`${testId}-note`} data-testid={`${testId}-note`}>
+          {note}
+        </Typography>
+      </Stack>
+      {children}
+    </Stack>
+  );
+}
+
+/** Load-time options: only those `offer` lists, each the same for every chat on the model. */
+function LoadOptionRows({
+  offer,
+  saved,
+  context,
+  onContext,
+  draftText,
+  onDraftText,
+  keepAlive,
+  onKeepAlive,
+  loadedContext,
+  disabled,
+}: {
+  offer: ModelLoadOffer;
+  saved: ModelSettings | null;
+  context: ModelContextSetting | null;
+  onContext: (context: ModelContextSetting | null) => void;
+  draftText: string;
+  onDraftText: (text: string) => void;
+  keepAlive: KeepAliveSeconds | null;
+  onKeepAlive: (keepAlive: KeepAliveSeconds | null) => void;
+  /** The num_ctx `/api/ps` says the model is loaded with now; undefined when it is not loaded or unknown. */
+  loadedContext: number | undefined;
+  disabled: boolean;
+}) {
+  const offered = offer.context;
+  if (!offered && !offer.draft && !offer.keepAlive) return null;
+  const sent = contextSent(offer, context);
+  const reloads =
+    loadedContext !== undefined &&
+    sent !== undefined &&
+    sent !== loadedContext &&
+    !sameContext(context, saved?.context ?? null);
+  const fixedSize = offered?.kind === 'ollama' && context?.mode === 'fixed' ? context.tokens : undefined;
+  const tooLarge = offered?.kind === 'ollama' && offered.sizes.find(size => size.size === fixedSize)?.loads === false;
+  return (
+    <>
+      <Divider sx={{ my: 1 }} />
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="model-defaults-load-section">
+        Sent by every request to this model, from chats, titles and summaries alike, and not set per chat.
+      </Typography>
+      {offered && (
+        <OptionRow
+          label="Context"
+          testId="model-defaults-context"
+          note={
+            offered.kind === 'budget' ? (
+              'The server sets the context. A smaller one here makes chats on this model summarise sooner.'
+            ) : (
+              <>
+                {sent !== undefined ? `Runs at ${contextSizeLabel(sent)}.` : ''}
+                {tooLarge ? " May not load in this computer's memory." : ''}
+                {reloads && (
+                  <Typography component="span" color="warning" data-testid="model-defaults-context-reload">
+                    {` Reloads the model, which is loaded at ${contextSizeLabel(loadedContext)} now.`}
+                  </Typography>
+                )}
+              </>
+            )
+          }
+        >
+          <Select
+            size="sm"
+            value={contextValue(context)}
+            disabled={disabled}
+            onChange={(_event, value) => value && onContext(contextOf(value))}
+            sx={{ width: 180, flexShrink: 0 }}
+            slotProps={{
+              button: {
+                'aria-label': 'Context',
+                'aria-describedby': 'model-defaults-context-note',
+                'data-testid': 'model-defaults-context-select',
+              },
+            }}
+          >
+            <Option value={SAME_AS_SETTINGS} data-testid="model-defaults-context-option-settings">
+              {offered.kind === 'budget' ? `Server's ${contextSizeLabel(offered.server)}` : 'Same as Settings'}
+            </Option>
+            {offered.kind === 'ollama' && offered.auto !== undefined && (
+              <Option value="auto" data-testid="model-defaults-context-option-auto">
+                Auto
+              </Option>
+            )}
+            {offered.kind === 'ollama' &&
+              offered.auto !== undefined &&
+              offered.sizes.map(({ size }) => (
+                <Option
+                  key={`auto:${size}`}
+                  value={`auto:${size}`}
+                  data-testid={`model-defaults-context-option-auto-${size}`}
+                >
+                  {`Auto, up to ${contextSizeLabel(size)}`}
+                </Option>
+              ))}
+            {offered.kind === 'ollama' &&
+              offered.sizes.map(({ size, tokens, loads }) => (
+                <Option
+                  key={`fixed:${size}`}
+                  value={`fixed:${size}`}
+                  label={contextSizeLabel(tokens)}
+                  data-testid={`model-defaults-context-option-${size}`}
+                >
+                  <Stack>
+                    {contextSizeLabel(tokens)}
+                    {loads === false && (
+                      <Typography
+                        level="body-xs"
+                        color="warning"
+                        data-testid={`model-defaults-context-option-${size}-note`}
+                      >
+                        May not load in this computer&apos;s memory
+                      </Typography>
+                    )}
+                  </Stack>
+                </Option>
+              ))}
+            {offered.kind === 'budget' &&
+              offered.sizes.map(size => (
+                <Option key={size} value={`fixed:${size}`} data-testid={`model-defaults-context-option-${size}`}>
+                  {contextSizeLabel(size)}
+                </Option>
+              ))}
+          </Select>
+        </OptionRow>
+      )}
+      {offer.draft && (
+        <OptionRow
+          label="MTP draft tokens"
+          testId="model-defaults-draft"
+          note={`Model default: ${offer.draft.modelDefault}. 0 turns MTP off; a change reloads the model.`}
+        >
+          <Input
+            size="sm"
+            type="number"
+            value={draftText}
+            placeholder={String(offer.draft.modelDefault)}
+            disabled={disabled}
+            onChange={event => onDraftText(event.target.value)}
+            sx={{ width: 112, flexShrink: 0, '& input::placeholder': { fontStyle: 'italic' } }}
+            slotProps={{
+              input: {
+                min: 0,
+                max: offer.draft.max,
+                step: 1,
+                'aria-label': 'MTP draft tokens',
+                'aria-describedby': 'model-defaults-draft-note',
+                'data-testid': 'model-defaults-draft-input',
+              },
+            }}
+          />
+        </OptionRow>
+      )}
+      {offer.keepAlive && (
+        <OptionRow label="Keep loaded" testId="model-defaults-keep-alive" note="After its last request.">
+          <Select
+            size="sm"
+            value={keepAlive === null ? 'default' : String(keepAlive)}
+            disabled={disabled}
+            onChange={(_event, value) =>
+              onKeepAlive(KEEP_ALIVE_CHOICES.find(choice => String(choice) === value) ?? null)
+            }
+            sx={{ width: 180, flexShrink: 0 }}
+            slotProps={{
+              button: { 'aria-label': 'Keep loaded', 'data-testid': 'model-defaults-keep-alive-select' },
+            }}
+          >
+            <Option value="default" data-testid="model-defaults-keep-alive-option-default">
+              Server default
+            </Option>
+            {KEEP_ALIVE_CHOICES.map(choice => (
+              <Option key={choice} value={String(choice)} data-testid={`model-defaults-keep-alive-option-${choice}`}>
+                {KEEP_ALIVE_LABELS[choice]}
+              </Option>
+            ))}
+          </Select>
+        </OptionRow>
+      )}
+    </>
   );
 }

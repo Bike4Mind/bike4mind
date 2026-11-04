@@ -23,5 +23,9 @@ export function loadedStateOf(loaded: readonly LoadedModel[], model: string): Lo
   const entry = loaded.find(candidate => withTag(candidate.name) === wanted);
   if (!entry) return { kind: 'unloaded' };
   const expiresAt = entry.expiresAt ? Date.parse(entry.expiresAt) : Number.NaN;
-  return { kind: 'loaded', expiresAt: Number.isFinite(expiresAt) ? expiresAt : null };
+  return {
+    kind: 'loaded',
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+    ...(entry.contextLength !== null ? { contextLength: entry.contextLength } : {}),
+  };
 }
