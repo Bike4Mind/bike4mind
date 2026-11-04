@@ -39,7 +39,11 @@ const confidential = (clientId: string, clientSecret?: string): RemoteMcpOAuthCl
 /** The admin-registered client for a catalog preset, if any. A malformed setting is logged, never silent. */
 export async function presetClientFor(presetId: string | undefined): Promise<ManualOAuthClient | undefined> {
   if (!presetId) return undefined;
-  const raw = getSettingsValue('customMcpPresetClients', await getSettingsMap({ adminSettings: adminSettingsRepository }), '');
+  const raw = getSettingsValue(
+    'customMcpPresetClients',
+    await getSettingsMap({ adminSettings: adminSettingsRepository }),
+    ''
+  );
   const parsed = parseCustomMcpPresetClients(raw);
   if (!parsed.ok) console.warn(`[mcpOAuth] customMcpPresetClients is unusable: ${parsed.error}`);
   return parsed.clients[presetId];

@@ -5,6 +5,7 @@
  * tests pass the loopback-allowed one. The SDK does the wire work; this adds what it does not check:
  * S256 required, https plus the connector URL rules on every endpoint, and the `resource` match.
  */
+import { createPinnedFetch, type PinnedFetch } from '@bike4mind/fab-pipeline/ssrf';
 import {
   discoverAuthorizationServerMetadata,
   discoverOAuthProtectedResourceMetadata,
@@ -85,6 +86,22 @@ export interface RemoteMcpOAuthEndpoints {
   tokenEndpoint: string;
   revocationEndpoint?: string;
   registrationEndpoint?: string;
+}
+
+/**
+ * The SSRF-pinned fetch for every OAuth request to a server-named host (metadata, registration, token,
+ * revoke): connect-time address pinning, small bodies, same-origin redirects only. Close it when done.
+ */
+export function createRemoteMcpOAuthFetch(
+  network: Pick<ValidateRemoteMcpUrlOptions, 'allowHttp' | 'allowPrivateCidrs'>
+): PinnedFetch {
+  return createPinnedFetch({
+    allowPrivateCidrs: network.allowPrivateCidrs,
+    allowHttp: network.allowHttp,
+    maxBodyBytes: 1024 * 1024,
+    timeoutMs: 15_000,
+    sameOriginRedirectsOnly: true,
+  });
 }
 
 function fail(message: string, cause?: unknown): never {

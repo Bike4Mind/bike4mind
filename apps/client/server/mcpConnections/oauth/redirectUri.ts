@@ -6,7 +6,8 @@ export const MCP_OAUTH_CLIENT_METADATA_PATH = '/.well-known/oauth-client/mcp-cli
 
 function appOrigin(): string {
   const appUrl = validateAppUrl('MCP OAuth');
-  if (!appUrl) throw new BadRequestError('This deployment has no valid APP_URL for sign-in', { code: 'app_url_missing' });
+  if (!appUrl)
+    throw new BadRequestError('This deployment has no valid APP_URL for sign-in', { code: 'app_url_missing' });
   return new URL(appUrl).origin;
 }
 

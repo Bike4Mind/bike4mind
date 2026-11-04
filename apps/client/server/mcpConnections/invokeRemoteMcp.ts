@@ -49,6 +49,7 @@ import {
   type CustomMcpContext,
   type RemoteMcpNetworkOptions,
 } from './customMcpAccess';
+import { OAuthReconnectRequiredError, getOAuthAccessToken } from './oauth/tokenManager';
 
 /**
  * The one way the app talks to a custom remote MCP server (design #4845 sections 5, 8, 11, 12).
@@ -264,7 +265,7 @@ function clampLimits(requested: Partial<RemoteMcpLimits> | undefined): Partial<R
 }
 
 /** A server-supplied scope is shown to the user and later sent to the authorization server. */
-function cleanScope(scope: string | undefined): string | undefined {
+export function cleanScope(scope: string | undefined): string | undefined {
   return typeof scope === 'string'
     ? cleanMcpToolText(scope, MCP_CONNECTION_LIMITS.requiredScopeLength) || undefined
     : undefined;
@@ -291,8 +292,13 @@ async function recordFailure(
     }
     return mcpConnectionRepository.setStatus(connection.id, status, failure, connection.auth.apiKey?.valueEnc ?? null);
   };
+  // The token manager already stored why the grant is gone.
+  if (error instanceof OAuthReconnectRequiredError) return;
   if (error instanceof RemoteMcpAuthRequiredError) {
-    if (connection.auth.kind === 'none') {
+    if (
+      connection.auth.kind === 'none' ||
+      (connection.auth.kind === 'oauth' && !connection.auth.oauth?.hasAccessToken)
+    ) {
       await mcpConnectionRepository.setPendingAuth(connection.id, {
         resourceMetadataUrl: trustedResourceMetadataUrl(error.resourceMetadataUrl, connection, network),
         scope: cleanScope(error.scope),
@@ -329,9 +335,15 @@ async function recordFailure(
 
 /**
  * The credential headers for a connection, decrypted here in the app tier. Header-name policy is
- * re-checked on every call so a row written before a rule tightened cannot smuggle a header.
+ * re-checked on every call so a row written before a rule tightened cannot smuggle a header. An OAuth
+ * connection gets its bearer token from the token manager, which refreshes it under a lease; with no
+ * grant yet it sends nothing, so the server's 401 records the challenge for sign-in.
  */
-function buildAuthHeaders(connection: IMcpConnectionDocument): Record<string, string> {
+async function buildAuthHeaders(
+  connection: IMcpConnectionDocument,
+  network: RemoteMcpNetworkOptions,
+  forceRefresh = false
+): Promise<Record<string, string>> {
   const { auth } = connection;
   if (auth.kind === 'none') return {};
   if (auth.kind === 'api_key') {
@@ -342,10 +354,8 @@ function buildAuthHeaders(connection: IMcpConnectionDocument): Record<string, st
     }
     return { [apiKey.headerName]: apiKey.scheme === 'raw' ? value : `Bearer ${value}` };
   }
-  // SEAM (OAuth): RemoteMcpTokenManager.getAccessToken(connection) with the leased refresh, then
-  // `Authorization: Bearer <token>`, one forced refresh and retry on a 401. Until then an OAuth
-  // connection reads as needing sign-in.
-  throw new RemoteMcpAuthRequiredError({});
+  const token = await getOAuthAccessToken(connection, { network, force: forceRefresh });
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 /** Read-only only when the server says so and does not also call it destructive; no hint is a write. */
@@ -487,7 +497,7 @@ export async function invokeRemoteMcp(
     const payload: RemoteMcpRunPayload = {
       url: decryptToken(connection.urlEnc) ?? '',
       transport: transportFor(connection, request.action),
-      headers: buildAuthHeaders(connection),
+      headers: await buildAuthHeaders(connection, context.network),
       action: request.action,
       ...(request.action === 'callTool' ? { toolName: request.toolName, args } : {}),
       limits: clampLimits(request.limits),
@@ -498,7 +508,14 @@ export async function invokeRemoteMcp(
     // about whether the server is up, so those come back as values and are rethrown below.
     const outcome = await breaker.execute(async () => {
       try {
-        return { ok: true as const, run: await runner(payload) };
+        try {
+          return { ok: true as const, run: await runner(payload) };
+        } catch (error) {
+          // The server rejected a token we thought was valid (revoked, or rotated early): refresh once and retry.
+          if (!(error instanceof RemoteMcpAuthRequiredError) || !connection.auth.oauth?.hasAccessToken) throw error;
+          const retry = { ...payload, headers: await buildAuthHeaders(connection, context.network, true) };
+          return { ok: true as const, run: await runner(retry) };
+        }
       } catch (error) {
         if (error instanceof RemoteMcpError && !OUTAGE_CODES.has(error.code)) return { ok: false as const, error };
         throw error;

@@ -31,8 +31,9 @@ import type {
   McpConnectionPatchBody,
 } from '@server/validators/mcpConnectionValidators';
 import { prepareConnectionUrl } from './connectionUrl';
-import { evaluateConnectionPolicy, type CustomMcpContext } from './customMcpAccess';
+import { evaluateConnectionPolicy, resolveCustomMcpContext, type CustomMcpContext } from './customMcpAccess';
 import { discoverConnectionTools, type DiscoveryOutcome } from './discovery';
+import { revokeConnectionGrant } from './oauth/revoke';
 import {
   CustomMcpPolicyBlockedError,
   CustomMcpUnavailableError,
@@ -55,9 +56,9 @@ export interface ConnectionActor {
   organizationId?: string | { toString(): string } | null;
 }
 
-const userOwner = (userId: string): McpConnectionOwner => ({ ownerType: 'user', ownerKey: userId });
+export const userOwner = (userId: string): McpConnectionOwner => ({ ownerType: 'user', ownerKey: userId });
 
-function audit(
+export function audit(
   actor: ConnectionActor,
   action: string,
   // A refused create has no id or slug yet.
@@ -207,7 +208,7 @@ async function probe(
   }
 }
 
-function assertPolicyAllows(
+export function assertPolicyAllows(
   actor: ConnectionActor,
   context: CustomMcpContext,
   connection: Pick<IMcpConnectionDocument, 'urlHost'> &
@@ -432,21 +433,46 @@ export async function rotateUserConnectionApiKey(
   return toPublicView(context, reloaded);
 }
 
-/**
- * SEAM (OAuth): revoke the refresh token, then the access token, at the advertised
- * `revocation_endpoint` (RFC 7009, best effort, logged) before the record goes. Nothing to revoke
- * for `none` and `api_key` connections; an API key is the user's to revoke at the vendor.
- */
-async function revokeRemoteGrant(connection: IMcpConnectionDocument): Promise<void> {
-  if (connection.auth.kind !== 'oauth') return;
-}
-
 /** Owner-scoped delete; open even with connectors switched off, so a user can always clean up. */
 export async function deleteUserConnection(actor: ConnectionActor, id: string): Promise<void> {
   const owner = userOwner(actor.id);
-  const connection = await mcpConnectionRepository.findByIdForOwner(id, owner);
+  const connection = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
   if (!connection) throw new NotFoundError('Connection not found');
-  await revokeRemoteGrant(connection);
+  await revokeRemoteGrant(actor, connection);
   if (!(await mcpConnectionRepository.deleteForOwner(id, owner))) throw new NotFoundError('Connection not found');
   audit(actor, 'disconnected', connection).success();
+}
+
+/**
+ * Revokes an OAuth grant at the authorization server (RFC 7009, best effort and logged, so it never
+ * blocks the caller). Nothing to revoke for `none` and `api_key` connections; an API key is the
+ * user's to revoke at the vendor.
+ */
+async function revokeRemoteGrant(actor: ConnectionActor, connection: IMcpConnectionDocument): Promise<void> {
+  if (connection.auth.kind !== 'oauth') return;
+  try {
+    const { network } = await resolveCustomMcpContext(actor.id);
+    await revokeConnectionGrant(connection, network);
+  } catch {
+    console.warn(`[connectionService] Could not revoke the grant of connection ${connection.id}`);
+  }
+}
+
+/** Revokes the grant and clears the tokens: the connection goes back to waiting for sign-in. */
+export async function disconnectUserConnectionOAuth(
+  actor: ConnectionActor,
+  context: CustomMcpContext,
+  id: string
+): Promise<IMcpConnectionPublic> {
+  const owner = userOwner(actor.id);
+  const connection = await mcpConnectionRepository.findByIdWithCredentials(id, owner);
+  if (!connection) throw new NotFoundError('Connection not found');
+  if (connection.auth.kind !== 'oauth') {
+    throw new ConflictError('This connection does not use OAuth sign-in', { code: 'not_oauth' });
+  }
+  await revokeConnectionGrant(connection, context.network);
+  const cleared = await mcpConnectionRepository.clearOAuthTokens(id, owner);
+  if (!cleared) throw new NotFoundError('Connection not found');
+  audit(actor, 'oauth_disconnected', cleared).success();
+  return toPublicView(context, cleared);
 }

@@ -108,6 +108,7 @@ const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
 const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
 const ArenaPage = lazy(() => import('./routes/arena'));
+const McpOAuthCallbackPage = lazy(() => import('./routes/integrations/mcp-oauth-callback'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
@@ -998,6 +999,17 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
+// Where a custom MCP connector's authorization server redirects back; the page posts the one-time parameters to the API.
+const mcpOAuthCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/integrations/mcp-oauth-callback',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <McpOAuthCallbackPage />
+    </Suspense>
+  ),
+});
+
 // Data-lake GitHub App return: its OAuth Callback URL points here, and with OAuth-during-install on, the install return lands here too.
 const gitHubLakeCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1367,6 +1379,7 @@ const routeTree = rootRoute.addChildren([
   verifyEmailChangeRoute,
   adminEmergencyRoute,
   googleDriveCallbackRoute,
+  mcpOAuthCallbackRoute,
   gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,

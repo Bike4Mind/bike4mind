@@ -71,14 +71,21 @@ describe('resolveOAuthClient', () => {
 
   it('uses a client the user typed, storing it encrypted', async () => {
     const resolved = await resolve({ manual: { clientId: 'typed', clientSecret: 'shh' } });
-    expect(resolved).toMatchObject({ mode: 'manual', manualClientIdEnc: 'enc:typed', manualClientSecretEnc: 'enc:shh' });
+    expect(resolved).toMatchObject({
+      mode: 'manual',
+      manualClientIdEnc: 'enc:typed',
+      manualClientSecretEnc: 'enc:shh',
+    });
   });
 
   it('uses the metadata-document client on a public https app when the server supports it', async () => {
     const resolved = await resolve({ discovery: discovery({ cimdSupported: true }) });
     expect(resolved).toMatchObject({
       mode: 'cimd',
-      client: { clientId: 'https://app.example.com/.well-known/oauth-client/mcp-client.json', tokenEndpointAuthMethod: 'none' },
+      client: {
+        clientId: 'https://app.example.com/.well-known/oauth-client/mcp-client.json',
+        tokenEndpointAuthMethod: 'none',
+      },
     });
   });
 
@@ -93,9 +100,19 @@ describe('resolveOAuthClient', () => {
     expect(first).toMatchObject({ mode: 'dcr', clientRegistrationId: 'reg-1' });
     expect(h.register).toHaveBeenCalledTimes(1);
 
-    h.rows = [{ id: 'reg-1', clientId: 'dcr-client', clientSecretEnc: 'enc:abc', tokenEndpointAuthMethod: 'client_secret_post' }];
+    h.rows = [
+      {
+        id: 'reg-1',
+        clientId: 'dcr-client',
+        clientSecretEnc: 'enc:abc',
+        tokenEndpointAuthMethod: 'client_secret_post',
+      },
+    ];
     const second = await resolve();
-    expect(second).toMatchObject({ clientRegistrationId: 'reg-1', client: { clientId: 'dcr-client', clientSecret: 'abc' } });
+    expect(second).toMatchObject({
+      clientRegistrationId: 'reg-1',
+      client: { clientId: 'dcr-client', clientSecret: 'abc' },
+    });
     expect(h.register).toHaveBeenCalledTimes(1);
   });
 
@@ -115,7 +132,12 @@ describe('resolveOAuthClient', () => {
 describe('loadConnectionClient', () => {
   it('rebuilds a manual client from its stored ciphertext', async () => {
     const client = await loadConnectionClient(
-      { auth: { kind: 'oauth', oauth: { clientMode: 'manual', manualClientIdEnc: 'enc:id', manualClientSecretEnc: 'enc:sec', issuer: 'i' } } } as never,
+      {
+        auth: {
+          kind: 'oauth',
+          oauth: { clientMode: 'manual', manualClientIdEnc: 'enc:id', manualClientSecretEnc: 'enc:sec', issuer: 'i' },
+        },
+      } as never,
       'https://app.example.com/cb'
     );
     expect(client).toMatchObject({ clientId: 'id', clientSecret: 'sec' });
