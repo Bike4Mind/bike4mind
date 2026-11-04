@@ -51,6 +51,24 @@ export class PartnerSignupRuleRepository
       },
     };
   }
+
+  async countByGrantPackage(ids: string[]) {
+    const counts = new Map<string, { domains: number; enabledDomains: number }>();
+    if (ids.length === 0) return counts;
+
+    const rows = await this.model.aggregate<{ _id: string; domains: number; enabledDomains: number }>([
+      { $match: { grantPackageId: { $in: ids } } },
+      {
+        $group: {
+          _id: '$grantPackageId',
+          domains: { $sum: 1 },
+          enabledDomains: { $sum: { $cond: [{ $eq: ['$enabled', true] }, 1, 0] } },
+        },
+      },
+    ]);
+    for (const row of rows) counts.set(row._id, { domains: row.domains, enabledDomains: row.enabledDomains });
+    return counts;
+  }
 }
 
 export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IPartnerSignupRuleModel>(

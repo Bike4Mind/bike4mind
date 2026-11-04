@@ -51,6 +51,44 @@ export class RegistrationInviteRepository
 
     return updatedInvites;
   }
+
+  /**
+   * Per-package code counts for the grant packages admin list. A code is active while it is
+   * unexpired and still redeemable (open, or unlimited-use). nextExpiry is the soonest expiry
+   * among active codes that carry one.
+   */
+  async usageByGrantPackage(ids: string[], now: Date = new Date()) {
+    const usage = new Map<string, { codes: number; activeCodes: number; nextExpiry: Date | null }>();
+    if (ids.length === 0) return usage;
+
+    const active = {
+      $and: [
+        { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $gt: ['$expiresAt', now] }] },
+        { $or: [{ $eq: ['$status', RegInviteStatusType.open] }, { $eq: ['$unlimitedUse', true] }] },
+      ],
+    };
+    const rows = await this.model.aggregate<{
+      _id: string;
+      codes: number;
+      activeCodes: number;
+      nextExpiry: Date | null;
+    }>([
+      { $match: { grantPackageId: { $in: ids } } },
+      {
+        $group: {
+          _id: '$grantPackageId',
+          codes: { $sum: 1 },
+          activeCodes: { $sum: { $cond: [active, 1, 0] } },
+          // $min skips null, so codes without an expiry (or inactive ones) never win.
+          nextExpiry: { $min: { $cond: [active, { $ifNull: ['$expiresAt', null] }, null] } },
+        },
+      },
+    ]);
+    for (const row of rows) {
+      usage.set(row._id, { codes: row.codes, activeCodes: row.activeCodes, nextExpiry: row.nextExpiry ?? null });
+    }
+    return usage;
+  }
 }
 
 const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(

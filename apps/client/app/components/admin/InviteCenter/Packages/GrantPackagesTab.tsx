@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, Button, Chip, IconButton, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,6 +18,7 @@ import {
 } from '@client/app/utils/grantPackageAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { GrantPackageFormModal } from './GrantPackageFormModal';
+import { capState } from './capState';
 
 const formatCount = (value: number) => value.toLocaleString('en-US');
 const capLabel = (used: number, cap: number | null) =>
@@ -57,9 +58,62 @@ const columns: DataColumn<GrantPackageRow>[] = [
     ),
   },
   {
+    id: 'codes',
+    label: 'Codes',
+    numeric: true,
+    render: row =>
+      row.usage ? (
+        <Tooltip title="Active codes (unexpired and still redeemable) out of all codes linked to this package">
+          <span data-testid={`grant-package-codes-${row.id}`}>
+            {formatCount(row.usage.activeCodes)} active / {formatCount(row.usage.codes)}
+          </span>
+        </Tooltip>
+      ) : (
+        '-'
+      ),
+  },
+  {
+    id: 'partnerDomains',
+    label: 'Partner domains',
+    numeric: true,
+    render: row =>
+      row.usage ? (
+        <Tooltip title={`${formatCount(row.usage.partnerDomains)} linked, including disabled rules`}>
+          <span data-testid={`grant-package-domains-${row.id}`}>{formatCount(row.usage.enabledPartnerDomains)}</span>
+        </Tooltip>
+      ) : (
+        '-'
+      ),
+  },
+  {
+    id: 'nextCodeExpiry',
+    label: 'Next code expiry',
+    render: row => (
+      <Tooltip title="Packages do not expire; this is the soonest expiry among linked active codes">
+        <span data-testid={`grant-package-next-expiry-${row.id}`}>
+          {row.usage?.nextCodeExpiry ? new Date(row.usage.nextCodeExpiry).toLocaleDateString('en-US') : '-'}
+        </span>
+      </Tooltip>
+    ),
+  },
+  {
     id: 'status',
     label: 'Status',
-    render: row => <StatusChip tone={row.active ? 'good' : 'neutral'} label={row.active ? 'Active' : 'Inactive'} dot />,
+    render: row => {
+      const cap = capState(row);
+      return (
+        <Stack direction="row" gap={0.5} flexWrap="wrap">
+          <StatusChip tone={row.active ? 'good' : 'neutral'} label={row.active ? 'Active' : 'Inactive'} dot />
+          {cap && (
+            <StatusChip
+              tone="warn"
+              label={cap === 'total' ? 'Cap reached' : 'Daily cap reached'}
+              data-testid={`grant-package-cap-reached-${row.id}`}
+            />
+          )}
+        </Stack>
+      );
+    },
   },
 ];
 
@@ -71,8 +125,8 @@ const GrantPackagesTab = ({ embedded = false }: { embedded?: boolean }) => {
   const [editing, setEditing] = useState<IGrantPackageDocument | null>(null);
 
   const { data, isPending, error, refetch } = useQuery({
-    queryKey: [GRANT_PACKAGES_QUERY_KEY, { page, pageSize }],
-    queryFn: () => fetchGrantPackages({ page, limit: pageSize }),
+    queryKey: [GRANT_PACKAGES_QUERY_KEY, { page, pageSize, usage: true }],
+    queryFn: () => fetchGrantPackages({ page, limit: pageSize, usage: true }),
   });
 
   const openForm = (pkg: IGrantPackageDocument | null) => {
