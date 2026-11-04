@@ -3,6 +3,7 @@ import { userService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { readSignupGrantAdminAction, signupGrantAuditTarget } from '@server/credits/signupGrantAdminAction';
+import { rerunDomainGrantAfterUnblock } from '@server/credits/rerunDomainGrantAfterUnblock';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
@@ -23,6 +24,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         });
       },
     });
+    if (result.outcome === 'applied') await rerunDomainGrantAfterUnblock(userId);
     return res.json(result);
   });
 

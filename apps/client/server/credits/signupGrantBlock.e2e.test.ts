@@ -1,5 +1,6 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { creditService, userService } from '@bike4mind/services';
+import { rerunDomainGrantAfterUnblock } from './rerunDomainGrantAfterUnblock';
 import { newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { SignupProtection } from '@bike4mind/common';
 import {
@@ -20,6 +21,24 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
+
+vi.mock('@server/entitlements/partnerRules', () => ({
+  partnerSignupGrantForEmail: async () => ({
+    matched: true,
+    ruleId: 'rule-1',
+    domain: 'partner.example',
+    entitlements: new Set<string>(),
+    signupCredits: 250,
+    organizationId: null,
+    tags: [],
+    subscription: null,
+    grantPackageId: null,
+  }),
+}));
+vi.mock('@server/entitlements/invalidate', () => ({
+  pushEntitlementInvalidation: async () => {},
+  pushSubscriptionsInvalidation: async () => {},
+}));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -625,5 +644,42 @@ describe('admin release of a held tranche against a real database', () => {
       reason: 'held_for_review',
     });
     expect(await balance(user.id)).toBe(0);
+  });
+});
+
+describe('the domain grant after a block is lifted', () => {
+  const silent = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never;
+  const domainCredits = (id: string) =>
+    CreditTransaction.countDocuments({ ownerId: id, reason: 'domain-grant signup credits' });
+
+  it('grants credits withheld during the block once, and a repeat or a second unblock grants nothing more', async () => {
+    const user = await makeGrantUser({ email: 'dee@partner.example' });
+    await userService.blockSignupGrant(user.id, blockAdapters);
+    await rerunDomainGrantAfterUnblock(user.id, silent);
+    expect(await balance(user.id)).toBe(0);
+    expect(await domainCredits(user.id)).toBe(0);
+
+    await userService.unblockSignupGrant(user.id, blockAdapters);
+    await rerunDomainGrantAfterUnblock(user.id, silent);
+    expect(await balance(user.id)).toBe(250);
+
+    await rerunDomainGrantAfterUnblock(user.id, silent);
+    await userService.blockSignupGrant(user.id, blockAdapters);
+    await userService.unblockSignupGrant(user.id, blockAdapters);
+    await rerunDomainGrantAfterUnblock(user.id, silent);
+    expect(await balance(user.id)).toBe(250);
+    expect(await domainCredits(user.id)).toBe(1);
+  });
+
+  it('does not double-grant an account that already received the domain credits before the block', async () => {
+    const user = await makeGrantUser({ email: 'dee@partner.example' });
+    await rerunDomainGrantAfterUnblock(user.id, silent);
+    expect(await balance(user.id)).toBe(250);
+
+    await userService.blockSignupGrant(user.id, blockAdapters);
+    await userService.unblockSignupGrant(user.id, blockAdapters);
+    await rerunDomainGrantAfterUnblock(user.id, silent);
+    expect(await balance(user.id)).toBe(250);
+    expect(await domainCredits(user.id)).toBe(1);
   });
 });

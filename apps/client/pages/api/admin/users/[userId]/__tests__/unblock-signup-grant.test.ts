@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   findById: vi.fn(),
   audit: vi.fn(),
   denySelf: vi.fn(),
+  domainGrant: vi.fn(),
+  logError: vi.fn(),
   rewards: { pauseForUser: vi.fn(), resumeForUser: vi.fn() },
 }));
 vi.mock('@server/middlewares/adminApi', () => ({
@@ -38,6 +40,12 @@ vi.mock('@server/utils/adminAudit', () => ({
   },
   recordAdminActionFromRequest: h.audit,
 }));
+vi.mock('@server/entitlements/signupDomainGrant', () => ({ applySignupDomainGrant: h.domainGrant }));
+vi.mock('@bike4mind/observability', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/observability')>();
+  Object.defineProperty(actual.Logger, 'globalInstance', { value: { error: h.logError, info: vi.fn() } });
+  return actual;
+});
 await import('../unblock-signup-grant');
 
 const request = (overrides: Record<string, unknown> = {}) => ({
@@ -93,5 +101,37 @@ describe('admin unblock signup grant', () => {
       expect.anything(),
       expect.objectContaining({ action: 'user.credits.grant_unblocked', reason: 'Cleared after review' })
     );
+  });
+
+  it('re-runs the domain grant for an email-verified account after the unblock', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', email: 'dee@partner.example', emailVerified: true });
+    const res = { json: vi.fn() };
+    await h.handler!(request(), res);
+
+    expect(h.domainGrant).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ userId: 'user-1', email: 'dee@partner.example', trigger: 'admin-unblock' })
+    );
+    expect(res.json).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the domain grant for an unverified account and for a no-op unblock', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', email: 'dee@partner.example', emailVerified: false });
+    await h.handler!(request(), { json: vi.fn() });
+
+    h.findById.mockResolvedValue({ id: 'user-1', email: 'dee@partner.example', emailVerified: true });
+    h.unblock.mockResolvedValue({ outcome: 'noop', reason: 'not_blocked', rewardsAffected: 0 });
+    await h.handler!(request(), { json: vi.fn() });
+
+    expect(h.domainGrant).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed domain grant and still answers with the unblock result', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', email: 'dee@partner.example', emailVerified: true });
+    h.domainGrant.mockRejectedValue(new Error('grant down'));
+    const res = { json: vi.fn() };
+    await h.handler!(request(), res);
+
+    expect(h.logError).toHaveBeenCalledTimes(1);
+    expect(res.json).toHaveBeenCalledExactlyOnceWith({ outcome: 'applied', credits: 0, rewardsAffected: 2 });
   });
 });
