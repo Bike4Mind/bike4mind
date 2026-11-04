@@ -159,9 +159,11 @@ describe('scopePostureFailures', () => {
 });
 
 describe('API-key scope posture of apps/client/pages/api', () => {
+  let analyzed: ReturnType<typeof analyzeApiRoutes> = [];
   let routes: PostureRoute[] = [];
   beforeAll(() => {
-    routes = analyzeApiRoutes().map(entry => ({
+    analyzed = analyzeApiRoutes();
+    routes = analyzed.map(entry => ({
       route: entry.route,
       file: entry.file,
       posture: classifyScopePosture(entry, read(entry.analyzedFile)),
@@ -171,5 +173,14 @@ describe('API-key scope posture of apps/client/pages/api', () => {
   it('gives every key-accepting route a deliberate scope posture', () => {
     expect(routes.length).toBeGreaterThan(0);
     expect(scopePostureFailures(routes, ROUTE_SCOPE_BASELINE)).toEqual([]);
+  });
+
+  // A `?NAME` scope is a constant the scope table could not resolve; the posture check counts it as
+  // scoped, so a scope file outside SCOPE_SOURCE_DIRS (apiRouteSources.ts) would pass unchecked.
+  it('resolves every scope constant a route names', () => {
+    const unresolved = analyzed.flatMap(entry =>
+      entry.scopes.filter(scope => scope.startsWith('?')).map(scope => `${entry.route}: ${scope}`)
+    );
+    expect(unresolved).toEqual([]);
   });
 });
