@@ -844,7 +844,7 @@ describe('resolveRemoteMcpRunner', () => {
     await expectInProcess();
   });
 
-  it.each(['production', 'test', ''])('fails closed on a hosted runtime without the link (NODE_ENV=%j)', env => {
+  it.each(['production', 'test', '', undefined])('fails closed on a hosted runtime without the link (NODE_ENV=%j)', env => {
     vi.stubEnv('B4M_SELF_HOST', 'false');
     vi.stubEnv('IS_LOCAL', 'false');
     vi.stubEnv('NODE_ENV', env);
