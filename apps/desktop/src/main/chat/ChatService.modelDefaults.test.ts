@@ -233,7 +233,10 @@ describe('per-model defaults and catalog sampling on a local turn', () => {
       id: model,
       name: 'Flash Lite',
       backend: 'gemini',
-      controls: { temperature: { min: 0, max: 2, step: 0.05, scope: 'request' } },
+      controls: {
+        temperature: { min: 0, max: 2, step: 0.05, scope: 'request' },
+        effort: { levels: ['low', 'high'], scope: 'request' },
+      },
     };
     const bodies: { options: Record<string, unknown> }[] = [];
     const post = vi.fn().mockImplementation((_url: string, body: { options: Record<string, unknown> }) => {
@@ -267,10 +270,19 @@ describe('per-model defaults and catalog sampling on a local turn', () => {
     services.push(service);
     const { id } = await service.createSession();
     await service.renameSession(id, 'Named');
+    await service.setSessionGeneration(id, { temperature: 0.3 });
+    await service.setSessionReasoningEffort(id, 'high');
     await service.send(id, 'hello');
     await vi.waitUntil(() => !service.isSessionBusy(id) && bodies.length > 0, { timeout: 3000, interval: 5 });
     expect(get).not.toHaveBeenCalled();
-    expect(bodies[0]?.options).not.toHaveProperty('temperature');
+    const { tools, ...options } = bodies[0]?.options ?? {};
+    expect(tools).toBeDefined();
+    expect(options).toEqual({
+      stream: true,
+      thinking: { enabled: true },
+      reasoningEffort: 'high',
+      temperature: 0.3,
+    });
   });
 
   it('sends nothing extra for a model with no defaults and no catalog entry', async () => {
