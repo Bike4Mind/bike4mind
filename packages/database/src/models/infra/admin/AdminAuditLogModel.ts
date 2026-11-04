@@ -1,6 +1,7 @@
 import mongoose, { Model, model, Schema, Types } from 'mongoose';
 import {
   ADMIN_AUDIT_CREDIT_GRANT_ACTIONS,
+  AUDIT_REVIEW_BASELINE_DAYS,
   IMPERSONATION_ENDED_ACTION,
   IMPERSONATION_STARTED_ACTION,
   type AuditEntry,
@@ -321,12 +322,15 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     const unreviewed = query.status === 'unreviewed';
     if (!unreviewed && !query.from) throw new Error('from is required for the all review queue');
 
-    // Unreviewed has no date bound: an old entry nobody signed off is exactly what the queue is for.
+    // Unreviewed has no product date bound: an old entry nobody signed off is exactly what the queue is for.
+    // Everything before the rollout baseline is already reviewed, so that cutoff is a safe scan floor.
+    const baselineFloor = unreviewed ? await this.findBaselineFloor() : null;
     const match: FilterClause = unreviewed
       ? {
           severity: 'critical',
+          ...(baselineFloor ? { occurredAt: { $gte: baselineFloor } } : {}),
+          // Exact match, unlike auditReviewConflict: stored actor and target ids are lowercase ObjectId hex.
           'actor.userId': { $ne: query.viewerUserId },
-          // Must stay in sync with auditReviewConflict: nobody signs off an entry about their own account.
           $nor: [{ 'target.kind': 'user', 'target.id': query.viewerUserId }],
         }
       : { severity: 'critical', occurredAt: { $gte: query.from } };
@@ -368,10 +372,27 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     return { entries, nextCursor, total: readCount(facets?.total) };
   }
 
+  /** A lower bound below the rollout baseline cutoff, with a day of slack for how long the migration ran. */
+  private async findBaselineFloor(): Promise<Date | null> {
+    const first = await AdminAuditReviewModel.findOne({ baseline: true })
+      .sort({ reviewedAt: 1 })
+      .select({ reviewedAt: 1 })
+      .lean<{ reviewedAt: Date }>();
+    if (!first) return null;
+    return new Date(first.reviewedAt.getTime() - (AUDIT_REVIEW_BASELINE_DAYS + 1) * 24 * 60 * 60 * 1000);
+  }
+
   async findById(id: string): Promise<AuditEntry | null> {
     if (!OBJECT_ID_HEX_PATTERN.test(id)) return null;
     const record = await this.auditLogModel.findById(id).lean<StoredRecord>();
     return record ? toAuditEntry(record) : null;
+  }
+
+  async findByIds(ids: string[]): Promise<AuditEntry[]> {
+    const validIds = ids.filter(id => OBJECT_ID_HEX_PATTERN.test(id));
+    if (validIds.length === 0) return [];
+    const records = await this.auditLogModel.find({ _id: { $in: validIds } }).lean<StoredRecord[]>();
+    return records.map(toAuditEntry);
   }
 
   async summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>> {

@@ -34,6 +34,9 @@ const AdminAuditReviewSchema = new Schema<AdminAuditReviewDocumentShape>(
   { collection: 'adminauditreviews', timestamps: false, versionKey: false }
 );
 
+// Lets the review queue find the rollout baseline cutoff without scanning every review.
+AdminAuditReviewSchema.index({ reviewedAt: 1 }, { partialFilterExpression: { baseline: true } });
+
 export const AdminAuditReviewModel: Model<AdminAuditReviewDocumentShape> =
   (mongoose.models.AdminAuditReview as Model<AdminAuditReviewDocumentShape> | undefined) ??
   model<AdminAuditReviewDocumentShape>('AdminAuditReview', AdminAuditReviewSchema);

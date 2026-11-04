@@ -249,6 +249,32 @@ describe('AdminAuditLogRepository.listReviewQueue', () => {
     expect(page.total).toBe(2);
   });
 
+  it('unreviewed only scans back to the rollout baseline cutoff, with a day of slack', async () => {
+    await AdminAuditReviewModel.createIndexes();
+    const day = 24 * 60 * 60 * 1000;
+    const baselined = await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'baselined' }, new Date('2020-01-01T00:00:00Z'))
+    );
+    await adminAuditReviewRepository.createMany([
+      { auditEntryId: baselined.id, reviewer: { userId: null, name: 'Rollout baseline' }, baseline: true },
+    ]);
+    await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'before floor' }, new Date(Date.now() - 9 * day))
+    );
+    await adminAuditLogRepository.append(
+      critical({ ...byOther, summary: 'in slack' }, new Date(Date.now() - 7.5 * day))
+    );
+    await adminAuditLogRepository.append(critical({ ...byOther, summary: 'recent' }, new Date(Date.now() - day)));
+
+    const page = await adminAuditLogRepository.listReviewQueue(
+      { status: 'unreviewed', viewerUserId: VIEWER },
+      { limit: 10 }
+    );
+
+    expect(page.entries.map(item => item.summary)).toEqual(['recent', 'in slack']);
+    expect(page.total).toBe(2);
+  });
+
   it('rejects status all without from', async () => {
     await expect(
       adminAuditLogRepository.listReviewQueue({ status: 'all', viewerUserId: VIEWER }, { limit: 10 })
