@@ -66,6 +66,14 @@ describe('LoopDirectiveRepository', () => {
     await expect(create({ action: 'pause' })).rejects.toThrow(/action/);
   });
 
+  it("lists an action row in both loops' logs, never in the worker's open directives", async () => {
+    const row = await create({ state: 'done', action: 'run_now', instruction: 'Run now' });
+    for (const loopId of [WORKER, OVERSEER]) {
+      expect((await loopDirectiveRepository.listForLoop(USER, loopId, 10)).map(d => d.id)).toEqual([row.id]);
+    }
+    expect(await loopDirectiveRepository.listOpenForLoop(USER, WORKER, 10)).toEqual([]);
+  });
+
   it('lists open and accepted directives oldest first, and both sides of a loop newest first', async () => {
     const at = (ms: number) => ({ createdAt: new Date(ms) });
     const first = await create({ instruction: 'first', ...at(1000) });

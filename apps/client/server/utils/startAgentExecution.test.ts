@@ -576,6 +576,8 @@ describe('startAgentExecution', () => {
           'loop_directive_respond',
           'loop_oversee_status',
           'loop_directive_issue',
+          'loop_run_now',
+          'loop_resume',
         ],
       })
     );

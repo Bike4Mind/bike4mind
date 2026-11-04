@@ -115,6 +115,7 @@ export function buildLoopQuery(
           '',
           `You oversee these loops: ${overseen.map(loop => `${JSON.stringify(loop.name)} (${loop.id})`).join(', ')}.`,
           'Check them with loop_oversee_status and steer them with loop_directive_issue. Do not do their work yourself.',
+          'If one is idle with ready tickets, use loop_run_now; if it stopped in needs_you or error and you believe the cause is fixed, use loop_resume. Those are the only actions you can take on it.',
         ]
       : [];
   return [

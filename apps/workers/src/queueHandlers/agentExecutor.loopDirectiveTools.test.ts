@@ -5,10 +5,12 @@ const loops = vi.hoisted(() => ({
   findByIdAndUserId: vi.fn(),
   updateForUser: vi.fn(),
   endBackoff: vi.fn().mockResolvedValue(undefined),
+  makeDueNow: vi.fn().mockResolvedValue(undefined),
 }));
 const directives = vi.hoisted(() => ({
   create: vi.fn(),
   countByExecution: vi.fn(),
+  countActionsSince: vi.fn(),
   findByIdForUser: vi.fn(),
   transition: vi.fn(),
   listToLoop: vi.fn(),
@@ -67,17 +69,25 @@ const run = (tools: ReturnType<typeof buildLoopDirectiveTools>, name: string, pa
   tools[name].implementation({ userId: 'u1' } as never).toolFn(params) as Promise<string>;
 
 let oversees: string[] = [WORKER, FOREIGN];
+let workerOverrides: Record<string, unknown> = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
   oversees = [WORKER, FOREIGN];
+  workerOverrides = {};
   loops.findByIdAndUserId.mockImplementation(async (id: string, userId: string) => {
     if (userId !== 'u1') return null;
     if (id === OVERSEER) return loopDoc(OVERSEER, { name: 'Overseer', oversees });
-    if (id === WORKER || id === UNWATCHED) return loopDoc(id);
+    if (id === WORKER) return loopDoc(id, workerOverrides);
+    if (id === UNWATCHED) return loopDoc(id);
     return null;
   });
   directives.countByExecution.mockResolvedValue(0);
+  directives.countActionsSince.mockResolvedValue(0);
+  loops.updateForUser.mockImplementation(async (id: string, _u: string, patch: Record<string, unknown>) => ({
+    ...loopDoc(id, workerOverrides),
+    ...patch,
+  }));
   directives.create.mockImplementation(async (doc: Record<string, unknown>) => ({ id: 'd-new', ...doc }));
   directives.transition.mockImplementation(async (id, _u, _from, state, reply) =>
     directive({ id, state, replies: [reply] })
@@ -300,5 +310,115 @@ describe('loop_directive_respond', () => {
   it('rejects an unknown outcome', async () => {
     directives.findByIdForUser.mockResolvedValue(directive());
     expect(await respond({ outcome: 'ignored' })).toMatch(/^Error: outcome must be one of/);
+  });
+});
+
+describe('overseer actions', () => {
+  const tools = (executionId = 'x1') => buildLoopDirectiveTools({ userId: 'u1', loopId: OVERSEER, executionId });
+  const act = (name: 'loop_run_now' | 'loop_resume', params: Record<string, unknown> = {}, executionId?: string) =>
+    run(tools(executionId), name, { loopId: WORKER, reason: ' Ready tickets waiting ', ...params });
+  const actionRow = (action: string, instruction: string) => ({
+    loopId: WORKER,
+    userId: 'u1',
+    fromLoopId: OVERSEER,
+    fromLoopName: 'Overseer',
+    executionId: 'x1',
+    instruction,
+    reason: 'Ready tickets waiting',
+    state: 'done',
+    action,
+    replies: [],
+  });
+
+  describe('loop_run_now', () => {
+    it('makes a live watched loop due and logs a done run_now row, writing nothing else', async () => {
+      const result = JSON.parse(await act('loop_run_now'));
+      expect(result).toMatchObject({ id: 'd-new', loopId: WORKER, due: true, running: false });
+      expect(loops.makeDueNow).toHaveBeenCalledWith(WORKER, expect.any(Date));
+      expect(directives.create).toHaveBeenCalledWith(actionRow('run_now', 'Run now'));
+      expect(loops.updateForUser).not.toHaveBeenCalled();
+    });
+
+    it('still succeeds with a run in flight, and says so', async () => {
+      workerOverrides = { activeExecutionId: 'x-worker' };
+      expect(JSON.parse(await act('loop_run_now'))).toMatchObject({ running: true });
+    });
+
+    it.each(['paused', 'needs_you', 'error', 'draft'])('refuses a %s loop', async status => {
+      workerOverrides = { status };
+      expect(await act('loop_run_now')).toBe(`Error: loop is ${status}; only a live loop can be run now`);
+      expect(loops.makeDueNow).not.toHaveBeenCalled();
+      expect(directives.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unwatched loop, a missing reason, and the 6th action of a run', async () => {
+      expect(await act('loop_run_now', { loopId: UNWATCHED })).toBe('Error: loop not found');
+      expect(await act('loop_run_now', { reason: ' ' })).toBe('Error: reason is required');
+      directives.countByExecution.mockResolvedValue(MAX_DIRECTIVES_PER_RUN);
+      expect(await act('loop_run_now')).toBe(
+        `Error: at most ${MAX_DIRECTIVES_PER_RUN} directives can be issued per run`
+      );
+      expect(loops.makeDueNow).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('loop_resume', () => {
+    it.each(['error', 'needs_you'])(
+      'sets a watched %s loop live, resets failures and logs a resume row',
+      async status => {
+        workerOverrides = { status, statusReason: 'Run failed', consecutiveFailures: 3 };
+        expect(JSON.parse(await act('loop_resume'))).toMatchObject({ id: 'd-new', loopId: WORKER, status: 'live' });
+        const [id, userId, patch, expected] = loops.updateForUser.mock.calls[0];
+        expect([id, userId, expected]).toEqual([WORKER, 'u1', status]);
+        // Only the status fields: goal, tools, schedule, model, stages and budget have no write path here.
+        expect(patch).toEqual({
+          status: 'live',
+          nextRunAt: expect.any(Date),
+          consecutiveFailures: 0,
+          statusReason: null,
+          autoResume: null,
+        });
+        expect(directives.create).toHaveBeenCalledWith(actionRow('resume', `Resume (was ${status}: Run failed)`));
+        expect(directives.countActionsSince).toHaveBeenCalledWith(WORKER, 'resume', expect.any(Date));
+      }
+    );
+
+    it.each([
+      ['an owner pause', { status: 'paused' }],
+      ['a budget pause', { status: 'paused', autoResume: 'budget', statusReason: 'Daily budget reached' }],
+      ['a credit pause', { status: 'paused', autoResume: 'credits', statusReason: 'Out of credits' }],
+      ['an all-loops budget pause', { status: 'paused', autoResume: 'budget', statusReason: 'All-loops' }],
+      ['a draft', { status: 'draft' }],
+      ['a live loop', { status: 'live' }],
+    ])('refuses %s', async (_label, overrides) => {
+      workerOverrides = overrides;
+      expect(await act('loop_resume')).toBe(
+        `Error: loop is ${overrides.status}; only a needs_you or error loop can be resumed`
+      );
+      expect(loops.updateForUser).not.toHaveBeenCalled();
+      expect(directives.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a second resume of the same worker within 24 h', async () => {
+      workerOverrides = { status: 'error' };
+      directives.countActionsSince.mockResolvedValue(1);
+      expect(await act('loop_resume')).toBe('Error: already resumed in the last 24 h; leave it to the owner');
+      expect(loops.updateForUser).not.toHaveBeenCalled();
+    });
+
+    it('reports a lost race with the owner as a conflict and logs nothing', async () => {
+      workerOverrides = { status: 'error' };
+      loops.updateForUser.mockResolvedValue(null);
+      expect(await act('loop_resume')).toBe('Error: loop changed while resuming');
+      expect(directives.create).not.toHaveBeenCalled();
+    });
+  });
+
+  it('neither tool schema takes more than the loop and a reason', () => {
+    const built = tools();
+    for (const name of ['loop_run_now', 'loop_resume']) {
+      const schema = built[name].implementation({ userId: 'u1' } as never).toolSchema;
+      expect(Object.keys(schema.parameters.properties as object).sort()).toEqual(['loopId', 'reason']);
+    }
   });
 });

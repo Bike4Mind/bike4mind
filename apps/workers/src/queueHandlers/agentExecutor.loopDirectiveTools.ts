@@ -1,8 +1,10 @@
 /**
  * Directive tools for loop runs. Every loop run gets `loop_directive_respond` to answer the directives sent
  * to it; a run of a loop with a non-empty `oversees` also gets `loop_oversee_status` and `loop_directive_issue`
- * to read and steer the loops it oversees. None of them can change another loop's goal, tools, schedule or
- * status: a directive is advice the worker sees on its next scheduled run and may push back on.
+ * to read and steer the loops it oversees. A directive is advice the worker sees on its next scheduled run and
+ * may push back on. The only two actions an overseer takes on a worker itself are `loop_run_now` (make a live
+ * worker due) and `loop_resume` (set a needs_you or error worker live); each is logged as a `done` directive
+ * with `action` set. None of the tools can change another loop's goal, tools, schedule, model, stages or budget.
  *
  * Wired like the ticket tools (`agentExecutor.loopTicketTools.ts`): appended after profile resolution, gated on
  * `execution.loopId` + `EnableLoops`, and pre-approved on headless loop runs in `startAgentExecution`.
@@ -19,6 +21,7 @@ import {
   WORK_ITEM_STATUSES,
   type ILoop,
   type ILoopDirective,
+  type LoopDirectiveAction,
   type LoopDirectiveWorkerOutcome,
 } from '@bike4mind/common';
 import {
@@ -30,6 +33,7 @@ import {
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
+import { nextStatusPatch } from '@server/utils/loopValidation';
 import { asToolResult, LOOP_NOT_FOUND } from './agentExecutor.loopTicketTools';
 
 /**
@@ -45,6 +49,9 @@ const RECENT_RUNS = 5;
 const RECENT_DIRECTIVES = 10;
 const DIRECTIVE_NOT_FOUND = 'directive not found';
 const WORKER_OUTCOMES: readonly LoopDirectiveWorkerOutcome[] = ['accepted', 'pushed_back', 'done'];
+/** One overseer resume per worker per window; past it a worker that keeps stopping is left to its owner. */
+const RESUME_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RESUMABLE: readonly ILoop['status'][] = ['needs_you', 'error'];
 
 interface LoopDirectiveScope {
   userId: string;
@@ -88,6 +95,7 @@ const directiveSummary = (directive: ILoopDirective) => ({
   instruction: directive.instruction,
   reason: directive.reason,
   state: directive.state,
+  ...(directive.action && { action: directive.action }),
   createdAt: directive.createdAt,
   replies: directive.replies.map(reply => ({ by: reply.by, outcome: reply.outcome, note: reply.note, at: reply.at })),
 });
@@ -120,6 +128,8 @@ async function loopStatus(loop: ILoop, userId: string) {
     lastRunAt: loop.lastRunAt,
     nextRunAt: loop.nextRunAt,
     consecutiveFailures: loop.consecutiveFailures,
+    ...(loop.hold && { hold: loop.hold }),
+    ...(loop.alarm && { alarm: { kind: loop.alarm.kind, reason: loop.alarm.reason, since: loop.alarm.since } }),
     memory: {
       notes: loop.memory.notes.slice(0, MEMORY_CHARS),
       nextAction: loop.memory.nextAction.slice(0, MEMORY_CHARS),
@@ -152,6 +162,118 @@ export function buildLoopDirectiveTools({
         : null;
     if (!overseer || !target) throw new NotFoundError(LOOP_NOT_FOUND);
     return { overseer, target };
+  };
+
+  const checkDirectiveCap = async () => {
+    if ((await loopDirectiveRepository.countByExecution(executionId)) >= MAX_DIRECTIVES_PER_RUN) {
+      throw new BadRequestError(`at most ${MAX_DIRECTIVES_PER_RUN} directives can be issued per run`);
+    }
+  };
+
+  /** Logs an overseer action as a `done` directive: in both loops' logs, never in the worker prompt. */
+  const logAction = (
+    overseer: ILoop,
+    target: ILoop,
+    action: LoopDirectiveAction,
+    instruction: string,
+    reason: string
+  ) =>
+    loopDirectiveRepository.create({
+      loopId: target.id,
+      userId,
+      fromLoopId: overseer.id,
+      fromLoopName: overseer.name,
+      executionId,
+      instruction,
+      reason,
+      state: 'done',
+      action,
+      replies: [],
+    } as Omit<ILoopDirective, 'id' | 'createdAt' | 'updatedAt'>);
+
+  const actionSchema = (name: string, description: string) => ({
+    name,
+    description,
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        loopId: { type: 'string', description: 'The overseen loop.' },
+        reason: { type: 'string', description: 'Why (1000 characters max); shown to the owner in both loop logs.' },
+      },
+      required: ['loopId', 'reason'],
+    },
+  });
+
+  const runNow: ToolDefinition = {
+    name: 'loop_run_now',
+    implementation: () => ({
+      toolFn: async value =>
+        asToolResult(async () => {
+          const params = (value ?? {}) as { loopId?: unknown; reason?: unknown };
+          const { overseer, target } = await watchedLoop(params.loopId);
+          const reason = requiredText('reason', params.reason, LOOP_DIRECTIVE_REASON_MAX);
+          if (target.status !== 'live') {
+            throw new BadRequestError(`loop is ${target.status}; only a live loop can be run now`);
+          }
+          await checkDirectiveCap();
+          await loopRepository.makeDueNow(target.id, new Date());
+          const logged = await logAction(overseer, target, 'run_now', 'Run now', reason);
+          return {
+            id: logged.id,
+            loopId: target.id,
+            due: true,
+            running: !!target.activeExecutionId,
+            note: target.activeExecutionId
+              ? 'A run is in flight; the next one starts after it, on a scheduler tick, if budget and pacing allow.'
+              : 'It starts on the next scheduler tick (within 5 minutes) if budget and pacing allow.',
+          };
+        }),
+      toolSchema: actionSchema(
+        'loop_run_now',
+        'Make a live loop this loop oversees due now, for example a worker idle with ready tickets (loop_oversee_status shows an idle_with_work alarm). Its budget, pacing and the run cap still apply. One of only two actions you can take on a worker (the other is loop_resume); counts toward the per-run directive cap.'
+      ),
+    }),
+  };
+
+  const resume: ToolDefinition = {
+    name: 'loop_resume',
+    implementation: () => ({
+      toolFn: async value =>
+        asToolResult(async () => {
+          const params = (value ?? {}) as { loopId?: unknown; reason?: unknown };
+          const { overseer, target } = await watchedLoop(params.loopId);
+          const reason = requiredText('reason', params.reason, LOOP_DIRECTIVE_REASON_MAX);
+          if (!RESUMABLE.includes(target.status)) {
+            throw new BadRequestError(`loop is ${target.status}; only a needs_you or error loop can be resumed`);
+          }
+          const now = new Date();
+          if (
+            (await loopDirectiveRepository.countActionsSince(
+              target.id,
+              'resume',
+              new Date(now.getTime() - RESUME_WINDOW_MS)
+            )) > 0
+          ) {
+            throw new BadRequestError('already resumed in the last 24 h; leave it to the owner');
+          }
+          await checkDirectiveCap();
+          // Conditional on the status read above, so an owner edit landing first wins.
+          const resumed = await loopRepository.updateForUser(
+            target.id,
+            userId,
+            nextStatusPatch(target, 'live', now),
+            target.status
+          );
+          if (!resumed) throw new ConflictError('loop changed while resuming');
+          const was = target.statusReason ? `${target.status}: ${target.statusReason}` : target.status;
+          const logged = await logAction(overseer, target, 'resume', `Resume (was ${was})`, reason);
+          return { id: logged.id, loopId: target.id, status: resumed.status, nextRunAt: resumed.nextRunAt };
+        }),
+      toolSchema: actionSchema(
+        'loop_resume',
+        'Set a loop this loop oversees live again after it stopped in needs_you or error, once you believe the cause is fixed. It never resumes a paused loop (owner, budget or credit pause), and only once per worker per 24 h. Its budget and pacing still apply. One of only two actions you can take on a worker (the other is loop_run_now); counts toward the per-run directive cap.'
+      ),
+    }),
   };
 
   const respond: ToolDefinition = {
@@ -252,9 +374,7 @@ export function buildLoopDirectiveTools({
           const { overseer, target } = await watchedLoop(params.loopId);
           const instruction = requiredText('instruction', params.instruction, LOOP_DIRECTIVE_INSTRUCTION_MAX);
           const reason = requiredText('reason', params.reason, LOOP_DIRECTIVE_REASON_MAX);
-          if ((await loopDirectiveRepository.countByExecution(executionId)) >= MAX_DIRECTIVES_PER_RUN) {
-            throw new BadRequestError(`at most ${MAX_DIRECTIVES_PER_RUN} directives can be issued per run`);
-          }
+          await checkDirectiveCap();
           // Not made due now: the worker picks it up on its next scheduled run, so its pacing stays predictable.
           const created = await loopDirectiveRepository.create({
             loopId: target.id,
@@ -291,5 +411,11 @@ export function buildLoopDirectiveTools({
     }),
   };
 
-  return { loop_directive_respond: respond, loop_oversee_status: status, loop_directive_issue: issue };
+  return {
+    loop_directive_respond: respond,
+    loop_oversee_status: status,
+    loop_directive_issue: issue,
+    loop_run_now: runNow,
+    loop_resume: resume,
+  };
 }

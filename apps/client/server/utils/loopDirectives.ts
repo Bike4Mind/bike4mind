@@ -11,6 +11,7 @@ export const directiveRow = (directive: ILoopDirective) => ({
   instruction: directive.instruction,
   reason: directive.reason,
   state: directive.state,
+  action: directive.action,
   replies: directive.replies.map(reply => (reply.by === 'owner' ? { ...reply, userId: undefined } : reply)),
   createdAt: directive.createdAt,
 });
