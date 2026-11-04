@@ -486,6 +486,20 @@ describe('WorkItemRepository', () => {
       expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(false);
     });
 
+    it('resumeBlockedRun leaves a ticket its run parked on dependencies parked', async () => {
+      const t = await ticket('T', {
+        status: 'blocked',
+        statusReason: 'Waiting on dependencies',
+        blockedOn: 'dependencies',
+        executionId: 'exec-1',
+      });
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(false);
+      expect(await workItemRepository.findByIdForUser(t.id, USER)).toMatchObject({
+        status: 'blocked',
+        blockedOn: 'dependencies',
+      });
+    });
+
     it('listForLoop returns every open ticket and only the newest closed ones', async () => {
       await ticket('Open');
       await ticket('Old', { stage: 'done', status: 'closed', closedAt: new Date(1000) });
@@ -580,9 +594,21 @@ describe('WorkItemRepository', () => {
       await ticket('Foreign', { status: 'blocked', blockedOn: 'dependencies', dependencies: [foreign.id] });
       await ticket('A', { status: 'blocked', blockedOn: 'dependencies' });
       await ticket('B', { status: 'blocked', blockedOn: 'dependencies' });
-      expect(await workItemRepository.reopenSatisfiedBlocks(2)).toHaveLength(1);
-      expect(await workItemRepository.reopenSatisfiedBlocks(2)).toHaveLength(1);
-      expect(await workItemRepository.reopenSatisfiedBlocks(2)).toHaveLength(0);
+      expect(await workItemRepository.reopenSatisfiedBlocks(1)).toHaveLength(1);
+      expect(await workItemRepository.reopenSatisfiedBlocks(1)).toHaveLength(1);
+      expect(await workItemRepository.reopenSatisfiedBlocks(1)).toHaveLength(0);
+    });
+
+    it('reopenSatisfiedBlocks reads past a page of still-waiting tickets and skips deleted or detached ones', async () => {
+      const openDep = await ticket('Open dep');
+      for (const title of ['W1', 'W2']) {
+        await ticket(title, { status: 'blocked', blockedOn: 'dependencies', dependencies: [openDep.id] });
+      }
+      const deleted = await ticket('Deleted', { status: 'blocked', blockedOn: 'dependencies' });
+      await workItemRepository.softDeleteForUser(deleted.id, USER);
+      await create('Detached', { status: 'blocked', blockedOn: 'dependencies' });
+      const ready = await ticket('Ready', { status: 'blocked', blockedOn: 'dependencies' });
+      expect((await workItemRepository.reopenSatisfiedBlocks(2)).map(t => t.id)).toEqual([ready.id]);
     });
 
     it('claimForRun counts a run; releaseClaim and an uncounted fold take it back', async () => {

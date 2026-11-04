@@ -33,10 +33,14 @@ const ModelName = 'WorkItem';
 export const MAX_GRAPH_ITEMS = 2000;
 
 /**
- * ponytail: candidate window for `listReadyForLoop`, cut after the priority sort, so only the tail of one
- * priority level can starve, and finish-first applies within the window.
+ * ponytail: candidate window for `listReadyForLoop`, cut after the priority sort and before the dependency
+ * filter. Lower priorities starve only while 200+ higher-or-equal open tickets fill it (even ones still waiting on
+ * open deps), and finish-first applies within the window.
  */
 const LOOP_READY_CANDIDATES = 200;
+
+/** ponytail: pages of parked tickets `reopenSatisfiedBlocks` reads per call; ones further on wait until earlier ones move. */
+const REOPEN_SCAN_PAGES = 25;
 
 export interface IWorkItemModel extends Model<IWorkItem> {}
 
@@ -164,7 +168,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
       { $addFields: { _rank: { $ifNull: ['$priority', DEFAULT_WORK_ITEM_PRIORITY] } } },
       { $sort: { _rank: 1, createdAt: 1 } },
       { $limit: LOOP_READY_CANDIDATES },
-      { $unset: '_rank' },
+      { $project: { _rank: 0 } },
     ]);
     const candidates: IWorkItem[] = docs.map(doc => this.workItemModel.hydrate(doc).toJSON());
     const depIds = [...new Set(candidates.flatMap(item => item.dependencies))];
@@ -239,8 +243,9 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
 
   async resumeBlockedRun(id: string, executionId: string): Promise<boolean> {
     const result = await this.workItemModel.updateOne(
-      { _id: id, executionId, status: 'blocked', deletedAt: null },
-      { $set: { status: 'in_progress' }, $unset: { statusReason: '', blockedOn: '' } }
+      // A ticket its run parked on dependencies stays parked; the sweep reopens it.
+      { _id: id, executionId, status: 'blocked', blockedOn: { $exists: false }, deletedAt: null },
+      { $set: { status: 'in_progress' }, $unset: { statusReason: '' } }
     );
     return result.modifiedCount > 0;
   }
@@ -266,29 +271,49 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   }
 
   async reopenSatisfiedBlocks(limit: number): Promise<IWorkItem[]> {
-    const parked = (
-      await this.workItemModel
-        .find({ blockedOn: 'dependencies', status: 'blocked', loopId: { $exists: true }, deletedAt: null })
-        .sort({ updatedAt: 1 })
-        .limit(limit)
-    ).map(doc => doc.toJSON());
-    const depIds = [...new Set(parked.flatMap(item => item.dependencies))].filter(id => mongoose.isValidObjectId(id));
-    // Not user-scoped: deps are always the owner's own (assertDependenciesUsable). A foreign one counts as open.
-    const deps = await this.workItemModel.find({ _id: { $in: depIds }, deletedAt: null });
-    const depById = new Map(deps.map(doc => [String(doc._id), doc]));
     const reopened: IWorkItem[] = [];
-    for (const item of parked) {
-      const waiting = item.dependencies.some(depId => {
-        const dep = depById.get(depId);
-        return dep !== undefined && (dep.userId !== item.userId || dep.status !== 'closed');
-      });
-      if (waiting) continue;
-      const result = await this.workItemModel.findOneAndUpdate(
-        { _id: item.id, status: 'blocked', blockedOn: 'dependencies', deletedAt: null },
-        { $set: { status: 'open' }, $unset: { statusReason: '', blockedOn: '' } },
-        { new: true }
-      );
-      if (result) reopened.push(result.toJSON());
+    // Paged by _id: a still-waiting ticket is not written, so a read capped at `limit` would rescan the same ones.
+    let after: string | undefined;
+    for (let page = 0; page < REOPEN_SCAN_PAGES && reopened.length < limit; page++) {
+      const parked = (
+        await this.workItemModel
+          .find({
+            blockedOn: 'dependencies',
+            status: 'blocked',
+            loopId: { $exists: true },
+            deletedAt: null,
+            ...(after && { _id: { $gt: after } }),
+          })
+          .sort({ _id: 1 })
+          .limit(limit)
+      ).map(doc => doc.toJSON());
+      if (parked.length === 0) break;
+      after = parked.at(-1)!.id;
+      const depIds = [...new Set(parked.flatMap(item => item.dependencies))].filter(id => mongoose.isValidObjectId(id));
+      // Not user-scoped: deps are always the owner's own (assertDependenciesUsable). A foreign one counts as open.
+      const deps = await this.workItemModel.find({ _id: { $in: depIds }, deletedAt: null });
+      const depById = new Map(deps.map(doc => [String(doc._id), doc]));
+      for (const item of parked) {
+        if (reopened.length >= limit) break;
+        const waiting = item.dependencies.some(depId => {
+          const dep = depById.get(depId);
+          return dep !== undefined && (dep.userId !== item.userId || dep.status !== 'closed');
+        });
+        if (waiting) continue;
+        // Matching the deps read above, so a dependency added meanwhile keeps the ticket parked.
+        const result = await this.workItemModel.findOneAndUpdate(
+          {
+            _id: item.id,
+            status: 'blocked',
+            blockedOn: 'dependencies',
+            dependencies: item.dependencies,
+            deletedAt: null,
+          },
+          { $set: { status: 'open' }, $unset: { statusReason: '', blockedOn: '' } },
+          { new: true }
+        );
+        if (result) reopened.push(result.toJSON());
+      }
     }
     return reopened;
   }
