@@ -7,7 +7,12 @@ import { VoiceGenerationVendor } from './voiceGeneration';
  * cost per 1,000 input characters, keyed by model.
  *
  * Sources (2026-07, keep in sync with each provider's pricing page):
- * - OpenAI Speech API:   tts-1 $15 / tts-1-hd $30 per 1M chars.
+ * - OpenAI Speech API:   tts-1 $15 / tts-1-hd $30 per 1M chars. gpt-4o-mini-tts is
+ *   priced per minute of audio (~$0.015/min), so its per-char cost depends on the
+ *   voice's speaking rate. The slowest bundled sample (marin, ~760 chars/min) costs
+ *   ~$0.0197 per 1K chars; the rate is set from that voice, not the ~900 average.
+ *   That clip is short, so this is an estimate: slower long-form speech can cost the
+ *   platform slightly more per character than it bills.
  * - ElevenLabs ElevenAPI: Flash/Turbo $0.05, Multilingual v2/v3 $0.10 per 1K chars.
  *   ElevenLabs' effective rate is plan-dependent; these are the pay-as-you-go
  *   rates and are treated as an approximation of the admin key's real cost.
@@ -17,6 +22,7 @@ type TtsRateTable = Record<string, number>;
 const OPENAI_TTS_RATES: TtsRateTable = {
   'tts-1': 0.015,
   'tts-1-hd': 0.03,
+  'gpt-4o-mini-tts': 0.02,
 };
 
 const ELEVENLABS_TTS_RATES: TtsRateTable = {
@@ -54,7 +60,8 @@ const VENDOR_FALLBACK_USD_PER_1K: Record<VoiceGenerationVendor, number> = {
  * then settles the actual vendor's cost and refunds the difference.
  */
 export const TTS_DEFAULT_MODEL: Record<VoiceGenerationVendor, string> = {
-  openai: 'tts-1',
+  // Not tts-1: it rejects the newer voices in AVAILABLE_TTS_VOICES (cedar, marin).
+  openai: 'gpt-4o-mini-tts',
   elevenlabs: 'eleven_multilingual_v2',
 };
 

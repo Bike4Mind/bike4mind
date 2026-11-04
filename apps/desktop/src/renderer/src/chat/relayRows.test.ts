@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { automaticSummary, displayText, relaySummary } from './relayRows';
+import { automaticSummary, displayText, relaySummary, relaySummaryParts } from './relayRows';
 
 const from = { fromSessionId: 'abc', fromTitle: 'Docs pass', hops: 1 };
 
@@ -38,6 +38,37 @@ describe('relaySummary', () => {
       relay: from,
     });
     expect(summary).toBe('Received message from Docs pass: The session "XP engine" has finished.');
+  });
+});
+
+describe('relaySummary variants', () => {
+  it('names the sender project when the message came from another one', () => {
+    expect(relaySummary({ content: 'hi', relay: { ...from, fromProject: 'docs' } })).toBe(
+      'Received message from Docs pass (docs): hi'
+    );
+    expect(relaySummary({ content: '  ', relay: { ...from, fromProject: 'docs' } })).toBe(
+      'Received message from Docs pass (docs)'
+    );
+  });
+
+  it('reads a done notice as the sender finishing, without the received-message prefix', () => {
+    const relay = { ...from, kind: 'done' as const, fromProject: 'docs' };
+    expect(relaySummary({ content: 'model-facing text', relay })).toBe(
+      'Docs pass finished the turn your message started'
+    );
+  });
+
+  it('splits around the sender so the name can be a link', () => {
+    expect(relaySummaryParts({ content: 'hi', relay: from })).toEqual({
+      lead: 'Received message from ',
+      sender: 'Docs pass',
+      tail: ': hi',
+    });
+    expect(relaySummaryParts({ content: 'x', relay: { ...from, kind: 'done' } })).toEqual({
+      lead: '',
+      sender: 'Docs pass',
+      tail: ' finished the turn your message started',
+    });
   });
 });
 

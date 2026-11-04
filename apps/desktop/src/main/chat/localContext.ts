@@ -170,6 +170,32 @@ export function grownContext(
   return step === undefined ? { reason: 'memory' } : { tokens: step, slower: !resident(input, step) };
 }
 
+/**
+ * The reply room a fixed context keeps when deciding whether tools fit. A max output override can
+ * only shrink it: a larger one takes what is left at send time (see replyLimit), so it never costs tools.
+ */
+export function toolReplyReserve(maxTokens: number | undefined): number | undefined {
+  return maxTokens === undefined ? undefined : Math.min(maxTokens, OUTPUT_RESERVE_TOKENS);
+}
+
+const MIN_REPLY_TOKENS = 256;
+
+/**
+ * The max_tokens to send on a context the server fixes, which refuses (vLLM) a prompt plus
+ * max_tokens past it: the limit when it fits, the room left when it does not, and none when that
+ * room is too small, so the server answers in whatever is left. The margin covers the estimate.
+ */
+export function replyLimit(
+  context: number | undefined,
+  maxTokens: number | undefined,
+  promptTokens: number
+): number | undefined {
+  if (!maxTokens || context === undefined) return maxTokens;
+  const room = context - promptTokens - Math.ceil(promptTokens / 10) - MIN_REPLY_TOKENS;
+  if (maxTokens <= room) return maxTokens;
+  return room >= MIN_REPLY_TOKENS ? room : undefined;
+}
+
 export function estimateTokens(messages: readonly OllamaMessage[], tools: readonly unknown[] = []): number {
   const toolChars = tools.length > 0 ? JSON.stringify(tools).length : 0;
   return Math.ceil(toolChars / CHARS_PER_TOKEN) + messages.reduce((sum, message) => sum + messageTokens(message), 0);

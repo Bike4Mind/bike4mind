@@ -46,6 +46,7 @@
     "test:kb-refusal": "tsx testKnowledgeToolRefusal.ts",
     "eval:tool-calling": "tsx toolCallingScorecard.ts",
     "create-prod-release": "tsx src/createProductionRelease.ts",
+    "voice-samples:generate": "tsx src/generate-voice-samples.ts",
     "release-notes:enqueue": "tsx src/releaseNotes/releaseNotesEnqueue.ts",
     "release-notes:backfill": "tsx src/releaseNotes/releaseNotesBackfill.ts",
     "help:ingest-datalake": "tsx help/ingest-help-datalake.ts",

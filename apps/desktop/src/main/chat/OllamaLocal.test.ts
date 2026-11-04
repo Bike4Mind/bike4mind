@@ -327,6 +327,62 @@ describe('OllamaLocal', () => {
     expect(sent.think).toBe(false);
   });
 
+  it('sends sampling overrides as Ollama options, and none when there are none', async () => {
+    const done = `${JSON.stringify({ done: true })}\n`;
+    const { sent } = await streamWith(done, {
+      maxTokens: 512,
+      generation: { temperature: 0.2, topP: 0.8, topK: 30, minP: 0.05, repeatPenalty: 1.05, presencePenalty: 1.5 },
+    });
+    expect(sent.options).toEqual({
+      num_ctx: 16384,
+      num_predict: 512,
+      temperature: 0.2,
+      top_p: 0.8,
+      top_k: 30,
+      min_p: 0.05,
+      repeat_penalty: 1.05,
+      presence_penalty: 1.5,
+    });
+    expect((await streamWith(done)).sent.options).toEqual({ num_ctx: 16384 });
+  });
+
+  it('sends a think level the template names, and true for one it does not', async () => {
+    const done = `${JSON.stringify({ done: true })}\n`;
+    const levels = { thinking: { values: ['low', 'medium', 'high'] } };
+    expect((await streamWith(done, { thinking: true, reasoningEffort: 'high' }, levels)).sent.think).toBe('high');
+    expect((await streamWith(done, { thinking: true, reasoningEffort: 'xhigh' }, levels)).sent.think).toBe(true);
+    expect((await streamWith(done, { thinking: true, reasoningEffort: 'high' })).sent.think).toBe(true);
+  });
+
+  it('lists sampling controls with the Modelfile defaults, and effort only for a model with think levels', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: unknown, init?: RequestInit) => {
+        if (String(input).endsWith('/api/tags'))
+          return Response.json({ models: [{ name: 'gpt-oss:20b' }, { name: 'llama3.2' }] });
+        return Response.json(
+          String(init?.body).includes('gpt-oss')
+            ? { capabilities: ['completion', 'tools', 'thinking'], thinking: { values: ['low', 'medium', 'high'] } }
+            : { capabilities: ['completion', 'tools'], parameters: 'temperature 0.7\ntop_k 20' }
+        );
+      })
+    );
+    const [gptOss, llama] = await new OllamaLocal().models();
+    expect(gptOss).toMatchObject({
+      supportsReasoningEffort: true,
+      thinkingToggle: true,
+      controls: { effort: { levels: ['low', 'medium', 'high'] }, temperature: { default: 0.8 } },
+    });
+    expect(llama).toMatchObject({
+      supportsReasoningEffort: false,
+      controls: { temperature: { default: 0.7 }, topK: { default: 20 }, topP: { default: 0.9 } },
+    });
+    expect(llama?.controls).not.toHaveProperty('effort');
+    expect(gptOss?.controls?.maxOutputTokens?.includesThinking).toBe(true);
+    expect(llama?.controls?.maxOutputTokens).toBeDefined();
+    expect(llama?.controls?.maxOutputTokens).not.toHaveProperty('includesThinking');
+  });
+
   describe('thinking off for a template that always thinks', () => {
     const done = `${JSON.stringify({ done: true })}\n`;
     const alwaysThinks = { thinking: { values: [true], default: true } };
@@ -690,6 +746,8 @@ describe('OllamaLocal', () => {
     ]);
     // Absent is unknown, which chat treats as tools on; only an explicit false turns them off.
     expect(first[1]).not.toHaveProperty('supportsTools');
+    expect(first[1]).not.toHaveProperty('supportsReasoningEffort');
+    expect(first[1]?.controls).not.toHaveProperty('effort');
 
     slow = new Set(['qwen3:8b', 'fresh']);
     shows.length = 0;

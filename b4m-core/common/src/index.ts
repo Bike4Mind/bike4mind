@@ -84,6 +84,7 @@ export * from './constants/oauthClients';
 export * from './constants/storage';
 export * from './schemas/openai';
 export * from './schemas/bfl';
+export * from './schemas/grantPackage';
 export * from './schemas/xai';
 export * from './schemas/gemini';
 export * from './types';

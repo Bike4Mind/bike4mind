@@ -76,7 +76,8 @@ export const signupGrantReleaseRepository = {
       // $type repeats the user_signupGrantHeldReason partial filter; without it the planner cannot pick that index.
       signupGrantHeldReason: { $eq: input.reason ?? 'budget_exhausted', $type: 'string' },
       tags: PENDING_FREE_CREDITS_TAG,
-      // Mirrors accountBlockReasons/isAiAccessRevoked: unpayable accounts must not eat the cron's scan window.
+      // Mirrors releaseHeldGrant's gate (accountBlockReasons, isAiAccessRevoked, isSignupGrantBlocked): unpayable
+      // accounts must not eat the cron's scan window.
       ...(input.payableOnly
         ? {
             emailVerified: true,
@@ -84,6 +85,7 @@ export const signupGrantReleaseRepository = {
             disputePending: { $ne: true },
             isModerated: { $ne: true },
             'moderation.status': { $ne: 'suspended' },
+            'signupGrant.blocked': { $exists: false },
           }
         : {}),
       ...(input.afterId ? { _id: { $gt: input.afterId } } : {}),
@@ -116,6 +118,7 @@ export const signupGrantReleaseRepository = {
       disputePending: { $ne: true },
       isModerated: { $ne: true },
       'moderation.status': { $ne: 'suspended' },
+      'signupGrant.blocked': { $exists: false },
       ...(input.afterId ? { _id: { $gt: input.afterId } } : {}),
     })
       .sort({ _id: 1 })

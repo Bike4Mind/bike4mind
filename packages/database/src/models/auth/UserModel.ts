@@ -1155,10 +1155,21 @@ const AcquisitionTouchSchema = new Schema(
   { _id: false }
 );
 
+const VerifiedTouchSchema = new Schema(
+  {
+    srcProductId: { type: String, required: true },
+    hopId: { type: String, required: true },
+    redeemedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const UserAcquisitionSchema = new Schema(
   {
     firstTouch: { type: AcquisitionTouchSchema, required: false },
     lastTouch: { type: AcquisitionTouchSchema, required: false },
+    // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
+    verifiedTouch: { type: VerifiedTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },
@@ -1240,6 +1251,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    grantPackageId: { type: String, default: null },
     // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
@@ -1283,6 +1295,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
               },
               { _id: false }
             ),
+            default: undefined,
+          },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
             default: undefined,
           },
         },

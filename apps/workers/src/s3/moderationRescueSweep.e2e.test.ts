@@ -12,6 +12,15 @@ import { KnowledgeType } from '@bike4mind/common';
 const store = vi.hoisted(() => ({
   objects: new Map<string, Buffer>(),
   transient: new Set<string>(),
+  refusedUsers: new Set<string>(),
+}));
+
+// The uploader allowance: refused for the users in `store.refusedUsers`, so no detector call is made.
+vi.mock('@server/s3/uploadModerationMeter', () => ({
+  buildUploadModerationMeter: ({ userId }: { userId: string }) => ({
+    reserveModerationCalls: async () => !store.refusedUsers.has(userId),
+    recordModerationCalls: async () => undefined,
+  }),
 }));
 
 // Stub only the genuinely-external side effect: S3 (which keys "exist"). Everything else - the real
@@ -64,14 +73,16 @@ afterEach(async () => {
   await mongoose.connection.dropDatabase();
   store.objects.clear();
   store.transient.clear();
+  store.refusedUsers.clear();
   vi.clearAllMocks();
 });
 
 const STALE_AGE_MS = 40 * 60_000; // older than the sweep's 30-min MODERATION_STALE_MS floor
 
-async function seedPending(filePath: string, mimeType: string) {
+async function seedPending(filePath: string, mimeType: string, userId = 'user1', status?: 'complete') {
   const doc = await FabFile.create({
-    userId: 'user1',
+    userId,
+    ...(status ? { status } : {}),
     fileName: 'f',
     type: KnowledgeType.FILE,
     filePath,
@@ -111,7 +122,38 @@ async function seedScanning(filePath: string, mimeType: string, status?: 'pendin
   return doc;
 }
 
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64'
+);
+
 describe('runModerationRescueSweep (DB integration)', () => {
+  it("holds an over-allowance user's uploads pending without an attempt and still reaches other users", async () => {
+    store.refusedUsers.add('heavy');
+    for (const key of ['h1.png', 'h2.png', 'h3.png']) {
+      store.objects.set(key, PNG);
+      await seedPending(key, 'image/png', 'heavy', 'complete');
+    }
+    store.objects.set('knowledge/heavy/notes', Buffer.from('plain text'));
+    await seedPending('knowledge/heavy/notes', 'text/plain', 'heavy');
+    store.objects.set('light.txt', Buffer.from('plain text'));
+    await seedPending('light.txt', 'text/plain', 'light', 'complete');
+
+    const { rescanned } = await runModerationRescueSweep({ enabled: true, limit: 3, logger });
+
+    const rows = await FabFile.find({}).lean();
+    const byPath = new Map(rows.map(row => [row.filePath, row]));
+    expect(rescanned).toBe(2);
+    expect(byPath.get('light.txt')?.moderationStatus).toBe('clean');
+    expect(byPath.get('knowledge/heavy/notes')?.moderationStatus).toBe('clean');
+    const heavy = ['h1.png', 'h2.png', 'h3.png'].map(key => byPath.get(key));
+    expect(heavy.map(row => row?.moderationStatus)).toEqual(['pending', 'pending', 'pending']);
+    expect(heavy.map(row => row?.moderationAttempts ?? 0)).toEqual([0, 0, 0]);
+    // Only the first was tried; the user's others were skipped for this run.
+    expect(heavy.filter(row => row?.moderationLastAttemptAt)).toHaveLength(1);
+    expect(heavy.every(row => !row?.moderationClaimedAt)).toBe(true);
+  });
+
   it('soft-deletes never-landed import orphans (not a content block) and does not starve a stranded row', async () => {
     // 3 import orphans: knowledge rows whose bytes never landed, so the S3 object was never written.
     // Seeded first (oldest), so a bounded window fills entirely with orphans - the head-of-line block

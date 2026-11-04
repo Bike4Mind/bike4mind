@@ -31,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ userService: { unlockSignupGrant: h.unlock } }));
+vi.mock('@bike4mind/services', () => ({ userService: { releaseRemainingSignupGrant: h.unlock } }));
 vi.mock('@server/utils/adminAudit', () => ({
   denySelfAdminAction: h.denySelf,
   isSelfOrImpersonator: h.selfOrImpersonator,
@@ -51,7 +51,14 @@ const request = () => ({
 describe('admin signup unlock', () => {
   it('passes the shared domain protection to the staged release', async () => {
     await h.handler!(request(), { json: vi.fn() });
-    expect(h.unlock.mock.calls[0][2].db.signupProtection).toBe(h.protection);
+    expect(h.unlock.mock.calls[0][1].db.signupProtection).toBe(h.protection);
+  });
+
+  it('answers with the explicit outcome, so a release with nothing to pay is a reasoned no-op', async () => {
+    h.unlock.mockResolvedValue({ outcome: 'noop', reason: 'no_grant' });
+    const res = { json: vi.fn() };
+    await h.handler!(request(), res);
+    expect(res.json).toHaveBeenCalledExactlyOnceWith({ outcome: 'noop', reason: 'no_grant' });
   });
 
   beforeEach(() => {
@@ -60,7 +67,7 @@ describe('admin signup unlock', () => {
       [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase())
     );
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
-    h.unlock.mockResolvedValue({ creditsGranted: 0 });
+    h.unlock.mockResolvedValue({ outcome: 'noop', reason: 'nothing_remaining' });
   });
   it('is jwt-only and rejects non-admin callers before invoking the grant', async () => {
     expect(h.config).toEqual({ auth: 'jwtOnly' });
@@ -92,9 +99,9 @@ describe('admin signup unlock', () => {
   });
   it('uses only the admin reason and rechecks persisted authorization', async () => {
     await h.handler!(request(), { json: vi.fn() });
-    const [id, reason, adapters] = h.unlock.mock.calls[0];
+    const [id, adapters] = h.unlock.mock.calls[0];
     expect(h.denySelf).not.toHaveBeenCalled();
-    expect([id, reason]).toEqual(['user-1', 'admin']);
+    expect(id).toBe('user-1');
     h.findById.mockResolvedValue({ isAdmin: false });
     expect(await adapters.validators.admin()).toBe(false);
     h.findById.mockResolvedValue({ isAdmin: true });

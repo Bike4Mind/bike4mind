@@ -41,8 +41,9 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: mockFindById },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async () => ({
   creditService: {
+    isRewardPartyBlocked: (await import('@bike4mind/services/creditService')).isRewardPartyBlocked,
     addCreditsWithLedgerRow: mockAddCredits,
     subtractCredits: mockSubtractCredits,
     clawbackCreditLotsByStripeRef: mockClawbackLots,
@@ -96,6 +97,18 @@ const subscription = (priceId = 'price_pro', items = 1) =>
   }) as unknown as Stripe.Subscription;
 
 const lean = (value: unknown) => ({ select: () => ({ lean: () => Promise.resolve(value) }) });
+const GRANT_BLOCKED = { signupGrant: { blocked: { at: new Date('2026-10-01T00:00:00Z') } } };
+// Records the projection each user lookup asked for, keyed by user id.
+const givenUsersWithSelects = (payer: unknown, inviter: unknown = {}) => {
+  const selects: Record<string, string> = {};
+  mockFindById.mockImplementation((id: string) => ({
+    select: (fields: string) => {
+      selects[id] = fields;
+      return { lean: () => Promise.resolve(id === 'friend1' ? payer : inviter) };
+    },
+  }));
+  return selects;
+};
 const givenUsers = (payer: unknown, inviter: unknown = {}) =>
   mockFindById.mockImplementation((id: string) => lean(id === 'friend1' ? payer : inviter));
 
@@ -274,6 +287,25 @@ describe('recordSubscriptionPaymentReward', () => {
     expect(mockRepo.create).not.toHaveBeenCalled();
   });
 
+  it('pays nothing when the inviter has an admin grant block', async () => {
+    givenUsers({ referredByUserId: 'inviter1' }, GRANT_BLOCKED);
+    await record();
+    expect(mockRepo.create).not.toHaveBeenCalled();
+  });
+
+  it('still records the inviter reward when the payer has an admin grant block', async () => {
+    givenUsers({ referredByUserId: 'inviter1', ...GRANT_BLOCKED });
+    await record();
+    expect(mockRepo.create).toHaveBeenCalledWith(expect.objectContaining({ inviterId: 'inviter1' }), NOW);
+  });
+
+  it('reads the grant block for the inviter only, never for the payer', async () => {
+    const selects = givenUsersWithSelects({ referredByUserId: 'inviter1' });
+    await record();
+    expect(selects.inviter1).toContain('signupGrant.blocked');
+    expect(selects.friend1).not.toContain('signupGrant');
+  });
+
   it('never throws, even when the write fails', async () => {
     mockRepo.create.mockRejectedValue(new Error('db down'));
     await expect(record()).resolves.toBeUndefined();
@@ -344,6 +376,36 @@ describe('releaseDueSubscriptionRewards', () => {
     expect(result).toMatchObject({ released: 0, cancelled: 1 });
     expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', 'payer_blocked', NOW);
     expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('keeps the reward pending when the inviter has only an admin grant block', async () => {
+    const paymentOutcome = vi.fn();
+    givenUsers({}, GRANT_BLOCKED);
+    const result = await releaseDueSubscriptionRewards({ now: NOW, paymentOutcome });
+    expect(result).toEqual({ candidates: 1, released: 0, cancelled: 0, failed: 0 });
+    expect(mockRepo.cancelPending).not.toHaveBeenCalled();
+    expect(mockRepo.claimForRelease).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('still cancels when the inviter has a grant block and is also banned', async () => {
+    givenUsers({}, { isBanned: true, ...GRANT_BLOCKED });
+    await releaseDueSubscriptionRewards({ now: NOW });
+    expect(mockRepo.cancelPending).toHaveBeenCalledWith('r1', 'inviter_blocked', NOW);
+  });
+
+  it('pays the inviter when only the payer has an admin grant block', async () => {
+    givenUsers(GRANT_BLOCKED);
+    const result = await releaseDueSubscriptionRewards({ now: NOW });
+    expect(result).toMatchObject({ released: 1, cancelled: 0 });
+    expect(mockRepo.cancelPending).not.toHaveBeenCalled();
+  });
+
+  it('reads the grant block for the inviter only, never for the payer', async () => {
+    const selects = givenUsersWithSelects({});
+    await releaseDueSubscriptionRewards({ now: NOW });
+    expect(selects.inviter1).toContain('signupGrant.blocked');
+    expect(selects.friend1).not.toContain('signupGrant');
   });
 
   it('releases a reward without a payment intent without asking Stripe', async () => {

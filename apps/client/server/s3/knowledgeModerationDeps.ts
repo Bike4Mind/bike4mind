@@ -59,7 +59,7 @@ export function buildKnowledgeModerationDeps(
       );
       return res.matchedCount > 0;
     },
-    release: async (_id, claimedAt) => {
+    release: async (_id, claimedAt, { countAttempt = true } = {}) => {
       const res = await FabFile.updateOne(
         { _id: _id as Types.ObjectId, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },
         {
@@ -71,7 +71,8 @@ export function buildKnowledgeModerationDeps(
           // reclaim, so its attempt count is undercounted. The on-demand route releases through
           // moderationScan.releaseModerationClaim, which writes the same bookkeeping.
           $set: { moderationStatus: 'pending', moderationLastAttemptAt: new Date() },
-          $inc: { moderationAttempts: 1 },
+          // A scan deferred by the moderation allowance did not fail, so it is not counted.
+          ...(countAttempt ? { $inc: { moderationAttempts: 1 } } : {}),
           $unset: { moderationClaimedAt: 1 },
         }
       );

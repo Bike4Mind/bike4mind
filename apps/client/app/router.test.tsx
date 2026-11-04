@@ -60,18 +60,18 @@ describe('adminRoute validateSearch', () => {
       validate({
         emergency_access: 'true',
         tab: 'audit-log',
-        feedbackId: 'f1',
+        feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
         category: 'credits',
-        entryId: 'e1',
+        entryId: 'cccccccccccccccccccccccc',
         section: 'security',
         q: 'slack',
       })
     ).toEqual({
       emergency_access: 'true',
       tab: 'audit-log',
-      feedbackId: 'f1',
+      feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
       category: 'credits',
-      entryId: 'e1',
+      entryId: 'cccccccccccccccccccccccc',
       section: 'security',
       q: 'slack',
     });

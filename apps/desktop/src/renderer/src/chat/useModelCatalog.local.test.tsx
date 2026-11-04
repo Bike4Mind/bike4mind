@@ -313,3 +313,21 @@ describe('useModelCatalog when a model server finishes a slow listing', () => {
     expect(changedListeners).toHaveLength(0);
   });
 });
+
+describe('useModelCatalog when main says its list changed', () => {
+  it('rereads main cached list, without forcing a fetch, and stops listening on unmount', async () => {
+    await mount(false);
+    expect(changedListeners).toHaveLength(1);
+    const updated: ChatModelOption = { ...model, controls: { effort: { levels: ['low', 'high'], scope: 'request' } } };
+    listModels.mockClear();
+    listModels.mockResolvedValue({ models: [updated] });
+    await act(async () => changedListeners.forEach(listener => listener()));
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(listModels).toHaveBeenCalledWith(false);
+    expect(catalog.models).toEqual([updated]);
+    expect(catalog.loading).toBe(false);
+
+    await act(async () => root.render(null));
+    expect(changedListeners).toHaveLength(0);
+  });
+});

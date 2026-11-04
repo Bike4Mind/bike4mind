@@ -99,6 +99,8 @@ import { serverHardware, withEnteredSpecs } from './enteredHardware';
 import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
 import { loadedStateOf, loadedStateTarget } from './loadedState';
 import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
+import { catalogSampling } from './catalogSampling';
+import type { CatalogSampling } from '@shared/generation';
 
 export interface ModelRuntimePort {
   readonly baseUrl: string;
@@ -994,6 +996,11 @@ export class ModelHubService {
   /** Projector sizes the curated list pins, by blob digest; chat sizes installed models from the same map. */
   pinnedProjectors(): ReadonlyMap<string, number> {
     return pinnedProjectorSizes(this.#deps.curated());
+  }
+
+  /** The curated family sampling for a local model matched by name on any local server; chat sends it as a seed. */
+  catalogSampling(ollamaName: string): CatalogSampling | undefined {
+    return catalogSampling(this.#deps.curated(), ollamaName);
   }
 
   /**
