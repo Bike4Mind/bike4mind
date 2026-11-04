@@ -1224,7 +1224,7 @@ export function ChatShell({
                   <ArtifactBrowserContext.Provider value={openArtifactInBrowserPane}>
                     <SessionOpenerContext.Provider value={selectSession}>
                       {/* Keyed so an open menu can never carry an image into another conversation,
-                    should a switch ever skip the `opening` gate that unmounts this today. */}
+                          should a switch ever skip the `opening` gate that unmounts this today. */}
                       <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
                         <MessageThread
                           // Remounted per conversation, so its window and scroll start over and nothing it
