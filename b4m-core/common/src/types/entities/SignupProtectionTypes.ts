@@ -19,7 +19,10 @@ export type SignupDomainHoldAutoPolicy = (typeof SIGNUP_DOMAIN_HOLD_AUTO_POLICIE
 export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_POLICY_VERSION = 1;
 export const SIGNUP_DOMAIN_HOLD_JUDGMENTS = ['abuse', 'legitimate', 'insufficient_evidence'] as const;
 export type SignupDomainHoldJudgment = (typeof SIGNUP_DOMAIN_HOLD_JUDGMENTS)[number];
-/** Must stay in sync with PlatformDecisionFailureCode in apps/client/server/decisions/platformDecision.ts. */
+/**
+ * PlatformDecisionFailureCode (apps/client/server/decisions/platformDecision.ts) plus `summary_timeout`;
+ * must stay in sync with it.
+ */
 export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES = [
   'provider_not_configured',
   'model_unavailable',
@@ -29,6 +32,7 @@ export const SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES = [
   'malformed_response',
   'refused',
   'invalid_request',
+  'summary_timeout',
 ] as const;
 export type SignupDomainHoldAssessmentFailure = (typeof SIGNUP_DOMAIN_HOLD_ASSESSMENT_FAILURES)[number];
 /** Failed assessments of one hold are retried up to this many times per policy version. */

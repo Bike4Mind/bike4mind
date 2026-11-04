@@ -342,7 +342,7 @@ describe('runSignupDomainHoldAssessments', () => {
     expect(deps.probeSite).toHaveBeenCalledTimes(1);
   });
 
-  it('skips a hold whose summary outlasts the timeout, without a call, and carries on', async () => {
+  it('stores a summary that outlasts the timeout as a failed attempt, without a call, and carries on', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const store = storeWith(
@@ -362,10 +362,16 @@ describe('runSignupDomainHoldAssessments', () => {
         status: 'ran',
         considered: 2,
         confirmed: 1,
-        skipped: { summary_timeout: 1 },
+        failed: 1,
+        recorded: 1,
       });
       expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
-      expect(store.get('fresh.example')?.assessment).toBeUndefined();
+      expect(store.get('fresh.example')?.assessment).toMatchObject({
+        outcome: 'failed',
+        failure: 'summary_timeout',
+        attempts: 1,
+      });
+      expect(store.get('fresh.example')?.status).toBe('held_pending_review');
       expect(store.get('second.example')?.status).toBe('blocked');
     } finally {
       vi.useRealTimers();

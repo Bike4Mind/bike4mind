@@ -27,6 +27,7 @@ import {
   SIGNUP_DOMAIN_HOLD_JUDGMENTS,
   type SignupDomainHoldAssessment,
   type SignupDomainHoldAssessmentConfig,
+  type SignupDomainHoldAssessmentFailure,
   SignupDomainHoldAssessmentConfigSchema,
   type SignupDomainHoldAutoPolicy,
   type SignupDomainHoldJudgment,
@@ -179,10 +180,10 @@ const isJudgment = (value: string): value is SignupDomainHoldJudgment =>
 
 type ModelOutput =
   | { outcome: 'judged'; judgment: SignupDomainHoldJudgment; confidence: number; modelVersion: string }
-  | { outcome: 'failed'; failure: PlatformDecisionFailureCode };
+  | { outcome: 'failed'; failure: SignupDomainHoldAssessmentFailure };
 
 type RunLevelFailure = Extract<PlatformDecisionFailureCode, 'provider_overloaded' | 'provider_not_configured'>;
-const isRunLevelFailure = (failure: PlatformDecisionFailureCode): failure is RunLevelFailure =>
+const isRunLevelFailure = (failure: SignupDomainHoldAssessmentFailure): failure is RunLevelFailure =>
   failure === 'provider_overloaded' || failure === 'provider_not_configured';
 
 const readAnswer = (answer: DecisionAnswer | undefined, modelVersion: string): ModelOutput => {
@@ -218,18 +219,18 @@ async function askModel(
   }
 }
 
-type HoldSkipReason = PlatformDecisionSkipReason | 'summary_timeout' | 'domain_attempts_exhausted' | RunLevelFailure;
+type HoldSkipReason = PlatformDecisionSkipReason | 'domain_attempts_exhausted' | RunLevelFailure;
 
 class HoldSkipped extends DecisionSkipped<HoldSkipReason> {}
 
-/** Gathers the facts, or skips the hold (no call, nothing stored) when they take too long. */
+/** Gathers the facts; null when they take too long, which is stored as a failed attempt. */
 async function summarizeHold(
   hold: SignupDomainReview,
   deps: SignupDomainHoldAssessmentDeps
-): Promise<SignupDomainHoldFeatureSummary> {
+): Promise<SignupDomainHoldFeatureSummary | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new HoldSkipped('summary_timeout')), SUMMARY_TIMEOUT_MS);
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), SUMMARY_TIMEOUT_MS);
   });
   try {
     return await Promise.race([gatherSummary(hold, deps), timeout]);
@@ -351,20 +352,23 @@ async function assessHold(
   deps: SignupDomainHoldAssessmentDeps
 ): Promise<HoldOutcome> {
   const summary = await summarizeHold(hold, deps);
-  const output = await withPlatformCallSlot(
-    { keyPrefix: KEY_PREFIX, cacheKey: hold.domain, maxConcurrency: config.maxConcurrency },
-    async () => {
-      // Counted per call rather than read from the stored attempts, so a failure that rolls back
-      // the write (and leaves the hold looking unassessed) still cannot be re-paid every run.
-      const calls = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-        `${KEY_PREFIX}:domainCalls:${hold.domain}`,
-        SIGNUP_DOMAIN_HOLD_ASSESSMENT_MAX_ATTEMPTS,
-        DAY_MS
+  // Stored rather than skipped: the hold would otherwise head the oldest-first queue every run.
+  const output: ModelOutput = !summary
+    ? { outcome: 'failed', failure: 'summary_timeout' }
+    : await withPlatformCallSlot(
+        { keyPrefix: KEY_PREFIX, cacheKey: hold.domain, maxConcurrency: config.maxConcurrency },
+        async () => {
+          // Counted per call rather than read from the stored attempts, so a failure that rolls back
+          // the write (and leaves the hold looking unassessed) still cannot be re-paid every run.
+          const calls = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+            `${KEY_PREFIX}:domainCalls:${hold.domain}`,
+            SIGNUP_DOMAIN_HOLD_ASSESSMENT_MAX_ATTEMPTS,
+            DAY_MS
+          );
+          if (!calls.success) throw new HoldSkipped('domain_attempts_exhausted');
+          return askModel(model, summary, config, deps.logger);
+        }
       );
-      if (!calls.success) throw new HoldSkipped('domain_attempts_exhausted');
-      return askModel(model, summary, config, deps.logger);
-    }
-  );
   // Provider-wide conditions, not facts about this hold: storing them would burn its attempts.
   if (output.outcome === 'failed' && isRunLevelFailure(output.failure)) throw new HoldSkipped(output.failure);
   const assessment = toAssessment(output, hold.assessment, model, deps.now());
@@ -374,7 +378,7 @@ async function assessHold(
       : (await deps.holds.recordAssessment(hold.domain, assessment))
         ? 'recorded'
         : 'stale';
-  if (assessment.outcome === 'judged' && applied !== 'stale') {
+  if (assessment.outcome === 'judged' && summary && applied !== 'stale') {
     try {
       await deps.recordShadowDetection(
         buildShadowDetection(hold, assessment, summary, applied === 'confirmed', config)
