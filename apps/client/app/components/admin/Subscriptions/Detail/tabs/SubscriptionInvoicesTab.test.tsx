@@ -44,7 +44,11 @@ describe('SubscriptionInvoicesTab', () => {
     expect(within(rows[0]).getByText('N-0001')).toBeInTheDocument();
     expect(within(rows[0]).getByText('$20.00')).toBeInTheDocument();
     expect(within(rows[0]).getByTestId('subscription-invoices-credits-cell')).toHaveTextContent('1,500');
-    expect(within(rows[1]).getByTestId('subscription-invoices-credits-cell')).toHaveTextContent('-');
+    expect(within(rows[0]).queryByTestId('subscription-invoices-no-grant')).not.toBeInTheDocument();
+    expect(within(rows[1]).getByTestId('subscription-invoices-no-grant')).toHaveAttribute(
+      'aria-label',
+      'No grant found'
+    );
     expect(screen.getByText('Amount (USD)')).toBeInTheDocument();
   });
 

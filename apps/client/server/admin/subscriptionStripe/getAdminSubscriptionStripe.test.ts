@@ -164,6 +164,15 @@ describe('getAdminSubscriptionStripe', () => {
     expect(mocks.createPreview).not.toHaveBeenCalled();
   });
 
+  it('still previews the next invoice when cancel_at falls after the current period', async () => {
+    mocks.createPreview.mockResolvedValue({ amount_due: 2500, currency: 'usd' });
+    const periodEnd = stripeSub.items.data[0].current_period_end;
+    mocks.retrieve.mockResolvedValue({ ...stripeSub, cancel_at: periodEnd + 90 * 86_400 });
+    expect(await getAdminSubscriptionStripe(ID, { fresh: true })).toMatchObject({ upcoming: { amount: 2500 } });
+    mocks.retrieve.mockResolvedValue({ ...stripeSub, cancel_at: periodEnd });
+    expect(await getAdminSubscriptionStripe(ID, { fresh: true })).toMatchObject({ upcoming: null });
+  });
+
   it('answers a comp without touching Stripe', async () => {
     mocks.subscription.mockResolvedValue({ ...stripeDoc, source: 'admin_grant', subscriptionId: 'admin_grant_1' });
     expect(await getAdminSubscriptionStripe(ID)).toEqual({ stripeConfigured: true, kind: 'comp' });
@@ -196,7 +205,10 @@ describe('getAdminSubscriptionStripe', () => {
     expect(mocks.retrieve).toHaveBeenCalledTimes(1);
     await getAdminSubscriptionStripe(ID, { fresh: true });
     expect(mocks.retrieve).toHaveBeenCalledTimes(2);
-    vi.advanceTimersByTime(60_001);
+    vi.advanceTimersByTime(59_999);
+    await getAdminSubscriptionStripe(ID);
+    expect(mocks.retrieve).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(2);
     await getAdminSubscriptionStripe(ID);
     expect(mocks.retrieve).toHaveBeenCalledTimes(3);
 

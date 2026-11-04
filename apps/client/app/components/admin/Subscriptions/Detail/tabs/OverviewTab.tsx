@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Button, Link, Stack, Typography } from '@mui/joy';
 import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
-import { cardExpiresWithinDays } from '@client/app/utils/adminSubscriptionStripe';
+import { cardExpiresWithinDays, cardIsExpired } from '@client/app/utils/adminSubscriptionStripe';
 import {
   isCompSubscription,
   type AdminSubscriptionDetail,
@@ -128,6 +128,9 @@ const PaymentFacts: React.FC<{ data: StripeData }> = ({ data }) => {
         {expiry && (
           <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
             {expiry}
+            {cardIsExpired(paymentMethod, now) && (
+              <StatusChip tone="bad" label="Expired" data-testid="subscription-detail-card-expired-chip" />
+            )}
             {cardExpiresWithinDays(paymentMethod, now) && (
               <StatusChip tone="warn" label="Expires soon" data-testid="subscription-detail-card-expiring-chip" />
             )}

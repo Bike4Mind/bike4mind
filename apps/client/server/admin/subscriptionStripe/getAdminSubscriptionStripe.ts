@@ -81,8 +81,12 @@ const listInvoices = async (stripe: Stripe, subscriptionId: string) => {
 // A preview persists nothing at Stripe. Canceled or ending subscriptions have no next invoice, and a failed
 // preview must not take the invoices down with it.
 const upcomingOf = async (stripe: Stripe, subscription: Stripe.Subscription): Promise<CachedStripe['upcoming']> => {
-  if (subscription.status === 'canceled' || subscription.cancel_at_period_end || subscription.cancel_at) return null;
-  const at = iso(subscription.items.data[0]?.current_period_end);
+  const periodEnd = subscription.items.data[0]?.current_period_end;
+  if (!periodEnd) return null;
+  // A cancel_at beyond this period still renews first.
+  const endsThisPeriod = subscription.cancel_at != null && subscription.cancel_at <= periodEnd;
+  if (subscription.status === 'canceled' || subscription.cancel_at_period_end || endsThisPeriod) return null;
+  const at = iso(periodEnd);
   if (!at) return null;
   try {
     const preview = await stripe.invoices.createPreview({ subscription: subscription.id });
