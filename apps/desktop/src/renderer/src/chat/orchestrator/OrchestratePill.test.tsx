@@ -16,7 +16,7 @@ describe('OrchestratePill', () => {
   it('reflects the behaviour and flips it', async () => {
     await themed.render(<OrchestratePill on={false} onChange={onChange} />);
     const pill = el('composer-orchestrate-toggle');
-    expect(pill.textContent).toBe('Orchestrate');
+    expect(pill.getAttribute('aria-label')).toBe('Orchestrate');
     expect(pill.getAttribute('aria-pressed')).toBe('false');
     act(() => pill.click());
     expect(onChange).toHaveBeenCalledWith(true);

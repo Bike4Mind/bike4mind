@@ -1,12 +1,12 @@
-import Button from '@mui/joy/Button';
+import IconButton from '@mui/joy/IconButton';
 import Tooltip from '@mui/joy/Tooltip';
-import Typography from '@mui/joy/Typography';
 import { AgentsIcon } from '../icons';
 
 /**
  * The session's Orchestrate behaviour: while on, the system prompt tells the assistant to split new
  * work across agents. Lives in the composer beside the approval mode because, like it, the choice
  * shapes the next turn; which surface the header shows is a separate, view-only switch.
+ * Icon-only so the footer stays one quiet row; the tint alone carries the state.
  */
 export function OrchestratePill({
   on,
@@ -19,27 +19,24 @@ export function OrchestratePill({
 }) {
   return (
     <Tooltip
-      title={on ? 'Orchestrate is on: new work is split across agents' : 'Split work across agents and coordinate them'}
+      title={on ? 'Orchestrate on: new work is split across agents' : 'Orchestrate: split work across agents'}
       size="sm"
       variant="soft"
       placement="top"
     >
-      <Button
+      <IconButton
         size="sm"
+        aria-label="Orchestrate"
         aria-pressed={on}
         variant={on ? 'soft' : 'plain'}
         color={on ? 'primary' : 'neutral'}
         disabled={disabled}
-        startDecorator={<AgentsIcon />}
         onClick={() => onChange(!on)}
         data-testid="composer-orchestrate-toggle"
-        // One short word, so it keeps its width while the model and effort labels ellipsize instead.
-        sx={{ fontWeight: 'normal', flexShrink: 0, borderRadius: 'xl', gap: 0.75 }}
+        sx={{ flexShrink: 0, borderRadius: 'xl', ...(!on && { color: 'text.tertiary' }) }}
       >
-        <Typography level="body-xs" noWrap textColor="inherit">
-          Orchestrate
-        </Typography>
-      </Button>
+        <AgentsIcon />
+      </IconButton>
     </Tooltip>
   );
 }
