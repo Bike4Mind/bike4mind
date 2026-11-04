@@ -51,7 +51,7 @@ describe('admin block signup grant', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
-    h.findById.mockResolvedValue({ id: 'user-1' });
+    h.findById.mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
     h.block.mockResolvedValue({ outcome: 'applied', credits: 0, rewardsAffected: 2 });
   });
 
@@ -103,7 +103,7 @@ describe('admin block signup grant', () => {
       expect.objectContaining({
         action: 'user.credits.grant_blocked',
         reason: 'Confirmed farming ring',
-        target: { kind: 'user', id: 'user-1', displayName: 'user-1' },
+        target: { kind: 'user', id: 'user-1', displayName: 'user@example.com' },
       })
     );
   });
