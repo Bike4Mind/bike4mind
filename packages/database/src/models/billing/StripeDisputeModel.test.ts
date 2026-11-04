@@ -47,6 +47,17 @@ describe('StripeDisputeModel', () => {
     expect(closed.closedAt).toBeInstanceOf(Date);
   });
 
+  it('flags a close it already holds as redelivered, but not a first close or a changed status', async () => {
+    await stripeDisputeRepository.recordOpened(facts());
+    const first = await stripeDisputeRepository.recordClosed(facts({ stripeStatus: 'lost' }), new Date());
+    const again = await stripeDisputeRepository.recordClosed(facts({ stripeStatus: 'lost' }), new Date());
+    const changed = await stripeDisputeRepository.recordClosed(facts({ stripeStatus: 'won' }), new Date());
+
+    expect(first.redelivered).toBe(false);
+    expect(again.redelivered).toBe(true);
+    expect(changed.redelivered).toBe(false);
+  });
+
   it('re-files an open user dispute as unmatched, and leaves other records alone', async () => {
     await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
     const refiled = await stripeDisputeRepository.markUserGone('dp_test_1');

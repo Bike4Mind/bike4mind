@@ -161,15 +161,18 @@ class StripeDisputeRepository {
 
   /**
    * Stores Stripe's final status. Creates the record when the dispute predates this collection or its
-   * open event was lost, so a close is never dropped.
+   * open event was lost, so a close is never dropped. `redelivered` is true when the record already held
+   * this close, so a caller can skip notifying twice.
    */
-  async recordClosed(facts: StripeDisputeFacts, closedAt: Date): Promise<StripeDisputeItem> {
-    const doc = await StripeDisputeModel.findOneAndUpdate(
+  async recordClosed(facts: StripeDisputeFacts, closedAt: Date): Promise<StripeDisputeItem & { redelivered: boolean }> {
+    const before = await StripeDisputeModel.findOneAndUpdate(
       { stripeDisputeId: facts.stripeDisputeId },
       { $setOnInsert: insertOnly(facts), $set: { stripeStatus: facts.stripeStatus, closedAt } },
-      { upsert: true, new: true }
+      { upsert: true, new: false }
     ).lean<LeanStripeDispute>();
-    return toItem(doc as LeanStripeDispute);
+    const doc = await StripeDisputeModel.findOne({ stripeDisputeId: facts.stripeDisputeId }).lean<LeanStripeDispute>();
+    const redelivered = before?.closedAt != null && before.stripeStatus === facts.stripeStatus;
+    return { ...toItem(doc as LeanStripeDispute), redelivered };
   }
 
   /**

@@ -854,6 +854,19 @@ describe('charge.dispute.closed', () => {
     expect(mocks.postMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('Resolve it in Admin > Disputes.'));
   });
 
+  it('does not post a redelivered lost organization close to Slack again', async () => {
+    mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'org_1' });
+    mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({
+      ...facts,
+      state: 'open',
+      redelivered: true,
+    }));
+
+    await deliver(closed('lost'));
+
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
   it('re-files a lost dispute whose user is gone as unmatched so an admin can resolve it', async () => {
     mocks.recordDisputeClosed.mockResolvedValue({ stripeDisputeId: 'dp_1', subject: 'user', state: 'open' });
 
