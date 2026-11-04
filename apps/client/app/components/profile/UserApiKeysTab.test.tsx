@@ -54,10 +54,10 @@ const h = vi.hoisted(() => ({
     callbackSigningSecretCreatedAt: new Date('2026-03-01'),
   } as RotateCallbackSigningSecretResponse,
   hasOptiAccess: false,
-  eligibility: { canCreate: true, message: null, orgBillingMayPass: true } as {
+  eligibility: { canCreate: true, message: null, refusedOrgIds: [] } as {
     canCreate: boolean;
     message: string | null;
-    orgBillingMayPass: boolean;
+    refusedOrgIds: string[];
   },
   billingOrgs: [] as { id: string; name: string }[],
 }));
@@ -576,16 +576,16 @@ describe('UserApiKeysTab - skills:write', () => {
 });
 
 describe('UserApiKeysTab - API key trust gate', () => {
-  const blocked = { canCreate: false, message: 'Verify your account to create API keys.', orgBillingMayPass: true };
+  const blocked = { canCreate: false, message: 'Verify your account to create API keys.', refusedOrgIds: [] as string[] };
   const accessDenied = {
     canCreate: false,
     message: 'API keys require an active paid subscription',
-    orgBillingMayPass: false,
+    refusedOrgIds: ['org-1'],
   };
 
   beforeEach(() => {
     h.keys = [activeKey];
-    h.eligibility = { canCreate: true, message: null, orgBillingMayPass: true };
+    h.eligibility = { canCreate: true, message: null, refusedOrgIds: [] };
     h.billingOrgs = [];
     h.createMutate.mockClear();
   });

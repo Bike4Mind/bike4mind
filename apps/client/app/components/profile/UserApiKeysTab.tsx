@@ -269,9 +269,11 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
       scopes: fd.scopes.includes(value) ? fd.scopes.filter(s => s !== value) : [...fd.scopes, value],
     }));
 
-  // A refusal covers personal keys; an org-billed key still passes when the server says one can.
+  // A refusal covers personal keys; an org-billed key still passes unless the access switch refuses that org.
+  const refusedOrgIds = eligibility?.refusedOrgIds ?? [];
   const blockedByTrust =
-    eligibility?.canCreate === false && (!formData.organizationId || !eligibility.orgBillingMayPass);
+    eligibility?.canCreate === false && (!formData.organizationId || refusedOrgIds.includes(formData.organizationId));
+  const someOrgAdmitted = (billingOrgs ?? []).some(org => !refusedOrgIds.includes(org.id));
   const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByTrust;
 
   return (
@@ -291,7 +293,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         <Stack spacing={2.5} className="project-api-keys-modal-content">
           {blockedByTrust && (
             <Alert color="warning" variant="soft" data-testid="api-key-trust-alert">
-              {canBillOrg && eligibility?.orgBillingMayPass
+              {canBillOrg && someOrgAdmitted
                 ? `${eligibility?.message} You can still create a key billed to an organization you manage.`
                 : eligibility?.message}
             </Alert>
@@ -324,7 +326,11 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
               >
                 <Option value="personal">Personal (your credits)</Option>
                 {billingOrgs?.map(org => (
-                  <Option key={org.id} value={org.id}>
+                  <Option
+                    key={org.id}
+                    value={org.id}
+                    disabled={eligibility?.canCreate === false && refusedOrgIds.includes(org.id)}
+                  >
                     {org.name} (organization credits)
                   </Option>
                 ))}
@@ -1933,7 +1939,8 @@ export default function UserApiKeysTab() {
   const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
   const { data: eligibility } = useApiKeyEligibility();
   const createBlockedByTrust =
-    eligibility?.canCreate === false && (!eligibility.orgBillingMayPass || (billingOrgs?.length ?? 0) === 0);
+    eligibility?.canCreate === false &&
+    !(billingOrgs ?? []).some(org => !(eligibility.refusedOrgIds ?? []).includes(org.id));
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');

@@ -21,21 +21,22 @@ export type ApiKeyEligibilityResponse = {
   /** Why not, and what would unlock it. Null when canCreate is true. */
   message: string | null;
   /**
-   * Whether a key billed to an org the caller administers can still pass. Org-billed keys skip
-   * trust but not the access switch, which admits them on the org's plan (or not at all when
-   * disabled). Always true when the switch admits the caller themselves.
+   * Administered orgs whose org-billed keys the access switch refuses. Org-billed keys skip trust
+   * but not the switch; empty whenever the switch admits the caller themselves (which implies it
+   * admits org-billed keys).
    */
-  orgBillingMayPass: boolean;
+  refusedOrgIds: string[];
 };
 
-/** Whether the access switch admits a key billed to at least one org the user administers. */
-async function anyAdministeredOrgMayBill(user: ApiKeyAccessUser, req: ActiveSubscriptionsRequest): Promise<boolean> {
+/** Ids of the orgs the user administers whose org-billed keys the access switch refuses. */
+async function orgsRefusedBySwitch(user: ApiKeyAccessUser, req: ActiveSubscriptionsRequest): Promise<string[]> {
   const organizationIds = await organizationRepository.findIdsAdministeredBy(user.id);
-  for (const organizationId of organizationIds) {
-    const billing = { billingOwnerType: CreditHolderType.Organization, organizationId };
-    if (await isApiKeyAccessAllowed(user, billing, req)) return true;
-  }
-  return false;
+  const allowed = await Promise.all(
+    organizationIds.map(organizationId =>
+      isApiKeyAccessAllowed(user, { billingOwnerType: CreditHolderType.Organization, organizationId }, req)
+    )
+  );
+  return organizationIds.filter((_, i) => !allowed[i]);
 }
 
 /**
@@ -51,13 +52,13 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
     return res.json({
       canCreate: false,
       message: API_KEY_ACCESS_DENIED_MESSAGE,
-      orgBillingMayPass: await anyAdministeredOrgMayBill(req.user, req),
+      refusedOrgIds: await orgsRefusedBySwitch(req.user, req),
     } satisfies ApiKeyEligibilityResponse);
   }
 
   const { assessment } = await resolveApiKeyTrust(req.user, req);
   if (assessment.status !== 'untrusted') {
-    return res.json({ canCreate: true, message: null, orgBillingMayPass: true } satisfies ApiKeyEligibilityResponse);
+    return res.json({ canCreate: true, message: null, refusedOrgIds: [] } satisfies ApiKeyEligibilityResponse);
   }
 
   const activePersonalKeys =
@@ -68,7 +69,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   return res.json({
     canCreate,
     message: canCreate ? null : userApiKeyService.describeApiKeyTrustRequirement(assessment),
-    orgBillingMayPass: true,
+    refusedOrgIds: [],
   } satisfies ApiKeyEligibilityResponse);
 });
 

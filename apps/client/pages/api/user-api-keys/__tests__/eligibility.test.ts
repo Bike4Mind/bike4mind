@@ -54,7 +54,7 @@ const callEligibility = async (assessment: Assessment) => {
   const { req, res } = createMocks({ method: 'GET' });
   Object.assign(req, { user: { id: 'u1' } });
   await mockRefs.getHandler!(req, res);
-  return res._getJSONData() as { canCreate: boolean; message: string | null; orgBillingMayPass: boolean };
+  return res._getJSONData() as { canCreate: boolean; message: string | null; refusedOrgIds: string[] };
 };
 
 describe('GET /api/user-api-keys/eligibility', () => {
@@ -71,19 +71,19 @@ describe('GET /api/user-api-keys/eligibility', () => {
     expect(await callEligibility({ status: 'trusted' })).toEqual({
       canCreate: false,
       message: 'API keys require an active paid subscription',
-      orgBillingMayPass: false,
+      refusedOrgIds: [],
     });
     expect(isApiKeyAccessAllowed).toHaveBeenCalledWith({ id: 'u1' }, undefined, expect.anything());
     expect(resolveApiKeyTrust).not.toHaveBeenCalled();
   });
 
-  it('reports org billing may pass when the switch admits a key billed to an administered org', async () => {
+  it('reports only the refused org when the switch admits a key billed to another administered org', async () => {
     findIdsAdministeredBy.mockResolvedValue(['org-free', 'org-paid']);
     isApiKeyAccessAllowed.mockImplementation(async (_user, billing?: { organizationId?: string }) => {
       return billing?.organizationId === 'org-paid';
     });
     const result = await callEligibility({ status: 'trusted' });
-    expect(result).toMatchObject({ canCreate: false, orgBillingMayPass: true });
+    expect(result).toMatchObject({ canCreate: false, refusedOrgIds: ['org-free'] });
     expect(findIdsAdministeredBy).toHaveBeenCalledWith('u1');
     expect(isApiKeyAccessAllowed).toHaveBeenCalledWith(
       { id: 'u1' },
@@ -92,10 +92,13 @@ describe('GET /api/user-api-keys/eligibility', () => {
     );
   });
 
-  it('reports org billing cannot pass when the switch refuses every administered org', async () => {
-    findIdsAdministeredBy.mockResolvedValue(['org-free']);
+  it('reports every administered org when the switch refuses them all', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-a', 'org-b']);
     isApiKeyAccessAllowed.mockResolvedValue(false);
-    expect(await callEligibility({ status: 'trusted' })).toMatchObject({ canCreate: false, orgBillingMayPass: false });
+    expect(await callEligibility({ status: 'trusted' })).toMatchObject({
+      canCreate: false,
+      refusedOrgIds: ['org-a', 'org-b'],
+    });
   });
 
   it('propagates an access-switch read failure without checking trust', async () => {
@@ -108,7 +111,7 @@ describe('GET /api/user-api-keys/eligibility', () => {
     expect(await callEligibility({ status: 'trusted' })).toEqual({
       canCreate: true,
       message: null,
-      orgBillingMayPass: true,
+      refusedOrgIds: [],
     });
     expect(countActiveByUserId).not.toHaveBeenCalled();
   });
@@ -118,7 +121,7 @@ describe('GET /api/user-api-keys/eligibility', () => {
     expect(await callEligibility(notYetTrusted(1))).toEqual({
       canCreate: true,
       message: null,
-      orgBillingMayPass: true,
+      refusedOrgIds: [],
     });
     expect(countActiveByUserId).toHaveBeenCalledWith('u1', 'personal');
   });
@@ -130,7 +133,7 @@ describe('GET /api/user-api-keys/eligibility', () => {
     expect(await callEligibility(assessment)).toEqual({
       canCreate: false,
       message: userApiKeyService.describeApiKeyTrustRequirement(assessment),
-      orgBillingMayPass: true,
+      refusedOrgIds: [],
     });
   });
 
