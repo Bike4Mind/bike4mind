@@ -797,6 +797,85 @@ describe('ChatService session_send', () => {
       );
     });
 
+    /** A sender whose message to another project is held, with the sender's own turn ended. */
+    async function heldFromIdleSender(text: string, id: string) {
+      const sender = await codeSession('Sender');
+      const target = await codeSession('Elsewhere', other);
+      await service.send(sender.id, 'go');
+      await awaitStream(0);
+      requestSend(streams[0], target.id, text, id);
+      await vi.waitUntil(() => service.heldRelaysFor(target.id).length === 1, { timeout: 5000, interval: 5 });
+      await awaitStream(1);
+      endTurn(streams[1]);
+      await vi.waitUntil(() => !service.isSessionBusy(sender.id), { timeout: 5000, interval: 5 });
+      return { sender, target, heldId: service.heldRelaysFor(target.id)[0].id };
+    }
+
+    it.each([
+      ['deleted', (id: string) => service.deleteSession(id)],
+      ['archived', (id: string) => service.setSessionArchived(id, true)],
+    ])('drops a held message from the receiver when its sender is %s', async (_name, remove) => {
+      const { sender, target } = await heldFromIdleSender('please rebase onto main', 'g1');
+      const requests = post.mock.calls.length;
+
+      await remove(sender.id);
+
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+      const lastHeld = events.findLast(event => event.type === 'held-relays' && event.sessionId === target.id);
+      expect(lastHeld?.type === 'held-relays' && lastHeld.held).toEqual([]);
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect(post.mock.calls).toHaveLength(requests);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+    });
+
+    it('runs nothing when a held message is delivered after its sender has gone', async () => {
+      const { sender, target, heldId } = await heldFromIdleSender('please rebase onto main', 'g2');
+      const requests = post.mock.calls.length;
+      // Straight to the store, as if the sender went between the card being drawn and Deliver.
+      await store.delete(sender.id);
+
+      await service.resolveHeldRelay(target.id, heldId, true);
+
+      await expect(awaitStream(requests, 1000)).rejects.toThrow();
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+      expect(await store.get(sender.id)).toBeNull();
+    });
+
+    it('refuses to deliver a held message into a conversation that is being cleaned up', async () => {
+      const { sender, target, heldId } = await heldFromIdleSender('please rebase onto main', 'g3');
+      (service as unknown as { abandoning: Set<string> }).abandoning.add(target.id);
+
+      await service.resolveHeldRelay(target.id, heldId, true);
+
+      expect(queue.list(target.id)).toHaveLength(0);
+      expect((await store.get(target.id))?.messages).toHaveLength(0);
+      const stored = await store.get(sender.id);
+      expect(stored?.messages.some(message => message.system && /could not be delivered/.test(message.content))).toBe(
+        true
+      );
+    });
+
+    it("runs a relay queued unheld even if the receiver's mode is loosened before it is taken", async () => {
+      const target = await codeSession('Target');
+      const sender = await codeSession('Sender');
+      await service.send(target.id, 'keep working');
+      await awaitStream(0);
+      await service.send(sender.id, 'go');
+      await awaitStream(1);
+      requestSend(streams[1], target.id, 'run the migration', 'm2');
+      await vi.waitUntil(() => !!callById('m2'), { timeout: 5000, interval: 5 });
+      expect(queue.list(target.id)).toHaveLength(1);
+
+      // Loose enough that sending now would be held: the hold is decided at send time only.
+      await store.setApprovalMode(target.id, 'full');
+      endTurn(streams[0]);
+
+      await turnAbout(/run the migration/);
+      expect(service.heldRelaysFor(target.id)).toHaveLength(0);
+    });
+
     it('holds a message to a conversation in a looser approval mode, even in the same project', async () => {
       const sender = await codeSession('Sender');
       const target = await codeSession('Loose');

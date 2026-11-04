@@ -933,6 +933,7 @@ export class ChatService {
     if (updated && archived) {
       // Delivering to an archived target is what tells each sender it never arrived.
       for (const entry of this.heldRelaysFor(sessionId)) await this.resolveHeldRelay(sessionId, entry.id, true);
+      this.dropHeldFrom(sessionId);
       await this.announceSuggestions(sessionId);
     }
     return updated;
@@ -1861,6 +1862,7 @@ export class ChatService {
     this.turnNotify.delete(sessionId);
     // The stored session is already gone here, so resolving takes the "could not be delivered" path.
     for (const entry of this.heldRelaysFor(sessionId)) await this.resolveHeldRelay(sessionId, entry.id, true);
+    this.dropHeldFrom(sessionId);
     for (const [childId, watch] of this.spawnWatch) {
       if (watch.parentSessionId === sessionId) this.spawnWatch.delete(childId);
     }
@@ -4678,6 +4680,8 @@ export class ChatService {
       return { ok: false, reason: 'unavailable', message: 'This build cannot deliver messages between sessions.' };
     }
 
+    // Decided now, against both modes as they are at send time: a relay already queued unheld
+    // still runs if the receiver's mode is loosened before it is taken.
     const holdReason = relayHoldReason(from, target);
     const held = this.heldRelays.get(targetId) ?? [];
     if (holdReason && held.length >= MAX_HELD_PER_SESSION) {
@@ -4752,9 +4756,14 @@ export class ChatService {
     else this.heldRelays.delete(sessionId);
     this.emitHeld(sessionId);
 
+    // A sender removed since the hold has nobody to answer to; see dropHeldFrom.
+    const senderId = entry.relay.fromSessionId;
+    const sender = await this.deps.store.get(senderId);
+    if (!sender || sender.archived || this.abandoning.has(senderId)) return;
+
     const target = await this.deps.store.get(sessionId);
     const title = mentionTitle(target?.title ?? 'That conversation');
-    if (deliver && target && !target.archived && this.deps.queue) {
+    if (deliver && target && !target.archived && !this.abandoning.has(sessionId) && this.deps.queue) {
       this.deps.queue.enqueueRelay(sessionId, entry.text, entry.relay);
       this.flushQueue(sessionId);
       return;
@@ -4767,6 +4776,17 @@ export class ChatService {
       content: notice,
       display: deliver ? `Your message to ${title} could not be delivered` : `${title} declined your message`,
     });
+  }
+
+  /** Drop every held message `senderId` sent, so no card offers one from a conversation that is gone. */
+  private dropHeldFrom(senderId: string): void {
+    for (const [targetId, held] of this.heldRelays) {
+      const rest = held.filter(entry => entry.relay.fromSessionId !== senderId);
+      if (rest.length === held.length) continue;
+      if (rest.length > 0) this.heldRelays.set(targetId, rest);
+      else this.heldRelays.delete(targetId);
+      this.emitHeld(targetId);
+    }
   }
 
   private emitHeld(sessionId: string): void {
