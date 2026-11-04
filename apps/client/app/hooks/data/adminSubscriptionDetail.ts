@@ -57,9 +57,12 @@ export const useAdminSubscriptionDetail = (id: string) =>
 
 const STRIPE_STALE_MS = 60_000;
 
-// A missing record will not appear on retry, and a Stripe outage already has a Try again button.
+// A missing record will not appear on retry, and a server or Stripe failure (502, gateway 504) already has a
+// Try again button; retrying it would only add load to a degraded Stripe.
 const retryStripeRead = (failureCount: number, error: unknown) =>
-  !isNotFoundError(error) && !(isAxiosError(error) && error.response?.status === 502) && failureCount < MAX_RETRIES;
+  !isNotFoundError(error) &&
+  !(isAxiosError(error) && (error.response?.status ?? 0) >= 500) &&
+  failureCount < MAX_RETRIES;
 
 /** What the Stripe sections of the detail page need from the live read. */
 export type AdminSubscriptionStripeState = {

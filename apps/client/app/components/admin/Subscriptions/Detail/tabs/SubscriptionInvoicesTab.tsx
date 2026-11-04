@@ -8,7 +8,13 @@ import { formatCredits } from '../../../Users/Profile/actions/creditAdjustment';
 import { formatDate } from '../subscriptionDetailModel';
 import { StripeSection, invoiceStatusTone } from '../stripeSections';
 
+const fetchedTime = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
 const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+
+// What the customer was charged once paid; what Stripe asked for otherwise (open, void, uncollectible).
+const invoiceAmount = (invoice: AdminStripeInvoice) =>
+  invoice.status === 'paid' ? invoice.amountPaid : invoice.amountDue;
 
 const columns = (currencies: string[]): DataColumn<AdminStripeInvoice>[] => [
   { id: 'number', label: 'Number', render: invoice => invoice.number ?? invoice.id },
@@ -20,10 +26,11 @@ const columns = (currencies: string[]): DataColumn<AdminStripeInvoice>[] => [
   },
   {
     id: 'amount',
-    label: `Amount (${currencies.map(currency => currency.toUpperCase()).join(', ')})`,
+    label: currencies.length === 1 ? `Amount (${currencies[0].toUpperCase()})` : 'Amount',
     numeric: true,
-    sortValue: invoice => invoice.amountDue,
-    render: invoice => formatMoney(invoice.amountDue, invoice.currency),
+    // Amounts in different currencies do not compare, so only a single-currency table sorts by amount.
+    sortValue: currencies.length === 1 ? invoiceAmount : undefined,
+    render: invoice => formatMoney(invoiceAmount(invoice), invoice.currency),
   },
   {
     id: 'status',
@@ -109,6 +116,22 @@ export const SubscriptionInvoicesTab: React.FC<{
               Showing the latest 300 invoices.
             </Typography>
           )}
+          <Typography
+            level="body-xs"
+            sx={{ mt: 1, color: 'admin.inkMuted' }}
+            data-testid="subscription-invoices-fetched-at"
+          >
+            Fetched from Stripe at {fetchedTime(data.fetchedAt)}.{' '}
+            <Link
+              component="button"
+              level="body-xs"
+              onClick={stripe.refetchFresh}
+              disabled={stripe.isFetching}
+              data-testid="subscription-invoices-refresh-btn"
+            >
+              Refresh
+            </Link>
+          </Typography>
         </>
       )}
     </StripeSection>
