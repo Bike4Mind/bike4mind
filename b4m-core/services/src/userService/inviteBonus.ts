@@ -1,4 +1,10 @@
-import { CreditHolderType, resolveSignupGrantSchedule, type IUserDocument, type SignupGrant } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  isSignupGrantBlocked,
+  resolveSignupGrantSchedule,
+  type IUserDocument,
+  type SignupGrant,
+} from '@bike4mind/common';
 import { addCreditsWithLedgerRow, DuplicateCreditTransactionError } from '../creditService';
 import type { FreeCreditAdapters } from './freeCredits';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
@@ -32,6 +38,7 @@ export function isInviteBonusEligible(
   if (!user?.signupInvite || !grant || grant.inviteBonusPaid != null) return false;
   if (user.signupInvite.source === 'organization' && !orgStandingVerified) return false;
   if (grant.stage === 'pending_email' || grant.unlockForfeited || user.signupGrantHeldReason) return false;
+  if (isSignupGrantBlocked(user)) return false;
   if (accountBlockReasons(user).length || isAiAccessRevoked(user) || isSignupGrantHeldForReview(user)) return false;
   // A reviewed or reduced tranche earns no bonus.
   return user.signupGrantAssessment?.credits === grant.signupCredits;

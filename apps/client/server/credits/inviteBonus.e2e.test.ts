@@ -266,6 +266,17 @@ describe('invite bonus', () => {
     expect(await bonusRows()).toBe(0);
   });
 
+  it('pays no bonus to an account an admin blocked from grants and rewards', async () => {
+    config.signupGrantInviteBonusCredits = '0';
+    const blocked = await createUser(1, true);
+    await userService.releaseSignupTranche(blocked.id, adapters);
+    config.signupGrantInviteBonusCredits = '2000';
+    await User.updateOne({ _id: blocked.id }, { $set: { 'signupGrant.blocked': { at: new Date() } } });
+    expect((await userService.payInviteBonus(blocked.id, adapters)).creditsGranted).toBe(0);
+    expect(await bonusRows()).toBe(0);
+    expect(await creditsOf(blocked.id)).toBe(1000);
+  });
+
   it('leaves the bonus unpaid on an exhausted signup pool and pays it on a later call', async () => {
     config.signupGrantSignupPoolDaily = '1500';
     const invited = await createUser(1, true);
