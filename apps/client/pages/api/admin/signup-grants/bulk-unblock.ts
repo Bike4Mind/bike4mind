@@ -37,7 +37,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         },
       }
     );
-    for (const userId of result.undoUserIds) await rerunDomainGrantAfterUnblock(userId);
+    for (const userId of result.undoUserIds) await rerunDomainGrantAfterUnblock(userId, req.logger);
     return res.json(result);
   });
 
