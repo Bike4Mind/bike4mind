@@ -44,6 +44,7 @@ import {
 import { allSecrets } from './secrets';
 import { web } from './web';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { imageProcessor } from './functions';
@@ -172,6 +173,7 @@ const individualLogGroups = $util.all([
   imageEditQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   imageProcessor.nodes.logGroup.apply(lg => lg?.name),
   mcpHandler.nodes.logGroup.apply(lg => lg?.name),
+  remoteMcpHandler.nodes.logGroup.apply(lg => lg?.name),
   sessionAutoNamingSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionSummarizationSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   sessionTaggingSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),

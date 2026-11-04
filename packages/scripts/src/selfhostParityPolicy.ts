@@ -193,6 +193,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap('function:infra/mcp.ts:mcpHandler', '9922cb89dfbe95edef9f97ec6deed16e722cf48201db2c61e50381522f6060f8'),
   hostedOnly(
+    'function:infra/remoteMcp.ts:remoteMcpHandler',
+    '69d7d937077e31281f43012e903c58d74513036fd50296b764855fc6c90e1b70',
+    'Isolates hosted custom-MCP egress outside the VPC; self-host runs the same RemoteMcpClient in-process by design.'
+  ),
+  hostedOnly(
     'function:infra/queues.ts:PublishThumbnailRenderer',
     'a250460c0bc75a4ff9c0176e6dd4655883ec598578667051d5ae2de9c911d441',
     'Renders publish thumbnails for the hosted-only publishThumbnailQueue, invoked synchronously by its handler; it packages a Lambda-only headless Chromium the self-host worker image does not ship.'
@@ -984,7 +989,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    '37284ab76c0c69632160d2a02c67b9547fc36ef1f806ccd69a5939bafc8e0cee',
+    'f7e60fec7cdc2408ca023c2afed7c6f9145983675cf1256c5d70862b3d4d9d8b',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',

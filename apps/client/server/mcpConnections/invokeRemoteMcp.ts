@@ -18,17 +18,22 @@ import {
   DEFAULT_REMOTE_MCP_LIMITS,
   RemoteMcpAuthFailedError,
   RemoteMcpAuthRequiredError,
-  RemoteMcpClient,
   RemoteMcpError,
   RemoteMcpProtocolError,
   RemoteMcpUpstreamError,
   validateRemoteMcpUrl,
   type RemoteMcpCallToolResult,
-  type RemoteMcpClientConfig,
   type RemoteMcpErrorCode,
   type RemoteMcpLimits,
   type RemoteMcpListToolsResult,
 } from '@bike4mind/mcp/remote';
+import {
+  createInProcessRemoteMcpRunner,
+  createLambdaRemoteMcpRunner,
+  type RemoteMcpAction,
+  type RemoteMcpRunPayload,
+  type RemoteMcpRunner,
+} from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
 import { cleanMcpToolText } from '@bike4mind/server-utils/mcpConnections/toolDiscovery';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { Resource } from 'sst';
@@ -58,45 +63,13 @@ import {
  * still lives here; apps/workers reaches it through the `@server/*` alias like invokeMcpHandler.
  */
 
-export type RemoteMcpAction = 'listTools' | 'callTool';
-
-/**
- * Everything one remote operation needs, already decrypted. Serializable on purpose: it is the
- * payload the hosted `remoteMcpHandler` Lambda will receive, so it carries no ids or DB handles.
- */
-export interface RemoteMcpRunPayload {
-  url: string;
-  transport: McpConnectionTransport;
-  headers: Record<string, string>;
-  action: RemoteMcpAction;
-  toolName?: string;
-  args?: Record<string, unknown>;
-  limits?: Partial<RemoteMcpLimits>;
-  network: RemoteMcpNetworkOptions;
-}
-
-export type RemoteMcpRunResult =
-  { action: 'listTools'; result: RemoteMcpListToolsResult } | { action: 'callTool'; result: RemoteMcpCallToolResult };
-
-export type RemoteMcpRunner = (payload: RemoteMcpRunPayload) => Promise<RemoteMcpRunResult>;
-
-/** Builds the runner over a client factory; tests pass one that reaches the loopback fixture. */
-export function createInProcessRemoteMcpRunner(
-  createClient: (config: RemoteMcpClientConfig) => RemoteMcpClient = config => new RemoteMcpClient(config)
-): RemoteMcpRunner {
-  return async payload => {
-    const client = createClient({
-      url: payload.url,
-      transport: payload.transport,
-      headers: payload.headers,
-      limits: payload.limits,
-      ...payload.network,
-    });
-    if (payload.action === 'listTools') return { action: 'listTools', result: await client.listTools() };
-    if (!payload.toolName) throw new Error('callTool needs a toolName');
-    return { action: 'callTool', result: await client.callTool(payload.toolName, payload.args ?? {}) };
-  };
-}
+export {
+  createInProcessRemoteMcpRunner,
+  type RemoteMcpAction,
+  type RemoteMcpRunPayload,
+  type RemoteMcpRunResult,
+  type RemoteMcpRunner,
+} from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
 
 const runInProcess = createInProcessRemoteMcpRunner();
 
@@ -110,17 +83,16 @@ function remoteMcpHandlerName(): string | undefined {
 }
 
 /**
- * Where a remote operation runs. Only in-process exists so far, which is what self-host keeps.
- * SEAM: the hosted `remoteMcpHandler` Lambda (outside the VPC, no links) is selected here when its
- * Resource is linked, mirroring invokeMcpHandler, and like it must never fall back to in-process
- * after a failed invoke. Until that branch exists, a linked Lambda fails closed rather than calling
- * user-supplied hosts from inside the VPC.
+ * Where a remote operation runs. A linked `remoteMcpHandler` (outside the VPC, no secrets) wins.
+ * Without it, only self-host and local development run in-process; a hosted runtime fails closed
+ * rather than calling user-supplied hosts from inside the VPC. Like invokeMcpHandler, a failed
+ * invoke never falls back to in-process.
  */
 export function resolveRemoteMcpRunner(): RemoteMcpRunner {
-  if (remoteMcpHandlerName()) {
-    throw new Error('remoteMcpHandler is linked but its dispatcher branch is not implemented');
-  }
-  return runInProcess;
+  const functionName = remoteMcpHandlerName();
+  if (functionName) return createLambdaRemoteMcpRunner(functionName);
+  if (isSelfHost() || process.env.IS_LOCAL === 'true' || process.env.NODE_ENV === 'development') return runInProcess;
+  throw new Error('remoteMcpHandler is not linked on this runtime');
 }
 
 export const REMOTE_MCP_CALLS_PER_MINUTE = 60;

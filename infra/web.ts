@@ -29,6 +29,7 @@ import {
 } from './emailIngestion';
 import { eventBus } from './eventBus';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import {
   fabFileChunkQueue,
@@ -265,6 +266,7 @@ export const web = new sst.aws.Nextjs(
       chatCompletion,
       imageProcessor,
       mcpHandler,
+      remoteMcpHandler,
       fabFileBucket,
       generatedImagesBucket,
       appFilesBucket,
