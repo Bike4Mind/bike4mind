@@ -55,9 +55,11 @@ const ownerFromMetadata = (metadata: unknown): BillingEventOwner | null => {
   return userId ? { ownerType: 'user', ownerId: userId } : null;
 };
 
-/** Drops undefined keys so the stored projection stays small. */
+/** Drops undefined keys and empty arrays so the stored projection stays small. */
 const compact = (data: BillingEventData): BillingEventData =>
-  Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)) as BillingEventData;
+  Object.fromEntries(
+    Object.entries(data).filter(([, value]) => value !== undefined && !(Array.isArray(value) && value.length === 0))
+  ) as BillingEventData;
 
 const projectInvoice = (event: StripeEventLike, invoice: Obj): BillingEventProjection => {
   const details = asObj(at(invoice, 'parent', 'subscription_details')) ?? asObj(invoice.subscription_details);
@@ -147,6 +149,7 @@ const projectOther = (event: StripeEventLike, object: Obj): BillingEventProjecti
       return {
         ...base,
         metadataOwner: ownerFromMetadata(object.metadata),
+        // `||`, not `??`: an amount_received of 0 means nothing was captured yet, so show the intended amount.
         amount: num(object.amount_received) || num(object.amount) || null,
         data: { paymentIntentId: str(object.id), status: str(object.status) },
       };

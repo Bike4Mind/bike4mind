@@ -67,7 +67,7 @@ const toListItem = (item: SubscriptionTimelineItem, onOpenAudit: (entry: AuditEn
     case 'credit':
       return {
         ...base,
-        tile: { text: 'CR', tone: item.credits < 0 ? 'bad' : 'warn' },
+        tile: { text: 'CR', tone: item.credits < 0 ? 'bad' : 'good' },
         summary: item.summary,
         meta: item.description,
       };

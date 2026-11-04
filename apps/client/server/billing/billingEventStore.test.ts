@@ -243,6 +243,16 @@ describe('projectStripeEvent', () => {
     }
   });
 
+  it('stores no refund ids for a charge with an empty refund list', () => {
+    const projection = projectStripeEvent({
+      id: 'evt_charge_2',
+      type: 'charge.refunded',
+      created: 1_700_000_000,
+      data: { object: { id: 'ch_2', object: 'charge', amount_refunded: 0, refunds: { data: [] } } },
+    });
+    expect(projection.data).not.toHaveProperty('refundIds');
+  });
+
   it('copies no payment method from a subscription', () => {
     const stored = JSON.stringify(projectStripeEvent(subscriptionUpdated()));
     expect(stored).not.toContain('4242');
