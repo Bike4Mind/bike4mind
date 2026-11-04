@@ -268,7 +268,6 @@ import EnsurePushTokenIndexes from './20260921236960_ensure-pushtoken-indexes';
 import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-referral-subscription-reward-indexes';
 import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
-import EnsureStripeDisputeIndexes from './20260921237400_ensure-stripe-dispute-indexes';
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
 import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
@@ -294,6 +293,7 @@ import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldc
 import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
+import EnsureStripeDisputeIndexes from './20260921238300_ensure-stripe-dispute-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
