@@ -46,16 +46,31 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
   return result.modifiedCount === 1;
 }
 
+/** A cheap precheck only: the seat reservation in payForPayingOrganization is the real gate. */
+async function hasOpenBonusSeat(organizationId: string): Promise<boolean> {
+  const organization = await Organization.findById(organizationId)
+    .select('seats signupInviteBonusCount')
+    .lean<{ seats?: number; signupInviteBonusCount?: number }>();
+  const seats = organization?.seats ?? 0;
+  return seats > 0 && (organization?.signupInviteBonusCount ?? 0) < seats;
+}
+
 /**
- * Pays the bonus to an account marked with `organizationId`'s invite, once its standing is confirmed.
+ * Pays the bonus to an account marked with `organizationId`'s invite, once its standing is confirmed
+ * (here, unless the caller just did: `standingVerified`).
  * The seat and bonus commit in one transaction, so an interrupted payout cannot leave a seat held.
  * An account not yet eligible takes no hold and cannot crowd out an eligible one at the last seat.
  */
-async function payForPayingOrganization(userId: string, organizationId: string): Promise<number> {
+async function payForPayingOrganization(
+  userId: string,
+  organizationId: string,
+  standingVerified = false
+): Promise<number> {
   const user = await userRepository.findById(userId);
   if (user?.signupInvite?.source !== 'organization' || user.signupInvite.organizationId !== organizationId) return 0;
   if (!userService.isInviteBonusEligible(user, true)) return 0;
-  if (!(await isPayingOrganization(organizationId))) return 0;
+  if (!(await hasOpenBonusSeat(organizationId))) return 0;
+  if (!standingVerified && !(await isPayingOrganization(organizationId))) return 0;
   const result = await userService.payInviteBonus(userId, {
     db: {
       users: userRepository,
@@ -89,7 +104,7 @@ export async function payOrgInviteBonus(userId: string, inviteId: string): Promi
   if (invite?.type !== InviteType.Organization || !invite.documentId) return 0;
   if (!(await isPayingOrganization(invite.documentId))) return 0;
   await recordOrgSignupInvite(userId, inviteId);
-  return payForPayingOrganization(userId, invite.documentId);
+  return payForPayingOrganization(userId, invite.documentId, true);
 }
 
 /**

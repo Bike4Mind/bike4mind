@@ -14,10 +14,15 @@ import {
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
+import { isPayingOrganization } from '@server/entitlements/orgPaidStanding';
 import { retryOrgInviteBonus, payOrgInviteBonus, recordOrgSignupInvite } from './orgInviteBonus';
 
 // Without the signup protection wiring the budget is unmetered; signupGrantBudget covers the pools.
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: undefined }));
+vi.mock('@server/entitlements/orgPaidStanding', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/entitlements/orgPaidStanding')>();
+  return { ...actual, isPayingOrganization: vi.fn(actual.isPayingOrganization) };
+});
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -325,6 +330,27 @@ describe('payOrgInviteBonus', () => {
     expect(await retryOrgInviteBonus(user.id)).toBe(2000);
     expect(await retryOrgInviteBonus(user.id)).toBe(0);
     expect(await CreditTransaction.countDocuments({ transactionId: `invite-bonus:${user.id}` })).toBe(1);
+  });
+
+  it('checks standing once on accept and skips it on a retry against a full organization', async () => {
+    await createOrganization(true);
+    const orgFilter = { _id: new mongoose.Types.ObjectId(organizationId) };
+    await Organization.collection.updateOne(orgFilter, { $set: { seats: 1 } });
+    const invite = await createInvite();
+    const first = await createUser('first', released);
+    vi.mocked(isPayingOrganization).mockClear();
+    expect(await payOrgInviteBonus(first.id, invite.id)).toBe(2000);
+    expect(isPayingOrganization).toHaveBeenCalledTimes(1);
+
+    const late = await createUser('late', {
+      ...released,
+      signupInvite: { source: 'organization', inviteId: invite.id, organizationId, at: new Date() },
+    });
+    vi.mocked(isPayingOrganization).mockClear();
+    const reserveSeat = vi.spyOn(Organization, 'updateOne');
+    expect(await retryOrgInviteBonus(late.id)).toBe(0);
+    expect(isPayingOrganization).not.toHaveBeenCalled();
+    expect(reserveSeat).not.toHaveBeenCalled();
   });
 
   it('pays nothing to an account that existed before the invite', async () => {
