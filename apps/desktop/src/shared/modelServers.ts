@@ -55,6 +55,109 @@ export interface ModelServerView {
   specs: ModelServerSpecs | null;
   /** Set while the server refuses tool calls: why, and how to turn them on. */
   toolsHint?: string;
+  /** Who runs the server and the settings it starts with. */
+  launch: ModelServerLaunchView | null;
+}
+
+/** OLLAMA_KV_CACHE_TYPE values besides f16 that fit.ts can price. */
+export const QUANTIZED_KV_CACHE_TYPES = ['q8_0', 'q4_0'] as const;
+export type QuantizedKvCacheType = (typeof QUANTIZED_KV_CACHE_TYPES)[number];
+
+/** What Desktop runs for a server it starts on this computer: `ollama serve`, or llama-server in router mode. */
+export type LaunchRuntime = 'ollama' | 'llama-server';
+
+/** Settings a server reads only when it starts, so Desktop applies them only to a server it starts. Absent is the default. */
+export interface ModelServerLaunchSettings {
+  /** Ollama: OLLAMA_KV_CACHE_TYPE for every model; absent is f16. */
+  kvCacheType?: QuantizedKvCacheType;
+  /** OLLAMA_FLASH_ATTENTION, or llama-server's --flash-attn; absent is auto. */
+  flashAttention?: 'on' | 'off';
+  /** llama-server: the program; absent is the one on PATH. */
+  binaryPath?: string;
+  /** llama-server: the folder of GGUF files it serves. */
+  modelsDir?: string;
+}
+
+/**
+ * Who runs the server at a saved address: `desktop`, one Desktop started and still runs; `other`, anything else that
+ * answers there; `none`, nothing answers; `remote`, another machine, an SSH server included.
+ */
+export type LaunchOwner = 'desktop' | 'other' | 'none' | 'remote';
+
+export interface ModelServerLaunchView {
+  runtime: LaunchRuntime;
+  owner: LaunchOwner;
+  busy: 'starting' | 'stopping' | null;
+  /** As saved; they apply on Desktop's next start. */
+  settings: ModelServerLaunchSettings;
+  /** Desktop's server started with other settings than the saved ones. */
+  pendingRestart: boolean;
+  /** Nothing answers there, and Desktop has what it needs to start the server. */
+  canStart: boolean;
+  /** Why Desktop cannot start it, or why its last start or run ended. */
+  problem: string | null;
+  /** Launch variables read from a server Desktop did not start, by name; null when Desktop cannot read them. */
+  observed: Record<string, string> | null;
+  /** The KV cache type fit sizes this server's models with. */
+  sizingKvCacheType: QuantizedKvCacheType | 'f16';
+  /** What answers there, for "This <noun> was not started by Bike4Mind Desktop": "Ollama server", "llama-server". */
+  noun: string;
+}
+
+/** Why Desktop leaves this server's launch settings alone; null when it applies them. */
+export function launchLockedMessage(launch: Pick<ModelServerLaunchView, 'owner' | 'noun'>): string | null {
+  if (launch.owner === 'remote')
+    return `This ${launch.noun} runs on another machine, so Desktop can't start it or apply these settings.`;
+  if (launch.owner === 'other')
+    return `This ${launch.noun} was not started by Bike4Mind Desktop, so Desktop can't apply these settings. To use them, stop that server and start it from Desktop.`;
+  return null;
+}
+
+const MAX_LAUNCH_PATH_CHARS = 1_024;
+const ABSOLUTE_PATH = /^(?:\/|[a-z]:[\\/]|\\\\[^\\])/i;
+
+/** The launch fields from an untrusted value; anything malformed is dropped. */
+export function readLaunchShape(value: unknown): ModelServerLaunchSettings {
+  if (typeof value !== 'object' || value === null) return {};
+  const raw = value as Record<string, unknown>;
+  const kv = QUANTIZED_KV_CACHE_TYPES.find(type => type === raw.kvCacheType);
+  const flash = raw.flashAttention === 'on' || raw.flashAttention === 'off' ? raw.flashAttention : undefined;
+  const path = (field: unknown) =>
+    typeof field === 'string' && field.trim() ? field.trim().slice(0, MAX_LAUNCH_PATH_CHARS + 1) : undefined;
+  const binaryPath = path(raw.binaryPath);
+  const modelsDir = path(raw.modelsDir);
+  return {
+    ...(kv ? { kvCacheType: kv } : {}),
+    ...(flash ? { flashAttention: flash } : {}),
+    ...(binaryPath ? { binaryPath } : {}),
+    ...(modelsDir ? { modelsDir } : {}),
+  };
+}
+
+export function sameLaunch(a: ModelServerLaunchSettings, b: ModelServerLaunchSettings): boolean {
+  return (
+    a.kvCacheType === b.kvCacheType &&
+    a.flashAttention === b.flashAttention &&
+    a.binaryPath === b.binaryPath &&
+    a.modelsDir === b.modelsDir
+  );
+}
+
+/** Why Desktop cannot save or start with these settings; null when it can. */
+export function launchSettingsProblem(settings: ModelServerLaunchSettings, runtime: LaunchRuntime): string | null {
+  if (runtime === 'ollama' && (settings.binaryPath || settings.modelsDir))
+    return 'Desktop finds Ollama itself and uses its own models folder.';
+  if (runtime === 'llama-server' && settings.kvCacheType) return 'The KV cache type applies to Ollama servers only.';
+  if (settings.kvCacheType && settings.flashAttention === 'off')
+    return `A ${settings.kvCacheType} KV cache needs flash attention. Set flash attention to Auto or On.`;
+  for (const [path, what] of [
+    [settings.binaryPath, 'llama-server'],
+    [settings.modelsDir, 'the models folder'],
+  ] as const) {
+    if (path !== undefined && (path.length > MAX_LAUNCH_PATH_CHARS || !ABSOLUTE_PATH.test(path)))
+      return `Enter the full path to ${what}.`;
+  }
+  return null;
 }
 
 /**
@@ -68,13 +171,7 @@ export interface ModelServerSpecs {
   bandwidthGBps: number | null;
   /** The GPU uses system RAM, as on Apple silicon. Only for a saved server: this computer's probe says so itself. */
   unified: boolean;
-  /** The Ollama server's OLLAMA_KV_CACHE_TYPE, which its API does not report; absent is Ollama's f16 default. */
-  kvCacheType?: QuantizedKvCacheType;
 }
-
-/** OLLAMA_KV_CACHE_TYPE values besides f16 that fit.ts can price; must match the copy in local-models servers. */
-export const QUANTIZED_KV_CACHE_TYPES = ['q8_0', 'q4_0'] as const;
-export type QuantizedKvCacheType = (typeof QUANTIZED_KV_CACHE_TYPES)[number];
 
 export const MAX_SPEC_MEMORY_GIB = 65_536;
 export const MAX_SPEC_BANDWIDTH_GBPS = 100_000;
@@ -84,27 +181,22 @@ export function specsRate(specs: ModelServerSpecs | null): specs is ModelServerS
   return !!specs && (specs.ramGiB !== null || specs.gpuMemoryGiB !== null);
 }
 
-/**
- * The spec fields from an untrusted value; null when it is not an object. Figures are not range-checked, and a cache
- * type that is not a quantized one is dropped.
- */
+/** The spec fields from an untrusted value; null when it is not an object. Figures are not range-checked. */
 export function readSpecsShape(value: unknown): ModelServerSpecs | null {
   if (typeof value !== 'object' || value === null) return null;
   const raw = value as Record<string, unknown>;
   const figure = (field: unknown) => (typeof field === 'number' ? field : null);
-  const kv = QUANTIZED_KV_CACHE_TYPES.find(type => type === raw.kvCacheType);
   return {
     ramGiB: figure(raw.ramGiB),
     gpuMemoryGiB: figure(raw.gpuMemoryGiB),
     bandwidthGBps: figure(raw.bandwidthGBps),
     unified: raw.unified === true,
-    ...(kv ? { kvCacheType: kv } : {}),
   };
 }
 
-/** No figure and no cache type, which is stored as no specs. */
+/** No figure, which is stored as no specs. */
 export function specsBlank(specs: ModelServerSpecs): boolean {
-  return specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null && !specs.kvCacheType;
+  return specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null;
 }
 
 /** Why Settings cannot save these specs; null when it can. A saved server needs RAM, having no probe to fall back on. */
@@ -117,11 +209,7 @@ export function specsProblem(specs: ModelServerSpecs, local: boolean): string | 
     return `Enter GPU memory as a number of GB above 0, up to ${MAX_SPEC_MEMORY_GIB}.`;
   if (out(specs.bandwidthGBps, MAX_SPEC_BANDWIDTH_GBPS))
     return `Enter memory bandwidth as a number of GB/s above 0, up to ${MAX_SPEC_BANDWIDTH_GBPS}.`;
-  if (
-    !local &&
-    specs.ramGiB === null &&
-    (specs.gpuMemoryGiB !== null || specs.bandwidthGBps !== null || specs.kvCacheType !== undefined)
-  )
+  if (!local && specs.ramGiB === null && (specs.gpuMemoryGiB !== null || specs.bandwidthGBps !== null))
     return 'Enter the RAM too. Desktop needs it to rate models for this server.';
   return null;
 }
@@ -150,6 +238,8 @@ export interface ModelServerProbeResult {
   /** A suggested name, from the host. */
   suggestedName: string | null;
   error: string | null;
+  /** Nothing answers at this address on this computer, so it can be saved for Desktop to start a server there. */
+  launchable?: boolean;
 }
 
 export interface ModelServerAddInput extends ModelServerProbeInput {
@@ -158,6 +248,8 @@ export interface ModelServerAddInput extends ModelServerProbeInput {
   access: ModelServerAccess;
   /** Required when the probe said `openToAnyone`. */
   acceptOpen?: boolean;
+  /** Save a `launchable` address that does not answer yet, for Desktop to start a server there. */
+  launch?: boolean;
 }
 
 export interface ModelServerUpdateInput {
@@ -166,11 +258,15 @@ export interface ModelServerUpdateInput {
   access?: ModelServerAccess;
   /** Replaces the stored credential; omitted keeps it. */
   credential?: ModelServerCredentialInput;
-  /** Replaces the entered hardware; null clears it. The only field "This computer" takes. */
+  /** Replaces the entered hardware; null clears it. "This computer" takes only this and `launch`. */
   specs?: ModelServerSpecs | null;
+  /** Replaces the launch settings, which apply on Desktop's next start of the server. */
+  launch?: ModelServerLaunchSettings;
 }
 
 export type ModelServerMutationResult = { ok: true; servers: ModelServerView[] } | { ok: false; error: string };
+
+export type ModelServerLaunchAction = 'start' | 'stop' | 'restart';
 
 /**
  * What the Models screen may do on a server: `chat-only` is the server's "Chat only" setting, and

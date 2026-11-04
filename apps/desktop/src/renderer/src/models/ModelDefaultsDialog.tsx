@@ -756,8 +756,8 @@ function LoadOptionRows({
           testId="model-defaults-kv-cache"
           note={
             offer.kvCache.type === 'f16'
-              ? "Ollama's default. Set for the whole server with OLLAMA_KV_CACHE_TYPE; enter another type under Settings, Model servers, Hardware so memory ratings use it."
-              : 'Set for the whole server with OLLAMA_KV_CACHE_TYPE, as entered under Settings, Model servers, Hardware.'
+              ? "Ollama's default, or what Desktop assumes when it can't read the server's settings. Set it for the whole server under Settings, Model servers, Launch settings, for an Ollama that Desktop starts."
+              : 'Set for the whole server with OLLAMA_KV_CACHE_TYPE, which this Ollama runs with.'
           }
         >
           <Typography level="body-sm" sx={{ flexShrink: 0 }} data-testid="model-defaults-kv-cache-value">

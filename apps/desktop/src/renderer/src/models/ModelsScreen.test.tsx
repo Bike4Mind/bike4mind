@@ -89,6 +89,7 @@ function server(id: string, name: string, extra: Partial<ModelServerView> = {}):
     health: { state: 'online', version: '0.40.11', latencyMs: 3, checkedAt: null, error: null },
     models: [],
     specs: null,
+    launch: null,
     ...extra,
   };
 }

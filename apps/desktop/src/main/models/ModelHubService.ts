@@ -183,6 +183,8 @@ export interface ModelHubServiceDeps {
   hardware: () => Promise<HardwareProfile>;
   /** Hardware entered in Settings by server id, `local` for this computer; read fresh for every call. */
   specs?: (serverId: string) => ModelServerSpecs | null;
+  /** The OLLAMA_KV_CACHE_TYPE a server's Ollama runs with, `local` for this computer; undefined is f16. */
+  kvCacheType?: (serverId: string) => QuantizedKvCacheType | undefined;
   /** The Settings choice local chat sizes its context with; fit badges plan for that same context. */
   localContext: () => Promise<LocalContextSetting>;
   /** A model's load settings by chat model id; its own context and draft count replace the above in its badge. */
@@ -653,7 +655,7 @@ interface Sizing {
   rating: 'probe' | 'entered';
   /** Whose memory `hardware` is, for the verdict's wording. */
   where: FitWhere;
-  /** The server's OLLAMA_KV_CACHE_TYPE as entered in Settings; absent is f16. */
+  /** The OLLAMA_KV_CACHE_TYPE the server runs with, when Desktop knows it; absent is f16. */
   kvCacheType?: QuantizedKvCacheType;
 }
 
@@ -758,7 +760,7 @@ export class ModelHubService {
       chatHardware: hardware,
       rating: specsRate(specs) ? 'entered' : 'probe',
       where: 'local',
-      kvCacheType: specs?.kvCacheType,
+      kvCacheType: this.#deps.kvCacheType?.(LOCAL_SERVER_ID),
     };
   }
 
@@ -830,7 +832,7 @@ export class ModelHubService {
           chatHardware: null,
           rating: 'entered',
           where: 'server',
-          kvCacheType: specs?.kvCacheType,
+          kvCacheType: this.#deps.kvCacheType?.(target.id),
         }
       : null;
   }

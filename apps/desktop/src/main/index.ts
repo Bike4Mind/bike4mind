@@ -142,6 +142,7 @@ void app.whenReady().then(async () => {
     spareWorktrees,
     modelServers,
     stopModelServers,
+    stopLocalServers,
     localContext,
     modelSettings,
     capabilityLedger,
@@ -196,6 +197,7 @@ void app.whenReady().then(async () => {
         terminals.shutdown(),
         browser.cookies.clearOnQuit(),
         spareWorktrees.dispose(),
+        stopLocalServers(),
       ]).catch(() => undefined);
     },
   });
@@ -229,6 +231,7 @@ void app.whenReady().then(async () => {
       terminals.shutdown(),
       browser.cookies.clearOnQuit(),
       spareWorktrees.dispose(),
+      stopLocalServers(),
     ])
       .catch(() => undefined)
       .finally(() => app.quit());

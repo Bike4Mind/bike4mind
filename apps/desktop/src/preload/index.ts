@@ -28,6 +28,7 @@ import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import type {
   ModelServerAddInput,
+  ModelServerLaunchAction,
   ModelServerProbeInput,
   ModelServerUpdateInput,
   ModelServerView,
@@ -412,6 +413,8 @@ const api: DesktopApi = {
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersRemove, id),
     check: (id?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersCheck, id),
     probedHardware: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbedHardware),
+    launch: (id: string, action: ModelServerLaunchAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelServersLaunch, id, action),
     onChanged: listener => {
       const handler = (_event: unknown, servers: ModelServerView[]) => listener(servers);
       ipcRenderer.on(IPC_CHANNELS.modelServersChanged, handler);

@@ -222,15 +222,6 @@ describe('stored records', () => {
     expect(hydrate(stored({ specs: good }) as never)?.specs).toEqual(good);
     expect(hydrate(stored({ specs: { ...good, ramGiB: -1 } }) as never)?.specs).toBeNull();
   });
-
-  it('keeps a quantized KV cache type, alone or with figures, and drops any other', () => {
-    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
-    const specs = (value: unknown) => hydrate(stored({ specs: value }) as never)?.specs;
-    expect(specs({ ...blank, kvCacheType: 'q8_0' })).toEqual({ ...blank, kvCacheType: 'q8_0' });
-    expect(specs({ ...blank, ramGiB: 64, kvCacheType: 'q4_0' })).toEqual({ ...blank, ramGiB: 64, kvCacheType: 'q4_0' });
-    expect(specs({ ...blank, kvCacheType: 'f16' })).toBeNull();
-    expect(specs({ ...blank, ramGiB: 64, kvCacheType: 'q5_1' })).toEqual({ ...blank, ramGiB: 64 });
-  });
 });
 
 describe('credentialHeaders', () => {

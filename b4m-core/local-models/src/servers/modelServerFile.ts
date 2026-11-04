@@ -14,17 +14,11 @@ export type StoredAuth = { type: 'none' } | { type: 'bearer' } | { type: 'header
 export type ModelServerCredentialInput =
   { type: 'none' } | { type: 'bearer'; token: string } | { type: 'header'; name: string; value: string };
 
-/** OLLAMA_KV_CACHE_TYPE values besides Ollama's f16 default that a fit can price; must match shared/modelServers.ts in Desktop. */
-export const QUANTIZED_KV_CACHE_TYPES = ['q8_0', 'q4_0'] as const;
-export type QuantizedKvCacheType = (typeof QUANTIZED_KV_CACHE_TYPES)[number];
-
 export interface ModelServerSpecs {
   ramGiB: number | null;
   gpuMemoryGiB: number | null;
   bandwidthGBps: number | null;
   unified: boolean;
-  /** The server's OLLAMA_KV_CACHE_TYPE as entered; absent is Ollama's f16 default. */
-  kvCacheType?: QuantizedKvCacheType;
 }
 
 /** A saved server without its secret. */
@@ -168,13 +162,11 @@ function readSpecsShape(value: unknown): ModelServerSpecs | null {
   if (typeof value !== 'object' || value === null) return null;
   const raw = value as Record<string, unknown>;
   const figure = (field: unknown) => (typeof field === 'number' ? field : null);
-  const kv = QUANTIZED_KV_CACHE_TYPES.find(type => type === raw.kvCacheType);
   return {
     ramGiB: figure(raw.ramGiB),
     gpuMemoryGiB: figure(raw.gpuMemoryGiB),
     bandwidthGBps: figure(raw.bandwidthGBps),
     unified: raw.unified === true,
-    ...(kv ? { kvCacheType: kv } : {}),
   };
 }
 
@@ -191,13 +183,9 @@ function specsInRange(specs: ModelServerSpecs): boolean {
 /** Specs as stored; a hand-edited or newer shape that does not check out is ignored, so the server stays unrated. */
 export function readSpecs(value: unknown): ModelServerSpecs | null {
   const specs = readSpecsShape(value);
-  if (!specs || isBlankSpecs(specs)) return null;
+  if (!specs) return null;
+  if (specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null) return null;
   return specsInRange(specs) ? specs : null;
-}
-
-/** No figure and no cache type: the same as no specs at all. */
-function isBlankSpecs(specs: ModelServerSpecs): boolean {
-  return specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null && !specs.kvCacheType;
 }
 
 // The next four must match apps/desktop/src/shared/chat.ts and shared/modelServers.ts; the renderer cannot import a Node package.

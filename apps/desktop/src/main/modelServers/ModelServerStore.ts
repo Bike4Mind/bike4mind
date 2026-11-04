@@ -14,9 +14,10 @@ import type {
   ModelServerAccess,
   ModelServerCredentialInput,
   ModelServerKind,
+  ModelServerLaunchSettings,
   ModelServerSpecs,
 } from '@shared/modelServers';
-import { LOCAL_SERVER_NAME, specsBlank, specsProblem } from '@shared/modelServers';
+import { LOCAL_SERVER_NAME, readLaunchShape, specsBlank, specsProblem } from '@shared/modelServers';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
 
 export { credentialHeaders, MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS };
@@ -27,6 +28,8 @@ interface StoreDocument extends Record<string, unknown> {
   servers: StoredServer[];
   /** This computer's entered hardware, which overrides its probe. */
   localSpecs?: ModelServerSpecs;
+  /** What Desktop starts this computer's Ollama with. A saved server keeps its own under `launch`. */
+  localLaunch?: ModelServerLaunchSettings;
   /** By server id, the models that replied with reasoning, which earns them a thinking switch. */
   thinkers?: Record<string, LearnedThinker[]>;
 }
@@ -145,6 +148,7 @@ export class ModelServerStore {
       access?: ModelServerAccess;
       credential?: ModelServerCredentialInput;
       specs?: ModelServerSpecs | null;
+      launch?: ModelServerLaunchSettings;
     }
   ): Promise<ModelServerRecord> {
     return this.commit(document => {
@@ -157,10 +161,9 @@ export class ModelServerStore {
       if (specs === null) delete stored.specs;
       else if (specs) stored.specs = specs;
       if (patch.kind !== undefined) stored.kind = patch.kind;
-      if (stored.kind !== 'ollama' && stored.specs?.kvCacheType) {
-        const { kvCacheType: _dropped, ...rest } = stored.specs;
-        stored.specs = rest;
-      }
+      // Launch settings are per program, and another kind runs another program.
+      if (stored.kind !== current.kind) delete stored.launch;
+      if (patch.launch) setLaunch(stored, patch.launch);
       if (patch.access !== undefined) stored.access = patch.access;
       let applied: (() => void) | undefined;
       if (patch.credential) {
@@ -198,6 +201,25 @@ export class ModelServerStore {
       const checked = checkedSpecs(specs, true);
       const { localSpecs: _previous, ...rest } = document;
       return { document: checked ? { ...rest, localSpecs: checked } : rest, result: checked };
+    });
+  }
+
+  /** A saved server's launch settings; empty before the list loads or when none are saved. */
+  launchSettings(id: string): ModelServerLaunchSettings {
+    return readLaunchShape(this.document?.servers.find(server => server.id === id)?.launch);
+  }
+
+  /** What Desktop starts this computer's Ollama with; empty before the list loads. */
+  localLaunch(): ModelServerLaunchSettings {
+    return readLaunchShape(this.document?.localLaunch);
+  }
+
+  setLocalLaunch(settings: ModelServerLaunchSettings): Promise<ModelServerLaunchSettings> {
+    return this.commit(document => {
+      this.assertWritable();
+      const clean = readLaunchShape(settings);
+      const { localLaunch: _previous, ...rest } = document;
+      return { document: Object.keys(clean).length > 0 ? { ...rest, localLaunch: clean } : rest, result: clean };
     });
   }
 
@@ -360,6 +382,12 @@ export class ModelServerStore {
   }
 }
 
+function setLaunch(stored: StoredServer, settings: ModelServerLaunchSettings): void {
+  const clean = readLaunchShape(settings);
+  if (Object.keys(clean).length > 0) stored.launch = clean;
+  else delete stored.launch;
+}
+
 function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((name, index) => name === b[index]);
 }
@@ -396,6 +424,6 @@ function checkedSpecs(specs: ModelServerSpecs | null, local: boolean): ModelServ
   if (!specs || specsBlank(specs)) return null;
   const problem = specsProblem(specs, local);
   if (problem) throw new Error(problem);
-  const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified, kvCacheType } = specs;
-  return { ramGiB, gpuMemoryGiB, bandwidthGBps, unified: !local && unified, ...(kvCacheType ? { kvCacheType } : {}) };
+  const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified } = specs;
+  return { ramGiB, gpuMemoryGiB, bandwidthGBps, unified: !local && unified };
 }

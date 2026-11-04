@@ -106,6 +106,7 @@ import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels, optionCatalogSampling, type CatalogSamplingHook } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { readHostOllamaEnv } from '../modelServers/observedOllama';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
@@ -304,6 +305,8 @@ export interface RegisteredChat {
   modelServers: ModelServerRegistry;
   /** Stops their health checks and any pending model list reload, on quit. */
   stopModelServers(): void;
+  /** Stops the servers Desktop started, on the quit pass that can wait. */
+  stopLocalServers(): Promise<void>;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
   /** Per-model defaults; the fit badges plan for each model's own context and draft too. */
@@ -516,6 +519,7 @@ export function registerChat(
     },
     edited: () => models.forgetLocal(),
     listedLate: lateReload.notify,
+    readOllamaEnv: url => readHostOllamaEnv(url),
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -1439,6 +1443,7 @@ export function registerChat(
       lateReload.stop();
       modelServers.stop();
     },
+    stopLocalServers: () => modelServers.stopLocalServers(),
     localContext,
     modelSettings,
     capabilityLedger,

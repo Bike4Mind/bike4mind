@@ -15,6 +15,7 @@ import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   ModelServerAddInput,
+  ModelServerLaunchAction,
   ModelServerMutationResult,
   ModelServerProbeInput,
   ModelServerProbeResult,
@@ -296,6 +297,7 @@ export const IPC_CHANNELS = {
   modelServersRemove: 'servers:remove',
   modelServersCheck: 'servers:check',
   modelServersProbedHardware: 'servers:probed-hardware',
+  modelServersLaunch: 'servers:launch',
   /** main -> renderer push; a server was added, changed, or its health was rechecked. */
   modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
@@ -1136,6 +1138,8 @@ export interface DesktopApi {
     check(id?: string): Promise<ModelServerView[]>;
     /** This computer's hardware as probed, before entered specs; null when the probe failed. */
     probedHardware(): Promise<MachineView | null>;
+    /** Starts, stops or restarts the server Desktop runs at a server's address on this computer. */
+    launch(id: string, action: ModelServerLaunchAction): Promise<ModelServerMutationResult>;
     onChanged(listener: (servers: ModelServerView[]) => void): () => void;
   };
   /** User-made sidebar sections; see @shared/sidebarSections. */

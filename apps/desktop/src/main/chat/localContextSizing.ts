@@ -64,7 +64,7 @@ export interface LocalContextSizingDeps {
   projectorBytes?(modelfile: string): Promise<number>;
   /** The curated list's projector sizes by digest, for a projector blob this computer cannot read. */
   pinnedProjectors?(): ReadonlyMap<string, number>;
-  /** The OLLAMA_KV_CACHE_TYPE entered for this computer in Settings; undefined is f16. */
+  /** The OLLAMA_KV_CACHE_TYPE this computer's Ollama runs with (see ModelServerRegistry.kvCacheType); undefined is f16. */
   kvCacheType?(): QuantizedKvCacheType | undefined;
   now?(): number;
 }

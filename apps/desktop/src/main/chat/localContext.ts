@@ -58,7 +58,7 @@ export interface LocalModelFootprint {
   hardware: HardwareProfile | null;
   /** Draft tokens per step while Ollama speculates (MTP or a draft layer); absent or 0 when it does not. */
   draftMax?: number;
-  /** The daemon's OLLAMA_KV_CACHE_TYPE as entered in Settings; absent is f16. */
+  /** The OLLAMA_KV_CACHE_TYPE the daemon runs with (see ModelServerRegistry.kvCacheType); absent is f16. */
   kvCacheType?: QuantizedKvCacheType;
 }
 
