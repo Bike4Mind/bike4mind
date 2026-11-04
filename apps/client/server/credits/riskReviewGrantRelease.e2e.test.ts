@@ -151,6 +151,21 @@ describe('releaseRiskReviewedSignupGrant', () => {
     expect(after?.currentCredits ?? 0).toBe(0);
     expect(audit).not.toHaveBeenCalled();
   });
+
+  it('rejects with the grant block as the reason, and pays nothing, for an account an admin blocked', async () => {
+    const userId = await heldAccount();
+    await User.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(userId) },
+      { $set: { 'signupGrant.blocked': { at: new Date() } } }
+    );
+
+    await expect(release(userId)).rejects.toThrow('unblock them before approving');
+
+    const after = await User.findById(userId).lean();
+    expect(after?.riskScore?.reviewState).toBe('pending');
+    expect(after?.currentCredits ?? 0).toBe(0);
+    expect(audit).not.toHaveBeenCalled();
+  });
 });
 
 describe('a payment unlock that pays the held tranche', () => {

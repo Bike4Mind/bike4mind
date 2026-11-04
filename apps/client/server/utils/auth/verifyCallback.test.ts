@@ -40,6 +40,8 @@ vi.mock('@bike4mind/database', () => ({
     // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
     // are about the callback, so the inbox is always free here.
     claimFreeCreditGrant: (...args: unknown[]) => mockClaimFreeCreditGrant(...args),
+    // The domain grant also checks the account has not been blocked from grants; none is blocked here.
+    findById: async () => null,
   },
 }));
 

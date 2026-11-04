@@ -59,6 +59,7 @@ describe('resolveFieldLimits', () => {
     const limits = resolveFieldLimits('users', opts());
     expect(limits).toEqual({
       password: false,
+      'signupGrant.blocked': false,
       stripeCustomerId: false,
       resetPasswordToken: false,
       signupGrantAssessment: false,
@@ -73,6 +74,23 @@ describe('resolveFieldLimits', () => {
     const limits = resolveFieldLimits('users', opts());
     expect(findWithheldFilterPaths({ 'throttle.tier': 'shadow' }, limits)).toEqual(['throttle.tier']);
     expect(findWithheldFilterPaths({ $or: [{ riskSignals: { $exists: true } }] }, limits)).toEqual(['riskSignals']);
+  });
+
+  it('withholds only the admin block of signupGrant, not the whole sub-document the credits UI reads', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(limits).toMatchObject({ 'signupGrant.blocked': false });
+    expect(limits).not.toHaveProperty('signupGrant');
+  });
+
+  it('refuses a users subscription filter that probes the signup grant block', () => {
+    const limits = resolveFieldLimits('users', opts());
+    expect(findWithheldFilterPaths({ 'signupGrant.blocked': { $exists: true } }, limits)).toEqual([
+      'signupGrant.blocked',
+    ]);
+    expect(findWithheldFilterPaths({ 'signupGrant.blocked.at': { $gt: new Date(0) } }, limits)).toEqual([
+      'signupGrant.blocked.at',
+    ]);
+    expect(findWithheldFilterPaths({ 'signupGrant.heldReason': 'budget_exhausted' }, limits)).toEqual([]);
   });
 
   it('returns undefined for a collection with no configured limits', () => {

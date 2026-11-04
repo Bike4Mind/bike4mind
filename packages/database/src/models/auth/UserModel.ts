@@ -714,6 +714,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
   }
 
+  /** Accounts whose self-serve deletion grace period ended at or before `now`, oldest first; served by user_deletion_scheduledFor. */
+  async findDeletionDueUserIds(now: Date, limit: number): Promise<string[]> {
+    const docs = await this.model
+      // $type repeats the partial index's filter, without which the planner cannot use it.
+      .find({ 'deletion.scheduledFor': { $type: 'date', $lte: now } })
+      .select('_id')
+      .sort({ 'deletion.scheduledFor': 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
   /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
   async findIdsBySignupIp(ip: string, excludeId: string, limit: number): Promise<string[]> {
     const docs = await this.model
@@ -1305,6 +1317,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
               },
               { _id: false }
             ),
+            default: undefined,
+          },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
             default: undefined,
           },
         },

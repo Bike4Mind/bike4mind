@@ -12,11 +12,14 @@ const h = vi.hoisted(() => ({
   post: vi.fn(),
   setCurrentUser: vi.fn(),
   resetTokens: vi.fn(),
+  currentUser: null as Record<string, unknown> | null,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { delete: h.del, get: vi.fn(), post: h.post } }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (select: (s: unknown) => unknown) => select({ setCurrentUser: h.setCurrentUser }),
+  useUser: Object.assign((select: (s: unknown) => unknown) => select({ setCurrentUser: h.setCurrentUser }), {
+    getState: () => ({ currentUser: h.currentUser, setCurrentUser: h.setCurrentUser }),
+  }),
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
   useAccessToken: (select: (s: unknown) => unknown) => select({ resetTokens: h.resetTokens }),
@@ -54,6 +57,20 @@ describe('useCancelAccountDeletion', () => {
     });
 
     expect(replace).toHaveBeenCalledWith('/');
+  });
+
+  it('clears the persisted deletion before reloading so the app boots unlocked', async () => {
+    h.currentUser = { id: 'u1', deletion: { scheduledFor: '2026-12-01T00:00:00.000Z' } };
+    h.del.mockResolvedValue({ status: 204 });
+    const { result } = renderHook(() => useCancelAccountDeletion(), { wrapper });
+
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(h.setCurrentUser).toHaveBeenCalledWith({ id: 'u1', deletion: null });
+    expect(h.setCurrentUser.mock.invocationCallOrder[0]).toBeLessThan(replace.mock.invocationCallOrder[0]);
+    h.currentUser = null;
   });
 
   it('treats a 404 (nothing scheduled) as done and reloads to /', async () => {

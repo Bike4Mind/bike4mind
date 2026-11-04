@@ -50,6 +50,7 @@ import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
 import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerOauthAbuseAutoBlock } from './oauthAbuseAutoBlock';
 import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
+import { registerAccountDeletionSweep } from './accountDeletionSweep';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -132,6 +133,7 @@ async function main() {
   registerAdminAuditAlerts(worker);
   registerOauthAbuseAutoBlock(worker);
   registerSignupGrantHeldRelease(worker);
+  registerAccountDeletionSweep(worker);
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);

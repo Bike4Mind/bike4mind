@@ -29,7 +29,7 @@ import {
 } from '@server/services/purgeDeletedUserData';
 import { purgeUserPublishedArtifacts } from '@server/services/publish/purgeUserPublishedArtifacts';
 import { logAuthAudit } from '@server/utils/authAudit';
-import { sendAccountDeletionScheduledEmail } from './accountDeletionEmail';
+import { sendAccountDeletionCancelledEmail, sendAccountDeletionScheduledEmail } from './accountDeletionEmail';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -150,13 +150,29 @@ export async function requestAccountDeletion(req: DeletionRequest, now = new Dat
   return { deletion, subscriptions };
 }
 
-/** Clear the caller's pending deletion, restoring access. Throws NotFoundError when none is pending. */
+/**
+ * Clear the caller's pending deletion, restoring access, and mail the deletion-cancelled email.
+ * Throws NotFoundError when none is pending, so a repeated cancel sends no second email.
+ */
 export async function cancelAccountDeletion(req: DeletionRequest): Promise<void> {
   const userId: string = req.user.id;
   if ((req.user as { impersonatedBy?: string }).impersonatedBy) {
     throw new ForbiddenError('Account deletion cannot be cancelled while impersonating a user.');
   }
-  const result = await User.updateOne({ _id: userId, deletion: { $ne: null } }, { $unset: { deletion: 1 } });
-  if (result.modifiedCount === 0) throw new NotFoundError('This account is not scheduled for deletion.');
+  // Reads the address in the same query that clears the deletion.
+  const cancelled = await User.findOneAndUpdate(
+    { _id: userId, deletion: { $ne: null } },
+    { $unset: { deletion: 1 } },
+    { projection: { email: 1 } }
+  ).lean<{ email?: string | null }>();
+  if (!cancelled) throw new NotFoundError('This account is not scheduled for deletion.');
   await logAuthAudit(req, { userId, event: 'account_deletion_cancelled' });
+
+  if (cancelled.email) {
+    try {
+      await sendAccountDeletionCancelledEmail(cancelled.email);
+    } catch (err) {
+      req.logger.error(`Failed to send the deletion-cancelled email for user ${userId}: ${String(err)}`);
+    }
+  }
 }

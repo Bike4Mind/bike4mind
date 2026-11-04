@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   withdrawListings: vi.fn(),
   revokeGrants: vi.fn(),
   sendEmail: vi.fn(),
+  sendCancelledEmail: vi.fn(),
   audit: vi.fn(),
 }));
 vi.mock('@server/billing/cancelAccountSubscriptions', () => ({ cancelAccountSubscriptions: h.cancelSubscriptions }));
@@ -42,7 +43,10 @@ vi.mock('@server/services/purgeDeletedUserData', async () => {
     revokeIntegrationGrants: h.revokeGrants,
   };
 });
-vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionScheduledEmail: h.sendEmail }));
+vi.mock('./accountDeletionEmail', () => ({
+  sendAccountDeletionScheduledEmail: h.sendEmail,
+  sendAccountDeletionCancelledEmail: h.sendCancelledEmail,
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.audit }));
 
 import { cancelAccountDeletion, requestAccountDeletion } from './accountDeletion';
@@ -264,10 +268,26 @@ describe('cancelAccountDeletion', () => {
     expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeUndefined();
     expect(await UserApiKey.countDocuments({ userId, status: { $ne: ApiKeyStatus.DISABLED } })).toBe(0);
     expect(h.audit).toHaveBeenCalledWith(expect.anything(), { userId, event: 'account_deletion_cancelled' });
+    const { email } = (await User.findById(userId).lean<{ email: string }>())!;
+    expect(h.sendCancelledEmail).toHaveBeenCalledWith(email);
   });
 
-  it('answers 404 when nothing is pending', async () => {
+  it('still cancels when the cancelled email fails', async () => {
     const userId = await seedAccount();
+    h.cancelSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
+    await requestAccountDeletion(requestFor(userId));
+    h.sendCancelledEmail.mockRejectedValueOnce(new Error('mail down'));
+
+    await cancelAccountDeletion(requestFor(userId));
+
+    expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('deletion-cancelled email'));
+  });
+
+  it('answers 404 when nothing is pending, and sends no email', async () => {
+    const userId = await seedAccount();
+    h.sendCancelledEmail.mockClear();
     await expect(cancelAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 404 });
+    expect(h.sendCancelledEmail).not.toHaveBeenCalled();
   });
 });

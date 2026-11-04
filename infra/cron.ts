@@ -28,6 +28,7 @@ import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
 
@@ -234,6 +235,42 @@ const signupGrantHeldRelease =
 
 if (signupGrantHeldRelease && signupGrantHeldReleaseDeadLetter) {
   signupGrantHeldReleaseDeadLetter.allowRules([$util.output(signupGrantHeldRelease)]);
+}
+
+// Account Deletion Sweep - hard-deletes accounts whose self-serve deletion grace period has passed.
+// Idempotent per account, so the next daily run is the retry; a run with failures throws into the DLQ.
+// Self-host twin: apps/workers/src/selfhost/accountDeletionSweep.ts.
+const accountDeletionSweep =
+  runsScheduledJobs && accountDeletionSweepDeadLetter
+    ? new sst.aws.Cron('accountDeletionSweep', {
+        schedule: 'cron(0 5 * * ? *)', // Daily at 5am UTC
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/accountDeletionSweep.handler',
+          runtime: 'nodejs24.x',
+          timeout: '10 minutes',
+          retries: 0,
+          link: [...allSecrets],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+          },
+          permissions: [accountDeletionSweepDeadLetter.sendPermission],
+          transform: accountDeletionSweepDeadLetter.functionTarget,
+          logging: {
+            retention: '1 month',
+          },
+        },
+        transform: {
+          target: {
+            ...accountDeletionSweepDeadLetter.ruleTarget.target,
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (accountDeletionSweep && accountDeletionSweepDeadLetter) {
+  accountDeletionSweepDeadLetter.allowRules([$util.output(accountDeletionSweep)]);
 }
 
 const secretRotationNotifierCron = runsScheduledJobs
@@ -1501,6 +1538,7 @@ const lakeInconsistencySweepCron = runsScheduledJobs
   : undefined;
 
 export {
+  accountDeletionSweep,
   adminAuditAlertsCron,
   oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,

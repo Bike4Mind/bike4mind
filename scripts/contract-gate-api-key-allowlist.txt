@@ -748,6 +748,7 @@ apps/client/pages/api/subscriptions/subscribe.ts
 apps/client/pages/api/system-prompts/activatable.ts
 apps/client/pages/api/test/cleanup.ts
 apps/client/pages/api/test/create-user.ts
+apps/client/pages/api/test/expire-account-deletion.ts  # deliberately unauthenticated (auth: false) like the other api/test routes: E2E stages only, gated by the x-e2e-cleanup-secret header and -e2e@test.com emails
 apps/client/pages/api/test/otc-code.ts
 apps/client/pages/api/test/propose-lake-content.ts
 apps/client/pages/api/tools/weather.ts

@@ -36,7 +36,7 @@ describe('DeleteAccountConfirm', () => {
     const text = screen.getByTestId('delete-account-confirm').textContent;
     expect(text).toContain('signed out on every device right away');
     expect(text).toContain('subscriptions will be canceled');
-    expect(text).toMatch(/permanently deleted on \w+ \d{1,2}, \d{4}/);
+    expect(text).toMatch(/Your account will be permanently deleted on \w+ \d{1,2}, \d{4}/);
     expect(text).toContain('cancel the deletion');
   });
 

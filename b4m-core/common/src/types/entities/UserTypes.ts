@@ -329,6 +329,19 @@ export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
 /** Days between a deletion request and the purge; the user can cancel until then. */
 export const ACCOUNT_DELETION_GRACE_DAYS = 14;
 
+export interface AccountDeletionRetainedRecord {
+  category: string;
+  reason: string;
+  retention: string;
+}
+
+// The full list is owned by the personal-data inventory and must stay in sync with the privacy policy.
+/** What survives a completed deletion, as listed in the deletion-complete email. */
+export const ACCOUNT_DELETION_RETAINED_RECORDS: readonly AccountDeletionRetainedRecord[] = [
+  { category: 'Security audit log of sign-ins', reason: 'Account security', retention: '12 months' },
+  { category: 'Pseudonymized performance telemetry', reason: 'Service reliability', retention: 'Up to 90 days' },
+];
+
 /** Error `code` (status 403) for every request a deletion-pending account may not make. */
 export const ACCOUNT_DELETION_PENDING_CODE = 'ACCOUNT_DELETION_PENDING';
 
