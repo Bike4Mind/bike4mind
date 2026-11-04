@@ -72,6 +72,9 @@ const MODE_RANK: Record<ChatApprovalMode, number> = { ask: 0, auto: 1, full: 2 }
  * other folders, and a looser approval mode means tools the sender's user would have been asked
  * about run unasked. Delivering in either case would let one conversation get done through
  * another what its own user never allowed, so the receiver's user decides instead.
+ *
+ * Only the project and the approval modes are compared; folders granted to one session on top
+ * of its project are not, so a same-project relay is never held over them.
  */
 export function relayHoldReason(
   from: Pick<ChatSession, 'project' | 'approvalMode' | 'origin'>,
