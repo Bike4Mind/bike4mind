@@ -290,6 +290,10 @@ describe('UserRepository.findPendingRiskReviewIds', () => {
     await set(await createUser(undefined, 'pending'), { 'moderation.status': 'suspended' });
     await set(await createUser(undefined, 'pending'), { 'signupGrant.unlockForfeited': { at: new Date() } });
     await set(await createUser(undefined, 'pending'), { paymentRiskEventAt: new Date() });
+    await set(await createUser(undefined, 'pending'), {
+      signupGrantAssessment: { band: 'review', status: 'evaluated' },
+      signupGrant: { stage: 'signup', creditsReleased: 0, signupCredits: 100 },
+    });
 
     await expect(userRepository.findPendingRiskReviewIds({ checkedBefore: now, limit: 10 })).resolves.toEqual([
       eligible,

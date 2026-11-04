@@ -341,6 +341,15 @@ export type UserLinkState = {
   moderation: { status: UserModerationStatus } | null;
 };
 
+// A held review tranche is paid only by the admin approve path, so automatic approval skips it.
+// Keep in sync with userService.isSignupGrantHeldForReview.
+const heldReviewTrancheFilter = {
+  'signupGrantAssessment.band': 'review',
+  'signupGrantAssessment.status': 'evaluated',
+  'signupGrant.stage': 'signup',
+  $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
+};
+
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
   constructor(model: IUserModel) {
     super(model);
@@ -1139,16 +1148,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'moderation.status': { $ne: 'suspended' },
           'signupGrant.unlockForfeited': null,
           paymentRiskEventAt: null,
-          // A held review tranche is paid only by the admin approve path. Keep in sync with
-          // userService.isSignupGrantHeldForReview.
-          $nor: [
-            {
-              'signupGrantAssessment.band': 'review',
-              'signupGrantAssessment.status': 'evaluated',
-              'signupGrant.stage': 'signup',
-              $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
-            },
-          ],
+          $nor: [heldReviewTrancheFilter],
         },
         { $set: { 'riskScore.reviewState': 'approved', riskReviewAutoApproval: approval } }
       )
@@ -1172,6 +1172,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           'moderation.status': { $ne: 'suspended' },
           'signupGrant.unlockForfeited': null,
           paymentRiskEventAt: null,
+          $nor: [heldReviewTrancheFilter],
           // $not also matches a review never evaluated (no field), which sorts first.
           riskReviewAutoCheckedAt: { $not: { $gte: options.checkedBefore } },
         },

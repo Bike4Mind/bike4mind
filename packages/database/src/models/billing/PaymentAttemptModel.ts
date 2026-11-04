@@ -230,12 +230,6 @@ class PaymentAttemptRepository {
     return { attempt: toAttempt(after), changed };
   }
 
-  /** This account's attempts within the retention window, newest first, at most `limit`. */
-  async findByUser(userId: string, limit: number): Promise<PaymentAttempt[]> {
-    const rows = await PaymentAttemptModel.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean().exec();
-    return rows.map(toAttempt);
-  }
-
   /** This account's succeeded attempts with this Radar risk level, created at or before `createdBefore`, newest first. */
   async findSettledByUser(
     userId: string,

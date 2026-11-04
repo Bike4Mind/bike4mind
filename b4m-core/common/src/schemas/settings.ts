@@ -1550,8 +1550,12 @@ export const SignupRiskAutoApprovalSchema = z
     settledPayment: z
       .object({
         enabled: z.boolean().prefault(true),
-        /** Hours a successful payment must have stood; 0 approves as the payment succeeds. */
-        minPaymentAgeHours: z.number().int().min(0).max(720).prefault(0),
+        /**
+         * Hours a successful payment must have stood, leaving time for an early fraud warning or dispute;
+         * 0 approves as the payment succeeds. Any refund, dispute or early fraud warning on the account,
+         * a partial or goodwill refund included, reopens this approval and rules the account out for good.
+         */
+        minPaymentAgeHours: z.number().int().min(0).max(720).prefault(24),
       })
       .strict()
       .prefault({}),
