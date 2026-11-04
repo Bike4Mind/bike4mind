@@ -576,7 +576,11 @@ describe('UserApiKeysTab - skills:write', () => {
 });
 
 describe('UserApiKeysTab - API key trust gate', () => {
-  const blocked = { canCreate: false, message: 'Verify your account to create API keys.', refusedOrgIds: [] as string[] };
+  const blocked = {
+    canCreate: false,
+    message: 'Verify your account to create API keys.',
+    refusedOrgIds: [] as string[],
+  };
   const accessDenied = {
     canCreate: false,
     message: 'API keys require an active paid subscription',
@@ -653,5 +657,67 @@ describe('UserApiKeysTab - API key trust gate', () => {
 
     expect(screen.queryByTestId('api-key-gate-alert')).not.toBeInTheDocument();
     expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
+  });
+
+  describe('access switch refusing some organizations', () => {
+    const switchRefusal = {
+      canCreate: false,
+      message: 'API keys require an active paid subscription',
+      refusedOrgIds: ['org-free'],
+    };
+
+    const pickOrg = async (name: RegExp) => {
+      fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
+      fireEvent.click(await screen.findByRole('option', { name }));
+    };
+
+    it('blocks submit with the gate alert when the selected organization is refused', async () => {
+      h.eligibility = switchRefusal;
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-paid', name: 'PaidCo' },
+      ];
+      openModalAndName();
+      await pickOrg(/FreeCo/);
+
+      expect(screen.getByTestId('api-key-gate-alert')).toHaveTextContent(switchRefusal.message);
+      expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
+    });
+
+    it('enables submit when the selected organization is admitted', async () => {
+      h.eligibility = switchRefusal;
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-paid', name: 'PaidCo' },
+      ];
+      openModalAndName();
+      await pickOrg(/PaidCo/);
+
+      expect(screen.queryByTestId('api-key-gate-alert')).not.toBeInTheDocument();
+      expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
+    });
+
+    it('offers the organization hint while billing personal when some organization is admitted', () => {
+      h.eligibility = switchRefusal;
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-paid', name: 'PaidCo' },
+      ];
+      openModalAndName();
+
+      expect(screen.getByTestId('api-key-gate-alert')).toHaveTextContent('organization you manage');
+    });
+
+    it('disables create on the tab with no organization hint when every organization is refused', () => {
+      h.eligibility = { ...switchRefusal, refusedOrgIds: ['org-free', 'org-other'] };
+      h.billingOrgs = [
+        { id: 'org-free', name: 'FreeCo' },
+        { id: 'org-other', name: 'OtherCo' },
+      ];
+      renderTab();
+
+      expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
+      expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(switchRefusal.message);
+    });
   });
 });
