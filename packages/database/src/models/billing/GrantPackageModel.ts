@@ -169,13 +169,19 @@ export class GrantPackageRepository implements IGrantPackageRepository {
     try {
       await GrantPackageRedemption.create([{ packageId, userId, day, dayCounted }]);
     } catch (error) {
-      // A concurrent reserve for this same user (outside a transaction) won the unique row after
-      // both passed the exists check: hand back the counts this call took.
-      if ((error as { code?: unknown } | null)?.code !== 11000) throw error;
-      await GrantPackage.updateOne({ _id: packageId, redeemedTotal: { $gt: 0 } }, { $inc: { redeemedTotal: -1 } });
-      if (dayCounted) {
-        await GrantPackageDayCount.updateOne({ packageId, day, count: { $gt: 0 } }, { $inc: { count: -1 } });
+      // Hand back the counts this call took. On a duplicate row a concurrent reserve for this same
+      // user (outside a transaction) won; on any other error the rethrow must not leak the counters.
+      // Best-effort: inside an aborted transaction these writes fail and the rollback covers them.
+      const isDuplicate = (error as { code?: unknown } | null)?.code === 11000;
+      try {
+        await GrantPackage.updateOne({ _id: packageId, redeemedTotal: { $gt: 0 } }, { $inc: { redeemedTotal: -1 } });
+        if (dayCounted) {
+          await GrantPackageDayCount.updateOne({ packageId, day, count: { $gt: 0 } }, { $inc: { count: -1 } });
+        }
+      } catch (undoError) {
+        if (isDuplicate) throw undoError;
       }
+      if (!isDuplicate) throw error;
       return { outcome: 'already', release: async () => {} };
     }
     return { outcome: 'reserved', release: () => this.releaseRedemption(packageId, userId) };

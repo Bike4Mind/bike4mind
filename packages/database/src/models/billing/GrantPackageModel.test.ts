@@ -126,6 +126,16 @@ describe('GrantPackageRepository.reserveRedemption', () => {
     expect((await GrantPackageDayCount.findOne({ packageId: id }).lean())?.count).toBe(1);
   });
 
+  it('hands back the counts when recording the redemption fails for a non-duplicate reason', async () => {
+    const id = await createPackage({ totalCap: 1, dailyCap: 1 });
+    const spy = vi.spyOn(GrantPackageRedemption, 'create').mockRejectedValueOnce(new Error('write failed'));
+    await expect(grantPackageRepository.reserveRedemption(id, 'a')).rejects.toThrow('write failed');
+    spy.mockRestore();
+    expect((await reload(id)).redeemedTotal).toBe(0);
+    expect((await GrantPackageDayCount.findOne({ packageId: id }).lean())?.count).toBe(0);
+    expect((await grantPackageRepository.reserveRedemption(id, 'b')).outcome).toBe('reserved');
+  });
+
   it('release frees the total and daily slot exactly once', async () => {
     const id = await createPackage({ totalCap: 1, dailyCap: 1 });
     const first = await grantPackageRepository.reserveRedemption(id, 'a');
