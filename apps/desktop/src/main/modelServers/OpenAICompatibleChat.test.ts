@@ -680,6 +680,7 @@ describe('OpenAICompatibleChat max output on a context the server fixes', () => 
     };
     for (const [status, message, maxTokens] of [
       [400, 'temperature must be at most 2', 2048],
+      [400, 'max_tokens must be at least 1, got 0.', 2048],
       [500, 'max_tokens scheduler crashed', 2048],
       [400, "This model's maximum context length is 8192 tokens.", undefined],
     ] as const) {
@@ -688,6 +689,23 @@ describe('OpenAICompatibleChat max output on a context the server fixes', () => 
       await expect(collect(client, ask(400, maxTokens))).rejects.toThrow();
       expect(bodies).toHaveLength(1);
     }
+  });
+
+  it('asks once more without max_tokens, then gives up when that is refused too', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model', max_model_len: CONTEXT }] });
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json(
+        { error: { message: "This model's maximum context length is 8192 tokens." } },
+        { status: 400 }
+      );
+    };
+    const client = chat(fetch, 'vllm');
+    await client.listModels();
+    await expect(collect(client, ask(400, 2048))).rejects.toThrow();
+    expect(bodies.map(body => body.max_tokens)).toEqual([2048, undefined]);
   });
 
   it('asks again without max_tokens and without the tools the server refused', async () => {

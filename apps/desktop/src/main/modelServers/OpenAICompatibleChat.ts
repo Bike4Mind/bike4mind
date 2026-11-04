@@ -163,7 +163,7 @@ const STOP_REASONS: Record<string, string> = { length: 'max_tokens', tool_calls:
 /** vLLM's refusal of a prompt plus max_tokens past max_model_len. */
 async function overflowsContext(response: Response): Promise<boolean> {
   if (response.status !== 400) return false;
-  return /maximum context length|max_tokens|max_completion_tokens/i.test(await response.clone().text());
+  return /maximum context length/i.test(await response.clone().text());
 }
 
 /**
