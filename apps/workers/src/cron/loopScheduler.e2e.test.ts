@@ -1567,6 +1567,7 @@ describe('runLoopSchedulerTick - safety and pacing', () => {
 });
 
 describe('runLoopSchedulerTick - liveness', () => {
+  const DESKTOP = { stages: ['todo', 'review', 'done'], stageConfig: [{ stage: 'review', runner: 'desktop' }] };
   const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
     (
       await WorkItem.create({
@@ -1615,6 +1616,16 @@ describe('runLoopSchedulerTick - liveness', () => {
       await runLoopSchedulerTick(new Date(NOW.getTime() + 10 * 60_000), logger);
       expect((await reload(loop.id)).alarm).toBeUndefined();
       expect(await keys()).toEqual([]);
+    });
+
+    it('does not flag a loop whose only ready ticket is in a desktop stage', async () => {
+      refuseStarts();
+      const loop = await createLoop({ ...DESKTOP, nextRunAt: LONG_DUE });
+      await createTicket(loop.id, { stage: 'review' });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect((await reload(loop.id)).alarm).toBeUndefined();
     });
 
     it('clears the alarm once the loop is paused by its owner', async () => {
@@ -1799,6 +1810,23 @@ describe('runLoopSchedulerTick - liveness', () => {
       expect(await ticketOf(stale.id)).toMatchObject({ status: 'open', runCount: 0 });
       expect(await ticketOf(fresh.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
       expect((await reload(loop.id)).nextRunAt).toEqual(NOW);
+    });
+
+    it('reopens a desktop-stage ticket whose run is gone, and never gives it to a cloud run', async () => {
+      const loop = await createLoop({ ...DESKTOP, nextRunAt: LATER });
+      const ticket = await createTicket(loop.id, {
+        stage: 'review',
+        status: 'in_progress',
+        executionId: 'exec-gone',
+        runCount: 1,
+      });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open', runCount: 0 });
+      // Only a desktop-stage ticket is ready, so the loop is not made due and no cloud run claims it.
+      expect(h.startAgentExecution).not.toHaveBeenCalled();
+      expect((await reload(loop.id)).nextRunAt).toEqual(LATER);
     });
 
     it('waits while the loop has a run in flight that could still link the claim', async () => {
