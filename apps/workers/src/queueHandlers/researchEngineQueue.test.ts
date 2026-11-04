@@ -16,13 +16,21 @@ const h = vi.hoisted(() => ({
   meter: vi.fn(),
   afford: vi.fn(),
   complete: vi.fn(),
+  sendStatusUpdate: vi.fn(),
   questFindById: vi.fn(),
   questUpdateIfUnfinished: vi.fn(),
   questSettle: vi.fn(),
+  questRepositoryMock: {} as Record<string, unknown>,
   deepResearchIntoQuest: vi.fn(),
   userRepository: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
   fabFileRepository: { commitContentRewrite: vi.fn(), findChargeState: vi.fn() },
 }));
+
+Object.assign(h.questRepositoryMock, {
+  findById: h.questFindById,
+  updateIfUnfinished: h.questUpdateIfUnfinished,
+  settleIfUnfinished: h.questSettle,
+});
 
 // Every export the module reads at import time, declared because this mock replaces the whole module.
 vi.mock('@bike4mind/database', () => ({
@@ -40,11 +48,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: h.fabFileRepository,
   taskScheduleRepository: {},
   fileTagRepository: {},
-  questRepository: {
-    findById: h.questFindById,
-    updateIfUnfinished: h.questUpdateIfUnfinished,
-    settleIfUnfinished: h.questSettle,
-  },
+  questRepository: h.questRepositoryMock,
   Connection: { find: vi.fn(), deleteOne: vi.fn() },
 }));
 vi.mock('@bike4mind/services', async () => ({
@@ -73,7 +77,7 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
 
 vi.mock('@bike4mind/services/llm/StatusManager', () => ({
   StatusManager: vi.fn(function () {
-    return { sendStatusUpdate: vi.fn() };
+    return { sendStatusUpdate: h.sendStatusUpdate };
   }),
 }));
 vi.mock('@bike4mind/utils', async () => ({
@@ -218,37 +222,102 @@ const researchEvent = (payload: Record<string, unknown>) =>
 const job = { questId: 'q1', sessionId: 's1', userId: 'u1', topic: 'Rare earth magnet supply' };
 
 describe('deepResearchIntoQuest action', () => {
-  beforeEach(() => vi.clearAllMocks());
+  const stored = {
+    id: 'q1',
+    sessionId: 's1',
+    status: 'running',
+    prompt: 'Research rare earths',
+    type: 'message',
+    timestamp: new Date(1),
+    promptMeta: { x: 1 },
+  };
+  const refusal = () =>
+    Object.assign(new Error('Not enough credits'), { additionalInfo: { errorCode: 'insufficient_credits' } });
+  const patch = { status: 'done', type: 'error', reply: 'Not enough credits', replies: ['Not enough credits'] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: 'u1' });
+    h.questFindById.mockResolvedValue(stored);
+    h.getOperationsTextModel.mockResolvedValue({ modelId: 'ops', llm: { complete: h.complete }, modelInfo: {} });
+  });
 
   it('runs research for the quest on the metered operations model', async () => {
-    h.userFindById.mockResolvedValue({ id: 'u1' });
-    h.getOperationsTextModel.mockResolvedValue({ modelId: 'ops', llm: { complete: h.complete }, modelInfo: {} });
     await dispatch(researchEvent(job), {} as never, logger as never);
     expect(h.afford).toHaveBeenCalled();
-    expect(h.deepResearchIntoQuest).toHaveBeenCalledWith(
-      { questId: 'q1', topic: 'Rare earth magnet supply' },
-      expect.objectContaining({ quests: expect.any(Object), push: expect.any(Function) })
+    expect(h.deepResearchIntoQuest).toHaveBeenCalledTimes(1);
+    const [params, adapters] = h.deepResearchIntoQuest.mock.calls[0];
+    expect(params).toStrictEqual({ questId: 'q1', topic: 'Rare earth magnet supply' });
+    expect(adapters.quests).toBe(h.questRepositoryMock);
+    expect(adapters.toolContext).toMatchObject({
+      userId: 'u1',
+      sessionId: 's1',
+      questId: 'q1',
+      authOrigin: 'internal',
+    });
+    expect(adapters.llm.complete).toEqual(expect.any(Function));
+    expect(adapters.llm.complete).not.toBe(h.complete);
+  });
+
+  it('pushes progress with the stored turn text under the partial', async () => {
+    await dispatch(researchEvent(job), {} as never, logger as never);
+    const { push } = h.deepResearchIntoQuest.mock.calls[0][1];
+    await push({ id: 'q1', sessionId: 's1', status: 'running', deepResearchState: { findings: [] } });
+    expect(h.sendStatusUpdate).toHaveBeenCalledWith(
+      {
+        id: 'q1',
+        sessionId: 's1',
+        prompt: 'Research rare earths',
+        type: 'message',
+        timestamp: stored.timestamp,
+        promptMeta: { x: 1 },
+        status: 'running',
+        deepResearchState: { findings: [] },
+      },
+      null
     );
   });
 
-  it('settles the quest with the refusal when the owner cannot pay', async () => {
-    h.userFindById.mockResolvedValue({ id: 'u1' });
-    h.questSettle.mockResolvedValue(true);
-    const refusal = Object.assign(new Error('Not enough credits'), {
-      additionalInfo: { errorCode: 'insufficient_credits' },
-    });
-    h.afford.mockRejectedValueOnce(refusal);
+  it('does not push when the quest is gone', async () => {
+    h.questFindById.mockResolvedValue(null);
     await dispatch(researchEvent(job), {} as never, logger as never);
-    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
-    expect(h.questSettle).toHaveBeenCalledWith('q1', {
-      status: 'done',
-      type: 'error',
-      reply: 'Not enough credits',
-      replies: ['Not enough credits'],
-    });
+    const { push } = h.deepResearchIntoQuest.mock.calls[0][1];
+    await push({ id: 'q1', sessionId: 's1', status: 'running' });
+    expect(h.sendStatusUpdate).not.toHaveBeenCalled();
   });
 
-  it('rejects a payload without a topic', async () => {
+  it('settles and pushes the refusal when the owner cannot pay, without rethrowing', async () => {
+    h.questSettle.mockResolvedValue(true);
+    h.afford.mockRejectedValueOnce(refusal());
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).resolves.toBeUndefined();
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+    expect(h.questSettle).toHaveBeenCalledWith('q1', patch);
+    expect(h.sendStatusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'q1', sessionId: 's1', prompt: 'Research rare earths', ...patch }),
+      null
+    );
+  });
+
+  it('does not push the refusal when the quest was already settled', async () => {
+    h.questSettle.mockResolvedValue(false);
+    h.afford.mockRejectedValueOnce(refusal());
+    await dispatch(researchEvent(job), {} as never, logger as never);
+    expect(h.questSettle).toHaveBeenCalled();
+    expect(h.sendStatusUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a non-refusal billing error so the message is redelivered', async () => {
+    h.afford.mockRejectedValueOnce(new Error('db down'));
+    await expect(dispatch(researchEvent(job), {} as never, logger as never)).rejects.toThrow('db down');
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+    expect(h.questSettle).not.toHaveBeenCalled();
+  });
+
+  it('rejects a topic that is empty or longer than 2000 characters', async () => {
     await expect(dispatch(researchEvent({ ...job, topic: '' }), {} as never, logger as never)).rejects.toThrow();
+    await expect(
+      dispatch(researchEvent({ ...job, topic: 'x'.repeat(2001) }), {} as never, logger as never)
+    ).rejects.toThrow();
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
   });
 });

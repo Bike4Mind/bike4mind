@@ -338,8 +338,13 @@ const deepResearchIntoQuestJob = async (
     logger
   );
   const status = new StatusManager(sender, logger, Resource.websocket.managementEndpoint, job.userId);
-  const push = (quest: { id: string; sessionId: string } & Record<string, unknown>) =>
-    status.sendStatusUpdate(quest as never, null);
+  // The status payload defaults absent fields (prompt, type), so partial pushes carry the stored turn text.
+  const stored = await questRepository.findById(job.questId);
+  const push = async (quest: { id: string; sessionId: string } & Record<string, unknown>) => {
+    if (!stored) return;
+    const { prompt, type, timestamp, promptMeta } = stored;
+    await status.sendStatusUpdate({ prompt, type, timestamp, promptMeta, ...quest } as never, null);
+  };
 
   let llm;
   try {
