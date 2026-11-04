@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { addLights, frameCamera } from './modelScene';
+import { addLights, frameCamera, poseJoints } from './modelScene';
 
 type Props = {
   object: THREE.Group | null;
@@ -12,6 +12,8 @@ type Props = {
   dimmed: boolean;
   /** The camera re-frames when this changes (a different file), not on every rebuild. */
   frameKey: string | null;
+  /** Joint angles in degrees by part name; posed on the viewer's own copy, so exports stay at rest. */
+  pose: Record<string, number>;
 };
 
 type Viewer = {
@@ -43,11 +45,14 @@ function gridFor(object: THREE.Object3D, dark: boolean): THREE.GridHelper {
 }
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
-export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Props) {
+export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
   const framedFor = useRef<string | null>(null);
   const shownObject = useRef<THREE.Group | null>(null);
+  const shownCopy = useRef<THREE.Group | null>(null);
+  const poseRef = useRef(pose);
+  poseRef.current = pose;
   // Set by the user orbiting, zooming or panning; until then a resize re-frames, because the first
   // frame is often taken before the pane has its size and a tall pane would crop the model.
   const userMoved = useRef(false);
@@ -105,8 +110,11 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Pro
     current.scene.background = new THREE.Color(dark ? '#1b1e23' : '#f4f5f7');
     current.content.clear();
     shownObject.current = object;
+    shownCopy.current = null;
     if (object) {
       const shown = object.clone(true);
+      poseJoints(shown, poseRef.current);
+      shownCopy.current = shown;
       shown.traverse(child => {
         if (child instanceof THREE.Mesh) {
           const material = (child.material as THREE.MeshStandardMaterial).clone();
@@ -127,6 +135,13 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Pro
     }
     current.render();
   }, [object, wireframe, dark, dimmed, frameKey]);
+
+  // A slider drag or playback only turns nodes: no re-clone, no re-frame.
+  useEffect(() => {
+    if (!viewer.current || !shownCopy.current) return;
+    poseJoints(shownCopy.current, pose);
+    viewer.current.render();
+  }, [pose]);
 
   return <Box ref={host} sx={{ position: 'absolute', inset: 0 }} data-testid="model-pane-viewport" />;
 }

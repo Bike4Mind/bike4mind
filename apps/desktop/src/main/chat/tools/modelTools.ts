@@ -1,4 +1,12 @@
-import { DEFAULT_MODEL_VIEWS, MODEL_VIEWS, type ModelView, formatModelSummary, modelKindFor } from '@shared/model3d';
+import {
+  DEFAULT_MODEL_VIEWS,
+  MODEL_POSES,
+  MODEL_VIEWS,
+  type ModelPose,
+  type ModelView,
+  formatModelSummary,
+  modelKindFor,
+} from '@shared/model3d';
 import { resolveWithinRoots } from './paths';
 import { showImage } from './toolImages';
 import { requireString, type ModelContext, type ToolContext, type ToolDefinition } from './types';
@@ -23,6 +31,9 @@ const MODEL_FILE_CONTRACT = [
   'Moving parts: give a part `pivot: [x, y, z]` (the point it turns about, e.g. a lid hinge, in model coordinates) and',
   '`parent: "body"` to nest it under another part. Each part becomes its own GLB node with its origin at the pivot, so a game',
   'engine can rotate it (open the lid) without touching the mesh. Model the rest pose (lid closed); names must be unique.',
+  'Make it a joint with `axis: [x, y, z]` (the direction it turns about, model axes, right-hand rule) and `range: [from, to]`',
+  '(degrees from the modelled pose, e.g. [0, 110]). The user gets a slider and a play button per joint, and the GLB gets an',
+  'animation clip named after the part. Check the open pose with model_screenshot pose "open": if the part swings the wrong way, negate the axis.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {
@@ -35,6 +46,13 @@ async function resolveModelPath(requested: string, context: ToolContext): Promis
   if (!modelKindFor(path))
     throw new Error(`Not a model file: ${requested}. Use a .model.js, .glb, .gltf or .stl file.`);
   return path;
+}
+
+function parsePose(input: Record<string, unknown>): ModelPose {
+  const raw = input.pose ?? 'rest';
+  if (!(MODEL_POSES as readonly unknown[]).includes(raw))
+    throw new Error(`pose must be one of: ${MODEL_POSES.join(', ')}`);
+  return raw as ModelPose;
 }
 
 function parseViews(input: Record<string, unknown>): ModelView[] {
@@ -101,22 +119,29 @@ export const modelScreenshot: ToolDefinition = {
           items: { type: 'string', enum: [...MODEL_VIEWS] },
           description: `Which angles, default ${DEFAULT_MODEL_VIEWS.join(', ')}.`,
         },
+        pose: {
+          type: 'string',
+          enum: [...MODEL_POSES],
+          description: 'rest (default) shows the model as written; open turns every joint to the end of its range.',
+        },
       },
     },
   },
   async run(input, context) {
     const model = requireModel(context);
     const views = parseViews(input);
+    const pose = parsePose(input);
     const requested = typeof input.path === 'string' && input.path.trim() ? input.path.trim() : undefined;
     const report = await openAndBuild(model, requested, context);
     if (!report.ok) return formatModelSummary(report);
-    const png = Buffer.from(await model.view.capture(views));
+    const png = Buffer.from(await model.view.capture(views, pose));
     const name = model.view.current().path?.split(/[\\/]/).pop() ?? 'model';
-    const kept = await model.keepScreenshot(png, `${name}: ${views.join(', ')}`);
+    const shownAs = pose === 'open' ? `${views.join(', ')}, joints open` : views.join(', ');
+    const kept = await model.keepScreenshot(png, `${name}: ${shownAs}`);
     if (kept) context.report?.media(kept);
     context.report?.label(`Looked at ${name}`);
     const shown = showImage(context, png, 'image/png');
-    const described = `Rendered ${name} from ${views.join(', ')} (one tile per view, labelled).`;
+    const described = `Rendered ${name} from ${shownAs} (one tile per view, labelled).`;
     if (!shown.ok)
       return `${described} The user sees it, but you cannot: ${shown.reason}.\n${formatModelSummary(report)}`;
     return `${described} You see it below this result in this reply only.\n${formatModelSummary(report)}`;

@@ -5,6 +5,7 @@ import { basename, dirname } from 'node:path';
 import {
   EMPTY_MODEL_STATE,
   type ModelBuildReport,
+  type ModelPose,
   type ModelView,
   type ModelViewState,
   modelKindFor,
@@ -12,7 +13,7 @@ import {
   writeParamValue,
 } from '@shared/model3d';
 
-export type ModelCaptureRequest = { id: string; views: ModelView[] };
+export type ModelCaptureRequest = { id: string; views: ModelView[]; pose: ModelPose };
 
 export type ModelLiveViewEvents = {
   state: (state: ModelViewState) => void;
@@ -158,7 +159,7 @@ export class ModelLiveView {
     return readFile(path).catch(() => null);
   }
 
-  capture(views: ModelView[]): Promise<Uint8Array> {
+  capture(views: ModelView[], pose: ModelPose = 'rest'): Promise<Uint8Array> {
     const id = randomUUID();
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -166,7 +167,7 @@ export class ModelLiveView {
         reject(new Error('The model pane did not return a screenshot in time.'));
       }, this.captureTimeoutMs);
       this.captures.set(id, { resolve, reject, timer });
-      if (!this.events.captureRequest({ id, views })) {
+      if (!this.events.captureRequest({ id, views, pose })) {
         clearTimeout(timer);
         this.captures.delete(id);
         reject(new Error('No Bike4Mind window is open to render the model.'));

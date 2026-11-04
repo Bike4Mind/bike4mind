@@ -1,4 +1,4 @@
-import type { ModelBuildReport, ModelView, ModelViewState } from '@shared/model3d';
+import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from '@shared/model3d';
 import type { CustomCommand } from '@bike4mind/cli/skills';
 import type { VideoModel } from '@bike4mind/common';
 import type { BrowserSnapshot } from '@shared/browserPage';
@@ -337,7 +337,7 @@ export interface ModelViewPort {
   current(): ModelViewState;
   open(path: string): Promise<ModelViewState>;
   waitForBuild(): Promise<ModelBuildReport>;
-  capture(views: ModelView[]): Promise<Uint8Array>;
+  capture(views: ModelView[], pose?: ModelPose): Promise<Uint8Array>;
   glbPath(): string | null;
 }
 

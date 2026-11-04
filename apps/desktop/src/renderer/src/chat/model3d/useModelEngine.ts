@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type * as THREE from 'three';
 import {
   EMPTY_MODEL_STATE,
+  jointsOf,
   partTreeError,
   type ModelBuildOutcome,
+  type ModelJoint,
   type ModelParam,
   type ModelPartMesh,
   type ModelSummary,
@@ -13,6 +15,7 @@ import {
   buildModelObject,
   exportGlb,
   loadAsset,
+  openPose,
   partsToStl,
   renderContactSheet,
   summarizeObject,
@@ -35,6 +38,11 @@ export type ModelEngine = {
   params: Record<string, ModelParam>;
   /** Param keys whose last slider value could not be written back to the file. */
   unsaved: string[];
+  /** The parts that turn, for the pane's joint sliders. Empty for loaded assets. */
+  joints: ModelJoint[];
+  /** Slider angles in degrees by part name; the viewer's pose only, never written or exported. */
+  jointAngles: Record<string, number>;
+  setJointAngles(angles: Record<string, number>): void;
   previewParam(key: string, value: number): void;
   commitParam(key: string, value: number): Promise<void>;
   exportFile(format: 'glb' | 'stl'): Promise<string | null>;
@@ -76,6 +84,9 @@ export function useModelEngine(dark: boolean): ModelEngine {
   const [summary, setSummary] = useState<ModelSummary | null>(null);
   const [params, setParams] = useState<Record<string, ModelParam>>({});
   const [unsaved, setUnsaved] = useState<string[]>([]);
+  const [joints, setJoints] = useState<ModelJoint[]>([]);
+  const [jointAngles, setJointAnglesState] = useState<Record<string, number>>({});
+  const posedPath = useRef<string | null>(null);
   const engine = useRef<EngineFrame | null>(null);
   const requestId = useRef(0);
   const pending = useRef<((outcome: ModelBuildOutcome | null) => void) | null>(null);
@@ -143,6 +154,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
     const next = buildModelObject(outcome.parts, outcome.units);
     const nextSummary = summarizeParts(outcome.parts, outcome.params, outcome.units);
     partsRef.current = outcome.parts;
+    setJoints(jointsOf(outcome.parts));
     setObject(next);
     setSummary(nextSummary);
     setParams(outcome.params);
@@ -158,12 +170,18 @@ export function useModelEngine(dark: boolean): ModelEngine {
     const { kind, source, generation, missing, path } = state;
     overrides.current = {};
     setUnsaved([]);
+    // A rebuild keeps the pose so a lid held open stays open while editing; another file starts closed.
+    if (posedPath.current !== path) {
+      posedPath.current = path;
+      setJointAnglesState({});
+    }
     if (!path || !kind) {
       setStatus('idle');
       setError(null);
       setObject(null);
       setSummary(null);
       setParams({});
+      setJoints([]);
       partsRef.current = null;
       return;
     }
@@ -187,6 +205,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
         if (cancelled) return;
         const loadedSummary = summarizeObject(loaded);
         partsRef.current = null;
+        setJoints([]);
         setObject(loaded);
         setSummary(loadedSummary);
         setParams({});
@@ -208,13 +227,13 @@ export function useModelEngine(dark: boolean): ModelEngine {
 
   useEffect(
     () =>
-      window.b4m.model.onCaptureRequest(({ id, views }) => {
+      window.b4m.model.onCaptureRequest(({ id, views, pose }) => {
         const current = objectRef.current;
         if (!current) {
           window.b4m.model.captureResult({ id, error: 'The model pane has nothing to show yet.' });
           return;
         }
-        renderContactSheet(current, views, darkRef.current)
+        renderContactSheet(current, views, darkRef.current, pose === 'open' ? openPose(current) : {})
           .then(bytes => window.b4m.model.captureResult({ id, bytes }))
           .catch(caught =>
             window.b4m.model.captureResult({ id, error: caught instanceof Error ? caught.message : String(caught) })
@@ -258,5 +277,22 @@ export function useModelEngine(dark: boolean): ModelEngine {
     await window.b4m.model.openDialog();
   }, []);
 
-  return { state, status, error, object, summary, params, unsaved, previewParam, commitParam, exportFile, openFile };
+  const setJointAngles = useCallback((angles: Record<string, number>) => setJointAnglesState(angles), []);
+
+  return {
+    state,
+    status,
+    error,
+    object,
+    summary,
+    params,
+    unsaved,
+    joints,
+    jointAngles,
+    setJointAngles,
+    previewParam,
+    commitParam,
+    exportFile,
+    openFile,
+  };
 }

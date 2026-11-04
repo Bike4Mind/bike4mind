@@ -10,6 +10,7 @@ import Typography from '@mui/joy/Typography';
 import { useCallback, useLayoutEffect, useState, type RefObject } from 'react';
 import { CloseIcon, CubeIcon } from './icons';
 import type { ModelEngine } from './model3d/useModelEngine';
+import { ModelJoints } from './model3d/ModelJoints';
 import { ModelViewport } from './model3d/ModelViewport';
 import {
   clampModelPaneWidth,
@@ -71,7 +72,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation
     };
   }, [conversation, pane]);
 
-  const { state, status, error, object, summary, params, unsaved } = engine;
+  const { state, status, error, object, summary, params, unsaved, joints, jointAngles } = engine;
   const [wireframe, setWireframe] = useState(false);
   const [exportNote, setExportNote] = useState('');
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
@@ -177,6 +178,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation
               dark={dark}
               dimmed={status === 'error'}
               frameKey={state.path}
+              pose={jointAngles}
             />
             {status === 'building' && !object && (
               <Stack alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0 }}>
@@ -265,6 +267,8 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation
           )}
         </Stack>
       )}
+
+      {joints.length > 0 && <ModelJoints joints={joints} angles={jointAngles} onChange={engine.setJointAngles} />}
 
       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 1.5, py: 1.25 }}>
         <Button

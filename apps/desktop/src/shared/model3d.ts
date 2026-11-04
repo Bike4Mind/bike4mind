@@ -25,7 +25,14 @@ export type ModelPartMesh = {
   pivot?: [number, number, number];
   /** The name of the part this one is nested under in the GLB, so it moves with it. */
   parent?: string;
+  /** Makes the part a joint: the direction it turns about through its pivot, in model axes (right-hand rule). */
+  axis?: [number, number, number];
+  /** With `axis`: how far it turns, in degrees from the modelled pose (0), e.g. [0, 110] for a lid. */
+  range?: [number, number];
 };
+
+/** A part that turns: what the pane's joint sliders and the GLB's animation clips are made from. */
+export type ModelJoint = { name: string; axis: [number, number, number]; range: [number, number] };
 
 export type ModelBuildOutcome =
   | { ok: true; parts: ModelPartMesh[]; params: Record<string, ModelParam>; units: ModelUnits }
@@ -62,6 +69,10 @@ export type ModelBuildReport = {
 export const MODEL_VIEWS = ['front', 'back', 'left', 'right', 'top', 'iso'] as const;
 export type ModelView = (typeof MODEL_VIEWS)[number];
 export const DEFAULT_MODEL_VIEWS: ModelView[] = ['front', 'right', 'top', 'iso'];
+
+/** How a screenshot poses the joints: as modelled, or each at the far end of its range. */
+export const MODEL_POSES = ['rest', 'open'] as const;
+export type ModelPose = (typeof MODEL_POSES)[number];
 
 export const EMPTY_MODEL_STATE: ModelViewState = {
   path: null,
@@ -153,9 +164,26 @@ export function formatModelSummary(report: ModelBuildReport, glbPath?: string): 
   return lines.join('\n');
 }
 
+const isNumbers = (value: unknown, length: number): boolean =>
+  Array.isArray(value) && value.length === length && value.every(Number.isFinite);
+
+function partJointError(part: ModelPartMesh): string | null {
+  const name = `Part "${part.name}"`;
+  if (part.axis === undefined && part.range === undefined) return null;
+  if (part.axis === undefined) return `${name} has a range but no axis to turn about.`;
+  if (!isNumbers(part.axis, 3) || part.axis.every(value => value === 0))
+    return `${name} has an axis that is not a direction [x, y, z], e.g. [1, 0, 0].`;
+  if (part.range === undefined) return `${name} has an axis but no range [from, to] in degrees.`;
+  if (!isNumbers(part.range, 2) || part.range[0] === part.range[1])
+    return `${name} has a range that is not two different angles [from, to] in degrees.`;
+  if (!part.pivot) return `${name} has an axis but no pivot to turn about.`;
+  return null;
+}
+
 /**
  * Why a set of parts cannot become a node tree, or null when it can. A part named as a parent has
- * to exist exactly once, and following parents must never come back to where it started.
+ * to exist exactly once, following parents must never come back to where it started, and a joint
+ * needs a pivot, a direction and two different limits.
  */
 export function partTreeError(parts: ModelPartMesh[]): string | null {
   const counts = new Map<string, number>();
@@ -165,6 +193,8 @@ export function partTreeError(parts: ModelPartMesh[]): string | null {
     if (part.pivot && !(part.pivot.length === 3 && part.pivot.every(Number.isFinite))) {
       return `Part "${part.name}" has a pivot that is not three numbers [x, y, z].`;
     }
+    const jointError = partJointError(part);
+    if (jointError) return jointError;
     if (part.parent === undefined) continue;
     if (part.parent === part.name) return `Part "${part.name}" cannot be its own parent.`;
     const count = counts.get(part.parent) ?? 0;
@@ -184,12 +214,23 @@ export function partTreeError(parts: ModelPartMesh[]): string | null {
   return null;
 }
 
+/** The parts that turn, in part order. Assumes the parts passed partTreeError. */
+export function jointsOf(parts: ModelPartMesh[]): ModelJoint[] {
+  return parts.flatMap(part =>
+    part.axis && part.range ? [{ name: part.name, axis: part.axis, range: part.range }] : []
+  );
+}
+
 /** The joint lines for ModelSummary: parts with a pivot or a parent, in model units. */
 export function describeJoints(parts: ModelPartMesh[]): string[] {
   return parts
     .filter(part => part.pivot || part.parent)
     .map(part => {
       const pivot = part.pivot ? `pivot (${part.pivot.map(formatNumber).join(', ')})` : 'pivot at origin';
-      return `${part.name}: ${pivot}${part.parent ? `, in ${part.parent}` : ''}`;
+      const turns =
+        part.axis && part.range
+          ? `, turns about (${part.axis.map(formatNumber).join(', ')}) from ${formatNumber(part.range[0])} to ${formatNumber(part.range[1])} deg`
+          : '';
+      return `${part.name}: ${pivot}${part.parent ? `, in ${part.parent}` : ''}${turns}`;
     });
 }

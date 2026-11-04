@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   describeJoints,
+  jointsOf,
   formatModelSummary,
   modelKindFor,
   partTreeError,
@@ -104,12 +105,33 @@ describe('partTreeError', () => {
     [[part('a', { parent: 'b' }), part('b', { parent: 'a' })], 'form a loop'],
     [[part('body'), part('body'), part('lid', { parent: 'body' })], 'that 2 parts are called'],
     [[part('lid', { pivot: [0, Number.NaN, 1] as [number, number, number] })], 'not three numbers'],
+    [[part('lid', { pivot: [0, 0, 0], range: [0, 90] })], 'a range but no axis'],
+    [[part('lid', { pivot: [0, 0, 0], axis: [0, 0, 0], range: [0, 90] })], 'not a direction'],
+    [[part('lid', { pivot: [0, 0, 0], axis: [1, 0, 0] })], 'no range'],
+    [[part('lid', { pivot: [0, 0, 0], axis: [1, 0, 0], range: [45, 45] })], 'two different angles'],
+    [[part('lid', { axis: [1, 0, 0], range: [0, 90] })], 'no pivot to turn about'],
   ])('refuses %#', (parts, message) => {
     expect(partTreeError(parts)).toContain(message);
   });
 });
 
+describe('jointsOf', () => {
+  it('lists the parts with an axis and range, and only those', () => {
+    const lid = part('lid', { pivot: [0, 20, 30], parent: 'body', axis: [1, 0, 0], range: [0, 110] });
+    expect(jointsOf([part('body'), lid, part('lock', { parent: 'lid' })])).toEqual([
+      { name: 'lid', axis: [1, 0, 0], range: [0, 110] },
+    ]);
+  });
+});
+
 describe('describeJoints', () => {
+  it('says how a joint turns', () => {
+    const lid = part('lid', { pivot: [0, 20, 30], parent: 'body', axis: [-1, 0, 0], range: [0, 110] });
+    expect(describeJoints([lid])).toEqual([
+      'lid: pivot (0, 20, 30), in body, turns about (-1, 0, 0) from 0 to 110 deg',
+    ]);
+  });
+
   it('lists only parts with a pivot or parent', () => {
     expect(describeJoints([part('body'), part('lid', { pivot: [0, 24.5, 38], parent: 'body' })])).toEqual([
       'lid: pivot (0, 24.5, 38), in body',

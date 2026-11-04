@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
   describeJoints,
+  type ModelJoint,
   type ModelKind,
   type ModelParam,
   type ModelPartMesh,
@@ -48,6 +49,7 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
     material.name = part.name;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = part.name;
+    if (part.axis && part.range) mesh.userData.joint = { axis: part.axis, range: part.range } satisfies JointData;
     return mesh;
   });
   const byName = new Map(parts.map((part, index) => [part.name, { mesh: meshes[index], pivot: part.pivot ?? origin }]));
@@ -65,6 +67,56 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
   root.userData.units = units;
   root.add(model);
   return root;
+}
+
+type JointData = Omit<ModelJoint, 'name'>;
+
+function jointNodes(root: THREE.Object3D): { node: THREE.Object3D; joint: JointData }[] {
+  const found: { node: THREE.Object3D; joint: JointData }[] = [];
+  root.traverse(node => {
+    const joint = node.userData.joint as JointData | undefined;
+    if (joint) found.push({ node, joint });
+  });
+  return found;
+}
+
+function jointRotation(joint: JointData, degrees: number): THREE.Quaternion {
+  const axis = new THREE.Vector3(...joint.axis).normalize();
+  return new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(degrees));
+}
+
+/**
+ * Turns each joint to its angle in degrees (0, the modelled pose, when absent). Joint nodes sit
+ * unrotated under unrotated parents, so a node's own rotation about the model-axis direction is
+ * the turn the model describes.
+ */
+export function poseJoints(root: THREE.Object3D, angles: Record<string, number>): void {
+  for (const { node, joint } of jointNodes(root)) node.quaternion.copy(jointRotation(joint, angles[node.name] ?? 0));
+}
+
+/** Each joint at the far end of its range: what `model_screenshot` shows as the open pose. */
+export function openPose(root: THREE.Object3D): Record<string, number> {
+  return Object.fromEntries(jointNodes(root).map(({ node, joint }) => [node.name, joint.range[1]]));
+}
+
+/**
+ * One clip per joint, named after the part, turning it from the first angle of its range to the
+ * second over a second. Keys every 90 degrees at most, since a quaternion track takes the short way.
+ */
+function jointClips(root: THREE.Object3D): THREE.AnimationClip[] {
+  return jointNodes(root).map(({ node, joint }) => {
+    const [from, to] = joint.range;
+    const steps = Math.max(1, Math.ceil(Math.abs(to - from) / 90));
+    const times: number[] = [];
+    const values: number[] = [];
+    for (let step = 0; step <= steps; step++) {
+      times.push(step / steps);
+      values.push(...jointRotation(joint, from + ((to - from) * step) / steps).toArray());
+    }
+    return new THREE.AnimationClip(node.name, 1, [
+      new THREE.QuaternionKeyframeTrack(`${node.uuid}.quaternion`, times, values),
+    ]);
+  });
 }
 
 /** Size and triangle count in model axes (x, y, z with z up). */
@@ -149,6 +201,12 @@ function bakeTopTransforms(root: THREE.Object3D): void {
       if (node instanceof THREE.Mesh)
         node.geometry = (node.geometry as THREE.BufferGeometry).clone().applyMatrix4(bake);
       if (node === top) return;
+      const joint = node.userData.joint as JointData | undefined;
+      if (joint) {
+        // The bake turns node frames by M, so a turn about a becomes a turn about M a.
+        const axis = new THREE.Vector3(...joint.axis).transformDirection(bake);
+        node.userData.joint = { ...joint, axis: axis.toArray() } satisfies JointData;
+      }
       node.updateMatrix();
       bake.clone().multiply(node.matrix).multiply(unbake).decompose(node.position, node.quaternion, node.scale);
       snapUnitScale(node.scale);
@@ -162,16 +220,20 @@ function bakeTopTransforms(root: THREE.Object3D): void {
   root.scale.set(1, 1, 1);
 }
 
-/** GLB in metres and Y-up (glTF's convention), one node and material per part, pivots kept. */
+/**
+ * GLB in metres and Y-up (glTF's convention), one node and material per part, pivots kept. Always
+ * in the modelled pose, whatever the pane's joint sliders show, plus one animation clip per joint.
+ */
 export async function exportGlb(root: THREE.Object3D): Promise<Uint8Array> {
   const scene = new THREE.Scene();
   const copy = root.clone(true);
+  poseJoints(copy, {});
   if (copy.userData.units === 'mm') copy.scale.setScalar(0.001);
   bakeTopTransforms(copy);
   scene.add(copy);
   // TRS rather than a matrix: glTF forbids `matrix` on a node an animation targets, and these
   // nodes exist so an engine can animate them.
-  const result = await new GLTFExporter().parseAsync(scene, { binary: true, trs: true });
+  const result = await new GLTFExporter().parseAsync(scene, { binary: true, trs: true, animations: jointClips(copy) });
   if (!(result instanceof ArrayBuffer)) throw new Error('The GLB exporter returned JSON instead of binary.');
   return new Uint8Array(result);
 }
@@ -266,7 +328,13 @@ const TILE = 512;
  * One labelled tile per view, laid out in a grid, as a PNG. Rendered off screen with a renderer of
  * its own, so it works whether or not the pane is visible.
  */
-export async function renderContactSheet(root: THREE.Object3D, views: ModelView[], dark: boolean): Promise<Uint8Array> {
+/** Joints are posed at `angles` (degrees by part name; the modelled pose when absent), not as the pane shows them. */
+export async function renderContactSheet(
+  root: THREE.Object3D,
+  views: ModelView[],
+  dark: boolean,
+  angles: Record<string, number> = {}
+): Promise<Uint8Array> {
   const columns = views.length <= 2 ? views.length : views.length <= 4 ? 2 : 3;
   const rows = Math.ceil(views.length / columns);
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -276,7 +344,9 @@ export async function renderContactSheet(root: THREE.Object3D, views: ModelView[
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(dark ? '#1f2329' : '#f4f5f7');
     addLights(scene);
-    scene.add(root.clone(true));
+    const subject = root.clone(true);
+    poseJoints(subject, angles);
+    scene.add(subject);
     const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
     const sheet = document.createElement('canvas');
     sheet.width = columns * TILE;
@@ -284,7 +354,7 @@ export async function renderContactSheet(root: THREE.Object3D, views: ModelView[
     const context = sheet.getContext('2d');
     if (!context) throw new Error('No 2D canvas available for the screenshot.');
     views.forEach((view, index) => {
-      frameCamera(camera, root, VIEW_DIRECTIONS[view]);
+      frameCamera(camera, subject, VIEW_DIRECTIONS[view]);
       renderer.render(scene, camera);
       const x = (index % columns) * TILE;
       const y = Math.floor(index / columns) * TILE;

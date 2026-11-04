@@ -10,8 +10,8 @@ import { MODEL_EXAMPLE_PROMPTS, ModelPane } from './ModelPane';
 
 // jsdom has no WebGL; the viewport is covered by the live app, not here.
 vi.mock('./model3d/ModelViewport', () => ({
-  ModelViewport: ({ dimmed }: { dimmed: boolean }) => (
-    <div data-testid="model-pane-viewport" data-dimmed={String(dimmed)} />
+  ModelViewport: ({ dimmed, pose }: { dimmed: boolean; pose: Record<string, number> }) => (
+    <div data-testid="model-pane-viewport" data-dimmed={String(dimmed)} data-pose={JSON.stringify(pose)} />
   ),
 }));
 
@@ -43,6 +43,9 @@ function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
     summary: null,
     params: {},
     unsaved: [],
+    joints: [],
+    jointAngles: {},
+    setJointAngles: vi.fn(),
     previewParam: vi.fn(),
     commitParam: vi.fn(async () => {}),
     exportFile: vi.fn(async () => '/project/chest.glb'),
@@ -133,6 +136,28 @@ describe('ModelPane', () => {
     render(engine({ ...BUILT, state: { ...BUILT.state!, path: '/project/chest.glb', kind: 'glb' }, params: {} }));
     expect(byTestId('model-pane-export-stl-btn')?.hasAttribute('disabled')).toBe(true);
     expect(byTestId('model-pane-params')).toBeNull();
+  });
+
+  it('shows no joints section for a model without joints', () => {
+    render(engine(BUILT));
+    expect(byTestId('model-pane-joints')).toBeNull();
+  });
+
+  it('poses the viewer from a joint slider and stops playback when dragged', () => {
+    const setJointAngles = vi.fn();
+    const joints = [{ name: 'lid', axis: [1, 0, 0] as [number, number, number], range: [0, 110] as [number, number] }];
+    render(engine({ ...BUILT, joints, jointAngles: { lid: 40 }, setJointAngles }));
+    expect(byTestId('model-pane-viewport')?.dataset.pose).toBe('{"lid":40}');
+    expect(byTestId('model-pane-joints')?.textContent).toContain('40\u00b0');
+    act(() => byTestId('model-pane-joints-play-btn')?.click());
+    expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Stop');
+    const input = byTestId('model-pane-joint-lid')?.querySelector('input') as HTMLInputElement;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '75');
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 75 });
+    expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
   });
 
   it('resizes from its left edge and remembers the width', () => {

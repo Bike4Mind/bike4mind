@@ -96,7 +96,7 @@ describe('model_screenshot', () => {
   it('captures the default views, keeps the image and shows it to the model', async () => {
     const { view, context, images, media, keepScreenshot } = setup();
     const text = await modelScreenshot.run({ path: 'chest.model.js' }, context);
-    expect(view.capture).toHaveBeenCalledWith(['front', 'right', 'top', 'iso']);
+    expect(view.capture).toHaveBeenCalledWith(['front', 'right', 'top', 'iso'], 'rest');
     expect(keepScreenshot).toHaveBeenCalled();
     expect(media).toHaveLength(1);
     expect(images).toHaveLength(1);
@@ -109,6 +109,16 @@ describe('model_screenshot', () => {
     expect(text).toContain('Build failed: boom');
     expect(view.capture).not.toHaveBeenCalled();
     expect(images).toHaveLength(0);
+  });
+
+  it('renders the joints open when asked, and says so', async () => {
+    const { view, context } = setup();
+    const text = await modelScreenshot.run({ path: 'chest.model.js', views: ['iso'], pose: 'open' }, context);
+    expect(view.capture).toHaveBeenCalledWith(['iso'], 'open');
+    expect(text).toContain('from iso, joints open');
+    await expect(modelScreenshot.run({ path: 'chest.model.js', pose: 'ajar' }, context)).rejects.toThrow(
+      /pose must be/
+    );
   });
 
   it('needs an open model when no path is given, and validates views', async () => {

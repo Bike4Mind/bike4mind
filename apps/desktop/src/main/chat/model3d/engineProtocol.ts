@@ -137,6 +137,8 @@ function partsOf(result, Manifold) {
     if (!(entry instanceof Manifold)) {
       if (Array.isArray(entry.pivot)) part.pivot = entry.pivot.map(Number);
       if (typeof entry.parent === 'string') part.parent = entry.parent;
+      if (Array.isArray(entry.axis)) part.axis = entry.axis.map(Number);
+      if (Array.isArray(entry.range)) part.range = entry.range.map(Number);
     }
     return part;
   });

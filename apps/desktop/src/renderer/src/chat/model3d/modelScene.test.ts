@@ -2,7 +2,17 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type { ModelPartMesh } from '@shared/model3d';
-import { buildModelObject, exportGlb, loadAsset, partsToStl, summarizeObject, summarizeParts } from './modelScene';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import {
+  buildModelObject,
+  exportGlb,
+  loadAsset,
+  openPose,
+  partsToStl,
+  poseJoints,
+  summarizeObject,
+  summarizeParts,
+} from './modelScene';
 
 /** An axis-aligned box from 0 to (x, y, z): 8 corners, 12 triangles, wound outward. */
 function box(name: string, x: number, y: number, z: number): ModelPartMesh {
@@ -129,6 +139,58 @@ describe('part pivots and parents', () => {
     expect(json.nodes.filter(node => node.scale)).toEqual([]);
     const lid = json.nodes.find(node => node.name === 'lid')!;
     expect(lid.translation?.map(value => Number(value.toFixed(6)))).toEqual([0, 0.03, -0.04]);
+  });
+
+  describe('as a joint', () => {
+    // The lid turns about its hinge line (model X); negative X tips its front edge up and back.
+    const jointed = () =>
+      parts().map(part =>
+        part.name === 'lid'
+          ? { ...part, axis: [-1, 0, 0] as [number, number, number], range: [0, 90] as [number, number] }
+          : part
+      );
+
+    it('poses the lid open about its hinge and back to rest', () => {
+      const root = buildModelObject(jointed(), 'mm');
+      root.getObjectByName('model')!.rotation.set(0, 0, 0);
+      poseJoints(root, { lid: 90 });
+      root.updateMatrixWorld(true);
+      const open = new THREE.Box3().setFromObject(root.getObjectByName('lid')!);
+      // Standing up behind the hinge: 40 deep becomes 40 tall, from the top of the body.
+      expect(open.min.z).toBeCloseTo(30);
+      expect(open.max.z).toBeCloseTo(70);
+      expect(open.min.y).toBeCloseTo(40);
+      expect(open.max.y).toBeCloseTo(50);
+      poseJoints(root, {});
+      root.updateMatrixWorld(true);
+      expect(new THREE.Box3().setFromObject(root.getObjectByName('lid')!).max.z).toBeCloseTo(40);
+    });
+
+    it('names the open pose after each range end', () => {
+      expect(openPose(buildModelObject(jointed(), 'mm'))).toEqual({ lid: 90 });
+    });
+
+    it('exports at rest even when posed, with a clip per joint that opens it', async () => {
+      const root = buildModelObject(jointed(), 'mm');
+      poseJoints(root, { lid: 60 });
+      const bytes = await exportGlb(root);
+      const loaded = await new GLTFLoader().parseAsync(bytes.slice().buffer, '');
+      const lid = loaded.scene.getObjectByName('lid')!;
+      expect(lid.quaternion.w).toBeCloseTo(1);
+      expect(loaded.animations.map(clip => clip.name)).toEqual(['lid']);
+      const [clip] = loaded.animations;
+      expect(clip.duration).toBeCloseTo(1);
+      // Play it to the end on the loaded scene: the lid stands up, in glTF's Y-up metres.
+      const mixer = new THREE.AnimationMixer(loaded.scene);
+      const action = mixer.clipAction(clip);
+      action.clampWhenFinished = true;
+      action.setLoop(THREE.LoopOnce, 1).play();
+      mixer.update(1);
+      loaded.scene.updateMatrixWorld(true);
+      const open = new THREE.Box3().setFromObject(lid);
+      expect(open.max.y).toBeCloseTo(0.07);
+      expect(open.min.y).toBeCloseTo(0.03);
+    });
   });
 
   it('reports joints in the summary', () => {
