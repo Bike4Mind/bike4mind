@@ -107,7 +107,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       }
 
       const catalog = subscriptionPlanCatalog();
-      const { match, searchTruncated, mismatchTruncated } = await adminSubscriptionsMatch(parsed.data, new Date(), catalog);
+      const { match, searchTruncated, mismatchTruncated } = await adminSubscriptionsMatch(
+        parsed.data,
+        new Date(),
+        catalog
+      );
       let after: ExportCursor | null = null;
       let truncated = false;
       let rowsWritten = 0;
