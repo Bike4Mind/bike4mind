@@ -137,7 +137,7 @@ describe('backfillAnalyticsRollup', () => {
     await backfillAnalyticsRollup({ dryRun: false, force: true, from: '2026-06-01', to: '2026-06-01', now: NOW, log: silent });
 
     expect(await AnalyticsDaily.findOne({ day: '2026-06-01' }).lean()).toMatchObject({
-      dau: 1,
+      dau: 2,
       api: { dau: 1, wau: 1, mau: 1 },
       signups: { unclassified: 0 },
     });

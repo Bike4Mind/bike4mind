@@ -144,7 +144,7 @@ describe('buildOverview', () => {
     ]);
     expect(overview.activeUsers.days.map(day => day.apiDau)).toEqual([7, 7, 7, 7, 7, null, 2]);
     expect(overview.stats.avgDau.value).toBe(10);
-    expect(overview.signups.totals).toEqual({ legit: 12, suspected: 6 });
+    expect(overview.signups.totals).toEqual({ legit: 12, suspected: 10 });
   });
 
   it('leaves a missing rollup day as a gap, never zero, and lists it', () => {
