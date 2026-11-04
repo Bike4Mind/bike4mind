@@ -51,6 +51,9 @@ describe('remoteMcpHandler', () => {
         throw new TypeError('boom');
       })(event)
     ).rejects.toThrow('boom');
+  });
+
+  it('returns a typed failure without a challenge as a value', async () => {
     await expect(
       createHandler(async () => {
         throw deserializeRemoteMcpError({ code: 'timeout', message: 'slow' });

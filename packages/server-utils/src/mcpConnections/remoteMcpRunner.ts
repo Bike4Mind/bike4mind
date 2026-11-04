@@ -189,11 +189,11 @@ export function createLambdaRemoteMcpRunner(
       throw failed(error instanceof Error ? error.name : 'unknown');
     }
     if (reply.FunctionError) throw failed(`FunctionError: ${reply.FunctionError}`);
+    if (!reply.Payload) throw failed('no payload');
     let body: unknown;
     try {
-      body = JSON.parse(Buffer.from(reply.Payload as Uint8Array).toString('utf8'));
+      body = JSON.parse(Buffer.from(reply.Payload).toString('utf8'));
     } catch (error) {
-      // A missing Payload lands here too (Buffer.from throws a TypeError).
       throw failed(error instanceof Error ? error.name : 'unknown');
     }
     const response = body as Partial<RemoteMcpLambdaResponse> | null;
