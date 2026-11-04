@@ -96,7 +96,7 @@ beforeEach(() => {
   mocks.isCompleted.mockResolvedValue(false);
   mocks.claimStep.mockResolvedValue(true);
   mocks.chargesRetrieve.mockResolvedValue(charge());
-  mocks.findByPaymentIntentId.mockResolvedValue({ ownerId: 'u1', credits: 166_667 });
+  mocks.findByPaymentIntentId.mockResolvedValue({ ownerId: 'u1', credits: 166_667, type: 'purchase' });
   mocks.findById.mockResolvedValue(user);
   mocks.refundsCreate.mockResolvedValue({ id: 're_1', amount: 10000, currency: 'usd' });
   mocks.clawbackRefundCredits.mockResolvedValue({ credits: 166_667, ratio: 1 });
@@ -238,6 +238,22 @@ describe('respondToEarlyFraudWarning', () => {
     const [message] = mocks.postMessageToSlack.mock.calls[0];
     expect(message).toContain('25000 unlocked signup credits clawed back');
     expect(message).toContain('cancelled `sub_same`');
+  });
+
+  it('on a subscription invoice charge with a ledger row, claws back the subscription-unlocked credits', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ ownerId: 'u1', credits: 25_000, type: 'subscription' });
+    mocks.findById.mockResolvedValue({
+      ...user,
+      currentCredits: 40_000,
+      signupGrant: { unlockedBy: 'subscription', unlockCredits: 25_000 },
+    });
+
+    await respondToEarlyFraudWarning(warningEvent, logger);
+
+    expect(mocks.subtractCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: 'u1', credits: 25_000, reason: 'abuse_clawback' }),
+      expect.anything()
+    );
   });
 
   it('on a credit pack charge, claws back only the signup credits a credit pack unlocked', async () => {
