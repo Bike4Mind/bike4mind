@@ -52,6 +52,7 @@ export const USER_SECRET_FIELDS = [
   'riskScore',
   'riskReviewAutoApproval',
   'riskReviewReopenedAt',
+  'paymentRiskEventAt',
   'riskReviewAutoCheckedAt',
   'riskEvidence',
   'freeCreditClaimEmail',

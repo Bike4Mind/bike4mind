@@ -4,6 +4,10 @@ const mocks = vi.hoisted(() => ({
   forfeitPaymentUnlock: vi.fn(),
   findByStripeCustomerId: vi.fn(),
   findByPaymentIntentId: vi.fn(),
+  findById: vi.fn(),
+  recordPaymentRiskEvent: vi.fn(),
+  findPaymentUserId: vi.fn(),
+  findOrganizationByStripeCustomerId: vi.fn(),
   retrieveCharge: vi.fn(),
   alertFraudBlock: vi.fn(),
   reopenSettledPaymentApproval: vi.fn(),
@@ -12,7 +16,13 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository: {},
   creditTransactionRepository: { findByPaymentIntentId: mocks.findByPaymentIntentId },
-  userRepository: { findByStripeCustomerId: mocks.findByStripeCustomerId },
+  organizationRepository: { findByStripeCustomerId: mocks.findOrganizationByStripeCustomerId },
+  paymentAttemptRepository: { findUserId: mocks.findPaymentUserId },
+  userRepository: {
+    findByStripeCustomerId: mocks.findByStripeCustomerId,
+    findById: mocks.findById,
+    recordPaymentRiskEvent: mocks.recordPaymentRiskEvent,
+  },
 }));
 vi.mock('@bike4mind/services', () => ({ userService: { forfeitPaymentUnlock: mocks.forfeitPaymentUnlock } }));
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: {} }));
@@ -34,6 +44,11 @@ describe('payment unlock forfeit helpers', () => {
     mocks.forfeitPaymentUnlock.mockResolvedValue({ outcome: 'cancelled' });
     mocks.reopenSettledPaymentApproval.mockResolvedValue(false);
     mocks.findByStripeCustomerId.mockImplementation(async id => (id === 'cus_1' ? { id: 'user_1' } : null));
+    mocks.findPaymentUserId.mockResolvedValue(null);
+    mocks.findOrganizationByStripeCustomerId.mockImplementation(async id =>
+      id === 'cus_org' ? { id: 'org_1' } : null
+    );
+    mocks.findById.mockImplementation(async id => (id === 'user_2' ? { id: 'user_2' } : null));
   });
 
   it('forfeits for the refunded charge payer, by customer id or expanded customer', async () => {
@@ -111,6 +126,44 @@ describe('payment unlock forfeit helpers', () => {
     expect(logger.info).toHaveBeenCalledWith('Settled-payment risk review approval reopened after a payment refund', {
       userId: 'user_1',
     });
+  });
+
+  it('records the payment risk event before the reopen, even for an account with no signup grant', async () => {
+    mocks.forfeitPaymentUnlock.mockResolvedValue({ outcome: 'not_enrolled' });
+    await forfeitHeldUnlockForRefund({ customer: 'cus_1' }, logger);
+    expect(mocks.recordPaymentRiskEvent).toHaveBeenCalledExactlyOnceWith('user_1', expect.any(Date));
+    expect(mocks.recordPaymentRiskEvent.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.reopenSettledPaymentApproval.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('falls back to the payment intent payer when the customer resolves to nobody', async () => {
+    mocks.findPaymentUserId.mockImplementation(async id => (id === 'pi_2' ? 'user_2' : null));
+    await forfeitHeldUnlockForRefund({ customer: 'cus_detached', payment_intent: 'pi_2' }, logger);
+    await forfeitHeldUnlockForRefund({ customer: null, payment_intent: { id: 'pi_2' } }, logger);
+    await forfeitHeldUnlockForRefund({ customer: null, payment_intent: 'pi_unknown' }, logger);
+    await forfeitHeldUnlockForRefund({ customer: 'cus_1', payment_intent: 'pi_2' }, logger);
+    expect(forfeitedWith()).toEqual([
+      ['user_2', 'refund'],
+      ['user_2', 'refund'],
+      ['user_1', 'refund'],
+    ]);
+    expect(mocks.findPaymentUserId.mock.calls).toEqual([['pi_2'], ['pi_2'], ['pi_unknown']]);
+  });
+
+  it('never attributes an organization charge to the member who started it', async () => {
+    mocks.findPaymentUserId.mockResolvedValue('user_2');
+    await forfeitHeldUnlockForRefund({ customer: 'cus_org', payment_intent: 'pi_2' }, logger);
+    expect(forfeitedWith()).toEqual([]);
+    expect(mocks.recordPaymentRiskEvent).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the warned charge payment intent payer', async () => {
+    mocks.retrieveCharge.mockResolvedValueOnce({ customer: null, payment_intent: 'pi_2' });
+    mocks.findPaymentUserId.mockResolvedValueOnce('user_2');
+    await forfeitHeldUnlockForFraudWarning({ id: 'issfr_1', charge: 'ch_1' }, logger);
+    expect(forfeitedWith()).toEqual([['user_2', 'fraud_warning']]);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('propagates a failed reopen so the webhook is retried', async () => {

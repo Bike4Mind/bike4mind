@@ -739,7 +739,9 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const refundPaymentIntentId =
         typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
 
-      // Runs before the refund-list guard: newer webhook API versions omit charge.refunds, and the reward only needs the cumulative amount.
+      // The reversal and the forfeit run before the refund-list guard: newer webhook API versions omit
+      // charge.refunds, and neither needs the refund objects (the reward reads the cumulative amount, the
+      // forfeit only the payer).
       // Deferred so a failing reversal cannot block the idempotent payer-side steps; rethrown below so Stripe redelivers.
       let reversalError: unknown;
       if (refundPaymentIntentId) {
@@ -766,14 +768,14 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       let payerError: unknown;
       refundPayer: try {
+        // Before the purchase lookup too: a refunded subscription charge has no credit purchase row.
+        await forfeitHeldUnlockForRefund(charge, req.logger);
+
         const refunds = charge.refunds?.data ?? [];
         if (refunds.length === 0) {
           req.logger.debug(`charge.refunded has no refund objects, skipping`);
           break refundPayer;
         }
-
-        // Before the purchase lookup: a refunded subscription charge has no credit purchase row.
-        await forfeitHeldUnlockForRefund(charge, req.logger);
 
         if (!refundPaymentIntentId) {
           req.logger.debug(`charge.refunded has no payment_intent, skipping`);

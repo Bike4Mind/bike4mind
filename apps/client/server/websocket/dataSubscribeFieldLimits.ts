@@ -83,6 +83,7 @@ export function resolveFieldLimits(
       riskEvidence: false,
       riskReviewAutoApproval: false,
       riskReviewReopenedAt: false,
+      paymentRiskEventAt: false,
       riskReviewAutoCheckedAt: false,
       throttle: false,
       riskSignals: false,

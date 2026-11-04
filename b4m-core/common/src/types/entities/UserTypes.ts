@@ -854,6 +854,12 @@ export interface IUser extends ICreditHolder {
    */
   riskReviewReopenedAt?: Date | null;
 
+  /**
+   * First refund, dispute or early fraud warning on the account's payments; disqualifies it from the
+   * automatic approval rules even when it has no signup grant to forfeit.
+   */
+  paymentRiskEventAt?: Date | null;
+
   /** Last time the auto-approval sweep evaluated this pending review; the sweep visits the oldest first. */
   riskReviewAutoCheckedAt?: Date | null;
 
@@ -1118,9 +1124,12 @@ export interface IUserRepository
   setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
   /**
    * Approve a pending review and record why; false when it was no longer pending, an admin reopened
-   * it, or the account is banned, disputed, suspended or has forfeited its payment unlock.
+   * it, or the account is banned, disputed, suspended, has a payment risk event, has forfeited its
+   * payment unlock or holds a signup grant tranche for review.
    */
   autoApproveRiskReview: (userId: string, approval: ISignupRiskAutoApproval) => Promise<boolean>;
+  /** Stamp paymentRiskEventAt, only when it is not already set, so the first event's time is kept. */
+  recordPaymentRiskEvent: (userId: string, at: Date) => Promise<void>;
   /**
    * Ids of pending reviews the auto-approval rules can still act on and that were not evaluated since
    * `checkedBefore`, least recently evaluated first.

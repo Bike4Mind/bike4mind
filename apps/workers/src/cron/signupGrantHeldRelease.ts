@@ -67,9 +67,14 @@ export async function runSignupGrantHeldRelease(now: Date = new Date()): Promise
     { now, maxUsers: MAX_USERS_PER_RUN }
   );
   if (heldUnlocks.scanned > 0) logger.info('[signupGrantHeldRelease] held unlocks done', heldUnlocks);
-  const riskReviewAutoApprovals = await sweepRiskReviewAutoApprovals(logger, { maxUsers: MAX_USERS_PER_RUN, now });
-  if (riskReviewAutoApprovals.scanned > 0)
-    logger.info('[signupGrantHeldRelease] risk review auto-approvals done', riskReviewAutoApprovals);
+  let riskReviewAutoApprovals: RiskReviewAutoApprovalSweepResult = { scanned: 0, approved: 0, failed: 0 };
+  try {
+    riskReviewAutoApprovals = await sweepRiskReviewAutoApprovals(logger, { maxUsers: MAX_USERS_PER_RUN, now });
+    if (riskReviewAutoApprovals.scanned > 0)
+      logger.info('[signupGrantHeldRelease] risk review auto-approvals done', riskReviewAutoApprovals);
+  } catch (error) {
+    logger.error('[signupGrantHeldRelease] risk review auto-approvals failed', error);
+  }
   return { ...result, heldUnlocks, riskReviewAutoApprovals };
 }
 

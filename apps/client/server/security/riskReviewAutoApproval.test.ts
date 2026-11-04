@@ -28,7 +28,7 @@ vi.mock('@bike4mind/database', () => ({
     reopenRiskAutoApproval: h.reopenAuto,
   },
   paymentAttemptRepository: {
-    findByUser: h.attempts,
+    findSettledByUser: h.attempts,
     countRadarBlocked: h.radarBlocked,
     countAccountsForCard: h.accountsForCard,
   },
@@ -127,12 +127,10 @@ describe('autoApproveRiskReview: settled payment', () => {
   });
 
   it.each([
-    ['an elevated Radar risk', { riskLevel: 'elevated' }],
-    ['no Radar assessment', { riskLevel: null }],
-    ['a failed payment', { outcome: 'failed' }],
-    ['no card fingerprint', { cardFingerprints: [] }],
-  ])('does not approve on %s', async (_label, overrides) => {
-    h.attempts.mockResolvedValue([payment(overrides)]);
+    ['no settled payment', []],
+    ['a payment with no card fingerprint', [payment({ cardFingerprints: [] })]],
+  ])('does not approve on %s', async (_label, attempts) => {
+    h.attempts.mockResolvedValue(attempts);
 
     const result = await autoApproveRiskReview(USER_ID, { rules: RULES, trigger: 'stripe/webhook', now: NOW });
 
@@ -159,16 +157,16 @@ describe('autoApproveRiskReview: settled payment', () => {
     expect(result.outcome).toBe('skipped');
   });
 
-  it('waits until the payment has stood for minPaymentAgeHours', async () => {
+  it('reads only Radar-normal settled payments that have stood for minPaymentAgeHours', async () => {
     const rules = SignupRiskAutoApprovalSchema.parse({ settledPayment: { minPaymentAgeHours: 24 } });
 
-    expect((await autoApproveRiskReview(USER_ID, { rules, trigger: 'stripe/webhook', now: NOW })).outcome).toBe(
-      'skipped'
-    );
-    const later = new Date(NOW.getTime() + DAY_MS);
-    expect((await autoApproveRiskReview(USER_ID, { rules, trigger: 'stripe/webhook', now: later })).outcome).toBe(
-      'approved'
-    );
+    await autoApproveRiskReview(USER_ID, { rules, trigger: 'stripe/webhook', now: NOW });
+
+    expect(h.attempts).toHaveBeenCalledExactlyOnceWith(USER_ID, {
+      riskLevel: 'normal',
+      createdBefore: new Date(NOW.getTime() - DAY_MS),
+      limit: 50,
+    });
   });
 
   it.each([
@@ -176,6 +174,7 @@ describe('autoApproveRiskReview: settled payment', () => {
     ['disputed', { disputePending: true }],
     ['suspended', { moderation: { status: 'suspended' } }],
     ['forfeited after a refund or fraud warning', { signupGrant: { unlockForfeited: { cause: 'refund', at: NOW } } }],
+    ['refunded, disputed or fraud-warned with no signup grant', { paymentRiskEventAt: NOW }],
   ])('never approves a %s account', async (_label, overrides) => {
     h.findById.mockResolvedValue(pendingUser(overrides));
 

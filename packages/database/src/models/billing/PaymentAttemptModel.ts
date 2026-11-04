@@ -167,6 +167,15 @@ class PaymentAttemptRepository {
     return row?.visitId ?? null;
   }
 
+  /** The account that started this payment intent; null when no attempt was recorded for it. */
+  async findUserId(paymentIntentId: string): Promise<string | null> {
+    const row = await PaymentAttemptModel.findOne({ paymentIntentId })
+      .select({ userId: 1, _id: 0 })
+      .maxTimeMS(2000)
+      .lean();
+    return row?.userId ?? null;
+  }
+
   /**
    * Adds a Stripe-reported outcome to the attempt, creating it when start-payment never saw it
    * (a Checkout subscription). `changed` is false when the update added nothing new (same outcome,
@@ -224,6 +233,24 @@ class PaymentAttemptRepository {
   /** This account's attempts within the retention window, newest first, at most `limit`. */
   async findByUser(userId: string, limit: number): Promise<PaymentAttempt[]> {
     const rows = await PaymentAttemptModel.find({ userId }).sort({ createdAt: -1 }).limit(limit).lean().exec();
+    return rows.map(toAttempt);
+  }
+
+  /** This account's succeeded attempts with this Radar risk level, created at or before `createdBefore`, newest first. */
+  async findSettledByUser(
+    userId: string,
+    input: { riskLevel: string; createdBefore: Date; limit: number }
+  ): Promise<PaymentAttempt[]> {
+    const rows = await PaymentAttemptModel.find({
+      userId,
+      outcome: 'succeeded',
+      riskLevel: input.riskLevel,
+      createdAt: { $lte: input.createdBefore },
+    })
+      .sort({ createdAt: -1 })
+      .limit(input.limit)
+      .lean()
+      .exec();
     return rows.map(toAttempt);
   }
 

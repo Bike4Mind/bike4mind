@@ -192,12 +192,29 @@ describe('UserRepository.autoApproveRiskReview', () => {
     ['suspended', { 'moderation.status': 'suspended' }],
     ['forfeited', { 'signupGrant.unlockForfeited': { cause: 'refund', at: new Date() } }],
     ['reopened by an admin', { riskReviewReopenedAt: new Date() }],
+    ['refunded, disputed or fraud-warned', { paymentRiskEventAt: new Date() }],
   ])('refuses a %s account at write time', async (_label, set) => {
     const id = await createUser(undefined, 'pending');
     await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: set });
 
     await expect(userRepository.autoApproveRiskReview(id, approval)).resolves.toBe(false);
     expect((await User.findById(id).lean())?.riskScore?.reviewState).toBe('pending');
+  });
+
+  const heldTranche = (creditsReleased: number) => ({
+    signupGrantAssessment: { band: 'review', status: 'evaluated' },
+    signupGrant: { stage: 'signup', creditsReleased, signupCredits: 100 },
+  });
+
+  it('refuses an account whose signup tranche is held for review, and approves one fully released', async () => {
+    const held = await createUser(undefined, 'pending');
+    const released = await createUser(undefined, 'pending');
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(held) }, { $set: heldTranche(40) });
+    await User.collection.updateOne({ _id: new mongoose.Types.ObjectId(released) }, { $set: heldTranche(100) });
+
+    await expect(userRepository.autoApproveRiskReview(held, approval)).resolves.toBe(false);
+    await expect(userRepository.autoApproveRiskReview(released, approval)).resolves.toBe(true);
+    expect((await User.findById(held).lean())?.riskScore?.reviewState).toBe('pending');
   });
 
   it('refuses a review that is no longer pending', async () => {
@@ -272,10 +289,23 @@ describe('UserRepository.findPendingRiskReviewIds', () => {
     await set(await createUser(undefined, 'pending'), { disputePending: true });
     await set(await createUser(undefined, 'pending'), { 'moderation.status': 'suspended' });
     await set(await createUser(undefined, 'pending'), { 'signupGrant.unlockForfeited': { at: new Date() } });
+    await set(await createUser(undefined, 'pending'), { paymentRiskEventAt: new Date() });
 
     await expect(userRepository.findPendingRiskReviewIds({ checkedBefore: now, limit: 10 })).resolves.toEqual([
       eligible,
     ]);
+  });
+});
+
+describe('UserRepository.recordPaymentRiskEvent', () => {
+  it('keeps the first event time', async () => {
+    const id = await createUser(undefined, 'pending');
+    const first = new Date('2026-11-01T00:00:00Z');
+
+    await userRepository.recordPaymentRiskEvent(id, first);
+    await userRepository.recordPaymentRiskEvent(id, new Date('2026-11-02T00:00:00Z'));
+
+    expect((await User.findById(id).lean())?.paymentRiskEventAt).toEqual(first);
   });
 });
 

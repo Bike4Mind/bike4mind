@@ -1138,11 +1138,26 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           disputePending: { $ne: true },
           'moderation.status': { $ne: 'suspended' },
           'signupGrant.unlockForfeited': null,
+          paymentRiskEventAt: null,
+          // A held review tranche is paid only by the admin approve path. Keep in sync with
+          // userService.isSignupGrantHeldForReview.
+          $nor: [
+            {
+              'signupGrantAssessment.band': 'review',
+              'signupGrantAssessment.status': 'evaluated',
+              'signupGrant.stage': 'signup',
+              $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
+            },
+          ],
         },
         { $set: { 'riskScore.reviewState': 'approved', riskReviewAutoApproval: approval } }
       )
       .exec();
     return result.modifiedCount === 1;
+  }
+
+  async recordPaymentRiskEvent(userId: string, at: Date): Promise<void> {
+    await this.model.updateOne({ _id: userId, paymentRiskEventAt: null }, { $set: { paymentRiskEventAt: at } }).exec();
   }
 
   async findPendingRiskReviewIds(options: { checkedBefore: Date; limit: number }): Promise<string[]> {
@@ -1156,6 +1171,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
           disputePending: { $ne: true },
           'moderation.status': { $ne: 'suspended' },
           'signupGrant.unlockForfeited': null,
+          paymentRiskEventAt: null,
           // $not also matches a review never evaluated (no field), which sorts first.
           riskReviewAutoCheckedAt: { $not: { $gte: options.checkedBefore } },
         },
@@ -1788,6 +1804,8 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
     // Written by setRiskReviewState on an admin reopen and by reopenRiskAutoApproval - see IUser.riskReviewReopenedAt.
     riskReviewReopenedAt: { type: Date, required: false, default: undefined },
+    // Written by forfeitSignupUnlock (apps/client/server/credits/paymentUnlockForfeit.ts) - see IUser.paymentRiskEventAt.
+    paymentRiskEventAt: { type: Date, required: false, default: undefined },
     // Written by markRiskReviewAutoChecked - see IUser.riskReviewAutoCheckedAt.
     riskReviewAutoCheckedAt: { type: Date, required: false, default: undefined },
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.

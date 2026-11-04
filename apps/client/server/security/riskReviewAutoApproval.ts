@@ -31,7 +31,7 @@ import { systemAuditActor } from '@server/utils/adminAudit';
 const HOUR_MS = 60 * 60_000;
 const DAY_MS = 24 * HOUR_MS;
 
-/** Payment attempts read per account; more than enough to find one qualifying payment. */
+/** Settled payments checked per account, newest first; more than enough to find one on an unshared card. */
 const PAYMENT_LOOKBACK = 50;
 
 /** Stripe Radar's lowest `outcome.risk_level`; anything else (or no Radar assessment) does not qualify. */
@@ -65,24 +65,26 @@ export async function loadRiskReviewAutoApprovalRules(): Promise<SignupRiskAutoA
 
 const anyRuleEnabled = (rules: SignupRiskAutoApproval) => rules.settledPayment.enabled || rules.quietAccount.enabled;
 
-// A refund, dispute or early fraud warning forfeits payment unlocks (paymentUnlockForfeit.ts); it
-// disqualifies the account from both rules, not only the payment one.
+// A refund, dispute or early fraud warning stamps paymentRiskEventAt and forfeits payment unlocks
+// (paymentUnlockForfeit.ts); either disqualifies the account from both rules, not only the payment one.
 const isDisqualified = (user: IUserDocument) =>
-  userService.accountBlockReasons(user).length > 0 || !!user.signupGrant?.unlockForfeited;
+  userService.accountBlockReasons(user).length > 0 || !!user.signupGrant?.unlockForfeited || !!user.paymentRiskEventAt;
 
 async function hasSettledPayment(
   userId: string,
   rule: SignupRiskAutoApproval['settledPayment'],
   now: Date
 ): Promise<boolean> {
-  // Counted over every retained attempt: the newest-50 read below can be pushed past a block by started rows.
+  // Counted over every retained attempt, not only the settled payments read below.
   const blocked = await paymentAttemptRepository.countRadarBlocked({ userId, ipHash: null, since: new Date(0) });
   if (blocked.account > 0) return false;
-  const attempts = await paymentAttemptRepository.findByUser(userId, PAYMENT_LOOKBACK);
-  const standingSince = now.getTime() - rule.minPaymentAgeHours * HOUR_MS;
+  const attempts = await paymentAttemptRepository.findSettledByUser(userId, {
+    riskLevel: RADAR_NORMAL_RISK,
+    createdBefore: new Date(now.getTime() - rule.minPaymentAgeHours * HOUR_MS),
+    limit: PAYMENT_LOOKBACK,
+  });
   for (const attempt of attempts) {
-    if (attempt.outcome !== 'succeeded' || attempt.riskLevel !== RADAR_NORMAL_RISK) continue;
-    if (new Date(attempt.createdAt).getTime() > standingSince || attempt.cardFingerprints.length === 0) continue;
+    if (attempt.cardFingerprints.length === 0) continue;
     // A card shared across accounts is the farming pattern; a truncated count (null) is not proof of one owner.
     const accountCounts = await Promise.all(
       attempt.cardFingerprints.map(fingerprint => paymentAttemptRepository.countAccountsForCard(fingerprint))
