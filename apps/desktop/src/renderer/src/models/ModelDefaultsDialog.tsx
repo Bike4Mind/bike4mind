@@ -119,6 +119,12 @@ export function ModelDefaultsDialog({ option, onClose }: { option: ChatModelOpti
   return <ModelDefaultsForm key={option?.id ?? ''} option={option} onClose={onClose} />;
 }
 
+/** An IPC rejection arrives wrapped in Electron's "Error invoking remote method" text. */
+function reasonText(reason: unknown): string {
+  const text = reason instanceof Error ? reason.message : String(reason);
+  return text.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+}
+
 function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null; onClose: () => void }) {
   const [loaded, setLoaded] = useState<ModelSettings | null>(null);
   const [readFailed, setReadFailed] = useState(false);
@@ -146,7 +152,7 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
         if (!live) return;
         setLoaded({});
         setReadFailed(true);
-        setError(`Desktop could not read this model's settings: ${String(reason)}`);
+        setError(`Desktop could not read this model's settings: ${reasonText(reason)}`);
       }
     );
     return () => {
@@ -176,7 +182,7 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
       if (saved) onClose();
       else setError('Desktop could not save these settings.');
     } catch (reason) {
-      setError(`Desktop could not save these settings: ${String(reason)}`);
+      setError(`Desktop could not save these settings: ${reasonText(reason)}`);
     } finally {
       setSaving(false);
     }

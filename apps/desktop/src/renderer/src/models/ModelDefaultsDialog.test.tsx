@@ -185,6 +185,27 @@ describe('ModelDefaultsDialog', () => {
     expect(setModelSettings).not.toHaveBeenCalled();
   });
 
+  it("shows the underlying message of a failed read, not Electron's remote method wrapper", async () => {
+    (window as unknown as { b4m: { chat: { getModelSettings: unknown } } }).b4m.chat.getModelSettings = vi.fn(
+      async () => {
+        throw new Error("Error invoking remote method 'chat:get-model-settings': Error: EACCES: denied");
+      }
+    );
+    await render(QWEN);
+    expect(byTestId('model-defaults-error')?.textContent).toBe(
+      "Desktop could not read this model's settings: EACCES: denied"
+    );
+  });
+
+  it('shows the underlying message of a failed save without the wrapper', async () => {
+    setModelSettings.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'chat:set-model-settings': Error: disk full")
+    );
+    await render(QWEN);
+    await click('model-defaults-save-btn');
+    expect(byTestId('model-defaults-error')?.textContent).toBe('Desktop could not save these settings: disk full');
+  });
+
   it("never shows the previous model's drafts when reopened for another model", async () => {
     stored = { generation: { temperature: 0.6 } };
     await render(QWEN);
