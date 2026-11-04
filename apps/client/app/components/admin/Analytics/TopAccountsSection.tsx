@@ -120,7 +120,11 @@ export function TopAccountsSection({ kind, data, loading, error, onRetry, onShow
           onRetry={onRetry}
           onRowActivate={onOpen}
           pagination={false}
-          minWidth="36rem"
+          // Wide enough that the columns scroll sideways instead of squeezing in the half-width card,
+          // and about five rows tall with the rest scrolling under the sticky header.
+          minWidth="44rem"
+          maxHeight="20rem"
+          alwaysShowScrollbar
           testId={`analytics-top-${kind}-table`}
           rowTestId={row => `analytics-top-${kind}-row-${row.id}`}
         />
