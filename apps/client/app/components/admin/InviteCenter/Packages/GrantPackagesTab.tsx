@@ -63,7 +63,7 @@ const columns: DataColumn<GrantPackageRow>[] = [
   },
 ];
 
-const GrantPackagesTab = () => {
+const GrantPackagesTab = ({ embedded = false }: { embedded?: boolean }) => {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -92,7 +92,7 @@ const GrantPackagesTab = () => {
   );
 
   return (
-    <Box sx={{ px: 3, py: 2 }}>
+    <Box sx={embedded ? undefined : { px: 3, py: 2 }}>
       <AdminPageHeader
         title="Grant packages"
         count={data?.meta.total}

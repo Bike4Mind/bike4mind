@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Button, Stack } from '@mui/joy';
+import { Button, Stack, Typography } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { AdminTab } from './adminSidebarConfig';
 import type { AdminSearch } from './adminTabParams';
@@ -13,6 +13,7 @@ import {
 import { useAdminModal } from './useAdminModal';
 import { AdminPageHeader } from './shared/AdminPageHeader';
 import { EmptyState } from './shared/EmptyState';
+import GrantPackagesTab from './InviteCenter/Packages/GrantPackagesTab';
 import { ViewTabs } from './shared/ViewTabs';
 
 type StubSection = {
@@ -33,20 +34,7 @@ const parseSection = INVITE_CENTER_SEARCH_PARSERS[INVITE_CENTER_SECTION_PARAM];
 
 const VIEWS = INVITE_CENTER_SECTION_IDS.map(id => ({ id, label: SECTION_LABELS[id] }));
 
-const STUB_SECTIONS: Record<Exclude<InviteCenterSectionId, 'waitlist'>, StubSection> = {
-  packages: {
-    title: 'Packages are coming here',
-    description:
-      'Invite codes, bulk invites, partner domains and redemption caps will live in this section. Until then, use the Invites and Partner signups pages.',
-    links: [
-      { label: 'Open Invites', tab: AdminTab.RegistrationInvites, testId: 'invite-center-open-invites-btn' },
-      {
-        label: 'Open Partner signups',
-        tab: AdminTab.PartnerSignupRules,
-        testId: 'invite-center-open-partner-signups-btn',
-      },
-    ],
-  },
+const STUB_SECTIONS: Record<Exclude<InviteCenterSectionId, 'waitlist' | 'packages'>, StubSection> = {
   schedule: {
     title: 'The signup credit schedule is coming here',
     description:
@@ -101,6 +89,37 @@ const StubSectionBody = ({ section }: { section: StubSection }) => {
   );
 };
 
+const PACKAGE_LINKS: StubSection['links'] = [
+  { label: 'Open Invites', tab: AdminTab.RegistrationInvites, testId: 'invite-center-open-invites-btn' },
+  { label: 'Open Partner signups', tab: AdminTab.PartnerSignupRules, testId: 'invite-center-open-partner-signups-btn' },
+];
+
+const PackagesSection = () => {
+  const setActiveTab = useAdminModal(state => state.setActiveTab);
+  return (
+    <Stack gap={1}>
+      <Stack direction="row" gap={1} flexWrap="wrap" alignItems="center">
+        <Typography level="body-sm" sx={{ color: 'text.secondary', mr: 1 }}>
+          Issue codes from Invites; attach domains from Partner signups.
+        </Typography>
+        {PACKAGE_LINKS.map(({ label, tab, testId }) => (
+          <Button
+            key={tab}
+            variant="outlined"
+            color="neutral"
+            size="sm"
+            data-testid={testId}
+            onClick={() => setActiveTab(tab)}
+          >
+            {label}
+          </Button>
+        ))}
+      </Stack>
+      <GrantPackagesTab embedded />
+    </Stack>
+  );
+};
+
 export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
   const search = useSearch({ strict: false }) as AdminSearch;
   const navigate = useNavigate();
@@ -133,7 +152,13 @@ export function InviteCenterShell({ waitlist }: { waitlist: ReactNode }) {
         data-testid="invite-center-sections"
       />
       <div data-testid={`invite-center-section-${section}`}>
-        {section === 'waitlist' ? waitlist : <StubSectionBody section={STUB_SECTIONS[section]} />}
+        {section === 'waitlist' ? (
+          waitlist
+        ) : section === 'packages' ? (
+          <PackagesSection />
+        ) : (
+          <StubSectionBody section={STUB_SECTIONS[section]} />
+        )}
       </div>
     </Stack>
   );
