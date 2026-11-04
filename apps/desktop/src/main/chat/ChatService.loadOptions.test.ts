@@ -9,7 +9,6 @@ import type { ModelCatalog } from './ModelCatalog';
 import { ollamaControls } from './modelControls';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 import { SessionStore } from './SessionStore';
-import { TITLE_INSTRUCTION } from './sessionTitle';
 import type { AccessStore } from './tools/AccessStore';
 
 const services: ChatService[] = [];
@@ -54,6 +53,7 @@ async function setup(load: ModelLoadSettings, trained = 262144) {
       );
     })
   );
+  const renamed = vi.fn();
   const directory = await mkdtemp(join(tmpdir(), 'b4m-load-options-'));
   roots.push(directory);
   const loadSettings = vi.fn(async (modelId: string) => (modelId === MODEL ? load : {}));
@@ -69,23 +69,31 @@ async function setup(load: ModelLoadSettings, trained = 262144) {
     getEnvironmentUrl: () => 'http://localhost:3000',
     logger: { debug: vi.fn(), warn: vi.fn() },
     emit: () => {},
+    summaryChanged: renamed,
     getApiClient: () => null,
   } as ConstructorParameters<typeof ChatService>[0]);
   services.push(service);
-  const isTitle = (body: OllamaBody) => body.messages[0]?.content === TITLE_INSTRUCTION;
-  return { service, bodies, isTitle };
+  // The title is named by a floating promise; teardown must wait for its session write.
+  const settled = (id: string) =>
+    vi.waitUntil(
+      () =>
+        !service.isSessionBusy(id) &&
+        renamed.mock.calls.some(([summary]) => (summary as { title?: string }).title === 'Widget sizing notes'),
+      { timeout: 3000, interval: 5 }
+    );
+  return { service, bodies, settled };
 }
 
 describe("a local model's load settings", () => {
   it('ride the turn, the title, the suggestion and the summary alike', async () => {
-    const { service, bodies, isTitle } = await setup({
+    const { service, bodies, settled } = await setup({
       context: { mode: 'fixed', tokens: 32768 },
       draftTokens: 3,
       keepAlive: 3600,
     });
     const { id } = await service.createSession();
     await service.send(id, 'how big is a widget?');
-    await vi.waitUntil(() => !service.isSessionBusy(id) && bodies.some(isTitle), { timeout: 3000, interval: 5 });
+    await settled(id);
     expect(await service.suggestNextPrompt(id)).not.toBeNull();
     expect(await service.compactContext(id, '')).toMatchObject({ ok: true });
 
@@ -97,18 +105,18 @@ describe("a local model's load settings", () => {
   });
 
   it('send the trained length a model stores as its context', async () => {
-    const { service, bodies } = await setup({ context: { mode: 'fixed', tokens: 40960 } }, 40960);
+    const { service, bodies, settled } = await setup({ context: { mode: 'fixed', tokens: 40960 } }, 40960);
     const { id } = await service.createSession();
     await service.send(id, 'how big is a widget?');
-    await vi.waitUntil(() => bodies.length > 0, { timeout: 3000, interval: 5 });
+    await settled(id);
     expect(bodies[0].options.num_ctx).toBe(40960);
   });
 
   it('send nothing extra for a model with none set', async () => {
-    const { service, bodies, isTitle } = await setup({});
+    const { service, bodies, settled } = await setup({});
     const { id } = await service.createSession();
     await service.send(id, 'how big is a widget?');
-    await vi.waitUntil(() => !service.isSessionBusy(id) && bodies.some(isTitle), { timeout: 3000, interval: 5 });
+    await settled(id);
     for (const body of bodies) {
       expect(body).not.toHaveProperty('keep_alive');
       expect(body.options).not.toHaveProperty('draft_num_predict');
