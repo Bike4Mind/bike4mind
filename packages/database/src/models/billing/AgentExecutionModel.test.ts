@@ -2070,4 +2070,71 @@ describe('AgentExecutionRepository', () => {
       expect(reloaded?.pendingPermission).toBeUndefined();
     });
   });
+
+  describe('desktop runner runs', () => {
+    const NOW = new Date('2026-11-04T12:00:00Z');
+    const LATER = new Date(NOW.getTime() + 120_000);
+
+    const createRun = async (overrides: Record<string, unknown> = {}) => {
+      const id = new mongoose.Types.ObjectId().toString();
+      const base = makeBaseExecution({ status: 'running' });
+      await agentExecutionRepository.createRunnerRun(id, {
+        ...base,
+        checkpoint: { steps: [], iteration: 0 },
+        runnerLeaseUntil: LATER,
+        ...overrides,
+      });
+      return { id, userId: base.userId };
+    };
+
+    it('leaves desktop runs out of the interactive slot count and counts them on their own', async () => {
+      const { userId } = await createRun();
+      await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'running' }));
+
+      expect(await agentExecutionRepository.countActiveByUserId(userId)).toBe(1);
+      expect(await agentExecutionRepository.countActiveDesktopByUserId(userId)).toBe(1);
+    });
+
+    it("renews a live lease, but not a lapsed one, a finished run, or another user's", async () => {
+      const { id, userId } = await createRun();
+      const until = new Date(LATER.getTime() + 60_000);
+
+      expect((await agentExecutionRepository.renewRunnerLease(id, userId, NOW, until))?.runnerLeaseUntil).toEqual(
+        until
+      );
+      expect(await agentExecutionRepository.renewRunnerLease(id, 'someone-else', NOW, until)).toBeNull();
+      expect(
+        await agentExecutionRepository.renewRunnerLease(id, userId, new Date(until.getTime() + 1), until)
+      ).toBeNull();
+
+      expect(await agentExecutionRepository.finishRunnerRun(id, userId, { status: 'completed' })).toBe(true);
+      expect(await agentExecutionRepository.renewRunnerLease(id, userId, NOW, until)).toBeNull();
+      expect(await agentExecutionRepository.finishRunnerRun(id, userId, { status: 'completed' })).toBe(false);
+    });
+
+    it('appends steps under a compare-and-set on the iteration, keeping the last 500', async () => {
+      const { id, userId } = await createRun();
+      const steps = Array.from({ length: 501 }, (_, i) => ({ type: 'thought', content: `s${i}` }));
+      const next = { steps, iteration: 1, pendingText: 'tail', leaseUntil: LATER };
+
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { iteration: 0 }, next)).toBe(true);
+      expect(await agentExecutionRepository.appendRunnerSteps(id, userId, NOW, { iteration: 0 }, next)).toBe(false);
+
+      const checkpoint = (await agentExecutionRepository.findRunnerRun(id, userId))?.checkpoint as {
+        steps: Array<{ content: string }>;
+        iteration: number;
+        pendingText: string;
+      };
+      expect(checkpoint.steps).toHaveLength(500);
+      expect(checkpoint.steps[0].content).toBe('s1');
+      expect(checkpoint).toMatchObject({ iteration: 1, pendingText: 'tail' });
+    });
+
+    it('lists active runs whose lease lapsed', async () => {
+      const lapsed = await createRun({ runnerLeaseUntil: new Date(NOW.getTime() - 1) });
+      await createRun();
+
+      expect((await agentExecutionRepository.listExpiredRunnerRuns(NOW, 10)).map(run => run.id)).toEqual([lapsed.id]);
+    });
+  });
 });

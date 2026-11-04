@@ -349,6 +349,15 @@ export interface IAgentExecution {
    */
   creditCap?: number;
   /**
+   * Set on a loop run a desktop runner works (apps/client/server/utils/loopRunner.ts). No executor runs it:
+   * the runner posts its progress and outcome, and its lease (`runnerLeaseUntil`) keeps it alive.
+   */
+  runner?: 'desktop';
+  /** A desktop run's lease; the loop scheduler fails the run and reopens its ticket once it lapses. */
+  runnerLeaseUntil?: Date;
+  /** How long a finished desktop run took on its machine (ms). */
+  runnerDurationMs?: number;
+  /**
    * The caller's per-request artifact intent, mirroring the chat surface's `enableArtifacts` body
    * field. Combined with the admin `EnableArtifacts` setting by `resolveArtifactsEnabled`, so only
    * an explicit `false` opts out and `undefined` leaves the admin setting as the only gate.
@@ -821,6 +830,9 @@ const AgentExecutionSchema = new mongoose.Schema(
     enableLattice: { type: Boolean },
     loopId: { type: String },
     creditCap: { type: Number },
+    runner: { type: String, enum: ['desktop'] },
+    runnerLeaseUntil: { type: Date },
+    runnerDurationMs: { type: Number },
     enableArtifacts: { type: Boolean },
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
@@ -955,6 +967,7 @@ AgentExecutionSchema.index({ parentExecutionId: 1, createdAt: 1 });
 AgentExecutionSchema.index({ userId: 1, status: 1, parentExecutionId: 1, isBackgroundExecution: 1 });
 AgentExecutionSchema.index({ spawnedByExecutionId: 1, status: 1 }); // Abort cascade to background children
 AgentExecutionSchema.index({ parentExecutionId: 1, dagNodeId: 1 }); // Sibling lookup during DAG completion handler
+AgentExecutionSchema.index({ runnerLeaseUntil: 1 }, { sparse: true }); // listExpiredRunnerRuns
 AgentExecutionSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90-day TTL - preserves billing/audit data
 
 // --- List filters & summary projection (history viewer) ---
@@ -1137,6 +1150,13 @@ const NOT_LOOP_PARKED = {
   $nor: [{ status: 'paused', loopId: { $exists: true }, pendingGate: { $exists: true } }],
 };
 
+const activeRunnerRun = (id: string, userId: string) => ({
+  _id: id,
+  userId,
+  runner: 'desktop',
+  status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES },
+});
+
 class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   constructor(private agentExecutionModel: mongoose.Model<IAgentExecution>) {
     super(agentExecutionModel);
@@ -1276,14 +1296,102 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    *
    * Synchronous in-process subagents (have `parentExecutionId` and no
    * `isBackgroundExecution`) are excluded since they're a transient side effect of an
-   * already-counted parent.
+   * already-counted parent. Desktop loop runs use no executor and have their own cap
+   * (`countActiveDesktopByUserId`).
    */
   async countActiveByUserId(userId: string): Promise<number> {
     return this.model.countDocuments({
       userId,
       status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES },
+      runner: { $exists: false },
       $or: [{ parentExecutionId: { $exists: false } }, { isBackgroundExecution: true }],
     });
+  }
+
+  async countActiveDesktopByUserId(userId: string): Promise<number> {
+    return this.model.countDocuments({ userId, runner: 'desktop', status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES } });
+  }
+
+  /** Creates a desktop loop run under a pre-generated id, so its ticket can be claimed under that id first. */
+  async createRunnerRun(
+    id: string,
+    fields: Omit<IAgentExecution, 'id' | 'createdAt' | 'updatedAt' | 'runner'>
+  ): Promise<IAgentExecution> {
+    return (await this.model.create({ ...fields, _id: id, runner: 'desktop' })).toObject();
+  }
+
+  /** The owner's desktop run, in any status; null for another user's, a cloud run, or a malformed id. */
+  async findRunnerRun(id: string, userId: string): Promise<IAgentExecution | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return (await this.model.findOne({ _id: id, userId, runner: 'desktop' }))?.toObject() ?? null;
+  }
+
+  /** Extends a live desktop run's lease to `until`; null when the run is not active or its lease already lapsed. */
+  async renewRunnerLease(id: string, userId: string, now: Date, until: Date): Promise<IAgentExecution | null> {
+    const doc = await this.model.findOneAndUpdate(
+      { ...activeRunnerRun(id, userId), runnerLeaseUntil: { $gte: now } },
+      { $set: { runnerLeaseUntil: until } },
+      { new: true }
+    );
+    return doc?.toObject() ?? null;
+  }
+
+  /**
+   * Appends a desktop run's progress steps (the last 500 kept) and renews its lease, conditional on
+   * `checkpoint.iteration` still being `expectedIteration` so two concurrent posts never interleave.
+   * False when the run is gone, its lease lapsed, or another post won.
+   */
+  async appendRunnerSteps(
+    id: string,
+    userId: string,
+    now: Date,
+    expected: { iteration: number },
+    next: { steps: unknown[]; iteration: number; pendingText: string; leaseUntil: Date }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      {
+        ...activeRunnerRun(id, userId),
+        runnerLeaseUntil: { $gte: now },
+        'checkpoint.iteration': expected.iteration,
+      },
+      {
+        $push: { 'checkpoint.steps': { $each: next.steps, $slice: -500 } },
+        $set: {
+          'checkpoint.iteration': next.iteration,
+          'checkpoint.pendingText': next.pendingText,
+          runnerLeaseUntil: next.leaseUntil,
+        },
+      }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /** Tallies a desktop run's completion credits for its loop budgets; the user was already billed for them. */
+  async addRunnerCredits(id: string, userId: string, credits: number): Promise<IAgentExecution | null> {
+    const doc = await this.model.findOneAndUpdate(
+      activeRunnerRun(id, userId),
+      { $inc: { totalCreditsUsed: credits } },
+      { new: true }
+    );
+    return doc?.toObject() ?? null;
+  }
+
+  /** Ends an active desktop run with `set` (its status and outcome) and drops its lease; false when it was not active. */
+  async finishRunnerRun(id: string, userId: string, set: Partial<IAgentExecution>): Promise<boolean> {
+    const result = await this.model.updateOne(activeRunnerRun(id, userId), {
+      $set: { completedAt: new Date(), ...set },
+      $unset: { runnerLeaseUntil: '' },
+    });
+    return result.modifiedCount > 0;
+  }
+
+  /** Active desktop runs whose lease lapsed before `now`, oldest lease first. */
+  async listExpiredRunnerRuns(now: Date, limit: number): Promise<IAgentExecution[]> {
+    const docs = await this.model
+      .find({ runner: 'desktop', status: { $in: ACTIVE_AGENT_EXECUTION_STATUSES }, runnerLeaseUntil: { $lt: now } })
+      .sort({ runnerLeaseUntil: 1 })
+      .limit(limit);
+    return docs.map(doc => doc.toObject());
   }
 
   /**

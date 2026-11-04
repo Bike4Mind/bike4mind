@@ -136,16 +136,24 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     stages: string[],
     skipStages: string[] = []
   ): Promise<IWorkItem[]> {
-    // Skipped stages are filtered in the query so they never eat the candidate window.
+    return this.listReady(userId, loopId, stages, { $nin: [stages.at(-1) ?? '', ...skipStages] });
+  }
+
+  async listReadyInStages(userId: string, loopId: string, stages: string[], inStages: string[]): Promise<IWorkItem[]> {
+    const last = stages.at(-1);
+    return this.listReady(userId, loopId, stages, { $in: inStages.filter(stage => stage !== last) });
+  }
+
+  private async listReady(
+    userId: string,
+    loopId: string,
+    stages: string[],
+    stageFilter: Record<string, string[]>
+  ): Promise<IWorkItem[]> {
+    // Stages are filtered in the query so excluded ones never eat the candidate window.
     const candidates = (
       await this.workItemModel
-        .find({
-          userId,
-          loopId,
-          deletedAt: null,
-          status: 'open',
-          stage: { $nin: [stages.at(-1) ?? '', ...skipStages] },
-        })
+        .find({ userId, loopId, deletedAt: null, status: 'open', stage: stageFilter })
         .sort({ createdAt: 1 })
         .limit(LOOP_READY_CANDIDATES)
     ).map(doc => doc.toJSON());
@@ -163,6 +171,21 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     const result = await this.workItemModel.findOneAndUpdate(
       { _id: id, loopId, deletedAt: null, status: 'open' },
       { $set: { status: 'in_progress' }, $inc: { runCount: 1 } },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async claimForRunner(
+    id: string,
+    userId: string,
+    loopId: string,
+    inStages: string[],
+    executionId: string
+  ): Promise<IWorkItem | null> {
+    const result = await this.workItemModel.findOneAndUpdate(
+      { _id: id, userId, loopId, deletedAt: null, status: 'open', stage: { $in: inStages } },
+      { $set: { status: 'in_progress', executionId }, $inc: { runCount: 1 } },
       { new: true }
     );
     return result?.toJSON() ?? null;

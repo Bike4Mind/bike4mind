@@ -40,6 +40,8 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   userId: string;
   userDetails: Array<IUserDetails> | null;
   logoFileId?: string | null; // File ID of the organization's logo
+  /** Org admins only: a loop desktop stage's `green-ci` merge policy is served as `review` (effectiveMergePolicy). */
+  loopsGreenCiMergeDisabled?: boolean;
 
   /** Virtual field to the organization's logo (AppFile) */
   logo?: IAppFileDocument | null;

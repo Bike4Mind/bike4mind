@@ -3,7 +3,9 @@ import {
   DEFAULT_LOOP_STAGES,
   ILoop,
   ILoopRepository,
+  ILoopMemory,
   LOOP_AUTO_RESUME_KINDS,
+  LOOP_MERGE_POLICIES,
   LOOP_STAGE_RUNNERS,
   LOOP_STATUSES,
   LoopAutoResume,
@@ -194,6 +196,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     );
     return result.modifiedCount > 0;
   }
+
+  async foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void> {
+    await this.loopModel.updateOne({ _id: id, userId }, { $set: { memory, lastRunAt }, $inc: { runCount: 1 } });
+  }
 }
 
 export const LoopSchema = new Schema<ILoop, ILoopModel>(
@@ -223,6 +229,11 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
             model: { type: String },
             tools: { type: [String], default: undefined },
             runner: { type: String, enum: LOOP_STAGE_RUNNERS },
+            repoHint: { type: String },
+            mergePolicy: { type: String, enum: LOOP_MERGE_POLICIES },
+            deployWorkflow: { type: String },
+            smoke: { type: new Schema({ url: { type: String }, command: { type: String } }, { _id: false }) },
+            holdLabels: { type: [String], default: undefined },
           },
           { _id: false }
         ),

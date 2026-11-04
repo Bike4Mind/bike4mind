@@ -171,6 +171,21 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /** `open -> in_progress`, conditional on still being `open`; null when another tick won the claim. */
   claimForRun(id: string, loopId: string): Promise<IWorkItem | null>;
 
+  /** `listReadyForLoop`'s order, over the loop's tickets in `inStages` only (desktop stages); never its last stage. */
+  listReadyInStages(userId: string, loopId: string, stages: string[], inStages: string[]): Promise<IWorkItem[]>;
+
+  /**
+   * A desktop runner's claim: `open -> in_progress` under `executionId` (its run) in one write, conditional
+   * on the ticket still being `open` in one of `inStages`; null when another claim won or the stage moved.
+   */
+  claimForRunner(
+    id: string,
+    userId: string,
+    loopId: string,
+    inStages: string[],
+    executionId: string
+  ): Promise<IWorkItem | null>;
+
   /** Count of the loop's tickets created or updated in [from, to]. */
   countTouchedForLoop(userId: string, loopId: string, from: Date, to: Date): Promise<number>;
 

@@ -67,6 +67,83 @@ export interface ILoopStageConfig {
    * does.
    */
   runner?: LoopStageRunner;
+  /** Desktop stages only, from here down: the guards a desktop runner applies to the ticket's work. `owner/name`. */
+  repoHint?: string;
+  /** Absent means `review`; served as `effectiveMergePolicy`. */
+  mergePolicy?: LoopMergePolicy;
+  deployWorkflow?: string;
+  smoke?: LoopSmokeCheck;
+  holdLabels?: string[];
+}
+
+export const LOOP_MERGE_POLICIES = ['review', 'green-ci', 'never'] as const;
+export type LoopMergePolicy = (typeof LOOP_MERGE_POLICIES)[number];
+export type LoopSmokeCheck = { url: string } | { command: string };
+
+/** The merge policy a desktop runner applies: `review` when unset, and when the org turned `green-ci` merges off. */
+export const effectiveMergePolicy = (
+  policy: LoopMergePolicy | undefined,
+  orgGreenCiDisabled?: boolean
+): LoopMergePolicy => (!policy || (policy === 'green-ci' && orgGreenCiDisabled) ? 'review' : policy);
+
+/** Header a desktop runner sends on its completion calls so their credits count toward the run's loop budgets. */
+export const LOOP_RUN_HEADER = 'X-B4M-Loop-Run';
+/** A desktop run's lease (ms); heartbeat and progress renew it, and the scheduler reopens the ticket once it lapses. */
+export const RUNNER_LEASE_MS = 2 * 60_000;
+/** A runner's presence counts as online this long (ms) after its last post. */
+export const RUNNER_PRESENCE_FRESH_MS = 2 * 60_000;
+/** Desktop runs a user may have active at once: the desktop app's lane cap. */
+export const MAX_DESKTOP_RUNS_PER_USER = 4;
+
+/** Desktop runner API shapes (apps/client/pages/api/loops/runner); the desktop app mirrors them. */
+export interface RunnerTicket {
+  ticketId: string;
+  title: string;
+  loopId: string;
+  loopName: string;
+  stage: string;
+  repoHint?: string;
+}
+
+export interface RunnerClaim {
+  ticket: RunnerTicket;
+  runId: string;
+  leaseExpiresAt: string;
+  /** The same prompt a cloud run of this ticket gets. */
+  prompt: string;
+  model?: string;
+  tools?: string[];
+  stage: {
+    mergePolicy: LoopMergePolicy;
+    guards?: { deployWorkflow?: string; smoke?: LoopSmokeCheck; holdLabels?: string[] };
+  };
+}
+
+export type LoopProgressFrame =
+  | { type: 'text'; text: string }
+  | { type: 'tool-start'; callId: string; name: string; input: string }
+  | { type: 'tool-end'; callId: string; name: string; status: string; error?: string; preview?: string }
+  | { type: 'usage'; usage: unknown };
+
+export type RunnerOutcome =
+  | { outcome: 'advanced'; answer: string; durationMs: number }
+  | { outcome: 'blocked'; reason: string; answer?: string; durationMs: number }
+  | { outcome: 'failed'; reason: string; durationMs: number }
+  | { outcome: 'released'; reason?: string; durationMs: number };
+
+/** A user's desktop runner, as last reported. One row per user: with two machines the last post wins. */
+export interface ILoopRunnerPresence {
+  id: string;
+  userId: string;
+  seenAt: Date;
+  lanesBusy: number;
+  lanesFree: number;
+  waitingReason?: string;
+}
+
+export interface ILoopRunnerPresenceRepository {
+  upsertForUser(userId: string, fields: Omit<ILoopRunnerPresence, 'id' | 'userId'>): Promise<void>;
+  findByUserId(userId: string): Promise<ILoopRunnerPresence | null>;
 }
 
 /** The config for a stage; {} when it has none. */
@@ -195,6 +272,11 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
    * `statusReason`. Conditional on both, so an owner's edit landing first wins. False when nothing matched.
    */
   resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean>;
+  /**
+   * Folds a finished desktop run into its loop: the new memory and `lastRunAt`, and one more `runCount`.
+   * Never touches `activeExecutionId`, which only cloud runs hold.
+   */
+  foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void>;
 }
 
 /**

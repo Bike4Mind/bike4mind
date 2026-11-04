@@ -549,4 +549,41 @@ describe('WorkItemRepository', () => {
       });
     });
   });
+
+  describe('desktop runner claims', () => {
+    const STAGES = ['todo', 'build', 'review', 'done'];
+
+    it('lists only open tickets in the given stages, never the last one, in finish-first order', async () => {
+      const older = await create('Build older', { loopId: 'loop-1', stage: 'build' });
+      const review = await create('Review', { loopId: 'loop-1', stage: 'review' });
+      await create('Todo (cloud)', { loopId: 'loop-1', stage: 'todo' });
+      await create('Done', { loopId: 'loop-1', stage: 'done' });
+      await create('Build busy', { loopId: 'loop-1', stage: 'build', status: 'in_progress' });
+
+      const ready = await workItemRepository.listReadyInStages(USER, 'loop-1', STAGES, ['build', 'review', 'done']);
+
+      expect(ready.map(item => item.id)).toEqual([review.id, older.id]);
+    });
+
+    it('lets exactly one of two concurrent claims win, under its run id, and counts the run', async () => {
+      const ticket = await create('Build', { loopId: 'loop-1', stage: 'build' });
+
+      const [a, b] = await Promise.all([
+        workItemRepository.claimForRunner(ticket.id, USER, 'loop-1', ['build'], 'run-a'),
+        workItemRepository.claimForRunner(ticket.id, USER, 'loop-1', ['build'], 'run-b'),
+      ]);
+
+      const winner = a ?? b;
+      expect([a, b].filter(Boolean)).toHaveLength(1);
+      expect(winner).toMatchObject({ status: 'in_progress', runCount: 1 });
+      expect(['run-a', 'run-b']).toContain(winner?.executionId);
+    });
+
+    it('refuses a ticket outside the stages, or of another user', async () => {
+      const ticket = await create('Todo', { loopId: 'loop-1', stage: 'todo' });
+
+      expect(await workItemRepository.claimForRunner(ticket.id, USER, 'loop-1', ['build'], 'run-a')).toBeNull();
+      expect(await workItemRepository.claimForRunner(ticket.id, OTHER_USER, 'loop-1', ['todo'], 'run-a')).toBeNull();
+    });
+  });
 });
