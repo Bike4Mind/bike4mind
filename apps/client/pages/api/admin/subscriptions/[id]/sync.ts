@@ -138,7 +138,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         });
       }
 
-      if ((row.updatedAt ?? new Date(0)).getTime() !== new Date(parsed.data.expectedUpdatedAt).getTime()) {
+      if (!row.updatedAt || row.updatedAt.getTime() !== new Date(parsed.data.expectedUpdatedAt).getTime()) {
         throw new ConflictError('This subscription changed; reload and try again.');
       }
 
@@ -153,7 +153,6 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
         if (stripeSub) {
           const applied = await applyStripeSubscriptionState(stripeSub, {
             ownerType: row.ownerType,
-            logger: req.logger,
             expectedUpdatedAt: row.updatedAt,
           });
           before = applied.before;

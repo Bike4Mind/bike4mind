@@ -22,7 +22,13 @@ export const SyncFromStripeDialog: React.FC<SubscriptionDialogProps> = ({ detail
 
   const handleConfirm = async (reason: string) => {
     if (!data) return;
-    await sync.mutateAsync({ expectedUpdatedAt: data.updatedAt, reason });
+    try {
+      await sync.mutateAsync({ expectedUpdatedAt: data.updatedAt, reason });
+    } catch (error) {
+      // The preview is stale after a conflict; reread it so the next confirm carries the new updatedAt.
+      void preview.refetch();
+      throw error;
+    }
     onClose();
     showUndo({ message: 'Synced from Stripe', onViewAudit: onAudit });
   };

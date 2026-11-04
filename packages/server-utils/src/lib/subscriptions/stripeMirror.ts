@@ -111,3 +111,6 @@ export const stripeSubscriptionRowFields = (
     ...stripeMirrorFields(subscription, syncedAt),
   };
 };
+
+/** Stripe statuses in which the subscription's quantity sets the organization's seat count. */
+export const SEAT_BILLING_STATUSES: ReadonlySet<string> = new Set(['active', 'trialing', 'past_due']);

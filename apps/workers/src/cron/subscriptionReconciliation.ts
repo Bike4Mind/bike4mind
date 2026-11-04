@@ -102,19 +102,19 @@ export async function runSubscriptionReconciliation(
   let checked = 0;
   let truncated = false;
 
-  // Same lookup Sync's seat write uses (the Stripe customer id), so a flagged seat count is one Sync can change.
-  const orgSeatsFor = async (row: (typeof rows)[number], sub: StripeSubscription) => {
-    if (row.ownerType !== SubscriptionOwnerType.Organization) return undefined;
-    const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer.id;
-    return (await organizationRepository.findByStripeCustomerId(customerId))?.seats;
-  };
+  const customerIdOf = (sub: StripeSubscription) => (typeof sub.customer === 'string' ? sub.customer : sub.customer.id);
+  // The row as read at the start; the findings are re-checked against the live row before they are written.
+  const snapshotUpdatedAt = new Map<string, number>();
 
-  const driftFinding = async (
+  // Same lookup Sync's seat write uses (the Stripe customer id), so a flagged seat count is one Sync can change.
+  const driftFinding = (
     row: (typeof rows)[number],
-    sub: StripeSubscription
-  ): Promise<BillingMismatchFinding | null> => {
-    const fields = diffSubscription(row, sub, await orgSeatsFor(row, sub));
+    sub: StripeSubscription,
+    orgSeats?: number
+  ): BillingMismatchFinding | null => {
+    const fields = diffSubscription(row, sub, orgSeats);
     if (fields.length === 0) return null;
+    snapshotUpdatedAt.set(sub.id, row.updatedAt?.getTime() ?? 0);
     return {
       stripeSubscriptionId: sub.id,
       kind: 'drift',
@@ -126,6 +126,9 @@ export async function runSubscriptionReconciliation(
     };
   };
 
+  // Matched pairs are compared after the listing, so the organizations' seats come in one query
+  // instead of one awaited lookup per subscription inside the paging loop.
+  const matched: { row: (typeof rows)[number]; sub: StripeSubscription }[] = [];
   const unmatched: StripeSubscription[] = [];
   await stripe.subscriptions.list({ limit: 100 }).autoPagingEach(async sub => {
     if (Date.now() > deadline) {
@@ -142,8 +145,7 @@ export async function runSubscriptionReconciliation(
     }
     if (withinGrace(row, sub, now)) return;
     covered.add(sub.id);
-    const finding = await driftFinding(row, sub);
-    if (finding) findings.push(finding);
+    matched.push({ row, sub });
   });
 
   // A listed subscription with no non-terminal row may still have a terminal one (a wrongly canceled row
@@ -154,6 +156,7 @@ export async function runSubscriptionReconciliation(
       r,
     ])
   );
+  const orphans: BillingMismatchFinding[] = [];
   for (const sub of unmatched) {
     const row = unmatchedRows.get(sub.id);
     if (withinGrace(row ?? null, sub, now)) continue;
@@ -163,10 +166,9 @@ export async function runSubscriptionReconciliation(
       // finished while Stripe's subscription is too (canceled row, incomplete_expired sub) agrees.
       if (resolveSubscriptionSource(row) !== SubscriptionSource.Stripe) continue;
       if (TERMINAL_STATUSES.has(row.status) && TERMINAL_STATUSES.has(sub.status)) continue;
-      const finding = await driftFinding(row, sub);
-      if (finding) findings.push(finding);
+      matched.push({ row, sub });
     } else if (ORPHAN_STATUSES.has(sub.status)) {
-      findings.push({
+      orphans.push({
         stripeSubscriptionId: sub.id,
         kind: 'orphan_stripe',
         subscriptionRowId: null,
@@ -177,6 +179,23 @@ export async function runSubscriptionReconciliation(
       });
     }
   }
+  findings.push(...orphans);
+
+  const orgSeats = await organizationRepository.findSeatsByStripeCustomerIds([
+    ...new Set(
+      matched.filter(m => m.row.ownerType === SubscriptionOwnerType.Organization).map(m => customerIdOf(m.sub))
+    ),
+  ]);
+  for (const { row, sub } of matched) {
+    const seats = row.ownerType === SubscriptionOwnerType.Organization ? orgSeats.get(customerIdOf(sub)) : undefined;
+    const finding = driftFinding(row, sub, seats);
+    if (finding) findings.push(finding);
+  }
+
+  const orgSeatsFor = async (row: (typeof rows)[number], sub: StripeSubscription) =>
+    row.ownerType === SubscriptionOwnerType.Organization
+      ? (await organizationRepository.findSeatsByStripeCustomerIds([customerIdOf(sub)])).get(customerIdOf(sub))
+      : undefined;
 
   const retrieveOrMissing = async (subscriptionId: string): Promise<StripeSubscription | 'missing' | 'error'> => {
     try {
@@ -215,7 +234,7 @@ export async function runSubscriptionReconciliation(
         });
         continue;
       }
-      const finding = await driftFinding(row, sub);
+      const finding = driftFinding(row, sub, await orgSeatsFor(row, sub));
       if (finding) findings.push(finding);
     }
 
@@ -236,15 +255,27 @@ export async function runSubscriptionReconciliation(
         covered.add(subscriptionId);
         continue;
       }
-      if (withinGrace(row, { created: 0 }, now)) continue;
       checked++;
+      if (withinGrace(row, { created: 0 }, now)) continue;
       const sub = await retrieveOrMissing(subscriptionId);
       if (sub === 'error') continue;
       covered.add(subscriptionId);
       // Gone from Stripe, or finished there too: both sides agree the subscription is over.
       if (sub === 'missing' || TERMINAL_STATUSES.has(sub.status)) continue;
-      const finding = await driftFinding(row, sub);
+      const finding = driftFinding(row, sub, await orgSeatsFor(row, sub));
       if (finding) findings.push(finding);
+    }
+  }
+
+  // The listing and retrievals above take minutes. A drift finding whose row was written meanwhile (a webhook,
+  // or a Sync) was compared against a stale snapshot, so it is dropped and left for the next run.
+  const driftIds = findings.filter(f => f.kind === 'drift').map(f => f.stripeSubscriptionId);
+  const live = new Map((await subscriptionRepository.findBySubscriptionIds(driftIds)).map(r => [r.subscriptionId, r]));
+  for (let i = findings.length - 1; i >= 0; i--) {
+    const { stripeSubscriptionId: id, kind } = findings[i];
+    if (kind === 'drift' && (live.get(id)?.updatedAt?.getTime() ?? 0) !== snapshotUpdatedAt.get(id)) {
+      findings.splice(i, 1);
+      covered.delete(id);
     }
   }
 

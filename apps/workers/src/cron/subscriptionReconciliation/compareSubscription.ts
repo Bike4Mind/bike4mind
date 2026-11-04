@@ -1,4 +1,5 @@
 import {
+  SEAT_BILLING_STATUSES,
   stripeSubscriptionRowFields,
   type StripeSubscriptionRowSource,
 } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
@@ -17,8 +18,6 @@ export type ComparableRow = Pick<
   ISubscription,
   'status' | 'priceId' | 'quantity' | 'periodEndsAt' | 'cancelAtPeriodEnd' | 'unitAmount'
 > & { updatedAt?: Date };
-
-const SEAT_BILLING_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
 type Value = string | number | boolean | Date | null | undefined;
 

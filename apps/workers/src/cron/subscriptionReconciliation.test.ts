@@ -31,7 +31,7 @@ const { strict } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: mocks.connect,
-  organizationRepository: { findByStripeCustomerId: mocks.findOrg },
+  organizationRepository: { findSeatsByStripeCustomerIds: mocks.findOrg },
   billingMismatchRepository: {
     upsertOpen: mocks.upsertOpen,
     resolveMissing: mocks.resolveMissing,
@@ -130,7 +130,11 @@ beforeEach(() => {
   mocks.upsertOpen.mockResolvedValue(true);
   mocks.resolveMissing.mockResolvedValue(0);
   mocks.findRows.mockResolvedValue([]);
-  mocks.findBySubIds.mockResolvedValue([]);
+  mocks.findOrg.mockResolvedValue(new Map());
+  // Live rows are the ones read at the start unless a test says a row changed mid-run.
+  mocks.findBySubIds.mockImplementation(async (ids: string[]) =>
+    ((await mocks.findRows()) ?? []).filter((r: { subscriptionId: string }) => ids.includes(r.subscriptionId))
+  );
   mocks.openIds.mockResolvedValue([]);
 });
 
@@ -150,16 +154,16 @@ describe('runSubscriptionReconciliation', () => {
     const result = await runSubscriptionReconciliation(undefined, NOW);
 
     expect(result.findings.map(f => [f.stripeSubscriptionId, f.kind])).toEqual([
-      ['sub_drift', 'drift'],
       ['sub_orphan', 'orphan_stripe'],
+      ['sub_drift', 'drift'],
       ['sub_gone', 'orphan_mongo'],
     ]);
-    expect(result.findings[0].fields).toEqual([{ field: 'quantity', mongo: '1', stripe: '3' }]);
+    expect(result.findings[1].fields).toEqual([{ field: 'quantity', mongo: '1', stripe: '3' }]);
     expect(mocks.list).toHaveBeenCalledTimes(1);
     expect(mocks.retrieve).toHaveBeenCalledTimes(1);
     expect(mocks.retrieve).toHaveBeenCalledWith('sub_gone');
     expect(mocks.resolveMissing).toHaveBeenCalledWith(
-      expect.objectContaining({ completeListing: true, seenIds: ['sub_drift', 'sub_orphan', 'sub_gone'] })
+      expect.objectContaining({ completeListing: true, seenIds: ['sub_orphan', 'sub_drift', 'sub_gone'] })
     );
     expect(mocks.slack).toHaveBeenCalledTimes(1);
     expect(mocks.slack.mock.calls[0][0]).not.toMatch(/@/);
@@ -260,13 +264,27 @@ describe('runSubscriptionReconciliation', () => {
 
   it('compares organization seats with the billed quantity', async () => {
     mocks.findRows.mockResolvedValue([row('sub_org', { ownerType: 'Organization', ownerId: 'org_1' })]);
-    mocks.findOrg.mockResolvedValue({ seats: 5 });
+    mocks.findOrg.mockResolvedValue(new Map([['cus_1', 5]]));
     mocks.list.mockReturnValue(listing([stripeSub('sub_org')]));
 
     const { findings } = await runSubscriptionReconciliation(undefined, NOW);
 
-    expect(mocks.findOrg).toHaveBeenCalledWith('cus_1');
+    expect(mocks.findOrg).toHaveBeenCalledTimes(1);
+    expect(mocks.findOrg).toHaveBeenCalledWith(['cus_1']);
     expect(findings[0].fields).toEqual([{ field: 'seats', mongo: '5', stripe: '3' }]);
+  });
+
+  it('drops a drift finding whose row was written while the run was listing', async () => {
+    const snapshot = row('sub_a', { quantity: 1, updatedAt: new Date(NOW.getTime() - 3 * 60 * 60 * 1000) });
+    mocks.findRows
+      .mockResolvedValueOnce([snapshot])
+      .mockResolvedValue([{ ...snapshot, updatedAt: new Date(NOW.getTime() - 60_000) }]);
+    mocks.list.mockReturnValue(listing([stripeSub('sub_a')]));
+
+    const { findings } = await runSubscriptionReconciliation(undefined, NOW);
+
+    expect(findings).toEqual([]);
+    expect(mocks.upsertOpen).not.toHaveBeenCalled();
   });
 
   it('skips rows and subscriptions inside the grace window', async () => {

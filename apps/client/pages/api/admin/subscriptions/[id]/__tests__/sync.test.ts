@@ -238,7 +238,7 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
       expect.objectContaining({ status: 'active', quantity: 3, priceId: 'price_1', unitAmount: 2000 }),
       UPDATED_AT
     );
-    expect(mocks.setSeats).toHaveBeenCalledWith('org_1', 3, { type: 'stripe' });
+    expect(mocks.orgUpdate).toHaveBeenCalledWith({ id: 'org_1', seats: 3 });
     const audit = mocks.audit.mock.calls[0][1];
     expect(audit.action).toBe('billing.subscription.synced');
     expect(audit.reason).toBe(REASON);
@@ -270,6 +270,13 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     await expect(run()).rejects.toMatchObject({ statusCode: 409 });
     expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
     expect(mocks.retrieve).not.toHaveBeenCalled();
+  });
+
+  it('is a 409 for a row with no updatedAt, which could not be write-guarded', async () => {
+    mocks.rowFindById.mockResolvedValue(row({ updatedAt: undefined }));
+    const { run } = call('POST');
+    await expect(run()).rejects.toMatchObject({ statusCode: 409 });
+    expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
   });
 
   it('marks the row canceled when Stripe has no such subscription', async () => {
@@ -330,7 +337,7 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
 
     await expect(run()).rejects.toMatchObject({ statusCode: 409 });
     expect(mocks.updateReturningBefore).toHaveBeenCalledWith('sub_1', expect.anything(), UPDATED_AT);
-    expect(mocks.setSeats).not.toHaveBeenCalled();
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
     expect(mocks.resolveForSubscription).not.toHaveBeenCalled();
   });

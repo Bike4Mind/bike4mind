@@ -84,7 +84,7 @@ export const handler = withEventContext(async (event, logger) => {
   // Update subscription in unified Subscription model
   const shouldInvalidateOrgs = await withTransaction(async () => {
     // Reassigned on a retried transaction, so both hold the attempt that committed.
-    const result = await applyStripeSubscriptionState(subscription, { ownerType: metadata.ownerType, logger });
+    const result = await applyStripeSubscriptionState(subscription, { ownerType: metadata.ownerType });
     before = result.before;
     owned = before !== null;
     if (result.seats) return true;
