@@ -5,7 +5,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { grantPackageRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, updateGrantPackageSchema, updateRequiresGrantReason, type AuditChange } from '@bike4mind/common';
 import { loadCreditGrantPolicy, parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
+import { assertCapsConsistent, splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
 import { z } from 'zod';
 
 const handler = adminApi({
@@ -30,12 +30,19 @@ const handler = adminApi({
     // Judged on the package as it will be after the edit, so a removed cap or raised amount counts.
     // Not atomic with the write: two concurrent admin edits are each judged against the pre-edit package.
     const after = { ...stored, ...data };
+    if ('totalCap' in data || 'dailyCap' in data) assertCapsConsistent(after);
     const reasonRequired = updateRequiresGrantReason(stored, after, await loadCreditGrantPolicy());
     const reason = reasonRequired ? parseAdminActionReason(rawReason) : undefined;
 
     const changedFields = (Object.keys(data) as (keyof typeof data)[]).filter(
       field => JSON.stringify(stored[field] ?? null) !== JSON.stringify(data[field] ?? null)
     );
+
+    // Nothing changed: no write and no audit entry.
+    if (changedFields.length === 0) {
+      res.status(200).json(stored);
+      return;
+    }
 
     const updated = await withTransaction(async () => {
       const pkg = await grantPackageRepository.updatePackage(id, reason ? { ...data, reason } : data);

@@ -84,6 +84,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 2,
             failedCount: 1,
             createdUserIds: expect.arrayContaining(['new-1', 'new-2']),
+            grantPackageId: null,
             credits: 0,
             startingCreditsTotal: 0,
             startingCreditsByUserId: { 'new-1': 0, 'new-2': 0 },
@@ -138,6 +139,7 @@ describe('POST /api/admin/bulk-create-users', () => {
             count: 1,
             failedCount: 1,
             createdUserIds: ['new-1'],
+            grantPackageId: null,
             credits: 50,
             startingCreditsTotal: 50,
             startingCreditsByUserId: { 'new-1': 50 },
@@ -296,6 +298,25 @@ describe('POST /api/admin/bulk-create-users', () => {
         expect.anything()
       );
       expect(h.reserve).toHaveBeenCalledWith('pkg-1', 'new-1');
+    });
+
+    it('stamps the package on the user, merges package and row tags, and audits the package', async () => {
+      h.requirePackage.mockResolvedValue({ ...pkg, tags: ['promo', 'x'] });
+      h.reserve.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+      await h.handler!(makeReq([{ email: 'a@b.test', tags: ['x', 'y'] }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.update).toHaveBeenCalledWith({ id: 'new-1', grantPackageId: 'pkg-1' });
+      expect(h.update).toHaveBeenLastCalledWith({ id: 'new-1', tags: ['promo', 'x', 'y'] });
+      expect(h.recordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ grantPackageId: 'pkg-1' }) })
+      );
+    });
+
+    it('never stamps the package on a row the caps refused', async () => {
+      h.requirePackage.mockResolvedValue(pkg);
+      h.reserve.mockResolvedValue({ outcome: 'refused', reason: 'daily_cap' });
+      await h.handler!(makeReq([{ email: 'a@b.test' }], { grantPackageId: 'pkg-1' }), res());
+      expect(h.update).not.toHaveBeenCalledWith(expect.objectContaining({ grantPackageId: 'pkg-1' }));
     });
 
     it('fails a row whose inbox already took a package grant', async () => {

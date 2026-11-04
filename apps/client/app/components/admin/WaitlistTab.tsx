@@ -29,6 +29,7 @@ import {
 } from '@mui/joy';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { GRANT_PACKAGES_QUERY_KEY } from '@client/app/utils/grantPackageAPICalls';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -85,6 +86,7 @@ const useGenerateSubscriberInvite = () => {
       queryClient.invalidateQueries({ queryKey: ['subscribers'] });
       // Also invalidate the waiting count badge in admin navigation
       queryClient.invalidateQueries({ queryKey: ['subscribers', 'waiting-count'] });
+      queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] });
     },
   });
 };

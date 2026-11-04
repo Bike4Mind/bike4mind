@@ -130,6 +130,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
                   if (reservation.outcome === 'refused') {
                     throw new BadRequestError(grantPackageRefusalMessage(reservation.reason));
                   }
+                  // Stamped only once the reservation held, in the same transaction as the account.
+                  await userRepository.update({ id: created.id, grantPackageId: grantPackage.id });
+                  created.grantPackageId = grantPackage.id;
                   return created;
                 })
               )
@@ -146,8 +149,12 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             creditsGranted: newUser.currentCredits ?? startingCredits,
           });
 
-          if (validatedData.tags && validatedData.tags.length > 0) {
-            newUser.tags = validatedData.tags;
+          // Same merge as invite registration (userService/register.ts): package tags join the row's tags.
+          const mergedTags = [
+            ...new Set([...(newUser.tags ?? []), ...(grantPackage?.tags ?? []), ...(validatedData.tags ?? [])]),
+          ];
+          if (mergedTags.length > 0) {
+            newUser.tags = mergedTags;
           }
 
           await userRepository.update({ id: newUser.id, tags: newUser.tags });
@@ -238,6 +245,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             count: createdUserIds.length,
             failedCount: results.filter(r => !r.success).length,
             createdUserIds: auditedIds,
+            grantPackageId: grantPackage?.id ?? null,
             credits: startingCreditsTotal,
             startingCreditsTotal,
             startingCreditsByUserId: Object.fromEntries(auditedIds.map(id => [id, startingCreditsById.get(id) ?? 0])),

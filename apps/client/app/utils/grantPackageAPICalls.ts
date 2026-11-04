@@ -9,6 +9,8 @@ import type {
 
 const BASE = '/api/admin/grant-packages';
 
+export const GRANT_PACKAGES_QUERY_KEY = 'admin-grant-packages';
+
 export type GrantPackageRow = IGrantPackageDocument & { redeemedToday: number };
 
 export type GrantPackageList = PaginatedResponse<GrantPackageRow> & { reasonPolicy: GrantPackageReasonPolicy };

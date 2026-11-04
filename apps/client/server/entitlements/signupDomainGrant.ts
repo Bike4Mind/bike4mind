@@ -68,6 +68,20 @@ async function reservePackageRedemption(
   return null;
 }
 
+/** Records which package paid for this signup. Best-effort: the credits are already granted, so a failed stamp must not undo them. */
+async function stampGrantPackage(
+  userId: string,
+  grantPackageId: string,
+  trigger: SeatCeilingRaiseTrigger,
+  logger: Logger
+): Promise<void> {
+  try {
+    await userRepository.update({ id: userId, grantPackageId });
+  } catch (stampError) {
+    logger.error(`Grant package ${grantPackageId} stamp failed for user ${userId} (${trigger})`, stampError);
+  }
+}
+
 /**
  * Everything a newly proven email's domain confers at signup: the one-time domain signup credits,
  * partner-rule org membership (with the seat-ceiling / at-capacity alerts), partner-rule user tags,
@@ -187,6 +201,7 @@ export async function applySignupDomainGrant(params: {
           );
           result.creditsGranted = signupCredits;
           result.currentCredits = holder?.currentCredits ?? null;
+          if (grantPackageId) await stampGrantPackage(userId, grantPackageId, trigger, logger);
           logger.info(`Granted ${signupCredits} one-time domain-grant signup credits to user ${userId} (${trigger})`);
         }
       }

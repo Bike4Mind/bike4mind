@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 
-const { creditLotRepository, mockAddTagsToUser, mockClaimFreeCreditGrant, grantPackages } = vi.hoisted(() => ({
-  grantPackages: { findById: vi.fn(), reserveRedemption: vi.fn(), releaseRedemption: vi.fn() },
-  creditLotRepository: { id: 'lots' },
-  mockAddTagsToUser: vi.fn(),
-  mockClaimFreeCreditGrant: vi.fn(),
-}));
+const { creditLotRepository, mockAddTagsToUser, mockClaimFreeCreditGrant, mockUserUpdate, grantPackages } = vi.hoisted(
+  () => ({
+    mockUserUpdate: vi.fn(),
+    grantPackages: { findById: vi.fn(), reserveRedemption: vi.fn(), releaseRedemption: vi.fn() },
+    creditLotRepository: { id: 'lots' },
+    mockAddTagsToUser: vi.fn(),
+    mockClaimFreeCreditGrant: vi.fn(),
+  })
+);
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   creditLotRepository,
@@ -15,6 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   organizationRepository: {},
   userRepository: {
     addTagsToUser: (...a: unknown[]) => mockAddTagsToUser(...a),
+    update: (...a: unknown[]) => mockUserUpdate(...a),
     claimFreeCreditGrant: (...a: unknown[]) => mockClaimFreeCreditGrant(...a),
   },
 }));
@@ -660,6 +664,25 @@ describe('applySignupDomainGrant - rule linked to a grant package', () => {
     expect(result.creditsGranted).toBe(100);
     expect(grantPackages.reserveRedemption).toHaveBeenCalledWith('pkg-1', 'user-1');
     expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 100 }), expect.anything());
+  });
+
+  it('stamps the package on the user once the credits are granted', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+    await run();
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user-1', grantPackageId: 'pkg-1' });
+  });
+
+  it('does not stamp the package when a cap refused the redemption', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'refused', reason: 'daily_cap' });
+    await run();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the grant when the package stamp write fails', async () => {
+    grantPackages.reserveRedemption.mockResolvedValue({ outcome: 'reserved', release: vi.fn() });
+    mockUserUpdate.mockRejectedValueOnce(new Error('db down'));
+    const result = await run();
+    expect(result.creditsGranted).toBe(100);
   });
 
   it('withholds only the credits at the cap: membership, subscription and hooks still apply', async () => {

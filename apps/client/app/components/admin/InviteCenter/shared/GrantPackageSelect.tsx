@@ -1,7 +1,10 @@
-import { FormControl, FormHelperText, FormLabel, Option, Select } from '@mui/joy';
+import { Chip, FormControl, FormHelperText, FormLabel, Option, Select } from '@mui/joy';
 import { useQuery } from '@tanstack/react-query';
-import { fetchGrantPackages, type GrantPackageRow } from '@client/app/utils/grantPackageAPICalls';
-import { GRANT_PACKAGES_QUERY_KEY } from '../Packages/GrantPackagesTab';
+import {
+  fetchGrantPackages,
+  GRANT_PACKAGES_QUERY_KEY,
+  type GrantPackageRow,
+} from '@client/app/utils/grantPackageAPICalls';
 
 const capText = (cap: number | null) => (cap === null ? 'uncapped' : `cap ${cap.toLocaleString()}`);
 
@@ -44,7 +47,7 @@ type Props = {
  * existing link stays visible but cannot be newly chosen.
  */
 const GrantPackageSelect = ({ value, onChange, testId, helperText, disabled }: Props) => {
-  const { data, isPending } = useGrantPackageOptions();
+  const { data, isPending, isError } = useGrantPackageOptions();
   const packages = (data?.data ?? []).filter(pkg => pkg.active || pkg.id === value);
   const selected = packages.find(pkg => pkg.id === value);
 
@@ -61,12 +64,18 @@ const GrantPackageSelect = ({ value, onChange, testId, helperText, disabled }: P
         <Option value="">None</Option>
         {packages.map(pkg => (
           <Option key={pkg.id} value={pkg.id} data-testid={`${testId}-option-${pkg.id}`}>
-            {pkg.name} ({pkg.credits.toLocaleString()} credits, {capText(pkg.totalCap)}, daily {capText(pkg.dailyCap)})
+            {pkg.name}
+            {pkg.legacy && (
+              <Chip size="sm" variant="soft" sx={{ ml: 1 }} data-testid={`${testId}-legacy-${pkg.id}`}>
+                Legacy
+              </Chip>
+            )}{' '}
+            ({pkg.credits.toLocaleString()} credits, {capText(pkg.totalCap)}, daily {capText(pkg.dailyCap)})
           </Option>
         ))}
       </Select>
       <FormHelperText data-testid={`${testId}-usage`}>
-        {selected ? grantPackageUsage(selected) : helperText}
+        {isError ? 'Could not load packages' : selected ? grantPackageUsage(selected) : helperText}
       </FormHelperText>
     </FormControl>
   );

@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { grantPackageRepository, withTransaction } from '@bike4mind/database';
 import { ApiKeyScope, createGrantPackageSchema, requiresGrantReason } from '@bike4mind/common';
 import { loadCreditGrantPolicy, parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
-import { splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
+import { assertCapsConsistent, splitReason, toBadRequest } from '@server/credits/grantPackageAdmin';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
@@ -41,6 +41,7 @@ const handler = adminApi({
       } catch (error) {
         toBadRequest(error);
       }
+      assertCapsConsistent(data);
       const reasonRequired = requiresGrantReason(data, await loadCreditGrantPolicy());
       const reason = reasonRequired ? parseAdminActionReason(rawReason) : undefined;
 

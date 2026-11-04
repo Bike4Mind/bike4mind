@@ -52,7 +52,7 @@ const handler = adminApi({
       }
       assertKnownEntitlements(data.entitlements);
       await assertOrganizationExists(data.organizationId);
-      await assertGrantPackageExists(data.grantPackageId);
+      await assertGrantPackageExists(data.grantPackageId, { requireActive: true });
       assertKnownSubscriptionPlan(data.subscription);
 
       // Fast, friendly duplicate check. This is a TOCTOU pre-check, not the guarantee - the
@@ -76,6 +76,7 @@ const handler = adminApi({
             details: {
               domain: rule.domain,
               organizationId: rule.organizationId ?? null,
+              grantPackageId: rule.grantPackageId ?? null,
               entitlements: rule.entitlements,
               signupCredits: rule.signupCredits ?? null,
               enabled: rule.enabled,

@@ -63,6 +63,7 @@ function makeReqRes(method: string, over: ReqOverrides = {}) {
 describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    repo.findById.mockResolvedValue(null);
     repo.update.mockResolvedValue({ id: 'r1', domain: 'partner.com', entitlements: ['optihashi:pro'], enabled: true });
   });
 
@@ -101,8 +102,25 @@ describe('/api/admin/partner-signup-rules/[id] — update (PUT)', () => {
     expect(repo.update).not.toHaveBeenCalled();
   });
 
+  it('rejects changing the link to an inactive grant package and never writes', async () => {
+    repo.findById.mockResolvedValue({ id: 'r1', grantPackageId: 'pkg-1' });
+    findPackage.mockResolvedValue({ id: 'pkg-off', credits: 100, active: false });
+    const { req, res } = makeReqRes('PUT', { body: { grantPackageId: 'pkg-off' } });
+    await expect(handlers.put(req, res)).rejects.toThrow(/grant package is inactive/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps a rule editable when it re-sends the same, since-deactivated package id', async () => {
+    repo.findById.mockResolvedValue({ id: 'r1', grantPackageId: 'pkg-off' });
+    findPackage.mockResolvedValue({ id: 'pkg-off', credits: 100, active: false });
+    const { req, res } = makeReqRes('PUT', { body: { grantPackageId: 'pkg-off', enabled: false } });
+    await handlers.put(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', grantPackageId: 'pkg-off' }));
+  });
+
   it('links an existing grant package and unlinks it with null', async () => {
-    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100 });
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100, active: true });
     const link = makeReqRes('PUT', { body: { grantPackageId: 'pkg-1' } });
     await handlers.put(link.req, link.res);
     expect(repo.update).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'r1', grantPackageId: 'pkg-1' }));

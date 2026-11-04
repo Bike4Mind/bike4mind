@@ -14,6 +14,7 @@ vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
   fetchGrantPackages,
   createGrantPackage,
   updateGrantPackage,
+  GRANT_PACKAGES_QUERY_KEY: 'admin-grant-packages',
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -60,9 +61,32 @@ describe('GrantPackagesTab', () => {
     expect(screen.getByTestId('grant-package-row-p1')).toHaveTextContent('1 / 1');
   });
 
+  it('marks legacy packages and shows a dash for Today when there is no daily cap', async () => {
+    fetchGrantPackages.mockResolvedValue({
+      data: [
+        { ...row, legacy: true },
+        { ...row, id: 'p3', name: 'Daily', dailyCap: 5, redeemedToday: 2 },
+      ],
+      meta: { currentPage: 1, totalPages: 1, total: 2 },
+      reasonPolicy: { singleGrantCredits: 50_000, dailyTotalCredits: 200_000 },
+    });
+    renderTab();
+    expect(await screen.findByTestId('grant-package-legacy-chip-p1')).toHaveTextContent('Legacy');
+    expect(screen.queryByTestId('grant-package-legacy-chip-p3')).toBeNull();
+    expect(screen.getByTestId('grant-package-row-p1')).not.toHaveTextContent('unlimited');
+    expect(screen.getByTestId('grant-package-row-p3')).toHaveTextContent('2 / 5');
+  });
+
+  it('disables Create while the list is loading', async () => {
+    fetchGrantPackages.mockReturnValue(new Promise(() => undefined));
+    renderTab();
+    expect(screen.getByTestId('grant-packages-create-btn')).toBeDisabled();
+  });
+
   it('creates a small package without asking for a reason', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('grant-packages-create-btn'));
+    await waitFor(() => expect(screen.getByTestId('grant-packages-create-btn')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('grant-packages-create-btn'));
     type('grant-package-name-input', 'Conference');
     type('grant-package-credits-input', '100');
     type('grant-package-total-cap-input', '1');
@@ -81,7 +105,8 @@ describe('GrantPackagesTab', () => {
 
   it('asks for a reason once the package crosses the threshold and blocks save until given', async () => {
     renderTab();
-    fireEvent.click(await screen.findByTestId('grant-packages-create-btn'));
+    await waitFor(() => expect(screen.getByTestId('grant-packages-create-btn')).toBeEnabled());
+    fireEvent.click(screen.getByTestId('grant-packages-create-btn'));
     type('grant-package-name-input', 'Open launch');
     type('grant-package-credits-input', '100');
     expect(screen.getByTestId('grant-package-large-grant-alert')).toBeInTheDocument();

@@ -129,8 +129,26 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 
+  it('rejects an inactive grant package with a 400 and never writes', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-off', credits: 100, active: false });
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-off' } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/grant package is inactive/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('records the linked grant package id in the create audit details', async () => {
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100, active: true });
+    repo.create.mockResolvedValue({ id: 'r1', ...validRule, grantPackageId: 'pkg-1', enabled: true });
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-1' } });
+    await handlers.post(req, res);
+    expect(audit).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ details: expect.objectContaining({ grantPackageId: 'pkg-1' }) })
+    );
+  });
+
   it('creates a rule linked to an existing grant package', async () => {
-    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100 });
+    findPackage.mockResolvedValue({ id: 'pkg-1', credits: 100, active: true });
     const { req, res } = makeReqRes('POST', { body: { ...validRule, grantPackageId: 'pkg-1' } });
     await handlers.post(req, res);
     expect(res._getStatusCode()).toBe(201);
@@ -154,6 +172,7 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
       expect.objectContaining({
         action: 'org.partner_signup_rule.created',
         target: { kind: 'settings', id: 'r1', displayName: 'partner.com' },
+        details: expect.objectContaining({ grantPackageId: null }),
       })
     );
     expect(repo.create.mock.invocationCallOrder[0]).toBeLessThan(audit.mock.invocationCallOrder[0]);

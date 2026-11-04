@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, Button, IconButton, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Chip, IconButton, Tooltip, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,21 +11,41 @@ import {
   StatusChip,
   type DataColumn,
 } from '@client/app/components/admin/shared';
-import { fetchGrantPackages, type GrantPackageRow } from '@client/app/utils/grantPackageAPICalls';
+import {
+  fetchGrantPackages,
+  GRANT_PACKAGES_QUERY_KEY,
+  type GrantPackageRow,
+} from '@client/app/utils/grantPackageAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { GrantPackageFormModal } from './GrantPackageFormModal';
-
-export const GRANT_PACKAGES_QUERY_KEY = 'admin-grant-packages';
 
 const formatCount = (value: number) => value.toLocaleString('en-US');
 const capLabel = (used: number, cap: number | null) =>
   cap === null ? `${formatCount(used)} / unlimited` : `${formatCount(used)} / ${formatCount(cap)}`;
 
 const columns: DataColumn<GrantPackageRow>[] = [
-  { id: 'name', label: 'Name', render: row => row.name },
+  {
+    id: 'name',
+    label: 'Name',
+    render: row => (
+      <>
+        {row.name}
+        {row.legacy && (
+          <Chip size="sm" variant="soft" sx={{ ml: 1 }} data-testid={`grant-package-legacy-chip-${row.id}`}>
+            Legacy
+          </Chip>
+        )}
+      </>
+    ),
+  },
   { id: 'credits', label: 'Credits', numeric: true, render: row => formatCount(row.credits) },
   { id: 'total', label: 'Redeemed', numeric: true, render: row => capLabel(row.redeemedTotal, row.totalCap) },
-  { id: 'today', label: 'Today', numeric: true, render: row => capLabel(row.redeemedToday, row.dailyCap) },
+  {
+    id: 'today',
+    label: 'Today',
+    numeric: true,
+    render: row => (row.dailyCap === null ? '-' : capLabel(row.redeemedToday, row.dailyCap)),
+  },
   {
     id: 'capHits',
     label: 'Cap hits',
@@ -61,7 +81,12 @@ const GrantPackagesTab = () => {
   };
 
   const createButton = (
-    <Button startDecorator={<AddIcon />} onClick={() => openForm(null)} data-testid="grant-packages-create-btn">
+    <Button
+      startDecorator={<AddIcon />}
+      onClick={() => openForm(null)}
+      disabled={!data}
+      data-testid="grant-packages-create-btn"
+    >
       Create package
     </Button>
   );

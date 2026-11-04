@@ -118,6 +118,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
+// Distinct identity so a test can prove the repository itself reaches the grant adapters.
+const grantPackageRepositoryStub = vi.hoisted(() => ({ marker: 'grant-package-repository' }));
 const mockFindByEmail = vi.fn();
 const mockFindSetting = vi.fn();
 const mockClaimOnce = vi.fn();
@@ -160,7 +162,7 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   creditLotRepository: {},
-  grantPackageRepository: {},
+  grantPackageRepository: grantPackageRepositoryStub,
   userRepository: {
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     count: vi.fn(),
@@ -571,6 +573,16 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     const body = res._getJSONData();
     expect(body.accessToken).toBe('a');
     expectSelfUserStripped(body.user, body, 'user-1');
+  });
+
+  it('wires the grant package repository into the registration adapters', async () => {
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    const adapters = mockRegisterViaOTC.mock.calls[0][1] as { db: { grantPackages?: unknown } };
+    expect(adapters.db.grantPackages).toBe(grantPackageRepositoryStub);
   });
 
   it('persists the signup touches and reports email_verified and credits_granted for the new user', async () => {
@@ -1189,6 +1201,18 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(mockClearPending).toHaveBeenCalledWith('u-existing');
     // The release is reflected onto the response, not just the doc the handler mutated.
     expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
+  });
+
+  it('wires the grant package repository into the held-grant release adapters', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    const adapters = mockReleasePending.mock.calls[0][1] as { db: { grantPackages?: unknown } };
+    expect(adapters.db.grantPackages).toBe(grantPackageRepositoryStub);
   });
 
   it('reports email_verified and the summed credits on the first verifying login', async () => {

@@ -13,7 +13,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mocks.post } }));
-vi.mock('@client/app/utils/grantPackageAPICalls', () => ({ fetchGrantPackages: mocks.fetchGrantPackages }));
+vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
+  fetchGrantPackages: mocks.fetchGrantPackages,
+  GRANT_PACKAGES_QUERY_KEY: 'admin-grant-packages',
+}));
 vi.mock('@client/app/utils/subscriberAPICalls', () => ({
   fetchSubscribers: mocks.fetchSubscribers,
   deleteSubscriber: vi.fn(),
@@ -101,6 +104,7 @@ describe('WaitlistTab invite dialog', () => {
     expect(screen.getByTestId('waitlist-invite-storage-input')).toHaveValue(2048);
     fireEvent.click(screen.getByTestId('waitlist-invite-dialog-reason-input-preset-0'));
     await waitFor(() => expect(confirm).toBeEnabled());
+    const packageFetchesBeforeSend = mocks.fetchGrantPackages.mock.calls.length;
     fireEvent.click(confirm);
 
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1));
@@ -108,6 +112,7 @@ describe('WaitlistTab invite dialog', () => {
     expect(body.grantPackageId).toBe('pkg1');
     expect(body.emailBody).toContain('750 credits');
     expect(body.emailBody).toContain('2048 MB');
+    await waitFor(() => expect(mocks.fetchGrantPackages.mock.calls.length).toBeGreaterThan(packageFetchesBeforeSend));
   });
 });
 

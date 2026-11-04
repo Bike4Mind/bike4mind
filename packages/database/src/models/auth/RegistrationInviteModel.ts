@@ -145,8 +145,6 @@ const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(
   }
 );
 
-RegistrationInviteSchema.index({ grantPackageId: 1 });
-
 // No index on email field - DocumentDB doesn't properly support sparse unique indexes.
 // The 'code' field ensures uniqueness for each invite.
 

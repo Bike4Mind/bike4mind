@@ -20,7 +20,10 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock('@client/app/utils/partnerSignupRuleAPICalls', () => api);
 const packageApi = vi.hoisted(() => ({ fetchGrantPackages: vi.fn() }));
-vi.mock('@client/app/utils/grantPackageAPICalls', () => packageApi);
+vi.mock('@client/app/utils/grantPackageAPICalls', () => ({
+  ...packageApi,
+  GRANT_PACKAGES_QUERY_KEY: 'admin-grant-packages',
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import PartnerSignupRulesTab from './PartnerSignupRulesTab';

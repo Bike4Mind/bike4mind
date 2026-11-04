@@ -69,6 +69,12 @@ describe('/api/admin/grant-packages (POST)', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 
+  it('rejects a daily cap above the total cap and never writes', async () => {
+    const { req, res } = makeReqRes('POST', { body: { ...small, totalCap: 5, dailyCap: 6 } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/dailyCap: must not exceed totalCap/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
   it('creates a package under the threshold without a reason and audits it', async () => {
     const { req, res } = makeReqRes('POST', { body: small });
     await handlers.post(req, res);
@@ -153,6 +159,22 @@ describe('/api/admin/grant-packages/[id] (PATCH)', () => {
         changes: [{ field: 'totalCap', before: 1, after: null }],
       })
     );
+  });
+
+  it('returns the stored package without a write or audit entry when nothing changed', async () => {
+    const { req, res } = makeReqRes('PATCH', { query: { id: 'p1' }, body: { active: true, totalCap: 1 } });
+    await handlers.patch(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ id: 'p1' });
+    expect(repo.updatePackage).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('rejects an edit that leaves the daily cap above the stored total cap', async () => {
+    repo.findById.mockResolvedValue({ ...stored, totalCap: 10, dailyCap: 5 });
+    const { req, res } = makeReqRes('PATCH', { query: { id: 'p1' }, body: { dailyCap: 11 } });
+    await expect(handlers.patch(req, res)).rejects.toThrow(/dailyCap: must not exceed totalCap/);
+    expect(repo.updatePackage).not.toHaveBeenCalled();
   });
 
   it('deactivates without a reason', async () => {

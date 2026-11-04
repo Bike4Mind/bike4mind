@@ -4,15 +4,24 @@ import type { GrantPackageRefusalReason } from '../types/entities/GrantPackageTy
 const capSchema = z.number().int().min(1).nullable();
 
 export const grantPackageInputSchema = z.object({
-  name: z.string().trim().min(1),
+  name: z.string().trim().min(1).max(100),
   credits: z.number().int().min(0),
   storageMb: z.number().int().min(1).nullable().optional(),
-  tags: z.array(z.string().trim().min(1)).optional(),
+  tags: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
   totalCap: capSchema,
   dailyCap: capSchema,
   active: z.boolean().optional(),
   reason: z.string().trim().min(1).nullable().optional(),
 });
+
+/**
+ * A daily cap above the total cap can never bind. Not a schema refine: refinements make zod v4 throw
+ * on the `.omit()`/`.partial()` derivations below, so the admin routes call this (PATCH on the merged values).
+ */
+export const grantPackageCapsConflict = (caps: { totalCap?: number | null; dailyCap?: number | null }): boolean =>
+  caps.totalCap != null && caps.dailyCap != null && caps.dailyCap > caps.totalCap;
+
+export const GRANT_PACKAGE_CAPS_CONFLICT_MESSAGE = 'dailyCap: must not exceed totalCap';
 
 export type GrantPackageInput = z.infer<typeof grantPackageInputSchema>;
 

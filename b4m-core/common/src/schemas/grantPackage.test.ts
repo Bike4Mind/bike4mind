@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createGrantPackageSchema,
+  grantPackageCapsConflict,
   grantPackageExposure,
   requiresGrantReason,
   updateGrantPackageSchema,
@@ -63,6 +64,24 @@ describe('admin package schemas', () => {
   it('rejects unknown keys, including a reason, so the route must split it off first', () => {
     expect(createGrantPackageSchema.safeParse({ ...base, reason: 'Pilot access' }).success).toBe(false);
     expect(updateGrantPackageSchema.safeParse({ redeemedTotal: 0 }).success).toBe(false);
+  });
+
+  it('bounds the name and tags like invite generation', () => {
+    expect(createGrantPackageSchema.safeParse({ ...base, name: 'n'.repeat(101) }).success).toBe(false);
+    expect(createGrantPackageSchema.safeParse({ ...base, tags: ['t'.repeat(101)] }).success).toBe(false);
+    expect(
+      createGrantPackageSchema.safeParse({ ...base, tags: Array.from({ length: 21 }, (_, i) => `t${i}`) }).success
+    ).toBe(false);
+    expect(
+      createGrantPackageSchema.safeParse({ ...base, tags: Array.from({ length: 20 }, (_, i) => `t${i}`) }).success
+    ).toBe(true);
+  });
+
+  it('flags a daily cap above the total cap only when both are set', () => {
+    expect(grantPackageCapsConflict({ totalCap: 5, dailyCap: 6 })).toBe(true);
+    expect(grantPackageCapsConflict({ totalCap: 5, dailyCap: 5 })).toBe(false);
+    expect(grantPackageCapsConflict({ totalCap: null, dailyCap: 6 })).toBe(false);
+    expect(grantPackageCapsConflict({ totalCap: 5, dailyCap: null })).toBe(false);
   });
 
   it('accepts a partial edit', () => {

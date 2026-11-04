@@ -57,12 +57,16 @@ const handler = adminApi({
       if (data.entitlements) assertKnownEntitlements(data.entitlements);
       // Present (and non-null) only when the update sets/changes the org association.
       if (data.organizationId) await assertOrganizationExists(data.organizationId);
-      await assertGrantPackageExists(data.grantPackageId);
-      // Only a changed plan is checked, so an admin can still edit or disable a rule whose plan
-      // was removed from the catalog after it was saved.
       // Also the "before" side of the audit diff. Read outside the transaction, so a concurrent PUT
       // can leave `before` stale; acceptable for a last-writer-wins edit.
       const stored = await partnerSignupRuleRepository.findById(id);
+      // Only a changed package must be active: the edit form re-sends the current id, and a rule
+      // linked to a since-deactivated package must stay editable.
+      await assertGrantPackageExists(data.grantPackageId, {
+        requireActive: data.grantPackageId !== stored?.grantPackageId,
+      });
+      // Only a changed plan is checked, so an admin can still edit or disable a rule whose plan
+      // was removed from the catalog after it was saved.
       if (data.subscription && stored?.subscription?.priceId !== data.subscription.priceId) {
         assertKnownSubscriptionPlan(data.subscription);
       }
