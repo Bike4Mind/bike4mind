@@ -19,7 +19,7 @@ import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { emitSignupFunnelEvents, recordSyntheticIdentity } from '@server/analytics/funnel';
+import { emitSignupFunnelEvents, recordAccountLane } from '@server/analytics/funnel';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const AUDITED_USER_ID_LIMIT = 100;
@@ -141,9 +141,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           createdUserIds.push(newUser.id);
           startingCreditsById.set(newUser.id, startingCredits);
 
-          const isSynthetic = await recordSyntheticIdentity(newUser);
+          const lane = await recordAccountLane(newUser);
           await emitSignupFunnelEvents({
-            user: { id: newUser.id, isSynthetic },
+            user: { id: newUser.id, ...lane },
             method: 'admin',
             emailVerified: newUser.emailVerified === true,
             creditsGranted: newUser.currentCredits ?? startingCredits,

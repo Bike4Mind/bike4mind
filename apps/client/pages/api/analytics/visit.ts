@@ -51,6 +51,12 @@ import { resolveServerConsent } from '@bike4mind/server-utils/analytics/serverCo
  * Hence the per-IP rate limit below, on top of the `/api/` per-IP counter the edge WAF already
  * keeps.
  *
+ * No lane either (server-utils analytics/lane.ts), on purpose. The browser sends this without the
+ * session's bearer token, so nothing here identifies the visitor: a mark could only come from the
+ * body or a cookie, which the visitor controls, and would let anyone take a real visit out of the
+ * count. A synthetic or internal user's visit is set apart downstream instead, by the marked
+ * `active` analyticsMiddleware sends for each of their visits under the same visit id.
+ *
  * The referrer comes from the body, never the Referer header: the beacon is a fetch from the
  * app's own page, so the header always names that page, and a visit read from it came from the
  * app itself. A body without one (consent declined or never given, no referrer, or a page loaded

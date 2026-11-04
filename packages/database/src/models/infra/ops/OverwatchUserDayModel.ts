@@ -25,6 +25,12 @@ export interface IOverwatchUserDayDoc {
    * the lane existed and every user no event marked - never a verified real user.
    */
   lane?: OverwatchLane;
+  /**
+   * true when any of the user's events that day carried `metadata.internal: true` (an internal
+   * account, see server-utils analytics/lane.ts). Sticky and never false, like `lane`; absent means
+   * unmarked. A row marked both is synthetic: that lane wins.
+   */
+  internal?: boolean;
   createdAt: Date;
 }
 
@@ -38,6 +44,7 @@ const OverwatchUserDaySchema = new Schema<IOverwatchUserDayDoc>(
     userType: { type: String },
     // No default: an old row must keep reading as unmarked, and nothing writes a value on its behalf.
     lane: { type: String, enum: OVERWATCH_LANE_VALUES },
+    internal: { type: Boolean },
   },
   { timestamps: true }
 );

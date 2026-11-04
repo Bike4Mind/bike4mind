@@ -12,6 +12,7 @@ import { ModalTriggerProvider } from './ModalTriggerContext';
 import ModalManager from '@client/app/components/modals/ModalManager';
 import ModalErrorBoundary from '@client/app/components/modals/ModalErrorBoundary';
 import ReferralModal, { ReferralInviteType } from '@client/app/components/referrals/ReferralModal';
+import ReferralRewardNotice from '@client/app/components/referrals/ReferralRewardNotice';
 import HelpModal from '@client/app/components/HelpModal';
 import PromptMetaInspector from '@client/app/components/Session/PromptMetaInspector';
 import FileBrowser from '../components/Files/Browser';
@@ -73,6 +74,7 @@ export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
             <ModalManager />
           </ModalErrorBoundary>
           <ReferralModal inviteType={ReferralInviteType.referral} />
+          <ReferralRewardNotice />
           <HelpModal />
           <PromptMetaInspector />
           <CreateTeamModal />

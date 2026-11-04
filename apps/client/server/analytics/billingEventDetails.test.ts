@@ -34,6 +34,7 @@ import {
   recordCheckoutVisit,
   subscriptionCheckoutVisitId,
   subscriptionEventUser,
+  subscriptionPeriodEnd,
   wholeDaysBetween,
 } from './billingEventDetails';
 
@@ -72,6 +73,48 @@ describe('planChangeDirection', () => {
   it('says unknown rather than inventing a direction off the plan ladder', () => {
     expect(planChangeDirection('price_basic', 'price_side')).toBe('unknown');
     expect(planChangeDirection('price_gone', 'price_pro')).toBe('unknown');
+  });
+});
+
+describe('subscriptionPeriodEnd', () => {
+  const invoiceWith = (lines: unknown) => ({ lines }) as unknown as Parameters<typeof subscriptionPeriodEnd>[0];
+  const line = (end: number, type = 'subscription_item_details') => ({ parent: { type }, period: { start: 0, end } });
+
+  it('is the latest subscription line end, in unix seconds, whatever order the lines come in', () => {
+    const latest = Date.parse('2027-11-03T10:00:00Z') / 1000;
+    for (const data of [
+      [line(latest - 86400), line(latest), line(latest - 3600)],
+      [line(latest), line(latest - 86400)],
+      [line(latest - 86400), line(latest)],
+    ]) {
+      expect(subscriptionPeriodEnd(invoiceWith({ data }))?.toISOString()).toBe('2027-11-03T10:00:00.000Z');
+    }
+  });
+
+  it('prefers a full-period line over a proration that ends later, and uses prorations when there is no other', () => {
+    const proration = (end: number) => ({
+      parent: { type: 'subscription_item_details', subscription_item_details: { proration: true } },
+      period: { start: 0, end },
+    });
+    const newPeriodEnd = Date.parse('2026-12-03T10:00:00Z') / 1000;
+    const oldPeriodEnd = Date.parse('2027-03-01T00:00:00Z') / 1000;
+    expect(
+      subscriptionPeriodEnd(invoiceWith({ data: [proration(oldPeriodEnd), line(newPeriodEnd)] }))?.toISOString()
+    ).toBe('2026-12-03T10:00:00.000Z');
+    expect(
+      subscriptionPeriodEnd(
+        invoiceWith({ data: [proration(oldPeriodEnd), { ...line(newPeriodEnd), period: null }] })
+      )?.toISOString()
+    ).toBe('2027-03-01T00:00:00.000Z');
+  });
+
+  it('has none without a subscription line that has a period', () => {
+    expect(subscriptionPeriodEnd(invoiceWith(undefined))).toBeUndefined();
+    expect(subscriptionPeriodEnd(invoiceWith({ data: [] }))).toBeUndefined();
+    expect(subscriptionPeriodEnd(invoiceWith({ data: [line(1_800_000_000, 'invoice_item_details')] }))).toBeUndefined();
+    expect(
+      subscriptionPeriodEnd(invoiceWith({ data: [{ parent: { type: 'subscription_item_details' }, period: null }] }))
+    ).toBeUndefined();
   });
 });
 

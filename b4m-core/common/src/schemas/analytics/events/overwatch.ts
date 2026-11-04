@@ -81,6 +81,11 @@ export type OverwatchUserType = (typeof OVERWATCH_USERTYPE_VALUES)[number];
 // the mark onto that user's per-user rows as a top-level `lane` and never clears
 // it. 'synthetic' is the only value ever written: an absent lane means
 // "unmarked", never a verified real user, so there is no 'real' value.
+//
+// An internal account's events (User.isInternal, or an admin) carry a separate
+// metadata.internal: true instead, never alongside the synthetic lane and never as
+// false. A flag of its own rather than a second lane value, so readers of `lane` are
+// unchanged.
 // ---------------------------------------------------------------------------
 
 export const OVERWATCH_LANE_VALUES = ['synthetic'] as const;

@@ -448,6 +448,35 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'The hourly job that reads Anthropic and OpenAI usage reports failed, so the provider-side spend alarms are blind until it recovers.',
     action: 'Check the poller Lambda log for the error. A missing or rotated admin key is the usual cause.',
   },
+  'image-moderation-incident-unalerted': {
+    title: 'A moderation incident has no reviewer alert',
+    level: 'page',
+    category: 'security',
+    unit: 'minutes',
+    meaning:
+      'An image moderation incident has waited over 30 minutes without an alert reaching a reviewer, even though the scheduled sweep keeps retrying. Either the email keeps failing or no reviewer is configured.',
+    action:
+      'Open the admin settings and check the image moderation reviewer list, then check the sweep Lambda log for send failures. Review the incident in the admin console in the meantime.',
+  },
+  'image-moderation-incident-unreviewed': {
+    title: 'A moderation incident has waited a day for review',
+    level: 'page',
+    category: 'security',
+    unit: 'minutes',
+    meaning:
+      'An image moderation incident has been waiting over 24 hours for a review verdict. Reviewers are reminded once a day, and this clears only when a verdict is recorded.',
+    action: 'Open the moderation incidents in the admin console and record a verdict, or ask a reviewer to.',
+  },
+  'image-moderation-no-reviewers': {
+    title: 'Moderation incidents are waiting and nobody is set to review them',
+    level: 'page',
+    category: 'security',
+    unit: 'checks',
+    meaning:
+      'Image moderation incidents are waiting for review, but the reviewer list in admin settings has no valid email address, so no alert can be sent.',
+    action:
+      'Add at least one valid address to the image moderation reviewer list in admin settings. The next sweep, within 15 minutes, alerts for everything waiting.',
+  },
   'mail-send-failures': {
     title: 'Emails are failing to send',
     level: 'page',

@@ -104,6 +104,12 @@ interface RegisterUserAdapters {
   collectRiskSignals?: FreeCreditAdapters['collectRiskSignals'];
   emitRiskBand?: FreeCreditAdapters['emitRiskBand'];
   signupMeta?: IUserDocument['signupMeta'];
+  /**
+   * Leave the pending free credits tagged instead of releasing them here. A caller that runs this
+   * inside a transaction must release after it commits: the staged grant opens its own transaction,
+   * which cannot see the account this one inserted but has not committed.
+   */
+  deferFreeCreditRelease?: boolean;
 }
 
 export const registerUser = async (
@@ -519,7 +525,7 @@ export const registerViaOTC = async (
   let finalTags = taggedUser.tags;
   let pendingCreditGrant = newUser.pendingCreditGrant ?? null;
 
-  if (db.creditTransactions) {
+  if (db.creditTransactions && !adapters.deferFreeCreditRelease) {
     const release = await releasePendingFreeCredits(taggedUser, {
       db: {
         adminSettings: db.adminSettings,
@@ -541,7 +547,7 @@ export const registerViaOTC = async (
       pendingCreditGrant = null;
       if (release.currentCredits !== null) newUser.currentCredits = release.currentCredits;
     }
-  } else {
+  } else if (!db.creditTransactions) {
     finalTags = finalTags.filter(t => t !== PENDING_FREE_CREDITS_TAG);
     pendingCreditGrant = null;
   }

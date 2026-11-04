@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   createUser: vi.fn(),
   publish: vi.fn(),
   emitSignupFunnelEvents: vi.fn(),
-  recordSyntheticIdentity: vi.fn(),
+  recordAccountLane: vi.fn(),
   recordAdminAction: vi.fn(),
   requirePackage: vi.fn(),
   reserve: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@server/analytics/funnel', () => ({
   emitSignupFunnelEvents: (...args: unknown[]) => h.emitSignupFunnelEvents(...args),
-  recordSyntheticIdentity: (...args: unknown[]) => h.recordSyntheticIdentity(...args),
+  recordAccountLane: (...args: unknown[]) => h.recordAccountLane(...args),
 }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@bike4mind/server-utils/utils/mailer/emailHelpers', async importOriginal => ({
@@ -60,7 +60,7 @@ describe('POST /api/admin/bulk-create-users', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.createUser.mockResolvedValue({ id: 'new-1', email: 'a@b.test', name: 'a@b.test', storageLimit: 1000 });
-    h.recordSyntheticIdentity.mockResolvedValue(false);
+    h.recordAccountLane.mockResolvedValue({ isSynthetic: false, isInternal: false });
     h.recordAdminAction.mockResolvedValue(null);
   });
 
@@ -122,7 +122,7 @@ describe('POST /api/admin/bulk-create-users', () => {
     });
 
     it.each([
-      ['synthetic identity', h.recordSyntheticIdentity],
+      ['account lane', h.recordAccountLane],
       ['signup funnel', h.emitSignupFunnelEvents],
       ['profile update', h.update],
     ] as const)('audits a persisted account and credits when %s fails', async (_step, failingOperation) => {
@@ -209,16 +209,34 @@ describe('POST /api/admin/bulk-create-users', () => {
   it('passes a synthetic classification into the signup emitter', async () => {
     const user = { id: 'new-synthetic', email: 'seed@test.example', name: 'Seed', storageLimit: 1000 };
     h.createUser.mockResolvedValue(user);
-    h.recordSyntheticIdentity.mockResolvedValue(true);
+    h.recordAccountLane.mockResolvedValue({ isSynthetic: true, isInternal: false });
 
     await h.handler!(makeReq([{ email: 'seed@test.example' }]), {
       status: vi.fn().mockReturnThis(),
       json: vi.fn(),
     });
 
-    expect(h.recordSyntheticIdentity).toHaveBeenCalledWith(user);
+    expect(h.recordAccountLane).toHaveBeenCalledWith(user);
     expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.objectContaining({ id: 'new-synthetic', isSynthetic: true }) })
+    );
+  });
+
+  it('passes an internal classification into the signup emitter', async () => {
+    const user = { id: 'new-staff', email: 'a@staff.example', name: 'Staff', storageLimit: 1000 };
+    h.createUser.mockResolvedValue(user);
+    h.recordAccountLane.mockResolvedValue({ isSynthetic: false, isInternal: true });
+
+    await h.handler!(makeReq([{ email: 'a@staff.example' }]), {
+      status: vi.fn().mockReturnThis(),
+      json: vi.fn(),
+    });
+
+    expect(h.recordAccountLane).toHaveBeenCalledWith(user);
+    expect(h.emitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: expect.objectContaining({ id: 'new-staff', isSynthetic: false, isInternal: true }),
+      })
     );
   });
 
