@@ -8,6 +8,9 @@
  *   - adminsettings: settingValue of every `isSensitive` setting (settingsMap)
  *   - apikeys: the per-user provider `apiKey` field
  *
+ * The deploy-time migration 20260921235955 now runs the plain `adminsettings` encrypt step on every
+ * deploy; this CLI remains for --dry-run, --reencrypt, --decrypt and `apikeys`.
+ *
  * Safety:
  *   - Uses isEncrypted() to skip already-encrypted values (idempotent, re-runnable)
  *   - Skips masked placeholders (values starting with the sensitive-setting mask), which

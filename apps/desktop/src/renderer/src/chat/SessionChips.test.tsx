@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatProject, ProjectInspection, RecentFolder } from '@shared/chat';
 import type { AppInfo } from '@shared/ipc';
-import { SessionChips } from './SessionChips';
+import { GrantedFolderChips, SessionChips } from './SessionChips';
 import type { ProjectBindingController } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -787,5 +787,43 @@ describe("the folder chip's recent folders", () => {
     await openMenu();
 
     expect(inMenu('session-chip-project-recent').map(item => item.textContent)).toEqual(['thing']);
+  });
+});
+
+describe("a Chat session's granted folders", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const onRemove = vi.fn(async (_directory: string) => {});
+
+  async function show(directories: readonly string[]): Promise<void> {
+    await act(async () => root.render(<GrantedFolderChips directories={directories} onRemove={onRemove} />));
+  }
+
+  const chips = () => Array.from(host.querySelectorAll<HTMLElement>('[data-testid="session-chip-context"]'));
+
+  beforeEach(() => {
+    onRemove.mockClear();
+    (window as unknown as { b4m: unknown }).b4m = { getAppInfo };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('draws nothing while no folder is shared', async () => {
+    await show([]);
+    expect(host.querySelector('[data-testid="session-granted-folders"]')).toBeNull();
+  });
+
+  it('draws one chip per folder, named by its last segments, and a click takes that one back', async () => {
+    await show(['/work/notes', '/Users/someone/code/thing/docs']);
+
+    expect(chips().map(chip => chip.textContent)).toEqual(['/work/notes', '.../thing/docs']);
+    await act(async () => chips()[1].querySelector('button')?.click());
+    expect(onRemove).toHaveBeenCalledExactlyOnceWith('/Users/someone/code/thing/docs');
   });
 });
