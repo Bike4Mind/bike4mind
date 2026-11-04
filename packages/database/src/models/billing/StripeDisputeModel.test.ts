@@ -101,6 +101,21 @@ describe('StripeDisputeModel', () => {
     ).toEqual({ status: 'not_found' });
   });
 
+  it('lets an admin resolve an open unmatched dispute that Stripe never closed', async () => {
+    const unmatched = await stripeDisputeRepository.recordOpened(facts({ subject: 'unmatched', subjectId: null }));
+
+    const resolved = await stripeDisputeRepository.resolveByAdmin({
+      id: unmatched.id,
+      adminId: 'admin1',
+      note: 'Handled',
+    });
+
+    expect(resolved).toMatchObject({
+      status: 'updated',
+      item: { state: 'resolved', resolution: { outcome: 'admin', resolvedBy: 'admin1', note: 'Handled' } },
+    });
+  });
+
   it('lets an admin resolve a user dispute only once Stripe has closed it', async () => {
     const user = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
     expect((await stripeDisputeRepository.resolveByAdmin({ id: user.id, adminId: 'admin1', note: 'x' })).status).toBe(

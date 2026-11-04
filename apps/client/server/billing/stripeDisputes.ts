@@ -11,6 +11,7 @@ import type { Logger } from '@bike4mind/observability';
 import { applyActionToUser } from '@server/admin/usersBulk/execute';
 import { usersBulkSystemApplyDeps } from '@server/admin/usersBulk/adapters';
 import { UserUndoSnapshotSchema, type UserUndoSnapshot } from '@server/admin/usersBulk/ports';
+import type { BulkUser } from '@server/admin/usersBulk/resolve';
 import { revertUserSnapshot, type RevertDeps } from '@server/admin/usersBulk/undo';
 import { systemAuditActor } from '@server/utils/adminAudit';
 
@@ -194,16 +195,29 @@ export async function resolveLostUserDispute(
 }
 
 export class DisputeContainUndoRefused extends Error {
-  constructor(readonly result: { status: 'conflict'; item: StripeDisputeItem } | { status: 'not_found' }) {
+  constructor(
+    readonly result: { status: 'conflict' | 'account_changed'; item: StripeDisputeItem } | { status: 'not_found' }
+  ) {
     super('Dispute Contain undo refused');
   }
+}
+
+/**
+ * The snapshot adds back what the Contain removed, so replaying it over a later change would stack on
+ * top of it (credits re-granted by hand would be granted twice). Only an account still in the Contain's
+ * after-state is reverted; anything else is for an admin to adjust by hand.
+ */
+function isStillContained(user: BulkUser, snapshot: UserUndoSnapshot): boolean {
+  if (snapshot.banned && !user.isBanned) return false;
+  return !snapshot.creditDelta || user.currentCredits === 0;
 }
 
 /**
  * An admin undoes the automatic Contain of a lost dispute: unsuspends, restores the credits it removed
  * and leaves the keys it revoked off (the account stays blocked while the dispute flag is set, and
  * the user creates new keys). The revert and the record's `undoneAt` commit together, so it runs once. Throws
- * DisputeContainUndoRefused when there is nothing to undo, or when it was already undone.
+ * DisputeContainUndoRefused when there is nothing to undo, when it was already undone, or when the
+ * account changed since the Contain.
  */
 export async function undoDisputeContain(
   dispute: StripeDisputeItem & { containSnapshot: unknown },
@@ -227,10 +241,17 @@ export async function undoDisputeContain(
       users: [parsed.data],
     },
     deps,
-    async () => {
-      const result = await stripeDisputeRepository.markContainUndone({ id: dispute.id, adminId });
-      if (result.status !== 'updated') throw new DisputeContainUndoRefused(result);
-      undone.item = result.item;
+    {
+      assertRevertable: user => {
+        if (!isStillContained(user, parsed.data)) {
+          throw new DisputeContainUndoRefused({ status: 'account_changed', item: dispute });
+        }
+      },
+      onReverted: async () => {
+        const result = await stripeDisputeRepository.markContainUndone({ id: dispute.id, adminId });
+        if (result.status !== 'updated') throw new DisputeContainUndoRefused(result);
+        undone.item = result.item;
+      },
     }
   );
   if (!undone.item) throw new Error(`Dispute Contain undo did not record for ${dispute.stripeDisputeId}`);

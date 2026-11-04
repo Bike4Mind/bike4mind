@@ -260,4 +260,38 @@ describe('undoDisputeContain', () => {
     expect((await User.findById(userId).lean())?.currentCredits).toBe(500);
     expect(await AdminAuditLogModel.countDocuments({ action: 'user.bulk.undone' })).toBe(1);
   });
+
+  it('refuses to undo when credits were re-granted by hand after the Contain, without doubling them', async () => {
+    const userId = await seedUser();
+    const adminId = await seedUser({ isAdmin: true, disputePending: false });
+    const record = await closeFor(userId);
+    await resolveLostUserDispute(record, { id: userId }, logger);
+    await User.updateOne({ _id: userId }, { $set: { currentCredits: 300 } });
+    const dispute = await stripeDisputeRepository.findById(record.id);
+
+    const refusal = await undoDisputeContain(dispute!, adminId, usersBulkUndoDeps(adminReq(adminId), logger)).catch(
+      (error: unknown) => error
+    );
+
+    expect(refusal).toBeInstanceOf(DisputeContainUndoRefused);
+    expect((refusal as DisputeContainUndoRefused).result.status).toBe('account_changed');
+    expect(await User.findById(userId).lean()).toMatchObject({ isBanned: true, currentCredits: 300 });
+    expect((await stripeDisputeRepository.findById(record.id))?.contain?.undoneAt).toBeNull();
+    expect(await AdminAuditLogModel.countDocuments({ action: 'user.bulk.undone' })).toBe(0);
+  });
+
+  it('refuses to undo a dispute that has no Contain', async () => {
+    const userId = await seedUser({ isAdmin: true });
+    const adminId = await seedUser({ isAdmin: true, disputePending: false });
+    const record = await closeFor(userId);
+    await resolveLostUserDispute(record, { id: userId, isAdmin: true }, logger);
+    const dispute = await stripeDisputeRepository.findById(record.id);
+
+    const refusal = await undoDisputeContain(dispute!, adminId, usersBulkUndoDeps(adminReq(adminId), logger)).catch(
+      (error: unknown) => error
+    );
+
+    expect(refusal).toBeInstanceOf(DisputeContainUndoRefused);
+    expect((refusal as DisputeContainUndoRefused).result.status).toBe('conflict');
+  });
 });

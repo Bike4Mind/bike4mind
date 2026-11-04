@@ -17,6 +17,7 @@ import {
   type UsersBulkLogger,
   type UsersBulkStore,
 } from './ports';
+import type { BulkUser } from './resolve';
 
 export type UndoDeps = {
   db: UsersBulkDb;
@@ -175,18 +176,22 @@ export async function undoAdminUsersBulk(
 
 /**
  * Reverts one user's snapshot outside any batch, for a system action that keeps its own durable undo
- * record (`record.adminId` is the admin undoing it). `onReverted` runs in the same transaction, so that
- * record is marked undone with the revert or not at all. Throws when the revert fails.
+ * record (`record.adminId` is the admin undoing it). `assertRevertable` sees the user inside the
+ * transaction before anything is written and throws to refuse. `onReverted` runs in the same
+ * transaction, so that record is marked undone with the revert or not at all. Throws when the revert fails.
  */
 export async function revertUserSnapshot(
   snapshot: UserUndoSnapshot,
   record: UndoRecord,
   deps: RevertDeps,
-  onReverted: () => Promise<void>
+  hooks: { assertRevertable: (user: BulkUser) => void; onReverted: () => Promise<void> }
 ): Promise<void> {
   await deps.withTransaction(async () => {
+    const user = await deps.db.findUser(snapshot.userId);
+    if (!user) throw new Error('User not found');
+    hooks.assertRevertable(user);
     await revertUser(snapshot, record, deps);
-    await onReverted();
+    await hooks.onReverted();
   });
 }
 

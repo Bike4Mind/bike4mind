@@ -1,6 +1,14 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope, STRIPE_DISPUTE_LIST_LIMIT, type StripeDisputeItem } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ForbiddenError,
+  STRIPE_DISPUTE_LIST_LIMIT,
+  hasAdminPermission,
+  missingAdminPermissionMessage,
+  type AdminPermissionId,
+  type StripeDisputeItem,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   handlers: {} as Record<string, Record<string, (req: unknown, res: unknown) => Promise<void>>>,
@@ -20,9 +28,16 @@ const h = vi.hoisted(() => ({
   },
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
-// The permission gate itself is adminApi's (covered by its own tests); these assert each route declares it.
+// The gate is adminApi's (covered by its own tests): the stand-in applies the route's declared POST
+// permission before the handler, as the real chain does, so a route's two-permission check is exercised.
 vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: (options: unknown) => {
+  requireAdminPermission: (
+    req: { user?: { isAdmin?: boolean; adminPermissions?: AdminPermissionId[] } },
+    permission: AdminPermissionId
+  ) => {
+    if (!hasAdminPermission(req.user, permission)) throw new ForbiddenError(missingAdminPermissionMessage(permission));
+  },
+  adminApi: (options: { adminPermissions?: { POST?: AdminPermissionId } }) => {
     h.routeOptions(options);
     h.optionsByRoute[h.current] = options;
     const route = (h.handlers[h.current] = {} as Record<string, (req: unknown, res: unknown) => Promise<void>>);
@@ -33,7 +48,14 @@ vi.mock('@server/middlewares/adminApi', () => ({
         return chain;
       },
       post: (fn: (req: unknown, res: unknown) => Promise<void>) => {
-        route.post = fn;
+        const declared = options.adminPermissions?.POST;
+        route.post = async (req, res) => {
+          const { user } = req as { user?: { isAdmin?: boolean; adminPermissions?: AdminPermissionId[] } };
+          if (declared && !hasAdminPermission(user, declared)) {
+            throw new ForbiddenError(missingAdminPermissionMessage(declared));
+          }
+          await fn(req, res);
+        };
         return chain;
       },
     };
@@ -140,7 +162,7 @@ describe('GET /api/admin/stripe-disputes', () => {
 });
 
 describe('POST /api/admin/stripe-disputes/resolve', () => {
-  it('is gated on the moderation permission', () => {
+  it('is gated on the credits permission', () => {
     expect(h.optionsByRoute.resolve).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
@@ -225,7 +247,56 @@ describe('POST /api/admin/stripe-disputes/undo-contain', () => {
     expect(h.optionsByRoute.undo).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
-      adminPermissions: { POST: 'users:moderate' },
+      adminPermissions: { POST: 'credits:adjust' },
+    });
+  });
+
+  describe('permissions', () => {
+    const asAdminWith = (adminPermissions: AdminPermissionId[]) => {
+      const { req, res } = request('POST', { body: { id: DISPUTE_ID, reason: REASON } });
+      Object.assign(req, { user: { id: ADMIN_ID, isAdmin: false, adminPermissions } });
+      return { req, res };
+    };
+
+    it('refuses an admin with only users:moderate, naming credits:adjust', async () => {
+      const { req, res } = asAdminWith(['users:moderate']);
+      await expect(h.handlers.undo.post(req, res)).rejects.toThrow('credits:adjust');
+      expect(h.findById).not.toHaveBeenCalled();
+    });
+
+    it('refuses an admin with only credits:adjust, naming users:moderate', async () => {
+      const { req, res } = asAdminWith(['credits:adjust']);
+      await expect(h.handlers.undo.post(req, res)).rejects.toThrow('users:moderate');
+      expect(h.findById).not.toHaveBeenCalled();
+    });
+
+    it('lets an admin with both proceed', async () => {
+      const dispute = { ...contained(), containSnapshot: { userId: 'u1', banned: true } };
+      h.findById.mockResolvedValue(dispute);
+      h.undoDisputeContain.mockResolvedValue(dispute);
+      const { req, res } = asAdminWith(['credits:adjust', 'users:moderate']);
+
+      await h.handlers.undo.post(req, res);
+
+      expect(h.undoDisputeContain).toHaveBeenCalled();
+    });
+  });
+
+  it('answers 409 with the account-changed message and the item when the account changed after the Contain', async () => {
+    const disputed = item({ subject: 'user' });
+    h.findById.mockResolvedValue({ ...contained(), containSnapshot: { userId: 'u1', banned: true } });
+    h.undoDisputeContain.mockRejectedValue(
+      new h.DisputeContainUndoRefused({ status: 'account_changed', item: disputed })
+    );
+    const { req, res } = request('POST', { body: { id: DISPUTE_ID, reason: REASON } });
+
+    await h.handlers.undo.post(req, res);
+
+    const { STRIPE_DISPUTE_ACCOUNT_CHANGED_MESSAGE } = await import('@pages/api/admin/stripe-disputes/undo-contain');
+    expect(res._getStatusCode()).toBe(409);
+    expect(res._getJSONData()).toMatchObject({
+      error: STRIPE_DISPUTE_ACCOUNT_CHANGED_MESSAGE,
+      item: { stripeDisputeId: 'dp_test_1', subject: 'user' },
     });
   });
 
