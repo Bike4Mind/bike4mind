@@ -25,8 +25,9 @@ import type {
   ModelServerState,
   ModelServerTransportType,
   ModelServerView,
+  QuantizedKvCacheType,
 } from '@shared/modelServers';
-import { specsProblem } from '@shared/modelServers';
+import { QUANTIZED_KV_CACHE_TYPES, specsProblem } from '@shared/modelServers';
 import { formatMemory, type MachineView } from '@shared/models';
 
 const KIND_LABEL: Record<ModelServerKind, string> = { ollama: 'Ollama', 'openai-compatible': 'OpenAI-compatible' };
@@ -167,10 +168,17 @@ function CredentialFields({
   );
 }
 
-type SpecsDraft = { ram: string; gpu: string; bandwidth: string; unified: boolean };
+type SpecsDraft = {
+  ram: string;
+  gpu: string;
+  bandwidth: string;
+  unified: boolean;
+  kv: QuantizedKvCacheType | null;
+};
 
 const figure = (value: number | null | undefined) => (value === null || value === undefined ? '' : String(value));
 const parsed = (value: string) => (value.trim() === '' ? null : Number(value));
+const KV_DEFAULT = 'f16';
 
 function specsDraft(specs: ModelServerSpecs | null): SpecsDraft {
   return {
@@ -178,6 +186,7 @@ function specsDraft(specs: ModelServerSpecs | null): SpecsDraft {
     gpu: figure(specs?.gpuMemoryGiB),
     bandwidth: figure(specs?.bandwidthGBps),
     unified: specs?.unified ?? false,
+    kv: specs?.kvCacheType ?? null,
   };
 }
 
@@ -187,6 +196,7 @@ function draftSpecs(draft: SpecsDraft): ModelServerSpecs {
     gpuMemoryGiB: parsed(draft.gpu),
     bandwidthGBps: parsed(draft.bandwidth),
     unified: draft.unified,
+    ...(draft.kv ? { kvCacheType: draft.kv } : {}),
   };
 }
 
@@ -195,6 +205,7 @@ export function specsSummary(specs: ModelServerSpecs): string {
     specs.ramGiB !== null ? `${specs.ramGiB} GB RAM${specs.unified ? ' shared with the GPU' : ''}` : null,
     specs.gpuMemoryGiB !== null ? `${specs.gpuMemoryGiB} GB GPU memory` : null,
     specs.bandwidthGBps !== null ? `${specs.bandwidthGBps} GB/s memory bandwidth` : null,
+    specs.kvCacheType ? `${specs.kvCacheType} KV cache` : null,
   ]
     .filter(Boolean)
     .join(', ');
@@ -304,6 +315,32 @@ function SpecsFields({
         in Curated picks
         {gpuBandwidth ? ", so enter the GPU's own figure, not the system RAM's." : '.'}
       </Typography>
+      {server.kind === 'ollama' && (
+        <FormControl size="sm" sx={{ maxWidth: 260 }}>
+          <FormLabel>KV cache type</FormLabel>
+          <Select
+            size="sm"
+            value={draft.kv ?? KV_DEFAULT}
+            onChange={(_event, value) =>
+              setDraft({ ...draft, kv: QUANTIZED_KV_CACHE_TYPES.find(type => type === value) ?? null })
+            }
+            slotProps={{ button: { 'data-testid': 'model-servers-specs-kv-select' } }}
+          >
+            <Option value={KV_DEFAULT} data-testid="model-servers-specs-kv-option-f16">
+              f16 (Ollama&apos;s default)
+            </Option>
+            {QUANTIZED_KV_CACHE_TYPES.map(type => (
+              <Option key={type} value={type} data-testid={`model-servers-specs-kv-option-${type}`}>
+                {type}
+              </Option>
+            ))}
+          </Select>
+          <FormHelperText>
+            What OLLAMA_KV_CACHE_TYPE is set to where this Ollama runs, which Desktop cannot read. It applies to every
+            model on the server. Ollama keeps f16 where flash attention is off.
+          </FormHelperText>
+        </FormControl>
+      )}
       {problem && (
         <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-specs-error">
           {problem}
@@ -313,7 +350,7 @@ function SpecsFields({
         <Button
           size="sm"
           disabled={busy}
-          onClick={() => save(draftSpecs(draft))}
+          onClick={() => save(draftSpecs(server.kind === 'ollama' ? draft : { ...draft, kv: null }))}
           data-testid="model-servers-specs-save-btn"
         >
           Save hardware

@@ -855,6 +855,7 @@ export class ModelServerRegistry {
               fetch,
               hasCredentials,
               redact: redactServerResponse,
+              kvCacheType: () => this.specs(record.id)?.kvCacheType,
             },
             this.deps.loadSettings
           )

@@ -496,6 +496,7 @@ export function registerChat(
   const localSizing = localContextSizing({
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
+    kvCacheType: () => modelServers.specs(LOCAL_SERVER_ID)?.kvCacheType,
   });
   const lateReload = createLateReload(() => {
     models.forgetLocal();

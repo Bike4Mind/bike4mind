@@ -421,6 +421,48 @@ describe('ModelServersSettings hardware', () => {
       specs: { ramGiB: null, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false },
     });
   });
+
+  it("shows and changes an Ollama server's entered KV cache type", async () => {
+    await show({
+      ...saved('ollama', 'manage'),
+      specs: { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q8_0' },
+    });
+    expect(byTestId('model-servers-specs-summary')?.textContent).toBe('Hardware entered: 64 GB RAM, q8_0 KV cache.');
+    await click('model-servers-specs-btn');
+    expect(byTestId('model-servers-specs-kv-select')?.textContent).toBe('q8_0');
+    await click('model-servers-specs-kv-select');
+    await click('model-servers-specs-kv-option-q4_0');
+    await click('model-servers-specs-save-btn');
+    expect(update).toHaveBeenLastCalledWith('gpu', {
+      specs: { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q4_0' },
+    });
+    await click('model-servers-specs-btn');
+    await click('model-servers-specs-kv-select');
+    await click('model-servers-specs-kv-option-f16');
+    await click('model-servers-specs-save-btn');
+    expect(update).toHaveBeenLastCalledWith('gpu', {
+      specs: { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false },
+    });
+  });
+
+  it('saves a KV cache type alone for this computer, and asks for none on an OpenAI-compatible server', async () => {
+    await show({ ...saved('ollama', 'manage'), id: 'local', name: 'This computer', local: true });
+    await click('model-servers-specs-btn');
+    expect(byTestId('model-servers-specs-kv-select')?.textContent).toBe("f16 (Ollama's default)");
+    await click('model-servers-specs-kv-select');
+    await click('model-servers-specs-kv-option-q8_0');
+    await click('model-servers-specs-save-btn');
+    expect(update).toHaveBeenCalledWith('local', {
+      specs: { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q8_0' },
+    });
+    await act(async () => root?.unmount());
+    host.remove();
+
+    await show(saved('openai-compatible', 'chat'));
+    await click('model-servers-specs-btn');
+    expect(byTestId('model-servers-specs-form')).not.toBeNull();
+    expect(byTestId('model-servers-specs-kv-select')).toBeNull();
+  });
 });
 
 describe('probedSummary', () => {

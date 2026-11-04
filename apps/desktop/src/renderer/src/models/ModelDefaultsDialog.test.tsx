@@ -337,6 +337,24 @@ describe('ModelDefaultsDialog load options', () => {
     expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 64K tokens.');
   });
 
+  it('shows the KV cache type as a server-wide value, with no per-model choice to save', async () => {
+    offer = { ...OLLAMA_OFFER, kvCache: { type: 'q8_0' } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-kv-cache-value')?.textContent).toBe('q8_0');
+    expect(byTestId('model-defaults-kv-cache-note')?.textContent).toBe(
+      'Set for the whole server with OLLAMA_KV_CACHE_TYPE, as entered under Settings, Model servers, Hardware.'
+    );
+    expect(byTestId('model-defaults-kv-cache-select')).toBeNull();
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+
+    offer = { kvCache: { type: 'f16' } };
+    await render(GEMMA);
+    expect(byTestId('model-defaults-load-section')).not.toBeNull();
+    expect(byTestId('model-defaults-kv-cache-value')?.textContent).toBe('f16');
+    expect(byTestId('model-defaults-kv-cache-note')?.textContent).toMatch(/^Ollama's default\. /);
+  });
+
   it('offers only a smaller context, as a budget, on a server that fixes its own', async () => {
     offer = { context: { kind: 'budget', server: 65536, sizes: [16384, 32768] } };
     await render(QWEN);

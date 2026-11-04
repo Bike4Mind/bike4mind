@@ -198,6 +198,27 @@ describe('ModelServerRegistry', () => {
     expect(restarted).toHaveBeenCalledTimes(1);
   });
 
+  it("offers a saved Ollama server's models with the KV cache type entered for it, as last saved", async () => {
+    const fake = fakeOllama();
+    const { registry: servers } = registry(fake);
+    const [, added] = await servers.add({
+      address: 'http://192.168.1.20:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    const chat = servers.chatFor(`srv-${added.id}`)!;
+    const model = `local:srv-${added.id}:qwen2.5:0.5b`;
+    expect((await chat.loadOffer!(model)).kvCache).toEqual({ type: 'f16' });
+
+    const specs = { ramGiB: 64, gpuMemoryGiB: 24, bandwidthGBps: null, unified: false };
+    await servers.update(added.id, { specs: { ...specs, kvCacheType: 'q8_0' } });
+    expect((await chat.loadOffer!(model)).kvCache).toEqual({ type: 'q8_0' });
+    await servers.update(added.id, { specs });
+    expect((await chat.loadOffer!(model)).kvCache).toEqual({ type: 'f16' });
+  });
+
   it('detects Ollama by what it answers and marks plain http on a private address unencrypted', async () => {
     const { registry: servers } = registry(fakeOllama());
     const probe = await servers.probe({ address: '192.168.1.20:11434', credential: none });

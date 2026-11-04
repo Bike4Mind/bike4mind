@@ -1867,7 +1867,30 @@ describe('OllamaLocal context sizing', () => {
         },
         draft: { modelDefault: 0, max: 16 },
         keepAlive: true,
+        kvCache: { type: 'f16' },
       });
+    });
+
+    it('names the KV cache type entered for this computer or for a saved server, and f16 when none is', async () => {
+      ollama(trainedFor(32768));
+      const entered = { ...sizing(AUTO_LOCAL_CONTEXT, 13), kvCacheType: () => 'q8_0' as const };
+      expect((await new OllamaLocal(undefined, entered).loadOffer('local:ollama:llama')).kvCache).toEqual({
+        type: 'q8_0',
+      });
+      expect(
+        (await new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13)).loadOffer('local:ollama:llama')).kvCache
+      ).toEqual({ type: 'f16' });
+      const serverFetch = vi.fn(async () => Response.json({ error: "model 'llama' not found" }, { status: 404 }));
+      const server = new OllamaLocal(undefined, undefined, {
+        runtimeId: 'srv-kv0001',
+        baseUrl: 'https://one.example.test',
+        label: 'gpu box',
+        fetch: serverFetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        kvCacheType: () => 'q4_0',
+      });
+      expect(await server.loadOffer('local:srv-kv0001:llama')).toEqual({ keepAlive: true, kvCache: { type: 'q4_0' } });
     });
 
     it('keeps the first size past the trained length, clamped to it, and adds nothing for an exact size', async () => {
@@ -1914,6 +1937,7 @@ describe('OllamaLocal context sizing', () => {
           ],
         },
         keepAlive: true,
+        kvCache: { type: 'f16' },
       });
     });
   });

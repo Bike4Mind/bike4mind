@@ -7,6 +7,7 @@
 import { parseLocalModelId, REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from './chat';
 import { normalizeGeneration, parseGenerationInput, type GenerationSettings } from './generation';
 import { parseModelContextSetting, type LocalContextSize, type ModelContextSetting } from './localContextSetting';
+import type { QuantizedKvCacheType } from './modelServers';
 
 export type ModelEffort = Exclude<ReasoningEffortSetting, 'default'>;
 
@@ -61,6 +62,8 @@ export interface ModelLoadOffer {
   /** For a model with an MTP or draft layer: the draft count Ollama runs it with when none is set. */
   draft?: { modelDefault: number; max: number };
   keepAlive?: true;
+  /** Ollama's KV cache type, set server-wide and never per model: the one entered in Settings, else f16. */
+  kvCache?: { type: 'f16' | QuantizedKvCacheType };
 }
 
 const MAX_ID_LENGTH = 1024;

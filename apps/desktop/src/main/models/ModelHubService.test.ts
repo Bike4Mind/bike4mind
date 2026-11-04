@@ -1173,6 +1173,19 @@ describe('ModelHubService entered hardware', () => {
     expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('system RAM');
     expect(curatedFit(list, 'gemma-4-26b')?.detail).not.toContain('Replies');
   });
+
+  it('sizes the KV cache with the type entered for the server, this computer included', async () => {
+    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    const need = (detail = '') => Number(/about (\d+(?:\.\d+)?) GiB/.exec(detail)?.[1]);
+    const f16 = await rated({}).service.curated();
+    const q8 = await rated({ local: { ...blank, kvCacheType: 'q8_0' } }).service.curated();
+    expect(q8.rating).toBe('probe');
+    expect(curatedFit(f16, 'qwen3-8-27b')?.detail).not.toContain('KV cache');
+    expect(curatedFit(q8, 'qwen3-8-27b')?.detail).toContain('the 32K context chat will use with a q8_0 KV cache');
+    expect(need(curatedFit(q8, 'qwen3-8-27b')?.detail)).toBeLessThan(need(curatedFit(f16, 'qwen3-8-27b')?.detail));
+    const server = await rated({ a: { ...GPU_16, kvCacheType: 'q4_0' } }).service.curated('a');
+    expect(curatedFit(server, 'gemma-4-12b')?.detail).toContain('with a q4_0 KV cache');
+  });
 });
 
 const GSQ_REPO = 'ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF';
