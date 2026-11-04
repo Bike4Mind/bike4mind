@@ -158,14 +158,28 @@ describe('OTC registration with a refer-a-friend invite', () => {
 });
 
 describe('OTC registration with a refer-a-friend invite, released inside the transaction', () => {
-  it('pays the signup tranche and the invite bonus in the caller transaction', async () => {
+  it('pays the signup tranche in the caller transaction and leaves the bonus to the next paying release', async () => {
     const invite = await createReferral('synthetic-inviter', 'SYNTHREFERRAL2');
 
     const invitee = await registerViaOtcRoute(1, invite.code, { deferRelease: false });
 
     const persisted = await User.findById(invitee.id).lean();
-    expect(persisted?.signupGrant).toMatchObject({ stage: 'signup', creditsReleased: 1000, inviteBonusPaid: 2000 });
+    expect(persisted?.signupGrant).toMatchObject({ stage: 'signup', creditsReleased: 1000 });
+    expect(persisted?.signupGrant?.inviteBonusPaid).toBeUndefined();
     expect(persisted?.tags).not.toContain(PENDING_FREE_CREDITS_TAG);
-    expect(persisted?.currentCredits).toBe(3000);
+    expect(persisted?.currentCredits).toBe(1000);
+
+    const drip = await userService.dripSignupGrant(invitee.id, '2030-03-01', {
+      db: {
+        users: userRepository,
+        signupProtection,
+        adminSettings: adminSettingsRepository,
+        creditTransactions: creditTransactionRepository,
+      },
+    });
+    expect(drip.creditsGranted).toBe(1000);
+    const dripped = await User.findById(invitee.id).lean();
+    expect(dripped?.signupGrant?.inviteBonusPaid).toBe(2000);
+    expect(dripped?.currentCredits).toBe(4000);
   });
 });

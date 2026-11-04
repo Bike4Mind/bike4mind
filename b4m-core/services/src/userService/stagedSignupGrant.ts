@@ -29,7 +29,7 @@ import {
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
 import { payInviteBonus } from './inviteBonus';
-import { inCallerTransaction } from './callerTransaction';
+import { callerTransactionSession, inCallerTransaction } from './callerTransaction';
 import {
   queueHeadBlocks,
   reserveSignupGrantBudget,
@@ -362,8 +362,9 @@ async function releaseStage(
         console.warn('[signup-risk] Band telemetry failed after grant commit');
       }
     }
-    // A later paying release retries a bonus an exhausted pool or a failure left unpaid.
-    if (expected === 'pending_email' || grantResult.creditsGranted > 0) {
+    // A later paying release retries a bonus an exhausted pool or a failure left unpaid. Inside a caller's
+    // transaction a failed bonus write would abort the caller's commit, so it waits for that later release.
+    if ((expected === 'pending_email' || grantResult.creditsGranted > 0) && !callerTransactionSession()) {
       await payInviteBonus(userId, adapters).catch(() => {
         console.warn('[signup-grant] Invite bonus payout failed; a later release retries it');
       });
