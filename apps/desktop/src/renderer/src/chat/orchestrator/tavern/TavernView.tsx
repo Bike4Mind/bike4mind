@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
-import { AGENT_STATE_LABEL, type AgentView, type ParentView } from '../roster';
+import { AGENT_STATE_LABEL, spawnerName, type AgentView, type ParentView } from '../roster';
 import type { AgentPersona } from './agentPersona';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import {
@@ -217,6 +217,7 @@ function Sprite({
   point,
   label,
   persona,
+  via,
   walkIn,
   selected,
   visited,
@@ -227,6 +228,8 @@ function Sprite({
   point: SlotPoint;
   label: NameLabel;
   persona: AgentPersona | undefined;
+  /** The agent that spawned this one, below the first level; kept off the nameplate to keep it short. */
+  via?: string;
   /** Mount at the door and walk to `point`; read on mount only. */
   walkIn: boolean;
   selected: boolean;
@@ -240,8 +243,9 @@ function Sprite({
   const pose = poseFor(agent.state);
   const bubble = bubbleText(agent);
   const displayName = persona?.label ?? agent.title;
-  const fullName = persona ? `${persona.label}: ${agent.title}` : agent.title;
-  const tooltip = persona ? `${persona.label}: ${persona.shortTitle}` : agent.title;
+  const viaSuffix = via ? ` \u00B7 via ${via}` : '';
+  const fullName = `${persona ? `${persona.label}: ${agent.title}` : agent.title}${viaSuffix}`;
+  const tooltip = `${persona ? `${persona.label}: ${persona.shortTitle}` : agent.title}${viaSuffix}`;
   return (
     <Box
       component="button"
@@ -475,6 +479,7 @@ export function TavernView({
             point={arrived ? placement.point : DOOR_POINT}
             label={labels.get(agent.id) ?? HIDDEN_LABEL}
             persona={personas.get(agent.id)}
+            via={spawnerName(agent, agents, spawner => personas.get(spawner.id)?.label ?? spawner.title)}
             walkIn={mounted.current && !prefersReducedMotion()}
             selected={agent.id === selectedId}
             visited={reducedMotion && agent.id === visit}

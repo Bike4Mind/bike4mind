@@ -28,6 +28,15 @@ afterEach(() => {
 });
 
 describe('BoardView', () => {
+  it('names the spawning agent on a card below the first level only', async () => {
+    await renderBoard([
+      agentFixture('lead', 'working', { title: 'Lead the audit' }),
+      agentFixture('helper', 'working', { depth: 2, parentId: 'lead' }),
+    ]);
+    expect(el('orchestrator-board-via-helper').textContent).toBe('via Lead the audit');
+    expect(query('orchestrator-board-via-lead')).toBeNull();
+  });
+
   it('puts stopped and idle agents in Done with a muted state chip', async () => {
     await renderBoard([agentFixture('a', 'stopped'), agentFixture('b', 'idle'), agentFixture('c', 'done')]);
     const done = el('orchestrator-board-column-done');

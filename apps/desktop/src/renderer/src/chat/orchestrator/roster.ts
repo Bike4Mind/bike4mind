@@ -132,6 +132,20 @@ export function agentStates(
   );
 }
 
+/**
+ * Who started an agent below the first level: the agent that spawned it, by `nameOf` (a title or a
+ * persona). Undefined for a direct child of the root, or when the spawner is not on the roster.
+ */
+export function spawnerName(
+  agent: Pick<AgentView, 'depth' | 'parentId'>,
+  agents: readonly AgentView[],
+  nameOf: (spawner: AgentView) => string = spawner => spawner.title
+): string | undefined {
+  if (agent.depth <= 1) return undefined;
+  const spawner = agents.find(candidate => candidate.id === agent.parentId);
+  return spawner && nameOf(spawner);
+}
+
 export function buildRoster(input: {
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;

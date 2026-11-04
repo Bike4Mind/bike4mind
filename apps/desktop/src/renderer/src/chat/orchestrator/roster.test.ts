@@ -11,6 +11,7 @@ import {
   deriveAgentState,
   descendantIds,
   formatAgentCost,
+  spawnerName,
   summarizeRoster,
   type AgentState,
   type AgentView,
@@ -329,5 +330,22 @@ describe('formatAgentCost', () => {
     expect(formatAgentCost(0.4213, 12)).toBe('$0.42');
     expect(formatAgentCost(undefined, 12)).toBe('12 cr');
     expect(formatAgentCost()).toBe('-');
+  });
+});
+
+describe('spawnerName', () => {
+  const view = (id: string, depth: number, parentId: string, title = `Agent ${id}`) =>
+    ({ id, depth, parentId, title }) as AgentView;
+  const lead = view('lead', 1, 'root', 'Lead the audit');
+  const helper = view('helper', 2, 'lead');
+
+  it('names the spawner below the first level only', () => {
+    expect(spawnerName(lead, [lead, helper])).toBeUndefined();
+    expect(spawnerName(helper, [lead, helper])).toBe('Lead the audit');
+    expect(spawnerName(helper, [lead, helper], spawner => `${spawner.id}!`)).toBe('lead!');
+  });
+
+  it('gives nothing when the spawner is off the roster', () => {
+    expect(spawnerName(helper, [helper])).toBeUndefined();
   });
 });

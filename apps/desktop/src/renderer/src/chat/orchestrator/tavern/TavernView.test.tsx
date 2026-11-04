@@ -65,6 +65,25 @@ afterEach(() => {
 });
 
 describe('TavernView', () => {
+  it('names the spawning agent by its persona in the tooltip and aria-label, not on the plate', async () => {
+    const agents = [
+      agentFixture('lead', 'working', { title: 'Lead the audit' }),
+      agentFixture('helper', 'working', { title: 'Check the helpers', depth: 2, parentId: 'lead' }),
+    ];
+    await renderTavern(agents);
+    const personas = assignPersonas(agents);
+    const lead = personas.get('lead')?.label ?? '';
+    const helper = personas.get('helper')?.label ?? '';
+    expect(el('orchestrator-tavern-agent-helper').getAttribute('title')).toBe(
+      `${helper}: ${personas.get('helper')?.shortTitle} \u00B7 via ${lead}`
+    );
+    expect(el('orchestrator-tavern-agent-helper').getAttribute('aria-label')).toBe(
+      `${helper}: Check the helpers \u00B7 via ${lead}: Working`
+    );
+    expect(el('orchestrator-tavern-name-helper').textContent).toBe(helper);
+    expect(el('orchestrator-tavern-agent-lead').getAttribute('title')).not.toContain('via');
+  });
+
   it('shows the persona on the plate and keeps the full title in the aria-label and tooltip', async () => {
     const agent = agentFixture('a', 'working', { title: 'Review the auth middleware' });
     await renderTavern([agent]);

@@ -6,7 +6,7 @@ import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import { prefersReducedMotion } from './motion';
 import type { OrchestratorViewProps } from './OrchestratorStage';
-import { formatAgentCost, type AgentState, type AgentView } from './roster';
+import { formatAgentCost, spawnerName, type AgentState, type AgentView } from './roster';
 
 type ColumnId = 'needs-you' | 'working' | 'done' | 'failed';
 
@@ -133,11 +133,14 @@ function useFlip(layoutSignature: string) {
 
 function BoardCard({
   agent,
+  via,
   selected,
   onSelect,
   cardRef,
 }: {
   agent: AgentView;
+  /** The agent that spawned this one, below the first level. */
+  via?: string;
   selected: boolean;
   onSelect(id: string): void;
   cardRef(node: HTMLElement | null): void;
@@ -174,6 +177,11 @@ function BoardCard({
       <Typography level="title-sm" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {agent.title}
       </Typography>
+      {via && (
+        <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid={`orchestrator-board-via-${agent.id}`}>
+          via {via}
+        </Typography>
+      )}
       {now && (
         <Typography level="body-xs" sx={lineClamp(2)}>
           {now}
@@ -250,6 +258,7 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
                 <BoardCard
                   key={agent.id}
                   agent={agent}
+                  via={spawnerName(agent, agents)}
                   selected={agent.id === selectedId}
                   onSelect={onSelect}
                   cardRef={refFor(agent.id)}
