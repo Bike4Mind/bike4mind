@@ -90,7 +90,7 @@ export function TopAccountsSection({ kind, data, loading, error, onRetry, onShow
     },
     {
       id: 'share',
-      label: 'Share of requests',
+      label: 'Share of all requests',
       numeric: true,
       sortValue: row => row.share,
       render: row => (

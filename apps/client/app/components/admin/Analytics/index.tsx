@@ -209,7 +209,7 @@ const AnalyticsTab = () => {
               variant="outlined"
               color="neutral"
               size="sm"
-              disabled={!data || isError || topAccounts.isPending}
+              disabled={!data || isError || topAccounts.isPending || topAccounts.isError}
               loading={exporting}
               onClick={() => void exportCsv()}
               data-testid="analytics-export-btn"

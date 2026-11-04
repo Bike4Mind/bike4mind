@@ -401,6 +401,19 @@ describe('AnalyticsTab', () => {
       await waitFor(() => expect(router.state.location.search).toMatchObject({ tab: 'credit-analytics' }));
     });
 
+    it('enables Export once both requests have loaded', async () => {
+      await renderPage('/admin?tab=analytics');
+      await screen.findByTestId('analytics-top-users-table');
+      await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
+    });
+
+    it('disables Export while top accounts have failed, so the zip never drops their files', async () => {
+      mocks.topAccounts.mockRejectedValue(new Error('boom'));
+      await renderPage('/admin?tab=analytics');
+      await screen.findByText('Could not load top users.');
+      expect(screen.getByTestId('analytics-export-btn')).toBeDisabled();
+    });
+
     it('requests the top accounts for the range only', async () => {
       await renderPage('/admin?tab=analytics&range=90d&signups=all');
       await screen.findByTestId('analytics-top-users-table');

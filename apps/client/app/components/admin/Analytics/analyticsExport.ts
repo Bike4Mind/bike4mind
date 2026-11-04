@@ -23,7 +23,7 @@ function topAccountsFile(name: string, idLabel: string, rows: readonly TopAccoun
     'Active days',
     'AI requests',
     'Credits consumed',
-    'Share of requests (%)',
+    'Share of all requests (%)',
   ];
   return csvFile(
     name,
@@ -36,7 +36,7 @@ function topAccountsFile(name: string, idLabel: string, rows: readonly TopAccoun
       'Active days': row.activeDays,
       'AI requests': row.requests,
       'Credits consumed': row.credits,
-      'Share of requests (%)': share(row.share),
+      'Share of all requests (%)': share(row.share),
     }))
   );
 }
