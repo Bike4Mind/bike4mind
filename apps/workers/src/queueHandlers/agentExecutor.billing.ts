@@ -122,10 +122,13 @@ export type IterationTokenDeltas = {
  * Field-compatible with `ToolLlmUsage` (b4m-core services tools/base/types.ts) minus the
  * model tag; each `onToolLlmUsage` callback is accumulated into this shape via `addToolUsage`.
  * `costUsd` is priced at the tool's OWN model, so it is folded into the iteration charge as
- * USD - never re-priced against the agent model's token rate.
+ * USD - never re-priced against the agent model's token rate. A restricted run's credits use
+ * `chargedCostUsd` instead; `costUsd` stays the COGS.
  */
 export type ToolUsageTotals = {
   costUsd: number;
+  /** USD on the ledger-named model for a restricted run's credits; absent means `costUsd`. */
+  chargedCostUsd?: number;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -141,6 +144,7 @@ export type PendingToolUsage = ToolUsageTotals;
 
 /** Fold one tool-internal usage report into the pending accumulator. Mutates `pending`. */
 export function addToolUsage(pending: PendingToolUsage, usage: ToolUsageTotals): void {
+  pending.chargedCostUsd = (pending.chargedCostUsd ?? pending.costUsd) + (usage.chargedCostUsd ?? usage.costUsd);
   pending.costUsd += usage.costUsd;
   pending.inputTokens += usage.inputTokens;
   pending.outputTokens += usage.outputTokens;
@@ -212,12 +216,14 @@ export function foldGeneratedMediaUsd(params: FoldGeneratedMediaUsdParams): void
 export function takeToolUsage(pending: PendingToolUsage): ToolUsageTotals {
   const snapshot: ToolUsageTotals = {
     costUsd: pending.costUsd,
+    chargedCostUsd: pending.chargedCostUsd,
     inputTokens: pending.inputTokens,
     outputTokens: pending.outputTokens,
     cacheReadTokens: pending.cacheReadTokens,
     cacheWriteTokens: pending.cacheWriteTokens,
   };
   pending.costUsd = 0;
+  pending.chargedCostUsd = undefined;
   pending.inputTokens = 0;
   pending.outputTokens = 0;
   pending.cacheReadTokens = 0;
@@ -518,7 +524,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   // event below still records the COGS delta, otherwise margin reporting would
   // silently under-count cost.
   const credits = effects.usdToCredits(
-    params.chargedModelInfo ? getTurnsCost(params.chargedModelInfo, turns) + toolUsage.costUsd : costDelta
+    params.chargedModelInfo
+      ? getTurnsCost(params.chargedModelInfo, turns) + (toolUsage.chargedCostUsd ?? toolUsage.costUsd)
+      : costDelta
   );
   if (credits > 0) {
     await effects.deductCredits({

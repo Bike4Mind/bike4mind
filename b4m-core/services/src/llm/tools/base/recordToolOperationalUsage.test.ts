@@ -246,6 +246,7 @@ describe('recordToolOperationalUsage', () => {
       cacheReadTokens: 8,
       cacheWriteTokens: 4,
       costUsd: 0.0042,
+      chargedCostUsd: 0.0042,
     });
   });
 
@@ -395,6 +396,53 @@ describe('recordToolOperationalUsage', () => {
       provider: 'unknown',
       model: 'gpt-4',
       executedModel: 'gpt-4o-mini',
+    });
+  });
+
+  describe('chargedCostUsd', () => {
+    const requested = { id: 'claude-x', backend: 'anthropic' } as never;
+
+    it('prices chargedCostUsd on the recorded model while costUsd stays on the run model', async () => {
+      vi.mocked(getTextModelCost).mockImplementation(m => (m.id === 'claude-x' ? 0.03 : 0.0042));
+      const onToolLlmUsage = vi.fn();
+      try {
+        await recordToolOperationalUsage(
+          makeContext({
+            availableModels: [modelInfo, requested],
+            toLedgerModel: id => (id === 'gpt-4o-mini' ? 'claude-x' : id),
+            onToolLlmUsage,
+          }),
+          { model: 'gpt-4o-mini', completionInfo, startTime: Date.now() }
+        );
+      } finally {
+        vi.mocked(getTextModelCost).mockImplementation(() => 0.0042);
+      }
+      expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ costUsd: 0.0042, chargedCostUsd: 0.03 });
+      expect(onToolLlmUsage).toHaveBeenCalledWith(expect.objectContaining({ costUsd: 0.0042, chargedCostUsd: 0.03 }));
+    });
+
+    it('charges the run price when the recorded model is not in the catalog', async () => {
+      await recordToolOperationalUsage(makeContext({ toLedgerModel: id => (id === 'gpt-4o-mini' ? 'claude-x' : id) }), {
+        model: 'gpt-4o-mini',
+        completionInfo,
+        startTime: Date.now(),
+      });
+      expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ costUsd: 0.0042, chargedCostUsd: 0.0042 });
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('ledger model "claude-x" not in request catalog')
+      );
+    });
+
+    it('charges the run price when nothing is substituted', async () => {
+      const onToolLlmUsage = vi.fn();
+      await recordToolOperationalUsage(makeContext({ onToolLlmUsage }), {
+        model: 'gpt-4o-mini',
+        completionInfo,
+        startTime: Date.now(),
+      });
+      expect(recordOperationalUsageMock.mock.calls[0][0]).toMatchObject({ costUsd: 0.0042, chargedCostUsd: 0.0042 });
+      expect(onToolLlmUsage).toHaveBeenCalledWith(expect.objectContaining({ chargedCostUsd: 0.0042 }));
+      expect(logger.warn).not.toHaveBeenCalled();
     });
   });
 });
