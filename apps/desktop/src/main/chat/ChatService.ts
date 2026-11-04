@@ -7114,6 +7114,8 @@ const ORCHESTRATOR_GUIDANCE: readonly string[] = [
   'automatically; its result names them. So never create worktrees or branches for agents',
   'yourself, never point an agent at another path, and never remove an agent worktree or delete',
   'its branch. Merging agent branches into your own branch to combine their work is fine.',
+  'Never use git stash, and tell agents not to: the stash is shared by every worktree of the',
+  "repository, so one agent's pop can take another's changes. Set work aside with a commit.",
   'Outside a repository the agents share this working directory, so give each one different',
   'files to change.',
   `At most ${MAX_CONCURRENT_SPAWNED} agents run at once; plan within that, and if a start is refused for`,
@@ -7366,7 +7368,7 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
  * guessing at which mentions of a path meant "this repository" and which meant that exact
  * directory; saying where the child is lets it decide.
  */
-function worktreePreamble(
+export function worktreePreamble(
   projectDirectory: string,
   workspace: { branch: string; base: string; workingDirectory: string }
 ): string {
@@ -7378,7 +7380,10 @@ function worktreePreamble(
     `Any path in the task below that points into ${projectDirectory} names a file of THAT`,
     'checkout. Use the one at the matching path inside your own worktree instead. Do not read or',
     'write under it: it is another session working tree, you have no access to it, and changing it',
-    'is the one thing your own worktree exists to prevent.]',
+    'is the one thing your own worktree exists to prevent.',
+    '',
+    'Never use git stash: the stash is shared by every worktree of this repository, so other',
+    "sessions' entries are on it and a pop can take their changes. Set work aside with a commit.]",
   ].join('\n');
 }
 
