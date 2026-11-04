@@ -1,4 +1,4 @@
-import type { ISpendAlert, SpendRuleId } from '@bike4mind/common';
+import { escapeSlackLine, type ISpendAlert, type SpendRuleId } from '@bike4mind/common';
 import {
   ADMIN_LINKS,
   composeAlarmMessage,
@@ -37,6 +37,11 @@ const RULE_TITLES: Record<SpendRuleId, string> = {
 const PLATFORM_RULES: ReadonlySet<SpendRuleId> = new Set(['platform_spike', 'platform_cost_spike']);
 
 const safe = escapeMrkdwn;
+
+/** A key name is user text on a single labeled line: no line breaks, bounded length. */
+const KEY_NAME_MAX = 60;
+const keyName = (name: string) =>
+  escapeSlackLine(name.length > KEY_NAME_MAX ? `${name.slice(0, KEY_NAME_MAX)}...` : name);
 
 const formatCredits = (credits: number) => Math.round(credits).toLocaleString('en-US');
 const formatUsd = (usd: number) => `$${usd.toFixed(2)}`;
@@ -113,7 +118,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   const viaKeys = Array.isArray(alert.context.viaKeys)
     ? alert.context.viaKeys.filter((name): name is string => typeof name === 'string')
     : [];
-  if (viaKeys.length > 0) fields.push(`*Via API keys*\n${viaKeys.map(safe).join(', ')}`);
+  if (viaKeys.length > 0) fields.push(`*Via API keys*\n${viaKeys.map(keyName).join(', ')}`);
 
   const sections: string[] = [];
   if (breakdown?.topModels.length) {

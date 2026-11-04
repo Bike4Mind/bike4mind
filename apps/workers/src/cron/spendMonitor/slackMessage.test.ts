@@ -212,4 +212,14 @@ describe('buildSpendAlertMessage', () => {
     expect(out).toContain('ci-key, a&amp;b');
     expect(json(build())).not.toContain('Via API keys');
   });
+
+  it('keeps a key name on one line and bounds its length', () => {
+    const long = 'x'.repeat(80);
+    const alert = { ...baseAlert, context: { ...baseAlert.context, viaKeys: ['first\nsecond', long] } };
+    const out = json(build({ alert }));
+
+    expect(out).toContain('first second');
+    expect(out).toContain(`${'x'.repeat(60)}...`);
+    expect(out).not.toContain(long);
+  });
 });
