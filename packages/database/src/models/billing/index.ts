@@ -18,3 +18,4 @@ export * from './SpendRollupModel';
 export * from './newAccountSpendCapAdapters';
 export * from './HeldCreditRewardModel';
 export * from './SpendAlertModel';
+export * from './BillingMismatchModel';
