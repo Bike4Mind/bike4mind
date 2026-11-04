@@ -18,8 +18,9 @@ import { MIN_AFFORDABLE_OUTPUT_TOKENS, affordableRoundBudget, type RoundBudget }
  * places enforce it: each provider round's output budget is lowered to what is left (beginRound,
  * applied through gateEveryRound so tool-loop rounds are covered too), the stream is stopped once
  * its streamed output alone has crossed the limit (recordStreamed), and settlement floors the
- * text charge at -allowance (settlementFloorCredits). Tool charges are billed in full. The CLI/API
- * wire path does the same in cliCompletions.ts with the helpers in completionCreditBudget.ts.
+ * text charge at -allowance (settlementFloorCredits). Tool charges count against the rounds that
+ * follow them and are billed in full. The CLI/API wire path does the same in cliCompletions.ts with
+ * the helpers in completionCreditBudget.ts.
  */
 
 /**
@@ -140,6 +141,8 @@ export type BeginRoundParams = {
   inputUsd: number;
   /** What the turn's earlier rounds cost (accumulatedRoundsUsd); 0 on the first. */
   spentUsd: number;
+  /** Credits the turn's tool calls (image, audio, subagents) have charged so far. */
+  toolCredits?: number;
   /** The output ceiling the round would otherwise be sent with. */
   maxOutputTokens: number;
 };
@@ -169,7 +172,7 @@ export class TurnCreditLimiter {
    * MIN_AFFORDABLE_OUTPUT_TOKENS (or the round's own ceiling, if smaller): below that a call is not worth making.
    */
   beginRound(params: BeginRoundParams): RoundBudget {
-    const spentCredits = params.spentUsd * CREDITS_PER_USD_COST;
+    const spentCredits = params.spentUsd * CREDITS_PER_USD_COST + Math.max(0, params.toolCredits ?? 0);
     this.roundModel = params.modelInfo;
     this.roundInputTokens = params.inputTokens;
     this.roundCommittedCredits = spentCredits + params.inputUsd * CREDITS_PER_USD_COST;

@@ -7789,6 +7789,64 @@ describe('ChatCompletionProcess', () => {
         expect(mockQuest.reply).toContain(outOfCreditsNotice());
       });
 
+      describe('tool charges against later rounds', () => {
+        const perOutputTokenCredits = (30 / 1_000_000) * CREDITS_PER_USD_COST;
+        const ROUND_OUTPUT = 200;
+        // An image call in the first round charges `toolCharge`; the second round ends the turn.
+        const toolThenAnswer = (toolCharge: number, rounds: Array<Record<string, unknown>>) =>
+          vi.fn(async function (this: any, model: string, messages: any[], options: any, cb: any) {
+            rounds.push(options);
+            if (rounds.length > 1) {
+              await cb(['done'], { inputTokens: 20, outputTokens: 5 });
+              return;
+            }
+            await cb(['round one '], { toolsUsed: [{ name: 'image_generation', arguments: '{}' }] });
+            (service as any).toolCreditsMap.set('image_generation', [toolCharge]);
+            return this.complete(
+              model,
+              [...messages, { role: 'user', content: 'tool result' }],
+              {
+                ...options,
+                _internal: { ...options._internal, accumInputTokens: 10, accumOutputTokens: ROUND_OUTPUT },
+              },
+              cb
+            );
+          });
+
+        it('sends the next round only what the tool charge left', async () => {
+          const TOOL_CHARGE = 50;
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const rounds: Array<Record<string, unknown>> = [];
+          setupPersonalTurn(incrementCredits, toolThenAnswer(TOOL_CHARGE, rounds));
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(rounds).toHaveLength(2);
+          const left = BALANCE - TOOL_CHARGE - ROUND_OUTPUT * perOutputTokenCredits;
+          expect(rounds[1].outputTokenCeiling).toBe(Math.floor(left / perOutputTokenCredits + 1e-9));
+          expect(rounds[1].outputTokenCeiling as number).toBeLessThan(rounds[0].outputTokenCeiling as number);
+        });
+
+        it('stops the turn when the tool charge spent what the balance had left', async () => {
+          const TOOL_CHARGE = BALANCE - 1;
+          const { state, incrementCredits } = fakeBalance(BALANCE);
+          const rounds: Array<Record<string, unknown>> = [];
+          setupPersonalTurn(incrementCredits, toolThenAnswer(TOOL_CHARGE, rounds));
+          mockQuest.sessionId = 'session1';
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(rounds).toHaveLength(1);
+          expect(mockQuest.reply).toContain(outOfCreditsNotice());
+          const roundOneCredits = realUsdToCreditsStochastic((ROUND_OUTPUT * 30) / 1_000_000, () => 0);
+          expect(state.balance).toBe(BALANCE - TOOL_CHARGE - roundOneCredits);
+          expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+            'tool_usage',
+            expect.objectContaining({ credits: -TOOL_CHARGE })
+          );
+        });
+      });
+
       it('keeps the partial answer and says why when the stream runs past the limit', async () => {
         const { state, incrementCredits } = fakeBalance(BALANCE);
         const complete = vi.fn().mockImplementation(async (_m, _ms, options: { abortSignal: AbortSignal }, cb) => {

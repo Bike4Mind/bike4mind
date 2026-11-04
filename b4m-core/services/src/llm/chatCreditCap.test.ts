@@ -166,6 +166,51 @@ describe('TurnCreditLimiter.beginRound', () => {
     expect(later.outputTokens).toBeLessThan(first.outputTokens);
   });
 
+  it("takes the turn's tool charges off a later round", () => {
+    const limiter = new TurnCreditLimiter(100_000, 0);
+    const later = limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 1_000,
+      inputUsd: 0,
+      spentUsd: 0,
+      toolCredits: 90_000,
+      maxOutputTokens: 1e6,
+    });
+    if (!later.affordable) throw new Error('expected the round to be affordable');
+    expect(later.outputTokens).toBe(Math.floor(10_000 / perOutputTokenCredits + 1e-9));
+  });
+
+  it('refuses a round once tool charges have spent the limit', () => {
+    const limiter = new TurnCreditLimiter(100_000, 0);
+    const budget = limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 1_000,
+      inputUsd: 0,
+      spentUsd: 0,
+      toolCredits: 100_000,
+      maxOutputTokens: 1e6,
+    });
+    expect(budget.affordable).toBe(false);
+    expect(limiter.stoppedForCredits).toBe(true);
+  });
+
+  it('counts tool charges when a stream runs past the limit', () => {
+    const limiter = new TurnCreditLimiter(100_000, 0);
+    limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 1_000,
+      inputUsd: 0,
+      spentUsd: 0,
+      toolCredits: 90_000,
+      maxOutputTokens: 1e6,
+    });
+    const outputTokensFor = (chars: number) => estimateStreamedOutputTokens(chars, MODEL.id);
+    let chars = 0;
+    while (outputTokensFor(chars + 1_000) * perOutputTokenCredits <= 10_000) chars += 1_000;
+    expect(limiter.recordStreamed(chars)).toBe(false);
+    expect(limiter.recordStreamed(100_000)).toBe(true);
+  });
+
   it('lets a paid account answer longer by exactly its allowance', () => {
     const free = new TurnCreditLimiter(1_000, 0).beginRound({
       modelInfo: MODEL,

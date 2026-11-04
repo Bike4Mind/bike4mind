@@ -5745,11 +5745,13 @@ export class ChatCompletionProcess {
                   const roundInputTokens =
                     inputTokens + (round === 0 ? 0 : estimateAddedInputTokens(roundMessages.slice(hopMessageCount)));
                   // Earlier hops' spend is not carried into round 0; the settlement floor bounds the charge.
+                  // Their tool charges are dropped with toolCreditsMap at the hop start and never billed.
                   const budget = creditLimiter.beginRound({
                     modelInfo: attemptLedgerModel,
                     inputTokens: roundInputTokens,
                     inputUsd: conservativeRoundInputUsd(attemptLedgerModel, roundInputTokens, roundCacheTtl),
                     spentUsd: round === 0 ? 0 : accumulatedRoundsUsd(attemptLedgerModel, roundOptions._internal),
+                    toolCredits: this.chargedToolCredits(),
                     maxOutputTokens: roundOptions.maxTokens ?? safeMaxTokens,
                   });
                   if (budget.affordable) return capRoundOutput(roundOptions, budget.outputTokens);
