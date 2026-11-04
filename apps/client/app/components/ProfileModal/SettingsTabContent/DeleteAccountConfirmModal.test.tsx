@@ -36,8 +36,9 @@ describe('DeleteAccountConfirm', () => {
     const text = screen.getByTestId('delete-account-confirm').textContent;
     expect(text).toContain('signed out on every device right away');
     expect(text).toContain('subscriptions will be canceled');
-    expect(text).toMatch(/Your account will be permanently deleted on \w+ \d{1,2}, \d{4}/);
-    expect(text).toContain('cancel the deletion');
+    expect(text).toMatch(/Your cancellation period ends on \w+ \d{1,2}, \d{4}/);
+    expect(text).toContain('Permanent deletion begins after that date');
+    expect(text).toContain('cancel until cleanup starts');
   });
 
   it('suggests downloading the data before deleting', () => {

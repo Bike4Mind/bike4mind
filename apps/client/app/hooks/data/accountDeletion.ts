@@ -21,6 +21,8 @@ export function useAccountDeletionStatus(enabled = true) {
     queryKey: ACCOUNT_DELETION_QUERY_KEY,
     queryFn: async () => (await api.get<AccountDeletionStatus>('/api/account/deletion')).data,
     enabled,
+    refetchOnMount: 'always',
+    refetchInterval: query => (query.state.data?.deletion ? 5_000 : false),
   });
 }
 

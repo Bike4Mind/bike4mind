@@ -50,6 +50,7 @@ vi.mock('./accountDeletionEmail', () => ({
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: h.audit }));
 
 import { cancelAccountDeletion, requestAccountDeletion } from './accountDeletion';
+import { withAccountNotPurging } from '@server/auth/withAccountNotPurging';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -282,6 +283,48 @@ describe('cancelAccountDeletion', () => {
 
     expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeUndefined();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('deletion-cancelled email'));
+  });
+
+  it('refuses cancellation after irreversible cleanup starts, including between retries', async () => {
+    const userId = await seedAccount();
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          deletion: { requestedAt: new Date(), scheduledFor: new Date(), source: 'self', purgeStartedAt: new Date() },
+        },
+      }
+    );
+    h.sendCancelledEmail.mockClear();
+
+    await expect(cancelAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 409 });
+    expect((await User.findById(userId).lean<{ deletion?: unknown }>())!.deletion).toBeDefined();
+    expect(h.sendCancelledEmail).not.toHaveBeenCalled();
+  });
+
+  it('does not insert authentication records after the purge claim commits', async () => {
+    const userId = await seedAccount();
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          deletion: { requestedAt: new Date(), scheduledFor: new Date(), source: 'self', purgeStartedAt: new Date() },
+        },
+      }
+    );
+    const before = await AuthSessionModel.countDocuments({ userId });
+    const insertSession = () =>
+      AuthSessionModel.create({
+        sid: `purging-${userId}`,
+        userId,
+        refreshTokenHash: 'hash',
+        createdVia: 'otc',
+        lastUsedAt: new Date(),
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+
+    await expect(withAccountNotPurging(userId, insertSession)).rejects.toMatchObject({ statusCode: 403 });
+    expect(await AuthSessionModel.countDocuments({ userId })).toBe(before);
   });
 
   it('answers 404 when nothing is pending, and sends no email', async () => {

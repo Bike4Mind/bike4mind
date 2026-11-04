@@ -596,7 +596,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'queue:infra/queues.ts:accountDataExportQueue',
-    'f6a2af609c2458570cdc00e95a695300500848d6cdd92a8762e38fed66f46128',
+    '83f9304409d24acf226c16c5ead6b6ba487a29bd14b376830576f7c53d69863b',
     {
       source: 'apps/workers/src/selfhost/accountDataExportQueue.ts',
       symbol: 'registerAccountDataExportQueue',
@@ -1067,7 +1067,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   wired(
     'schedule:infra/cron.ts:accountDeletionSweep',
-    'bd85a9491af566894d7e83adec930f1a80472634d6a415571b3f729f05d17a93',
+    '72fa5618555abfbf8b8133e0724f50ef538a6b7bc953cde266003a042f61c946',
     {
       source: 'apps/workers/src/selfhost/accountDeletionSweep.ts',
       symbol: 'registerAccountDeletionSweep',

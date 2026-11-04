@@ -17,6 +17,11 @@ const h = vi.hoisted(() => ({
   uploadFile: vi.fn(),
   publish: vi.fn(),
   userFindById: vi.fn(),
+  leaseClaim: vi.fn(),
+  leaseExists: vi.fn(),
+  leaseRelease: vi.fn(),
+  leaseRenew: vi.fn(),
+  permanentDelete: vi.fn(),
   fabFind: vi.fn(),
   mementoFind: vi.fn(),
   artifactFind: vi.fn(),
@@ -35,6 +40,12 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: h.userFindById },
+  User: {
+    findOneAndUpdate: (...args: unknown[]) => ({ lean: () => h.leaseClaim(...args) }),
+    exists: h.leaseExists,
+    updateOne: (filter: unknown, update: { $set?: unknown }) =>
+      update.$set ? h.leaseRenew(filter, update) : h.leaseRelease(filter, update),
+  },
   fabFileRepository: { find: h.fabFind },
   mementoRepository: { find: h.mementoFind },
   artifactRepository: { find: h.artifactFind },
@@ -60,7 +71,12 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
-  getFilesStorage: () => ({ getMetadata: h.getMetadata, getContent: h.getContent, uploadFile: h.uploadFile }),
+  getFilesStorage: () => ({
+    getMetadata: h.getMetadata,
+    getContent: h.getContent,
+    uploadFile: h.uploadFile,
+    deletePermanently: h.permanentDelete,
+  }),
   getGeneratedImageStorage: () => ({ getMetadata: h.genMetadata, getContent: h.genContent }),
 }));
 vi.mock('@bike4mind/server-utils/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
@@ -110,6 +126,9 @@ const notFound = () => Object.assign(new Error('Not Found'), { name: 'NotFound' 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.leaseClaim.mockResolvedValue({ email: 'ada@example.com' });
+  h.leaseRenew.mockResolvedValue({ matchedCount: 1 });
+  h.leaseExists.mockResolvedValue({ _id: USER_ID });
   process.env.APP_URL = 'https://app.example.com/';
   remainingMs = () => FULL_BUDGET_MS;
   h.uploaded = null;
@@ -173,7 +192,12 @@ describe('account data export worker', () => {
   it('builds the zip with every category and emails a link to the app page', async () => {
     await run();
 
-    expect(h.uploadFile).toHaveBeenCalledWith(expect.any(String), KEY, { ContentType: 'application/zip' });
+    expect(h.uploadFile).toHaveBeenCalledWith(
+      expect.any(String),
+      KEY,
+      { ContentType: 'application/zip' },
+      expect.any(AbortSignal)
+    );
     const entries = await unzip(h.uploaded!);
     expect([...entries.keys()].sort()).toEqual([
       'README.txt',
@@ -286,6 +310,23 @@ describe('account data export worker', () => {
       h.notebooks = [chat(['generated/a.png'])];
 
       await expect(run()).rejects.toThrow('reset');
+      expect(h.publish).not.toHaveBeenCalled();
+    });
+
+    it('rejects a generated image stream failure rather than publishing a partial archive', async () => {
+      h.notebooks = [chat(['generated/a.png'])];
+      const source = new Readable({
+        read() {
+          this.push(Buffer.from('partial image'));
+          this.destroy(new Error('Image checksum mismatch'));
+        },
+      });
+      h.genContent.mockResolvedValue(source);
+
+      await expect(run()).rejects.toThrow('Image checksum mismatch');
+
+      expect(source.destroyed).toBe(true);
+      expect(h.uploadFile).not.toHaveBeenCalled();
       expect(h.publish).not.toHaveBeenCalled();
     });
 
@@ -411,6 +452,21 @@ describe('account data export worker', () => {
     expect(h.getContent).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects an uploaded file stream reset without an unhandled stream error', async () => {
+    const source = new Readable({
+      read() {
+        this.destroy(Object.assign(new Error('Storage connection reset'), { code: 'ECONNRESET' }));
+      },
+    });
+    h.getContent.mockResolvedValue(source);
+
+    await expect(run()).rejects.toThrow('Storage connection reset');
+
+    expect(source.destroyed).toBe(true);
+    expect(h.uploadFile).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
   it('retries rather than rebuilding when the existence check itself fails', async () => {
     h.getMetadata.mockRejectedValue(new Error('AccessDenied'));
 
@@ -425,6 +481,7 @@ describe('account data export worker', () => {
     await expect(run()).rejects.toThrow('key unavailable');
     expect(h.uploadFile).not.toHaveBeenCalled();
     expect(h.publish).not.toHaveBeenCalled();
+    expect(h.leaseRelease).toHaveBeenCalledOnce();
   });
 
   it('skips an account that no longer exists', async () => {
@@ -439,5 +496,139 @@ describe('account data export worker', () => {
   it('rejects a malformed job id', async () => {
     await expect(run({ exportJobId: '../x', userId: USER_ID })).rejects.toThrow();
     expect(h.userFindById).not.toHaveBeenCalled();
+  });
+
+  it('refuses overdue and already-purging accounts before acquiring an export lease', async () => {
+    h.userFindById.mockResolvedValue({
+      email: 'ada@example.com',
+      deletion: { scheduledFor: new Date(Date.now() - 1) },
+    });
+    await run();
+    expect(h.leaseClaim).not.toHaveBeenCalled();
+    expect(h.uploadFile).not.toHaveBeenCalled();
+    h.userFindById.mockResolvedValue({ email: 'ada@example.com', deletion: { purgeStartedAt: new Date() } });
+    await run();
+    expect(h.leaseClaim).not.toHaveBeenCalled();
+    expect(h.permanentDelete).toHaveBeenCalledTimes(2);
+    expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+  });
+
+  it('atomically excludes the purge and concurrent exports, then releases only its own lease', async () => {
+    await run();
+    const [filter, update] = h.leaseClaim.mock.calls[0];
+    expect(filter).toMatchObject({ _id: USER_ID, 'deletion.purgeStartedAt': null });
+    expect(filter.$and).toEqual([
+      {
+        $or: [
+          { 'accountDataExportLease.expiresAt': null },
+          { 'accountDataExportLease.expiresAt': { $lte: expect.any(Date) } },
+        ],
+      },
+    ]);
+    expect(update.$set.accountDataExportLease.id).toEqual(expect.any(String));
+    expect(update.$set.accountDataExportLease.expiresAt.getTime()).toBeGreaterThan(Date.now() + 19 * 60 * 1000);
+    expect(h.leaseRelease).toHaveBeenCalledWith(
+      { _id: USER_ID, 'accountDataExportLease.id': update.$set.accountDataExportLease.id },
+      { $unset: { accountDataExportLease: 1 } }
+    );
+  });
+
+  it('rejects before upload and releases the lease if admission is lost while building', async () => {
+    h.leaseExists.mockResolvedValue(null);
+    await expect(run()).rejects.toThrow('lease lost');
+    expect(h.uploadFile).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.leaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it('erases a late upload permanently if the lease is lost after remote success', async () => {
+    h.leaseExists.mockResolvedValueOnce({ _id: USER_ID }).mockResolvedValueOnce(null);
+    await expect(run()).rejects.toThrow('lease lost after upload');
+    expect(h.uploadFile).toHaveBeenCalledOnce();
+    expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.leaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it('retries a concurrent-export admission failure without releasing the other invocation lease', async () => {
+    h.leaseClaim.mockResolvedValue(null);
+    await expect(run()).rejects.toThrow('Another account data export');
+    expect(h.leaseRelease).not.toHaveBeenCalled();
+    expect(h.getMetadata).not.toHaveBeenCalled();
+  });
+
+  it('renews the same unexpired account lease immediately before a hard-bounded upload', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      await run();
+      expect(h.leaseRenew).toHaveBeenCalledWith(
+        expect.objectContaining({
+          _id: USER_ID,
+          'deletion.purgeStartedAt': null,
+          'accountDataExportLease.id': expect.any(String),
+          'accountDataExportLease.expiresAt': { $gt: expect.any(Date) },
+        }),
+        { $set: { 'accountDataExportLease.expiresAt': expect.any(Date) } }
+      );
+      expect(h.leaseRenew.mock.invocationCallOrder[0]).toBeLessThan(h.uploadFile.mock.invocationCallOrder[0]);
+      expect(timeout).toHaveBeenCalledWith(5 * 60 * 1000);
+      expect(h.uploadFile.mock.calls[0][3]).toBeInstanceOf(AbortSignal);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it('does not upload or email when atomic pre-upload lease renewal loses admission', async () => {
+    h.leaseRenew.mockResolvedValue({ matchedCount: 0 });
+    await expect(run()).rejects.toThrow('lease lost before upload');
+    expect(h.uploadFile).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+    expect(h.leaseRelease).toHaveBeenCalledOnce();
+  });
+
+  it('does not start an upload after a cooperative self-host deadline has elapsed', async () => {
+    remainingMs = () => 0;
+    await expect(run()).rejects.toThrow('No remaining time');
+    expect(h.leaseRenew).not.toHaveBeenCalled();
+    expect(h.uploadFile).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it('reconciles an ambiguous failed upload and retains the lease through its expiry', async () => {
+    h.uploadFile.mockRejectedValueOnce(Object.assign(new Error('response lost'), { code: 'ECONNRESET' }));
+    await expect(run()).rejects.toThrow('response lost');
+    expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    expect(h.leaseRelease).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it('preserves the original upload error and its fence when remote cleanup also fails', async () => {
+    h.uploadFile.mockRejectedValueOnce(new Error('upload timeout'));
+    h.permanentDelete.mockRejectedValueOnce(new Error('cleanup denied'));
+    await expect(run()).rejects.toThrow('upload timeout');
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('ambiguous upload'),
+      expect.objectContaining({ key: KEY, cleanupError: expect.any(Error) })
+    );
+    expect(h.leaseRelease).not.toHaveBeenCalled();
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
+  it('reconciles known remote output on redelivery after the account has been removed', async () => {
+    h.userFindById.mockResolvedValue(null);
+    await run();
+    expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    expect(h.leaseClaim).not.toHaveBeenCalled();
+  });
+
+  it('reconciles known remote output when an irreversible purge wins atomic admission', async () => {
+    h.leaseClaim.mockResolvedValue(null);
+    h.userFindById
+      .mockResolvedValueOnce({ email: 'ada@example.com' })
+      .mockResolvedValueOnce({ deletion: { purgeStartedAt: new Date() } });
+    await run();
+    expect(h.permanentDelete).toHaveBeenCalledWith(KEY);
+    expect(h.uploadFile).not.toHaveBeenCalled();
+    expect(h.leaseRelease).not.toHaveBeenCalled();
   });
 });

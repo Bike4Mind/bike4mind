@@ -4,7 +4,7 @@ import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
 import { api } from '@client/app/contexts/ApiContext';
 import { useUserLogout } from '@client/app/hooks/data/user';
-import { useCancelAccountDeletion } from '@client/app/hooks/data/accountDeletion';
+import { useAccountDeletionStatus, useCancelAccountDeletion } from '@client/app/hooks/data/accountDeletion';
 import { registerAccountDeletionInterceptor } from '@client/app/utils/accountDeletionInterceptor';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -27,16 +27,27 @@ const AccountDeletionPendingGate: React.FC<{ children: React.ReactNode; exempt?:
   children,
   exempt = false,
 }) => {
-  const deletion = useUser(s => s.currentUser?.deletion);
+  const currentUser = useUser(s => s.currentUser);
+  const setCurrentUser = useUser(s => s.setCurrentUser);
+  const deletion = currentUser?.deletion;
   const [refusedScheduledFor, setRefusedScheduledFor] = useState<string | null>(null);
+  const status = useAccountDeletionStatus(!!deletion || refusedScheduledFor !== null);
+  const activeDeletion = status.data?.deletion ?? deletion;
+  const purgeStarted = !!activeDeletion?.purgeStartedAt;
   const cancelDeletion = useCancelAccountDeletion();
   const { mutate: logout, isPending: logoutIsPending } = useUserLogout();
 
   useEffect(() => registerAccountDeletionInterceptor(api, setRefusedScheduledFor), []);
+  useEffect(() => {
+    if (status.isSuccess && status.isFetchedAfterMount && !status.isFetching && status.data.deletion === null) {
+      if (currentUser?.deletion) setCurrentUser({ ...currentUser, deletion: null });
+      setRefusedScheduledFor(null);
+    }
+  }, [status.isSuccess, status.isFetchedAfterMount, status.isFetching, status.data, currentUser, setCurrentUser]);
 
   if (exempt || (!deletion && refusedScheduledFor === null)) return <>{children}</>;
 
-  const date = formatScheduledDeletionDate(deletion?.scheduledFor ?? refusedScheduledFor);
+  const date = formatScheduledDeletionDate(activeDeletion?.scheduledFor ?? refusedScheduledFor);
 
   return (
     <Box
@@ -52,21 +63,24 @@ const AccountDeletionPendingGate: React.FC<{ children: React.ReactNode; exempt?:
         textAlign: 'center',
       }}
     >
-      <Typography level="h2">Your account is scheduled for deletion</Typography>
+      <Typography level="h2">
+        {purgeStarted ? 'Your account is being deleted' : 'Your account is scheduled for deletion'}
+      </Typography>
       <Typography level="body-md" sx={{ maxWidth: 520, color: 'text.secondary' }} data-testid="account-deletion-date">
-        {date
-          ? `Your account will be permanently deleted on ${date}.`
-          : 'Your account will be permanently deleted soon.'}{' '}
-        Cancel the deletion to use your account again.
+        {purgeStarted
+          ? 'Permanent deletion has started. Your account data is being removed and this can no longer be cancelled.'
+          : `${date ? `Your account is scheduled for permanent deletion after ${date}.` : 'Your account is waiting for permanent deletion.'} You can cancel until cleanup starts.`}
       </Typography>
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', justifyContent: 'center' }}>
-        <Button
-          data-testid="account-deletion-cancel-btn"
-          loading={cancelDeletion.isPending}
-          onClick={() => cancelDeletion.mutate(undefined, { onError: error => toast.error(getErrorMessage(error)) })}
-        >
-          Cancel deletion
-        </Button>
+        {!purgeStarted && (
+          <Button
+            data-testid="account-deletion-cancel-btn"
+            loading={cancelDeletion.isPending}
+            onClick={() => cancelDeletion.mutate(undefined, { onError: error => toast.error(getErrorMessage(error)) })}
+          >
+            Cancel deletion
+          </Button>
+        )}
         <Button
           data-testid="account-deletion-sign-out-btn"
           variant="outlined"

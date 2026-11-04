@@ -338,8 +338,29 @@ export interface AccountDeletionRetainedRecord {
 // The full list is owned by the personal-data inventory and must stay in sync with the privacy policy.
 /** What survives a completed deletion, as listed in the deletion-complete email. */
 export const ACCOUNT_DELETION_RETAINED_RECORDS: readonly AccountDeletionRetainedRecord[] = [
-  { category: 'Security audit log of sign-ins', reason: 'Account security', retention: '12 months' },
+  { category: 'Account security audit log', reason: 'Account security', retention: '12 months' },
+  { category: 'API key security audit log', reason: 'Account security', retention: 'Up to 90 days' },
+  {
+    category: "Hidden annotations on other owners' published pages",
+    reason: 'Existing annotation audit retention; annotations are hidden immediately',
+    retention: '90 days after deletion',
+  },
   { category: 'Pseudonymized performance telemetry', reason: 'Service reliability', retention: 'Up to 90 days' },
+  {
+    category: 'Organization-owned content and independently owned copies',
+    reason: "Deleting your account does not delete another owner's data",
+    retention: "Their owners' existing retention periods",
+  },
+  {
+    category: 'Files held by moderation, including their contents and related records',
+    reason: 'Existing moderation restrictions preserve these files and their evidence',
+    retention: 'While the moderation restriction remains in place',
+  },
+  {
+    category: 'Minimal deletion markers',
+    reason: 'Preventing removed data from reappearing; the markers contain no deleted memory content',
+    retention: 'Indefinitely',
+  },
 ];
 
 /** Error `code` (status 403) for every request a deletion-pending account may not make. */
@@ -357,6 +378,10 @@ export interface IUserDeletion {
   requestedAt: Date;
   scheduledFor: Date;
   source: AccountDeletionSource;
+  /** Set once irreversible cleanup starts; cancellation is no longer allowed. */
+  purgeStartedAt?: Date;
+  purgeLeaseId?: string;
+  purgeLeaseExpiresAt?: Date;
 }
 
 export interface IUser extends ICreditHolder {
@@ -432,6 +457,8 @@ export interface IUser extends ICreditHolder {
   disputePending?: boolean;
   /** Set while a requested deletion is in its grace period (see IUserDeletion). */
   deletion?: IUserDeletion | null;
+  /** Server-side lease preventing a data export from racing permanent account cleanup. */
+  accountDataExportLease?: { id: string; expiresAt: Date };
   /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.

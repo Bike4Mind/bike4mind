@@ -807,6 +807,12 @@ const accountDataExportQueueSubscription = accountDataExportQueue.subscribe(
     storage: '5 GB',
     vpc: lambdaVpc,
     link: [...allSecrets, fabFileBucket, generatedImagesBucket, eventBus],
+    permissions: [
+      {
+        actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
+        resources: [fabFileBucket.arn, $interpolate`${fabFileBucket.arn}/*`],
+      },
+    ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),

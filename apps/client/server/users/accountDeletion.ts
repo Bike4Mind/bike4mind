@@ -33,8 +33,7 @@ import { sendAccountDeletionCancelledEmail, sendAccountDeletionScheduledEmail } 
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-// any: express Request generics vary across call sites; only user, logger and request metadata are read.
-type DeletionRequest = Request<any, any, any, any, any>;
+type DeletionRequest = Request<unknown, unknown, unknown, unknown, Record<string, unknown>>;
 
 export type OwnedOrganization = { id: string; name: string };
 
@@ -161,11 +160,16 @@ export async function cancelAccountDeletion(req: DeletionRequest): Promise<void>
   }
   // Reads the address in the same query that clears the deletion.
   const cancelled = await User.findOneAndUpdate(
-    { _id: userId, deletion: { $ne: null } },
+    { _id: userId, deletion: { $ne: null }, 'deletion.purgeStartedAt': null },
     { $unset: { deletion: 1 } },
     { projection: { email: 1 } }
   ).lean<{ email?: string | null }>();
-  if (!cancelled) throw new NotFoundError('This account is not scheduled for deletion.');
+  if (!cancelled) {
+    if (await User.exists({ _id: userId, 'deletion.purgeStartedAt': { $type: 'date' } })) {
+      throw new ConflictError('Account deletion has started and can no longer be cancelled.');
+    }
+    throw new NotFoundError('This account is not scheduled for deletion.');
+  }
   await logAuthAudit(req, { userId, event: 'account_deletion_cancelled' });
 
   if (cancelled.email) {

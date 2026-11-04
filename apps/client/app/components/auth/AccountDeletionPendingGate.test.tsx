@@ -8,6 +8,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
   currentUser: null as Record<string, unknown> | null,
+  status: null as Record<string, unknown> | null,
+  setCurrentUser: vi.fn(),
   cancel: vi.fn(),
   logout: vi.fn(),
   api: null as unknown as import('axios').AxiosInstance,
@@ -19,10 +21,17 @@ vi.mock('@client/app/contexts/ApiContext', async () => {
   return { api: h.api };
 });
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (select: (s: unknown) => unknown) => select({ currentUser: h.currentUser }),
+  useUser: (select: (s: unknown) => unknown) =>
+    select({ currentUser: h.currentUser, setCurrentUser: h.setCurrentUser }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({ useUserLogout: () => ({ mutate: h.logout, isPending: false }) }));
 vi.mock('@client/app/hooks/data/accountDeletion', () => ({
+  useAccountDeletionStatus: () => ({
+    data: h.status,
+    isSuccess: h.status !== null,
+    isFetchedAfterMount: true,
+    isFetching: false,
+  }),
   useCancelAccountDeletion: () => ({ mutate: h.cancel, isPending: false }),
 }));
 
@@ -42,6 +51,7 @@ describe('AccountDeletionPendingGate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.currentUser = { id: 'u1' };
+    h.status = null;
   });
 
   it('renders the app for an account with no pending deletion', () => {
@@ -59,6 +69,22 @@ describe('AccountDeletionPendingGate', () => {
     expect(h.cancel).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByTestId('account-deletion-sign-out-btn'));
     expect(h.logout).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows irreversible cleanup and removes cancellation when the server reports purge start', () => {
+    h.currentUser = { id: 'u1', deletion: { scheduledFor: '2026-11-17T12:00:00.000Z' } };
+    h.status = { deletion: { scheduledFor: '2026-11-17T12:00:00.000Z', purgeStartedAt: '2026-11-17T12:01:00.000Z' } };
+    wrap();
+    expect(screen.getByText('Your account is being deleted')).toBeTruthy();
+    expect(screen.queryByTestId('account-deletion-cancel-btn')).toBeNull();
+    expect(screen.getByTestId('account-deletion-sign-out-btn')).toBeTruthy();
+  });
+
+  it('clears persisted deletion when another tab has cancelled it', () => {
+    h.currentUser = { id: 'u1', deletion: { scheduledFor: '2026-11-17T12:00:00.000Z' } };
+    h.status = { deletion: null };
+    wrap();
+    expect(h.setCurrentUser).toHaveBeenCalledWith({ id: 'u1', deletion: null });
   });
 
   it('renders an exempt page (the data export download) while a deletion is pending', () => {

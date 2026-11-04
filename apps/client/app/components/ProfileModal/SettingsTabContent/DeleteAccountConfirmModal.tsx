@@ -71,8 +71,8 @@ export function DeleteAccountConfirm({ onCancel }: { onCancel: () => void }) {
       description={
         'You will be signed out on every device right away, your API keys and connected apps will be revoked, ' +
         'your subscriptions will be canceled, and the pages and Skill Market listings you published will be taken ' +
-        `offline. Your account will be permanently deleted on ${purgeDate}. Until then you can sign ` +
-        'in and cancel the deletion; canceling restores access, but not what was revoked or taken offline. ' +
+        `offline. Your cancellation period ends on ${purgeDate}. Permanent deletion begins after that date. You can sign ` +
+        'in and cancel until cleanup starts; canceling restores access, but not what was revoked or taken offline. ' +
         'To keep a copy of your data, use Download your data before you continue.'
       }
       forwardButtonText="Delete account"

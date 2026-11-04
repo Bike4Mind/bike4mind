@@ -38,10 +38,11 @@ export function accountDeletionScheduledEmailBody(scheduledFor: Date, signInUrl:
   return layout(
     'Your account is scheduled for deletion',
     `
-      <p>Your account will be permanently deleted on <strong>${date}</strong>. Until then you have been
+      <p>Your cancellation period ends on <strong>${date}</strong>. Permanent deletion begins after that date.
+      You can cancel until cleanup starts. You have been
       signed out everywhere, your API keys and connected apps have been revoked, and your subscriptions have been
       canceled.</p>
-      <p>Changed your mind? <a href="${escapeHtml(signInUrl)}">Sign in</a> before that date and choose Cancel deletion.</p>
+      <p>Changed your mind? <a href="${escapeHtml(signInUrl)}">Sign in</a> and choose Cancel deletion before cleanup starts.</p>
       <div class="warning">
         <strong>If this wasn't you</strong>, sign in to cancel the deletion, then change your password.
       </div>`
@@ -52,7 +53,7 @@ export async function sendAccountDeletionScheduledEmail(to: string, scheduledFor
   const signInUrl = `${requireEnv('APP_URL', process.env.APP_URL)}/login`;
   await EmailEvents.Send.publish({
     to,
-    subject: `Your account is scheduled for deletion on ${formatDeletionDate(scheduledFor)}`,
+    subject: `Your account deletion cancellation period ends on ${formatDeletionDate(scheduledFor)}`,
     body: accountDeletionScheduledEmailBody(scheduledFor, signInUrl),
   });
 }

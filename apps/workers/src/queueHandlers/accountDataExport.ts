@@ -1,11 +1,13 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { createWriteStream, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 import { Readable, Transform } from 'stream';
+import { pipeline } from 'stream/promises';
 import archiver from 'archiver';
 import { z } from 'zod';
 import {
+  User,
   agentRepository,
   artifactContentRepository,
   artifactRepository,
@@ -47,6 +49,7 @@ const AccountDataExportPayload = z.object({
 export const MAX_FILE_BYTES = 3 * 1024 ** 3;
 // Left for the upload and the email once the file copy stops.
 const UPLOAD_RESERVE_MS = 5 * 60 * 1000;
+const EXPORT_LEASE_MS = 20 * 60 * 1000;
 // Aborts, timeouts and network resets are retried by SQS; any other per-object error omits that object.
 const isTransientError = (error: unknown) => {
   const { name, code } = (error ?? {}) as { name?: string; code?: string };
@@ -114,16 +117,21 @@ async function appendStream(archive: Archiver, body: unknown, zipPath: string): 
   if (!(body instanceof Readable)) throw new Error('Storage returned a non-stream body');
   let streamed = 0;
   // A Transform, not a 'data' listener: that would start the flow before archiver pipes the entry.
-  const counted = body.pipe(
-    new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        streamed += chunk.length;
-        callback(null, chunk);
-      },
-    })
-  );
-  body.once('error', error => counted.destroy(error));
-  await appendEntry(archive, counted, zipPath, true);
+  const counted = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      streamed += chunk.length;
+      callback(null, chunk);
+    },
+  });
+  try {
+    // pipeline installs stream error handlers before starting flow. Archiver queues entries,
+    // so it may not have attached its own source error handler when an S3 body first fails.
+    await Promise.all([appendEntry(archive, counted, zipPath, true), pipeline(body, counted)]);
+  } catch (error) {
+    body.destroy();
+    counted.destroy();
+    throw error;
+  }
   return streamed;
 }
 
@@ -229,6 +237,7 @@ async function writeNotebooks(
     if (remainingMs() < reserveMs) {
       ref = { key, omitted: 'time_limit' };
     } else {
+      let appendStarted = false;
       try {
         const { size = 0 } = await generated.getMetadata(key);
         if (budget.copiedBytes + size > MAX_FILE_BYTES) {
@@ -242,11 +251,14 @@ async function writeNotebooks(
             createHash('sha1').update(key).digest('hex').slice(0, 10),
             /^\.\w{1,8}$/.test(ext) ? ext : ''
           );
+          // Once insertion starts, an error invalidates the archive; omission is only safe
+          // for lookup failures before any entry bytes have been written.
+          appendStarted = true;
           budget.copiedBytes += await appendStream(archive, body, zipPath);
           ref = { path: zipPath };
         }
       } catch (error) {
-        if (isTransientError(error)) throw error;
+        if (appendStarted || isTransientError(error)) throw error;
         logger.warn('Account data export: generated image unavailable', {
           key,
           error: error instanceof Error ? error.message : String(error),
@@ -566,40 +578,132 @@ async function existingExport(storage: Storage, key: string) {
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const { exportJobId, userId } = secureParameters(JSON.parse(event.Records[0].body), AccountDataExportPayload);
   logger.updateMetadata({ exportJobId, userId });
+  const key = accountDataExportKey(userId, exportJobId);
+  const removeSkippedExport = () => getFilesStorage().deletePermanently(key);
 
   const user = await userRepository.findById(userId);
   if (!user?.email) {
     logger.warn('Account data export skipped: the account is gone or has no email to deliver to');
+    await removeSkippedExport();
     return;
   }
 
+  const now = new Date();
+  const deletionDue = (account: typeof user) =>
+    !!account?.deletion?.purgeStartedAt ||
+    (!!account?.deletion?.scheduledFor && new Date(account.deletion.scheduledFor).getTime() <= Date.now());
+  if (deletionDue(user)) {
+    logger.info('Account data export skipped: permanent deletion is due or has started');
+    await removeSkippedExport();
+    return;
+  }
   const appUrl = process.env.APP_URL?.trim();
   if (!appUrl) throw new Error('APP_URL is required to link an account data export');
 
-  const storage = getFilesStorage();
-  const key = accountDataExportKey(userId, exportJobId);
-
-  // A redelivery after the upload only re-sends the email.
-  const existing = await existingExport(storage, key);
-  const fresh = existing?.lastModified && Date.now() - existing.lastModified.getTime() < ACCOUNT_DATA_EXPORT_TTL_MS;
-  let builtAt = fresh ? existing.lastModified : null;
-  if (!builtAt) {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'account-data-export-'));
-    try {
-      const zipPath = path.join(dir, 'account-data.zip');
-      await buildArchive(zipPath, userId, storage, () => context.getRemainingTimeInMillis(), logger);
-      await storage.uploadFile(zipPath, key, { ContentType: 'application/zip' });
-      builtAt = new Date();
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+  // The purge's atomic claim checks this same User document. Holding the lease prevents
+  // prefix cleanup and final user deletion from racing a slow export upload.
+  const leaseId = randomUUID();
+  const admissionFilter = {
+    _id: userId,
+    deletedAt: null,
+    'deletion.purgeStartedAt': null,
+    $or: [{ 'deletion.scheduledFor': null }, { 'deletion.scheduledFor': { $gt: now } }],
+  };
+  const claimed = await User.findOneAndUpdate(
+    {
+      ...admissionFilter,
+      $and: [
+        { $or: [{ 'accountDataExportLease.expiresAt': null }, { 'accountDataExportLease.expiresAt': { $lte: now } }] },
+      ],
+    },
+    { $set: { accountDataExportLease: { id: leaseId, expiresAt: new Date(now.getTime() + EXPORT_LEASE_MS) } } },
+    { new: true, projection: { email: 1 } }
+  ).lean<{ email?: string | null }>();
+  if (!claimed) {
+    const current = await userRepository.findById(userId);
+    if (!current || deletionDue(current)) {
+      logger.info('Account data export skipped: permanent deletion won admission');
+      await removeSkippedExport();
+      return;
     }
-  } else {
-    logger.info('Account data export already built; re-sending the email');
+    throw new Error('Another account data export holds the account lease');
   }
-
-  const email = buildAccountDataExportReadyEmail({
-    downloadPageUrl: `${appUrl.replace(/\/+$/, '')}/account-data-export/${exportJobId}`,
-    expiresAt: new Date(builtAt.getTime() + ACCOUNT_DATA_EXPORT_TTL_MS),
+  const leaseFilter = () => ({
+    ...admissionFilter,
+    $or: [{ 'deletion.scheduledFor': null }, { 'deletion.scheduledFor': { $gt: new Date() } }],
+    'accountDataExportLease.id': leaseId,
+    'accountDataExportLease.expiresAt': { $gt: new Date() },
   });
-  await EmailEvents.Send.publish({ to: user.email, subject: email.subject, body: email.body });
+  const hasLease = async () => !!(await User.exists(leaseFilter()));
+  const assertLease = async () => {
+    if (!(await hasLease())) throw new Error('Account data export lease lost or account deletion is due');
+  };
+
+  const storage = getFilesStorage();
+  let releaseLease = true;
+  try {
+    // A redelivery after the upload only re-sends the email.
+    const existing = await existingExport(storage, key);
+    const fresh = existing?.lastModified && Date.now() - existing.lastModified.getTime() < ACCOUNT_DATA_EXPORT_TTL_MS;
+    let builtAt = fresh ? existing.lastModified : null;
+    if (!builtAt) {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'account-data-export-'));
+      try {
+        const zipPath = path.join(dir, 'account-data.zip');
+        await buildArchive(zipPath, userId, storage, () => context.getRemainingTimeInMillis(), logger);
+        await assertLease();
+        const uploadTimeoutMs = Math.min(UPLOAD_RESERVE_MS, context.getRemainingTimeInMillis() - 1000);
+        if (uploadTimeoutMs <= 0) throw new Error('No remaining time to upload the account data export');
+        // Self-host budgets are cooperative, so building can overrun them. Renew atomically
+        // before the remote write and bound its total duration below the renewed lease.
+        const renewed = await User.updateOne(leaseFilter(), {
+          $set: { 'accountDataExportLease.expiresAt': new Date(Date.now() + EXPORT_LEASE_MS) },
+        });
+        if (renewed.matchedCount !== 1) throw new Error('Account data export lease lost before upload');
+        try {
+          await storage.uploadFile(
+            zipPath,
+            key,
+            { ContentType: 'application/zip' },
+            AbortSignal.timeout(uploadTimeoutMs)
+          );
+        } catch (error) {
+          // A failed response does not prove S3 rejected the write. Keep the renewed fence
+          // until expiry even after cleanup: the remote PutObject may commit after deletion.
+          releaseLease = false;
+          try {
+            await storage.deletePermanently(key);
+          } catch (cleanupError) {
+            logger.error('Account data export: failed to reconcile an ambiguous upload', { key, cleanupError });
+          }
+          throw error;
+        }
+        if (!(await hasLease())) {
+          // Remote success survives loss of the local lease. Erase the object before
+          // reporting failure, so a retrying purge cannot miss a late export upload.
+          await storage.deletePermanently(key);
+          throw new Error('Account data export lease lost after upload');
+        }
+        builtAt = new Date();
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    } else {
+      logger.info('Account data export already built; re-sending the email');
+    }
+
+    await assertLease();
+    const email = buildAccountDataExportReadyEmail({
+      downloadPageUrl: `${appUrl.replace(/\/+$/, '')}/account-data-export/${exportJobId}`,
+      expiresAt: new Date(builtAt.getTime() + ACCOUNT_DATA_EXPORT_TTL_MS),
+    });
+    await EmailEvents.Send.publish({ to: claimed.email || user.email, subject: email.subject, body: email.body });
+  } finally {
+    if (releaseLease) {
+      await User.updateOne(
+        { _id: userId, 'accountDataExportLease.id': leaseId },
+        { $unset: { accountDataExportLease: 1 } }
+      );
+    }
+  }
 });

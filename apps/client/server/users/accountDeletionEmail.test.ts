@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ACCOUNT_DELETION_RETAINED_RECORDS } from '@bike4mind/common';
+import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 const publish = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
@@ -25,10 +26,11 @@ describe('deletion-scheduled email', () => {
 
     const [message] = publish.mock.calls[0];
     expect(message.to).toBe('dev@example.test');
-    expect(message.subject).toBe('Your account is scheduled for deletion on November 18, 2026 (UTC)');
+    expect(message.subject).toBe('Your account deletion cancellation period ends on November 18, 2026 (UTC)');
     expect(message.body).toContain('<strong>November 18, 2026 (UTC)</strong>');
-    // The purge removes the account, not all of its data; the complete email lists what goes.
-    expect(message.body).toContain('Your account will be permanently deleted on');
+    expect(message.body).toContain('Your cancellation period ends on');
+    expect(message.body).toContain('Permanent deletion begins after that date');
+    expect(message.body).toContain('You can cancel until cleanup starts');
     expect(message.body).toContain('href="https://app.example.test/login"');
   });
 
@@ -62,11 +64,13 @@ describe('deletion-complete email', () => {
     expect(message.subject).toBe('Your account has been deleted');
     for (const item of PURGED_USER_DATA) expect(message.body).toContain(`<li>${item}</li>`);
     for (const record of ACCOUNT_DELETION_RETAINED_RECORDS) {
-      expect(message.body).toContain(`<strong>${record.category}</strong>`);
-      expect(message.body).toContain(`Kept for ${record.retention}.`);
+      expect(message.body).toContain(`<strong>${escapeHtml(record.category)}</strong>`);
+      expect(message.body).toContain(escapeHtml(record.reason));
+      expect(message.body).toContain(`Kept for ${escapeHtml(record.retention)}.`);
     }
     expect(message.body).toContain('AI model providers');
     expect(message.body).toContain('payment processor');
+    expect(message.body).toContain('Files held by moderation, including their contents and related records');
   });
 
   it('escapes retained records and says so when none are kept', () => {

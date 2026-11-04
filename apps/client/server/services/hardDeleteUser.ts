@@ -8,6 +8,8 @@ import { resolveUserType } from '@server/analytics/resolveUserType';
 import {
   cancelAccountSubscriptions,
   SINGLE_USER_CANCEL_BUDGET_MS,
+  NO_SUBSCRIPTIONS_CANCELED,
+  readAccountSubscriptionCustomerIds,
   type AccountSubscriptionCancellation,
 } from '@server/billing/cancelAccountSubscriptions';
 import {
@@ -62,8 +64,9 @@ async function emitAccountDeleted(account: IUserDocument | null, initiatedBy: Ha
  * and the self-serve deletion purge (server/users/completeAccountDeletion.ts).
  *
  * `commitDelete` runs the caller's own delete (its authorization and notifications) with a users
- * repository whose `delete` reads the integration grants and cancels the Stripe subscriptions first,
- * then deletes the row in a transaction with the context hooks. Once that commits, the purge and the
+ * repository whose `delete` captures integration grants and billing references, then deletes the row
+ * in a transaction with the context hooks. Admin subscription cancellation precedes the delete; a
+ * cancellable self-serve purge defers cancellation until its guarded delete commits. The purge and the
  * account_deleted event run in a `finally`: a throw after the commit (a failed notification) must not
  * skip them, because a retry would find no row and nothing would run them again.
  */
@@ -84,12 +87,16 @@ export async function hardDeleteUser<T>(
         integrationGrants = await readUserIntegrationGrants(id);
         const target = await userRepository.findById(id);
         deletedAccount = target;
-        // Before the delete: the Stripe customer ids live on the row. A deleted account must never
-        // renew, but a Stripe failure must not block the delete, so it is reported to the hooks instead.
-        const cancellation = await cancelAccountSubscriptions(
-          { userId: id, reason: 'account_deleted', deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
-          context.logger
-        );
+        // Capture customer IDs while the row exists. Self-serve deletion stays cancellable until
+        // the transaction commits, so only the admin path may cancel subscriptions before it.
+        const cancelAfterDelete = context.initiatedBy === 'self';
+        const customerIds = cancelAfterDelete ? await readAccountSubscriptionCustomerIds(id) : undefined;
+        const cancellation = cancelAfterDelete
+          ? NO_SUBSCRIPTIONS_CANCELED
+          : await cancelAccountSubscriptions(
+              { userId: id, reason: 'account_deleted', deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
+              context.logger
+            );
         subscriptionCancellation = cancellation;
         let result: Awaited<ReturnType<typeof userRepository.delete>>;
         try {
@@ -109,6 +116,14 @@ export async function hardDeleteUser<T>(
           throw error;
         }
         deleteCommitted = true;
+        if (cancelAfterDelete) {
+          // Cancellation can win until the guarded delete commits. Do no external writes before
+          // that point: a failed due-date guard must leave a restored account's subscriptions alone.
+          subscriptionCancellation = await cancelAccountSubscriptions(
+            { userId: id, reason: 'account_deleted', customerIds, deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
+            context.logger
+          );
+        }
         return result;
       },
     },

@@ -1,4 +1,4 @@
-import { organizationRepository, userRepository } from '@bike4mind/database';
+import { Organization, userRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { isStripeConfigured, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { voidOpenSubscriptionInvoices } from '@bike4mind/server-utils/integrations/stripe/dunning';
@@ -70,9 +70,18 @@ const reasonOf = (error: unknown): string => {
  * organizations it owns. A member's org is not included; only the billing owner pays for it.
  */
 async function billedCustomerIds(user: { id: string; stripeCustomerId?: string | null }): Promise<string[]> {
-  const ownedOrgs = await organizationRepository.find({ userId: user.id });
+  const ownedOrgs = await Organization.find({ userId: user.id }, { stripeCustomerId: 1 })
+    .setOptions({ includeDeleted: true })
+    .lean<{ stripeCustomerId?: string | null }[]>();
   const ids = [user.stripeCustomerId, ...ownedOrgs.map(org => org.stripeCustomerId)];
   return [...new Set(ids.filter((id): id is string => typeof id === 'string' && id.length > 0))];
+}
+
+/** Capture before a guarded hard delete so cancellation can run after that delete commits. */
+export async function readAccountSubscriptionCustomerIds(userId: string): Promise<string[]> {
+  if (!isStripeConfigured()) return [];
+  const user = await userRepository.findById(userId);
+  return user ? billedCustomerIds(user) : [];
 }
 
 // Per Stripe request (ms). Bulk callers run this inside a time budget checked only between chunks,
@@ -161,23 +170,28 @@ async function cancelCustomerSubscriptions(
  * the suspension or deletion it accompanies must go ahead, so each failure is logged at error and
  * returned for the caller's response and audit record. Refunds are deliberately not issued.
  *
- * Call it before a hard delete: the customer ids are read from the user and its owned orgs.
+ * Without captured customerIds, call before a hard delete: the IDs are read from the user and its
+ * owned orgs. A guarded self-serve delete captures the IDs first and cancels only after commit.
  *
  * `deadline` (epoch ms) bounds the whole call: past it no Stripe request is made, and every
  * subscription or customer not yet handled is returned as failed.
  */
 export async function cancelAccountSubscriptions(
-  input: { userId: string; reason: AccountSubscriptionCancelReason; deadline?: number },
+  input: {
+    userId: string;
+    reason: AccountSubscriptionCancelReason;
+    deadline?: number;
+    /** IDs captured before a committed hard delete; an explicit empty list means nothing to cancel. */
+    customerIds?: readonly string[];
+  },
   logger: Pick<Logger, 'info' | 'error'>
 ): Promise<AccountSubscriptionCancellation> {
   const result: AccountSubscriptionCancellation = { canceled: [], failed: [] };
   if (!isStripeConfigured()) return result;
 
-  let customerIds: string[];
+  let customerIds: readonly string[];
   try {
-    const user = await userRepository.findById(input.userId);
-    if (!user) return result;
-    customerIds = await billedCustomerIds(user);
+    customerIds = input.customerIds ?? (await readAccountSubscriptionCustomerIds(input.userId));
   } catch (error) {
     result.failed.push({ customerId: 'unknown', subscriptionId: null, reason: reasonOf(error) });
     logger.error('[Billing] could not resolve the subscriptions to cancel for an account', {

@@ -31,9 +31,13 @@ export async function readUserIntegrationGrants(userId: string): Promise<UserInt
   return User.findById(userId, 'googleDrive atlassianConnect').lean<UserIntegrationGrants>();
 }
 
-/** User-facing summary the deletion-complete email sends; keep in sync with the steps below and the user delete. */
+/** Self-serve completion summary; keep in sync with purgeAccountContent, purgeAccountFiles and the user delete. */
 export const PURGED_USER_DATA: readonly string[] = [
   'Your account and profile',
+  'Personal notebooks and their messages',
+  'Personal files and generated media (except moderation-held content or copies still owned by others)',
+  'Personal projects, artifacts, skills and memories',
+  'Personal data lakes, agent records and connected-device credentials',
   'Sign-in sessions and sign-in history',
   'Google Drive and Atlassian connections',
   'Published pages',

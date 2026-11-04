@@ -296,6 +296,9 @@ const UserDeletionSchema = new Schema(
     requestedAt: { type: Date, required: true },
     scheduledFor: { type: Date, required: true },
     source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    purgeStartedAt: { type: Date, required: false },
+    purgeLeaseId: { type: String, required: false },
+    purgeLeaseExpiresAt: { type: Date, required: false },
   },
   { _id: false }
 );
@@ -1342,6 +1345,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
     deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountDataExportLease: {
+      type: new Schema(
+        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
