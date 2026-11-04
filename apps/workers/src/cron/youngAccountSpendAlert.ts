@@ -64,7 +64,8 @@ function formatSpenderLine(
 ): string {
   const links = [adminUserLink(spender.userId, appUrl), stripeCustomerSlackLink(spender.stripeCustomerId, stage)];
   return (
-    `${rank}. \`${escapeSlackText(spender.userId)}\` ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
+    `${rank}. ${spender.email ? escapeSlackText(spender.email) : 'no email'} ` +
+    `\`${escapeSlackText(spender.userId)}\` ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
     `(created ${new Date(spender.accountCreatedAt).toISOString()}) - ` +
     links.filter((link): link is string => link !== null).join(' | ')
   );

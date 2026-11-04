@@ -255,4 +255,52 @@ describe('decideIncidents', () => {
       }),
     ]);
   });
+
+  describe('superseded incidents', () => {
+    const spikeKey = spendAlertOpenKey('account_spike', 'User', 'u1');
+    const ceiling = breach({ rule: 'account_ceiling', severity: 'critical', value: 6000 });
+
+    it('silently resolves a spike when the same scope breaches the ceiling, and opens the ceiling', () => {
+      const decisions = decideIncidents([active()], [ceiling], now, windowEnd);
+
+      expect(decisions).toEqual([
+        {
+          kind: 'resolve',
+          id: 'a1',
+          patch: { status: 'resolved', resolvedAt: now, clearRuns: 2, lastEvaluatedWindowEnd: windowEnd },
+          announce: false,
+        },
+        expect.objectContaining({ kind: 'open', alert: expect.objectContaining({ rule: 'account_ceiling' }) }),
+      ]);
+    });
+
+    it('resolves an acknowledged superseded incident too', () => {
+      const [decision] = decideIncidents([active({ status: 'acknowledged' })], [ceiling], now, windowEnd);
+
+      expect(decision).toMatchObject({ kind: 'resolve', announce: false, patch: { status: 'resolved' } });
+    });
+
+    it('resolves a caller-supplied superseded key that was never notified', () => {
+      const alert = active({ lastNotifiedAt: undefined, lastNotifiedValue: undefined });
+      const decisions = decideIncidents([alert], [], now, windowEnd, new Set([spikeKey]));
+
+      expect(decisions).toEqual([expect.objectContaining({ kind: 'resolve', id: 'a1', announce: false })]);
+    });
+
+    it('leaves a spike on another scope alone', () => {
+      const [decision] = decideIncidents([active()], [{ ...ceiling, scopeId: 'u2' }], now, windowEnd);
+
+      expect(decision).toMatchObject({ kind: 'update', id: 'a1' });
+    });
+
+    it('writes viaKeys into the context on open and on a breach patch', () => {
+      const withKeys = { ...ceiling, viaKeys: ['ci-key'] };
+      const [opened] = decideIncidents([], [withKeys], now, windowEnd);
+      const ceilingAlert = active({ id: 'a2', rule: 'account_ceiling', openKey: 'account_ceiling:User:u1' });
+      const [patched] = decideIncidents([ceilingAlert], [withKeys], now, windowEnd);
+
+      expect(opened).toMatchObject({ alert: { context: { viaKeys: ['ci-key'] } } });
+      expect(patched).toMatchObject({ patch: { context: { baseline: 10, ratio: 10, viaKeys: ['ci-key'] } } });
+    });
+  });
 });

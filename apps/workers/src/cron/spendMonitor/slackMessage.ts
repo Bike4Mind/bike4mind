@@ -40,6 +40,7 @@ const safe = escapeMrkdwn;
 
 const formatCredits = (credits: number) => Math.round(credits).toLocaleString('en-US');
 const formatUsd = (usd: number) => `$${usd.toFixed(2)}`;
+const listPriceNote = (creditUsd: number) => `approx. at list price, ${formatUsd(creditUsd * 1000)} per 1,000 credits`;
 
 function formatDuration(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
@@ -60,7 +61,7 @@ function formatAmount(rule: SpendRuleId, amount: number, creditUsd: number): str
 
 function listPriceContext(stage: string, rule: SpendRuleId, creditUsd: number): string[] {
   const context = [safe(stage)];
-  if (rule !== 'platform_cost_spike') context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
+  if (rule !== 'platform_cost_spike') context.push(listPriceNote(creditUsd));
   return context;
 }
 
@@ -109,6 +110,10 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     const estimate = isCost ? ' (est.)' : '';
     fields.push(`*Trusted accounts, not in ratio*\n${formatAmount(alert.rule, trustedExcluded, creditUsd)}${estimate}`);
   }
+  const viaKeys = Array.isArray(alert.context.viaKeys)
+    ? alert.context.viaKeys.filter((name): name is string => typeof name === 'string')
+    : [];
+  if (viaKeys.length > 0) fields.push(`*Via API keys*\n${viaKeys.map(safe).join(', ')}`);
 
   const sections: string[] = [];
   if (breakdown?.topModels.length) {
@@ -135,7 +140,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
 
   const context = [safe(stage), `${kind === 'escalate' ? 'escalated, ' : ''}${alert.severity}`];
   if (trusted) context.push('trusted-account limits');
-  if (!isCost) context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
+  if (!isCost) context.push(listPriceNote(creditUsd));
 
   return composeAlarmMessage({
     stage,

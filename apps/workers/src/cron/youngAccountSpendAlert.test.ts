@@ -51,7 +51,13 @@ const summary = (totalCredits: number, accountCount: number) => ({
   totalCredits,
   accountCount,
   topSpenders: [
-    { userId: 'user-a', creditsSpent: totalCredits, accountCreatedAt: createdAt, stripeCustomerId: 'cus_a' },
+    {
+      userId: 'user-a',
+      creditsSpent: totalCredits,
+      accountCreatedAt: createdAt,
+      stripeCustomerId: 'cus_a',
+      email: 'a@example.com',
+    },
   ],
 });
 
@@ -93,19 +99,24 @@ describe('young-account spend message', () => {
     totalCredits: 12345,
     accountCount: 2,
     topSpenders: [
-      { userId: 'user-a', creditsSpent: 12000, accountCreatedAt: createdAt, stripeCustomerId: 'cus_a' },
-      { userId: 'user-b', creditsSpent: 345, accountCreatedAt: createdAt, stripeCustomerId: null },
+      {
+        userId: 'user-a',
+        creditsSpent: 12000,
+        accountCreatedAt: createdAt,
+        stripeCustomerId: 'cus_a',
+        email: 'a@example.com',
+      },
+      { userId: 'user-b', creditsSpent: 345, accountCreatedAt: createdAt, stripeCustomerId: null, email: null },
     ],
   };
   const thresholds = { credits: 5000, accounts: 25 };
 
-  it('lists the window, counts and ranked user ids without emails', () => {
+  it('lists the window, counts and ranked emails with user ids', () => {
     const text = formatYoungAccountSpendMessage(twoSpenders, thresholds, window, 'production', undefined);
     expect(text).toContain('2026-10-26T10:00:00.000Z to 2026-10-26T11:00:00.000Z');
     expect(text).toContain('12,345 credits across 2 accounts');
-    expect(text).toContain('1. `user-a` 12,000 credits');
-    expect(text).toContain('2. `user-b` 345 credits');
-    expect(text).not.toContain('@');
+    expect(text).toContain('1. a@example.com `user-a` 12,000 credits');
+    expect(text).toContain('2. no email `user-b` 345 credits');
     expect([...text].every(char => char.charCodeAt(0) < 128)).toBe(true);
   });
 
@@ -118,11 +129,11 @@ describe('young-account spend message', () => {
       'https://app.example.com'
     ).split('\n');
     expect(lines).toContain(
-      '1. `user-a` 12,000 credits (created 2026-10-25T00:00:00.000Z) - ' +
+      '1. a@example.com `user-a` 12,000 credits (created 2026-10-25T00:00:00.000Z) - ' +
         '<https://app.example.com/admin/users/user-a|admin> | <https://dashboard.stripe.com/customers/cus_a|Stripe>'
     );
     expect(lines).toContain(
-      '2. `user-b` 345 credits (created 2026-10-25T00:00:00.000Z) - ' +
+      '2. no email `user-b` 345 credits (created 2026-10-25T00:00:00.000Z) - ' +
         '<https://app.example.com/admin/users/user-b|admin> | no Stripe customer'
     );
   });
@@ -140,12 +151,18 @@ describe('young-account spend message', () => {
 
   it('keeps ids from breaking out of their Slack links', () => {
     const text = formatYoungAccountSpendMessage(
-      { ...twoSpenders, topSpenders: [{ ...twoSpenders.topSpenders[0], userId: 'a|b>c', stripeCustomerId: 'cus|x' }] },
+      {
+        ...twoSpenders,
+        topSpenders: [
+          { ...twoSpenders.topSpenders[0], userId: 'a|b>c', stripeCustomerId: 'cus|x', email: 'x<y&z@example.com' },
+        ],
+      },
       thresholds,
       window,
       'production',
       'https://app.example.com'
     );
+    expect(text).toContain('x&lt;y&amp;z@example.com');
     expect(text).toContain('<https://app.example.com/admin/users/a%7Cb%3Ec|admin>');
     expect(text).toContain('<https://dashboard.stripe.com/customers/cus%7Cx|Stripe>');
   });

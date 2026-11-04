@@ -133,9 +133,14 @@ describe('evaluateScope', () => {
     expect(breaches[0]).toMatchObject({ rule: 'account_ceiling', severity: 'critical' });
   });
 
-  it('returns both the spike and the ceiling when both fire', () => {
-    const rules = evaluateScope(scope('Agent', 6000, 100), thresholds).map(breach => breach.rule);
-    expect(rules).toEqual(['account_spike', 'account_ceiling']);
+  it('raises only the ceiling when the spike and the ceiling both hold', () => {
+    const breaches = evaluateScope(scope('Agent', 6000, 100), thresholds);
+    expect(breaches).toEqual([expect.objectContaining({ rule: 'account_ceiling', severity: 'critical', ratio: 60 })]);
+  });
+
+  it('raises only the spike below the ceiling', () => {
+    const breaches = evaluateScope(scope('Agent', 4000, 100), thresholds);
+    expect(breaches).toEqual([expect.objectContaining({ rule: 'account_spike', severity: 'warning', ratio: 40 })]);
   });
 
   it('maps apiKey to apikey rules and raises exactly the ceiling for 6000 over a zero baseline', () => {

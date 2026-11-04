@@ -666,4 +666,107 @@ describe('evaluateSpend', () => {
     await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
     expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-source-mix-failed', expect.anything());
   });
+
+  describe('folding api keys into their payer', () => {
+    const keyDeps = (
+      fakes: ReturnType<typeof createFakes>,
+      key: { userId: string; billingOwnerType?: string; organizationId?: string }
+    ) => {
+      fakes.deps.resolveScopeDeps = {
+        ...fakes.deps.resolveScopeDeps,
+        findApiKeysByIds: async ids => ids.map(id => ({ id, name: 'ci-key', ...key })),
+        findOrganizationsByIds: async ids => ids.map(id => ({ id, name: `Org ${id}` })),
+      };
+    };
+    const platform = windowBuckets('platform', 'all', 100);
+
+    it('posts one account incident for a key and its owner, naming the key', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({ rule: 'account_ceiling', context: { viaKeys: ['ci-key'] } });
+      expect(JSON.stringify(fakes.posts[0])).toContain('ci-key');
+    });
+
+    it('folds an org-billed key into its Organization', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u9', billingOwnerType: 'Organization', organizationId: 'o1' });
+      fakes.setRollups([
+        ...platform,
+        ...windowBuckets('Organization', 'o1', 2000),
+        ...windowBuckets('apiKey', 'k1', 2000),
+      ]);
+
+      await run(fakes);
+
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({
+        scopeType: 'Organization',
+        scopeId: 'o1',
+        context: { viaKeys: ['ci-key'] },
+      });
+    });
+
+    it('keeps the key incident when its owner did not breach', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      fakes.setRollups([...platform, ...windowBuckets('apiKey', 'k1', 2000)]);
+
+      await run(fakes);
+
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({ rule: 'apikey_ceiling', scopeType: 'apiKey' });
+      expect(fakes.alerts[0].context).not.toHaveProperty('viaKeys');
+    });
+
+    it('resolves a standing key incident silently once its owner breaches too', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      fakes.setRollups([...platform, ...windowBuckets('apiKey', 'k1', 2000)]);
+      await run(fakes);
+
+      fakes.nextWindow();
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
+
+      expect(fakes.alerts.map(a => [a.rule, a.status])).toEqual([
+        ['apikey_ceiling', 'resolved'],
+        ['account_ceiling', 'open'],
+      ]);
+      expect(fakes.posts.map(p => p.text).join('\n')).not.toContain('Resolved');
+    });
+
+    it('still posts the unfolded cards when the lookup fails', async () => {
+      const fakes = createFakes();
+      fakes.deps.resolveScopeDeps = {
+        ...fakes.deps.resolveScopeDeps,
+        findApiKeysByIds: vi.fn().mockRejectedValueOnce(new Error('mongo down')).mockResolvedValue([]),
+      };
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 2 });
+      expect(fakes.alerts).toHaveLength(2);
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-fold-failed', expect.anything());
+    });
+  });
+
+  it('mentions the group once per run, on the platform critical', async () => {
+    const fakes = createFakes();
+    fakes.deps.messageContext = { ...fakes.deps.messageContext, mention: 'channel' };
+    fakes.setRollups([
+      ...quietPlatformHistory(100),
+      ...windowBuckets('platform', 'all', 5000),
+      ...windowBuckets('User', 'u1', 2000),
+      ...windowBuckets('User', 'u2', 2000),
+    ]);
+
+    await expect(run(fakes)).resolves.toMatchObject({ posted: 3 });
+
+    const mentioned = fakes.posts.filter(post => post.text.includes('<!channel>'));
+    expect(mentioned).toHaveLength(1);
+    expect(mentioned[0].text).toContain('Platform');
+  });
 });
