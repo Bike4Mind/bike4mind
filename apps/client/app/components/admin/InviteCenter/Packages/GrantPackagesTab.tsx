@@ -63,7 +63,7 @@ const columns: DataColumn<GrantPackageRow>[] = [
     numeric: true,
     render: row =>
       row.usage ? (
-        <Tooltip title="Active codes (unexpired and still redeemable) out of all codes linked to this package">
+        <Tooltip title="Active codes (not expired, and not yet used unless unlimited-use) out of all codes linked to this package">
           <span data-testid={`grant-package-codes-${row.id}`}>
             {formatCount(row.usage.activeCodes)} active / {formatCount(row.usage.codes)}
           </span>

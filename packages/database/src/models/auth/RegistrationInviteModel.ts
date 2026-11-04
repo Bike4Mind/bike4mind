@@ -53,9 +53,10 @@ export class RegistrationInviteRepository
   }
 
   /**
-   * Per-package code counts for the grant packages admin list. A code is active while it is
-   * unexpired and still redeemable (open, or unlimited-use). nextExpiry is the soonest expiry
-   * among active codes that carry one.
+   * Per-package code counts for the grant packages admin list. A code is active while register()
+   * in b4m-core/services/src/userService/register.ts would still accept it: not past expiresAt,
+   * and no used date unless unlimited-use. status is not consulted there, so not here either.
+   * nextExpiry is the soonest expiry among active codes that carry one.
    */
   async usageByGrantPackage(ids: string[], now: Date = new Date()) {
     const usage = new Map<string, { codes: number; activeCodes: number; nextExpiry: Date | null }>();
@@ -63,8 +64,8 @@ export class RegistrationInviteRepository
 
     const active = {
       $and: [
-        { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $gt: ['$expiresAt', now] }] },
-        { $or: [{ $eq: ['$status', RegInviteStatusType.open] }, { $eq: ['$unlimitedUse', true] }] },
+        { $or: [{ $eq: [{ $ifNull: ['$expiresAt', null] }, null] }, { $gte: ['$expiresAt', now] }] },
+        { $or: [{ $eq: [{ $ifNull: ['$used', null] }, null] }, { $eq: ['$unlimitedUse', true] }] },
       ],
     };
     const rows = await this.model.aggregate<{

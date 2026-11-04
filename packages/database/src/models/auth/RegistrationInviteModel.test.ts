@@ -25,9 +25,15 @@ describe('RegistrationInviteRepository.usageByGrantPackage', () => {
       // Expired: counted as a code, not active, and never the next expiry.
       invite({ grantPackageId: 'a', expiresAt: day(-1) }),
       // Used single-use code with the earliest future expiry: not active, so it must not win.
-      invite({ grantPackageId: 'a', status: RegInviteStatusType.used, expiresAt: day(1) }),
+      invite({
+        grantPackageId: 'a',
+        status: RegInviteStatusType.used,
+        used: day(-1),
+        usedbyId: 'user-1',
+        expiresAt: day(1),
+      }),
       // Used but unlimited-use stays redeemable.
-      invite({ grantPackageId: 'a', status: RegInviteStatusType.used, unlimitedUse: true, expiresAt: day(2) }),
+      invite({ grantPackageId: 'a', used: day(-1), unlimitedUse: true, expiresAt: day(2) }),
       invite({ grantPackageId: 'other', expiresAt: day(1) }),
       invite({}),
     ]);
@@ -37,6 +43,22 @@ describe('RegistrationInviteRepository.usageByGrantPackage', () => {
     expect(usage.get('a')).toEqual({ codes: 6, activeCodes: 4, nextExpiry: day(2) });
     expect(usage.has('missing')).toBe(false);
     expect(usage.has('other')).toBe(false);
+  });
+
+  it('counts a waiting code as active, since redemption does not check status', async () => {
+    await invite({ grantPackageId: 'a', status: RegInviteStatusType.waiting, expiresAt: day(1) });
+
+    const usage = await registrationInviteRepository.usageByGrantPackage(['a'], NOW);
+
+    expect(usage.get('a')).toEqual({ codes: 1, activeCodes: 1, nextExpiry: day(1) });
+  });
+
+  it('counts a code expiring at exactly now as active, matching the redemption check', async () => {
+    await invite({ grantPackageId: 'a', expiresAt: NOW });
+
+    const usage = await registrationInviteRepository.usageByGrantPackage(['a'], NOW);
+
+    expect(usage.get('a')).toEqual({ codes: 1, activeCodes: 1, nextExpiry: NOW });
   });
 
   it('reports no expiry when no active code carries one', async () => {
