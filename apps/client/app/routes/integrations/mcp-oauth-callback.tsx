@@ -13,25 +13,24 @@ type Outcome = 'working' | 'failed';
 const McpOAuthCallbackPage = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
-  const [outcome, setOutcome] = useState<Outcome>('working');
+  const text = (key: string) => (typeof search[key] === 'string' ? (search[key] as string) : undefined);
+  const code = text('code');
+  const state = text('state');
+  const iss = text('iss');
+  const unusable = Boolean(search.error) || !code || !state;
+  const [exchangeFailed, setExchangeFailed] = useState(false);
+  const outcome: Outcome = unusable || exchangeFailed ? 'failed' : 'working';
   // The code is single use: a second run (StrictMode, a re-render) would only burn it.
   const started = useRef(false);
 
   useEffect(() => {
-    if (started.current) return;
+    if (started.current || unusable) return;
     started.current = true;
-    const text = (key: string) => (typeof search[key] === 'string' ? (search[key] as string) : undefined);
-    const code = text('code');
-    const state = text('state');
-    if (search.error || !code || !state) {
-      setOutcome('failed');
-      return;
-    }
     api
-      .post('/api/mcp-connections/oauth/callback', { code, state, iss: text('iss') })
+      .post('/api/mcp-connections/oauth/callback', { code, state, iss })
       .then(() => navigate({ to: '/integrations', search: { tab: 'integrations' } }))
-      .catch(() => setOutcome('failed'));
-  }, [search, navigate]);
+      .catch(() => setExchangeFailed(true));
+  }, [unusable, code, state, iss, navigate]);
 
   return (
     <Box sx={{ maxWidth: 480, mx: 'auto', mt: 12, px: 2 }} data-testid="mcp-oauth-callback-page">

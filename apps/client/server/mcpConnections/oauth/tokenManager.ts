@@ -148,7 +148,7 @@ async function refreshWithLease(
     }
     throw new RemoteMcpAuthRequiredError({});
   } catch (error) {
-    if (error instanceof RemoteMcpInvalidGrantError) return markReconnect(connection);
+    if (error instanceof RemoteMcpInvalidGrantError) return await markReconnect(connection);
     if (error instanceof RemoteMcpOAuthError) {
       throw new RemoteMcpAuthFailedError('The authorization server refused the refresh');
     }

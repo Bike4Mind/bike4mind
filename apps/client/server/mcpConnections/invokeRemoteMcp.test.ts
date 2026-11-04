@@ -93,6 +93,15 @@ vi.mock('@bike4mind/server-utils/integrations/integrationAuditLogger', () => ({
     }),
   },
 }));
+const tokenManager = vi.hoisted(() => ({
+  getOAuthAccessToken: vi.fn(),
+  OAuthReconnectRequiredError: class extends Error {} as unknown as new () => Error,
+}));
+vi.mock('./oauth/tokenManager', async importOriginal => {
+  const actual = await importOriginal<typeof import('./oauth/tokenManager')>();
+  tokenManager.OAuthReconnectRequiredError = actual.OAuthReconnectRequiredError;
+  return { ...actual, getOAuthAccessToken: tokenManager.getOAuthAccessToken };
+});
 vi.mock('./customMcpAccess', async importOriginal => ({
   ...(await importOriginal<typeof import('./customMcpAccess')>()),
   resolveCustomMcpContext: vi.fn(async () => {
@@ -414,23 +423,114 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
     );
   });
 
-  it('an OAuth connection reads as needing sign-in until the token manager exists', async () => {
-    const id = seed('/mcp', {
-      auth: {
-        kind: 'oauth',
-        oauth: { resource: 'r', issuer: 'i', authorizationServerUrl: 'a', scopes: [], clientMode: 'dcr' },
+  describe('OAuth connections', () => {
+    const oauthAuth = (hasAccessToken: boolean): IMcpConnectionDocument['auth'] => ({
+      kind: 'oauth',
+      oauth: {
+        resource: 'r',
+        issuer: 'i',
+        authorizationServerUrl: 'a',
+        scopes: [],
+        clientMode: 'dcr',
+        hasAccessToken,
       },
     });
-    await expectRemoteCode(
-      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
-      'auth_required'
-    );
-    expect(fixture.requests).toHaveLength(0);
-    expect(repo.setStatus).toHaveBeenCalledWith(
-      id,
-      'needs_reconnect',
-      expect.objectContaining({ code: 'auth_required' })
-    );
+    const listed = {
+      action: 'listTools' as const,
+      result: { tools: [], dropped: [], detectedTransport: 'streamable-http' as const },
+    };
+
+    it('sends the token manager bearer token', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockResolvedValue('tok-1');
+      await invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { runner, context: context() }
+      );
+      expect(fixture.requests.find(r => r.method === 'POST')?.authorization).toBe('Bearer tok-1');
+    });
+
+    it('forces one refresh and retries once when the server rejects the token', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockResolvedValueOnce('stale').mockResolvedValueOnce('fresh');
+      const seen: string[] = [];
+      const flaky = vi.fn(async (payload: { headers: Record<string, string> }) => {
+        seen.push(payload.headers.Authorization ?? '');
+        if (seen.length === 1) throw new RemoteMcpAuthRequiredError({});
+        return listed;
+      });
+      await invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { runner: flaky, context: context() }
+      );
+      expect(seen).toEqual(['Bearer stale', 'Bearer fresh']);
+      expect(tokenManager.getOAuthAccessToken).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        expect.objectContaining({ force: false })
+      );
+      expect(tokenManager.getOAuthAccessToken).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        expect.objectContaining({ force: true })
+      );
+      expect(repo.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('a second 401 after the refresh leaves the connection needing reconnect', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockResolvedValue('tok');
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: rejecting, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(rejecting).toHaveBeenCalledTimes(2);
+      expect(repo.setStatus).toHaveBeenCalledWith(
+        id,
+        'needs_reconnect',
+        expect.objectContaining({ code: 'auth_required' })
+      );
+    });
+
+    it('sends no credentials before sign-in, so the 401 records the challenge', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(false) });
+      tokenManager.getOAuthAccessToken.mockResolvedValue(undefined);
+      const challenged = vi.fn(async (payload: { headers: Record<string, string> }) => {
+        expect(payload.headers).toEqual({});
+        throw new RemoteMcpAuthRequiredError({
+          resourceMetadataUrl: 'https://auth.fixture.example/.well-known/oauth-protected-resource/mcp',
+        });
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: challenged, context: context() }
+        ),
+        'auth_required'
+      );
+      expect(challenged).toHaveBeenCalledTimes(1);
+      expect(repo.setPendingAuth).toHaveBeenCalledWith(
+        id,
+        expect.objectContaining({ message: 'The server requires sign-in' })
+      );
+    });
+
+    it('keeps the reason the token manager stored when the grant is gone', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockRejectedValue(new tokenManager.OAuthReconnectRequiredError());
+      await expectRemoteCode(
+        invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() }),
+        'auth_required'
+      );
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(fixture.requests).toHaveLength(0);
+    });
   });
 
   it('a timeout on a call leaves a connected connection connected; on a listTools it is an error', async () => {

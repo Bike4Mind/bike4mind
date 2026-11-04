@@ -599,7 +599,10 @@ export interface McpApiKeyUpdate {
  * The discovered OAuth configuration of a connection (endpoints, client identity). Never carries tokens;
  * optional fields left out are cleared, so a re-discovery cannot leave a stale endpoint behind.
  */
-export type McpOAuthConfigUpdate = Pick<IMcpConnectionOAuth, 'resource' | 'issuer' | 'authorizationServerUrl' | 'clientMode'> &
+export type McpOAuthConfigUpdate = Pick<
+  IMcpConnectionOAuth,
+  'resource' | 'issuer' | 'authorizationServerUrl' | 'clientMode'
+> &
   Partial<
     Pick<
       IMcpConnectionOAuth,
