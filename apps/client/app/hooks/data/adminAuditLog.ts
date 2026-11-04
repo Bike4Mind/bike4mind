@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
@@ -168,12 +168,19 @@ export const useAuditReview = (entryId: string | null) =>
     enabled: entryId !== null,
   });
 
+// A review never writes to the audit log, so the event list, entry and summary queries stay valid.
+const invalidateReviewQueries = (queryClient: QueryClient) =>
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['admin', 'audit-log', 'review-queue'] }),
+    queryClient.invalidateQueries({ queryKey: ['admin', 'audit-log', 'review'] }),
+  ]);
+
 export const useMarkAuditReviewed = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: { entryIds: string[]; note?: string }): Promise<MarkAuditReviewedResult> =>
       (await api.post<MarkAuditReviewedResult>('/api/admin/audit-log/reviews', input)).data,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'audit-log'] }),
+    onSuccess: () => invalidateReviewQueries(queryClient),
     onError: () => toast.error('Could not mark the entries as reviewed. Refresh the list and try again.'),
   });
 };
@@ -183,7 +190,7 @@ export const useUnmarkAuditReviewed = () => {
   return useMutation({
     mutationFn: async (input: { entryIds: string[] }): Promise<UnmarkAuditReviewedResult> =>
       (await api.delete<UnmarkAuditReviewedResult>('/api/admin/audit-log/reviews', { data: input })).data,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'audit-log'] }),
+    onSuccess: () => invalidateReviewQueries(queryClient),
     onError: () => toast.error('Could not undo the review. Refresh the list and try again.'),
   });
 };

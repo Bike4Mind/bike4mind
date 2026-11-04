@@ -194,7 +194,7 @@ describe('review queue hooks', () => {
     expect(get).toHaveBeenCalledWith('/api/admin/audit-log/reviews', { params: { entryId: 'e1' } });
   });
 
-  it('posts a review and invalidates the audit log', async () => {
+  it('posts a review and invalidates the review queries', async () => {
     post.mockResolvedValue({ data: { reviewed: ['e1'], skipped: [] } });
     const { wrapper, queryClient } = makeWrapper();
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
@@ -205,7 +205,8 @@ describe('review queue hooks', () => {
     });
 
     expect(post).toHaveBeenCalledWith('/api/admin/audit-log/reviews', { entryIds: ['e1'], note: 'ok' });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'audit-log'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'audit-log', 'review-queue'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'audit-log', 'review'] });
   });
 
   it('sends the unmark ids as the DELETE body', async () => {
@@ -242,6 +243,7 @@ describe('review queue hooks', () => {
       };
       Object.values(keys).forEach(queryKey => queryClient.setQueryData(queryKey, { seeded: true }));
       queryClient.setQueryData(['unrelated'], { seeded: true });
+      queryClient.setQueryData(['admin', 'audit-log', 'list', {}, 50], { seeded: true });
 
       const { result } = renderHook(() => useMutationHook(), { wrapper });
       await act(async () => {
@@ -252,21 +254,22 @@ describe('review queue hooks', () => {
       expect(queryClient.getQueryState(keys.count)?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState(keys.review)?.isInvalidated).toBe(true);
       expect(queryClient.getQueryState(['unrelated'])?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryState(['admin', 'audit-log', 'list', {}, 50])?.isInvalidated).toBe(false);
     });
   });
 
-  it('keeps the real queue and count hooks under the invalidated audit-log prefix', async () => {
+  it('keeps the real queue and count hooks under the invalidated review-queue prefix', async () => {
     get.mockResolvedValue({ data: { entries: [], nextCursor: null, total: 1 } });
     const { wrapper, queryClient } = makeWrapper();
     renderHook(() => useAuditReviewQueue('unreviewed'), { wrapper });
     renderHook(() => useUnreviewedAuditCount({ enabled: true }), { wrapper });
     await waitFor(() =>
-      expect(queryClient.getQueryCache().findAll({ queryKey: ['admin', 'audit-log'] })).toHaveLength(2)
+      expect(queryClient.getQueryCache().findAll({ queryKey: ['admin', 'audit-log', 'review-queue'] })).toHaveLength(2)
     );
     expect(
       queryClient
         .getQueryCache()
-        .findAll({ queryKey: ['admin', 'audit-log'] })
+        .findAll({ queryKey: ['admin', 'audit-log', 'review-queue'] })
         .every(query => query.state.status === 'success' || query.state.fetchStatus === 'fetching')
     ).toBe(true);
   });
