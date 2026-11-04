@@ -5,6 +5,7 @@ import {
   isSupportedEmbeddingModel,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   DocumentDateSource,
+  type ExtractionRefusalReason,
   IFabFile,
   MIN_CHUNK_CHARS_FLOOR,
   MIN_PASSAGE_TOKEN_TARGET,
@@ -301,6 +302,18 @@ export function effectiveChunkTokenLimit(opts: {
   return Math.min(hardLimit, target);
 }
 
+/**
+ * Why chunkFile declined to read a file, reported by SmartChunker.getExtractionRefusal(). `reason`
+ * is the value stored on FabFile.extractionRefusalReason; the rest is for logs.
+ */
+export type ExtractionRefusal =
+  | {
+      reason: Extract<ExtractionRefusalReason, 'decompressedSizeExceeded'>;
+      format: 'DOCX' | 'XLSX';
+      limitBytes: number;
+    }
+  | { reason: Extract<ExtractionRefusalReason, 'unopenableContainer'>; format: 'DOCX' | 'XLSX'; detail: string };
+
 // The SmartChunker class handles chunking of various file types into smaller pieces suitable for processing by an embedding model
 export class SmartChunker {
   private model: string;
@@ -320,6 +333,9 @@ export class SmartChunker {
   // hand - re-reading the file just to look at its metadata would double the ingest read for a
   // field most documents do not have. Undefined whenever no source offered a plausible date.
   private lastDocumentDate: ExtractedDocumentDate | undefined;
+  // Set when the most recent chunkFile() call declined to read the file rather than reading it and
+  // finding no text. Undefined whenever the file was read, chunks or not.
+  private lastExtractionRefusal: ExtractionRefusal | undefined;
   private lastYieldAt = Date.now();
 
   /**
@@ -409,6 +425,14 @@ export class SmartChunker {
   }
 
   /**
+   * Why the most recent chunkFile() call returned no chunks without reading the file, or undefined
+   * when it read the file. See ExtractionRefusal.
+   */
+  public getExtractionRefusal(): ExtractionRefusal | undefined {
+    return this.lastExtractionRefusal;
+  }
+
+  /**
    * Chunk a file into smaller pieces that can be processed by the model
    * Overloaded method that accepts either an IFabFile or a Buffer with mimeType
    */
@@ -436,6 +460,7 @@ export class SmartChunker {
     // returns no chunks (audio/image/unsupported) leaves it undefined.
     this.lastExtractedText = undefined;
     this.lastDocumentDate = undefined;
+    this.lastExtractionRefusal = undefined;
 
     // Audio and video (generated media) are intentionally not vectorizable -
     // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
@@ -523,6 +548,15 @@ export class SmartChunker {
   }
 
   /** Truncates `text` at MAX_EXTRACTED_TEXT_CHARS, warning when it does. */
+  private refuseExtraction(refusal: ExtractionRefusal): void {
+    this.lastExtractionRefusal = refusal;
+    this.logger.warn(
+      refusal.reason === 'decompressedSizeExceeded'
+        ? `${refusal.format} exceeds the ${refusal.limitBytes}-byte decompressed budget; not chunked`
+        : `${refusal.format} container could not be opened; not chunked: ${refusal.detail}`
+    );
+  }
+
   private capExtractedText(text: string, format: string): string {
     if (text.length <= MAX_EXTRACTED_TEXT_CHARS) return text;
     this.logger.warn(
@@ -702,12 +736,16 @@ export class SmartChunker {
     try {
       zip = await JSZip.loadAsync(content);
     } catch (error) {
-      this.logger.warn(`Workbook zip could not be opened to bound its size; not chunked: ${(error as Error).message}`);
+      this.refuseExtraction({ reason: 'unopenableContainer', format: 'XLSX', detail: (error as Error).message });
       return undefined;
     }
     const measured = await measureZipContainer(zip, MAX_OOXML_INFLATED_BYTES);
     if (!measured.ok) {
-      this.logger.warn(`Workbook exceeds the ${MAX_OOXML_INFLATED_BYTES}-byte decompressed budget; not chunked`);
+      this.refuseExtraction({
+        reason: 'decompressedSizeExceeded',
+        format: 'XLSX',
+        limitBytes: MAX_OOXML_INFLATED_BYTES,
+      });
       return undefined;
     }
     for (const name of measured.failedEntries) zip.remove(name);
@@ -1021,10 +1059,22 @@ export class SmartChunker {
   private async chunkDOCX(content: Buffer): Promise<Chunk[]> {
     // Opened before mammoth, which inflates the whole container in one call, so its XML can be
     // bounded first. mammoth reads the zip with this same library, so a container that fails to
-    // open here would fail there too. The same open serves the date: mammoth has no metadata API.
-    const zip = await JSZip.loadAsync(content);
+    // open here would fail there too - and fail the same way on every retry, so it is refused rather
+    // than thrown, as the workbook path does. The same open serves the date: mammoth has no
+    // metadata API.
+    let zip: JSZip;
+    try {
+      zip = await JSZip.loadAsync(content);
+    } catch (error) {
+      this.refuseExtraction({ reason: 'unopenableContainer', format: 'DOCX', detail: (error as Error).message });
+      return [];
+    }
     if (!(await measureZipContainer(zip, MAX_OOXML_INFLATED_BYTES)).ok) {
-      this.logger.warn(`DOCX exceeds the ${MAX_OOXML_INFLATED_BYTES}-byte decompressed budget; not chunked`);
+      this.refuseExtraction({
+        reason: 'decompressedSizeExceeded',
+        format: 'DOCX',
+        limitBytes: MAX_OOXML_INFLATED_BYTES,
+      });
       return [];
     }
     const result = await mammoth.extractRawText({ buffer: content });
