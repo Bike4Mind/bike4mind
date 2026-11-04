@@ -1027,7 +1027,10 @@ describe('ModelHubService entered hardware', () => {
   };
 
   /** This computer is a 62 GB CPU-only box with chat fixed at 32K; server `a` has whatever `specs.a` says. */
-  function rated(specs: Record<string, ModelServerSpecs | null>) {
+  function rated(
+    specs: Record<string, ModelServerSpecs | null>,
+    setting: LocalContextSetting = { mode: 'fixed', tokens: 32768 }
+  ) {
     const local = harness({ hardware: machine('cpu', 62) });
     const remote = harness();
     const service = new ModelHubService({
@@ -1038,7 +1041,7 @@ describe('ModelHubService entered hardware', () => {
       libraryLayers: local.libraryLayers,
       hardware: local.hardware,
       specs: id => specs[id] ?? null,
-      localContext: async () => ({ mode: 'fixed', tokens: 32768 }),
+      localContext: async () => setting,
       curated: () => CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
@@ -1183,8 +1186,23 @@ describe('ModelHubService entered hardware', () => {
     expect(curatedFit(f16, 'qwen3-8-27b')?.detail).not.toContain('KV cache');
     expect(curatedFit(q8, 'qwen3-8-27b')?.detail).toContain('the 32K context chat will use with a q8_0 KV cache');
     expect(need(curatedFit(q8, 'qwen3-8-27b')?.detail)).toBeLessThan(need(curatedFit(f16, 'qwen3-8-27b')?.detail));
-    const server = await rated({ a: { ...GPU_16, kvCacheType: 'q4_0' } }).service.curated('a');
-    expect(curatedFit(server, 'gemma-4-12b')?.detail).toContain('with a q4_0 KV cache');
+    const server = rated({ a: { ...GPU_16, kvCacheType: 'q4_0' } });
+    expect(curatedFit(await server.service.curated('a'), 'gemma-4-12b')?.detail).toContain('with a q4_0 KV cache');
+    server.remote.runtime.list.mockResolvedValue([installedModel]);
+    const installed = await server.service.installed('a');
+    expect(installed.ok && installed.models[0].fit?.detail).toContain('with a q4_0 KV cache');
+  });
+
+  it("rates the larger context Auto gives chat on this computer's GPU with a quantized KV cache", async () => {
+    const gpu = { ramGiB: 64, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false };
+    const contexts = async (specs: ModelServerSpecs) =>
+      (await rated({ local: specs }, AUTO_LOCAL_CONTEXT).service.curated()).entries.map(
+        entry => entry.builds[0].fit?.context ?? 0
+      );
+    const f16 = await contexts(gpu);
+    const q8 = await contexts({ ...gpu, kvCacheType: 'q8_0' });
+    expect(q8.every((tokens, index) => tokens >= f16[index])).toBe(true);
+    expect(q8.some((tokens, index) => tokens > f16[index])).toBe(true);
   });
 });
 
