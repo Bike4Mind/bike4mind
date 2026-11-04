@@ -37,7 +37,10 @@ function cohortWindow(filter: AdminUsersFilter, key: 'verdict' | 'funnelStep') {
   return { start: new Date(filter.createdFrom), end: new Date(filter.createdTo) };
 }
 
-/** Users with a rolled-up day of first-party AI activity (the active flag) in [fromDay, toDay], served by the { day, userId } index. */
+/**
+ * Users with a rolled-up day of first-party AI activity (the active flag) in [fromDay, toDay],
+ * served by the { day, active, userId } index.
+ */
 async function activeUserIds(fromDay: string, toDay: string): Promise<string[]> {
   const rows = await AnalyticsUserDay.aggregate<{ _id: string }>([
     { $match: { day: { $gte: fromDay, $lte: toDay }, active: true } },
