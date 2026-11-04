@@ -7,6 +7,8 @@ import {
   type SignupGrantPool,
   type SignupProtection,
 } from '@bike4mind/common';
+import type mongoose from 'mongoose';
+import { callerTransactionSession } from './callerTransaction';
 
 type BudgetAdapters = {
   adminSettings: Pick<IAdminSettingsRepository, 'findBySettingName'>;
@@ -23,21 +25,33 @@ export type SignupGrantBudgetReservation = {
 
 const noop = async () => {};
 
-const refundScope = new AsyncLocalStorage<Array<() => Promise<void>>>();
+// `txn` is the Mongo transaction attempt whose payout the draw funds, when it ran inside one.
+type ScopeDraw = { release: () => Promise<void>; txn?: mongoose.mongo.Transaction };
+const refundScope = new AsyncLocalStorage<ScopeDraw[]>();
 // Fresh draws made inside a refundBudgetOnFailure scope, by counter key and transaction id, so a
 // transaction retry inside that scope still recognises its own earlier draw as fresh.
-const scopeDraws = new WeakMap<Array<() => Promise<void>>, Map<string, () => Promise<void>>>();
+const scopeDraws = new WeakMap<ScopeDraw[], Map<string, ScopeDraw>>();
+
+const ambientTransaction = () => callerTransactionSession()?.transaction;
+// The driver's public isCommitted is also true for an aborted transaction, so read its internal state.
+// A transaction still open when the scope returns is the caller's to settle.
+const attemptAborted = (txn?: mongoose.mongo.Transaction) =>
+  (txn as { state?: string } | undefined)?.state === 'TRANSACTION_ABORTED';
 
 /**
- * Hands back every budget draw made inside `fn` if it throws. The counter commits outside any ambient
- * transaction, so a caller that rolls the payouts back (e.g. a losing invite redemption) must refund it.
+ * Hands back every budget draw made inside `fn` if it throws, and on success every draw whose own
+ * transaction attempt aborted (a retried attempt that drew under another id, or never paid). The
+ * counter commits outside any ambient transaction, so a caller that rolls the payouts back (e.g. a
+ * losing invite redemption) must refund it.
  */
 export async function refundBudgetOnFailure<T>(fn: () => Promise<T>): Promise<T> {
-  const releases: Array<() => Promise<void>> = [];
+  const draws: ScopeDraw[] = [];
   try {
-    return await refundScope.run(releases, fn);
+    const result = await refundScope.run(draws, fn);
+    await Promise.all(draws.filter(draw => attemptAborted(draw.txn)).map(draw => draw.release()));
+    return result;
   } catch (error) {
-    await Promise.all(releases.map(release => release()));
+    await Promise.all(draws.map(draw => draw.release()));
     throw error;
   }
 }
@@ -155,7 +169,10 @@ export async function reserveSignupGrantBudget(
   const scope = refundScope.getStore();
   const drawKey = `${key}|${transactionId}`;
   const ownDraw = !reservation.fresh && scope ? scopeDraws.get(scope)?.get(drawKey) : undefined;
-  if (ownDraw) return { outcome: 'reserved', release: ownDraw, fresh: true };
+  if (ownDraw) {
+    ownDraw.txn = ambientTransaction();
+    return { outcome: 'reserved', release: ownDraw.release, fresh: true };
+  }
   const reservedSpent = async () => reservation.spent;
   if (reservation.spent * 2 >= budget) await alertCrossing(budgetConfig, pool, day, 50, reservedSpent, budget);
   if (reservation.spent >= budget) await alertCrossing(budgetConfig, pool, day, 100, reservedSpent, budget);
@@ -173,9 +190,10 @@ export async function reserveSignupGrantBudget(
         });
       };
   if (scope && reservation.fresh) {
-    scope.push(release);
-    const draws = scopeDraws.get(scope) ?? new Map<string, () => Promise<void>>();
-    draws.set(drawKey, release);
+    const draw: ScopeDraw = { release, txn: ambientTransaction() };
+    scope.push(draw);
+    const draws = scopeDraws.get(scope) ?? new Map<string, ScopeDraw>();
+    draws.set(drawKey, draw);
     scopeDraws.set(scope, draws);
   }
   return { outcome: 'reserved', release, fresh: reservation.fresh };

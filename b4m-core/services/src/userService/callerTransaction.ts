@@ -9,7 +9,13 @@ type SessionStore = { getStore(): { session?: mongoose.mongo.ClientSession } | u
  * OTC registration (apps/client/pages/api/otc/verify.ts) is still creating.
  */
 export function inCallerTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  return callerTransactionSession() ? fn() : withTransaction(fn);
+}
+
+/** The ambient Mongoose session when it is inside a transaction, else undefined. */
+export function callerTransactionSession(): mongoose.mongo.ClientSession | undefined {
   // transactionAsyncLocalStorage is a Mongoose internal missing from its public types.
   const als = (mongoose as unknown as { transactionAsyncLocalStorage?: SessionStore }).transactionAsyncLocalStorage;
-  return als?.getStore()?.session?.inTransaction() ? fn() : withTransaction(fn);
+  const session = als?.getStore()?.session;
+  return session?.inTransaction() ? session : undefined;
 }
