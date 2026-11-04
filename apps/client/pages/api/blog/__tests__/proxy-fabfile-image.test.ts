@@ -7,12 +7,16 @@ import { BadGatewayError, BadRequestError, NotFoundError } from '@bike4mind/comm
  * `errorHandler` logs at warn; only a failed storage download is a server-side fault.
  */
 
+// any: the handler is captured from a mocked baseApi chain, so express req/res are not typed here
 const mockRefs = vi.hoisted(() => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handler: null as null | ((req: any, res: any) => unknown),
 }));
 
 vi.mock('@client/server/middlewares/baseApi', () => ({
   baseApi: () => {
+    // any: minimal stand-in for the baseApi router chain
+    /* eslint-disable @typescript-eslint/no-explicit-any */
     const chain: any = {
       use: () => chain,
       post: (fn: any) => {
@@ -20,6 +24,7 @@ vi.mock('@client/server/middlewares/baseApi', () => ({
         return chain;
       },
     };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
     return chain;
   },
 }));
@@ -35,8 +40,8 @@ import '../proxy-fabfile-image';
 function request(body: unknown) {
   const { req, res } = createMocks({ method: 'POST', body });
   const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
-  (req as any).user = { id: 'u1' };
-  (req as any).logger = logger;
+  (req as unknown as { user: unknown }).user = { id: 'u1' };
+  (req as unknown as { logger: unknown }).logger = logger;
   return { req, res, logger };
 }
 
@@ -79,6 +84,29 @@ describe('POST /api/blog/proxy-fabfile-image', () => {
     await mockRefs.handler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true, mimeType: 'image/png' });
+  });
+
+  it('answers a held or blocked image like a missing one without downloading it', async () => {
+    findById.mockResolvedValue({ ...ownImage, moderationStatus: 'blocked' });
+    const { req, res } = request({ fabFileId: 'f1' });
+
+    await expect(mockRefs.handler!(req, res)).rejects.toThrow(new NotFoundError('FabFile not found'));
+    expect(axiosGet).not.toHaveBeenCalled();
+  });
+
+  it('rejects a missing fabFileId as a bad request', async () => {
+    const { req, res } = request({});
+
+    await expect(mockRefs.handler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a file with no stored url as a bad request', async () => {
+    findById.mockResolvedValue({ ...ownImage, fileUrl: undefined });
+    const { req, res } = request({ fabFileId: 'f1' });
+
+    await expect(mockRefs.handler!(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(axiosGet).not.toHaveBeenCalled();
   });
 
   it('rejects a non-image file as a bad request', async () => {
