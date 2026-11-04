@@ -26,6 +26,7 @@ const ticket = (id: string, overrides: Partial<ILoopTicket> = {}): ILoopTicket =
   status: 'open',
   dependencies: [],
   runCount: 0,
+  priority: 'p2',
   ready: false,
   createdAt: '2026-10-29T10:00:00.000Z',
   updatedAt: '2026-10-29T10:00:00.000Z',
@@ -115,7 +116,8 @@ describe('LoopTicketBoard', () => {
 
   it('moves a ticket with the stage select', () => {
     renderBoard();
-    fireEvent.click(within(screen.getByTestId('loop-ticket-older')).getByRole('combobox'));
+    const card = within(screen.getByTestId('loop-ticket-older'));
+    fireEvent.click(within(card.getByTestId('loop-ticket-stage-select')).getByRole('combobox'));
     fireEvent.click(screen.getByRole('option', { name: 'doing' }));
     expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', stage: 'doing' });
   });
@@ -183,7 +185,8 @@ describe('LoopTicketBoard', () => {
         <LoopTicketBoard loop={loop} data={orphan} onViewRun={onViewRun} />
       </CssVarsProvider>
     );
-    fireEvent.click(within(screen.getByTestId('loop-ticket-o')).getByRole('combobox'));
+    const card = within(screen.getByTestId('loop-ticket-o'));
+    fireEvent.click(within(card.getByTestId('loop-ticket-stage-select')).getByRole('combobox'));
     expect(screen.getByRole('option', { name: 'review (removed)' })).toHaveAttribute('aria-disabled', 'true');
   });
 
@@ -195,9 +198,94 @@ describe('LoopTicketBoard', () => {
     fireEvent.change(screen.getByTestId('loop-ticket-title-input'), { target: { value: ' Write docs ' } });
     fireEvent.click(screen.getByTestId('loop-ticket-submit-btn'));
     expect(createTicket.mutate).toHaveBeenCalledWith(
-      { loopId: 'l1', title: 'Write docs', stage: 'todo' },
+      { loopId: 'l1', title: 'Write docs', stage: 'todo', priority: 'p2' },
       expect.anything()
     );
+  });
+
+  const renderTickets = (stages: ILoopTicketsResponse['stages']) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <LoopTicketBoard loop={loop} data={{ stages, runLimit: 6 }} onViewRun={onViewRun} />
+      </CssVarsProvider>
+    );
+
+  it('shows a priority chip on each card and changes priority with its select', () => {
+    renderBoard();
+    expect(screen.getAllByTestId('loop-ticket-priority-chip')).toHaveLength(4);
+    const card = within(screen.getByTestId('loop-ticket-older'));
+    expect(card.getByTestId('loop-ticket-priority-chip')).toHaveTextContent('P2');
+    fireEvent.click(within(card.getByTestId('loop-ticket-priority-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'P0' }));
+    expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', priority: 'p0' });
+  });
+
+  it('adds a ticket with the chosen priority', () => {
+    renderBoard();
+    fireEvent.click(screen.getByTestId('loop-ticket-add-btn'));
+    fireEvent.change(screen.getByTestId('loop-ticket-title-input'), { target: { value: 'Hotfix' } });
+    fireEvent.click(within(screen.getByTestId('loop-ticket-priority-select-new')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'P0' }));
+    fireEvent.click(screen.getByTestId('loop-ticket-submit-btn'));
+    expect(createTicket.mutate).toHaveBeenCalledWith(
+      { loopId: 'l1', title: 'Hotfix', stage: 'todo', priority: 'p0' },
+      expect.anything()
+    );
+  });
+
+  it('orders open cards and the Queued strip by priority first, then age; closed cards stay last', () => {
+    renderTickets([
+      {
+        stage: 'todo',
+        tickets: [
+          ticket('old-p2', { ready: true, createdAt: '2026-10-29T08:00:00.000Z' }),
+          ticket('new-p2', { ready: true, createdAt: '2026-10-29T09:00:00.000Z' }),
+          ticket('new-p0', { ready: true, priority: 'p0', createdAt: '2026-10-29T12:00:00.000Z' }),
+        ],
+      },
+      {
+        stage: 'doing',
+        tickets: [ticket('along-p3', { stage: 'doing', ready: true, priority: 'p3' })],
+      },
+      {
+        stage: 'done',
+        tickets: [
+          ticket('closed-p3', { stage: 'done', status: 'closed', priority: 'p3' }),
+          ticket('open-p0', { stage: 'done', priority: 'p0' }),
+        ],
+      },
+    ]);
+    const ids = (stage: string) =>
+      within(screen.getByTestId(`loop-stage-column-${stage}`))
+        .getAllByTestId(/^loop-ticket-[a-z0-9]+-p\d$/)
+        .map(el => el.getAttribute('data-testid'));
+    expect(ids('todo')).toEqual(['loop-ticket-new-p0', 'loop-ticket-old-p2', 'loop-ticket-new-p2']);
+    expect(ids('done')).toEqual(['loop-ticket-open-p0', 'loop-ticket-closed-p3']);
+
+    const queued = screen.getByTestId('loop-ticket-strip-ready').textContent!;
+    const at = (id: string) => queued.indexOf(`Ticket ${id}`);
+    expect(at('new-p0')).toBeLessThan(at('old-p2'));
+    expect(at('old-p2')).toBeLessThan(at('new-p2'));
+    expect(at('new-p2')).toBeLessThan(at('along-p3'));
+  });
+
+  it('shows a ticket parked on its dependencies as waiting, not as a blocked reason', () => {
+    renderTickets([
+      {
+        stage: 'todo',
+        tickets: [
+          ticket('parked', {
+            status: 'blocked',
+            blockedOn: 'dependencies',
+            statusReason: 'Waiting on dependencies',
+            dependencies: ['x'],
+          }),
+        ],
+      },
+    ]);
+    const card = within(screen.getByTestId('loop-ticket-parked'));
+    expect(card.getByTestId('loop-ticket-waiting-deps')).toHaveTextContent('Waiting on dependencies');
+    expect(card.queryByTestId('loop-ticket-blocked-reason')).toBeNull();
   });
 
   it('renders a blocked reason as markdown on the card', () => {

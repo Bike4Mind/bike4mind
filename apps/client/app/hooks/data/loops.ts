@@ -11,6 +11,8 @@ import type {
   LoopDirectiveOwnerAction,
   LoopGateOutcome,
   LoopStatus,
+  WorkItemBlocker,
+  WorkItemPriority,
   WorkItemStatus,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -28,7 +30,10 @@ export interface ILoopTicket {
   executionId?: string;
   /** Runs that claimed it since its owner last moved it; the loop blocks it at `runLimit`. */
   runCount: number;
-  /** Open with every dependency closed: the scheduler works the furthest-along, then oldest, next. */
+  priority: WorkItemPriority;
+  /** Parked on a condition the scheduler reopens it from, not on its owner. */
+  blockedOn?: WorkItemBlocker;
+  /** Open with every dependency closed: the scheduler works the highest priority, furthest-along, then oldest, next. */
   ready: boolean;
   createdAt: string;
   updatedAt: string;
@@ -183,12 +188,16 @@ export const useRunLoop = () =>
   );
 
 export const useCreateLoopTicket = () =>
-  useLoopMutation((body: { loopId: string; title: string; description?: string; stage: string }) =>
-    api.post('/api/work-items', body)
+  useLoopMutation(
+    (body: { loopId: string; title: string; description?: string; stage: string; priority: WorkItemPriority }) =>
+      api.post('/api/work-items', body)
   );
 
+/** A stage change is an owner move (fresh run allowance); a priority change is not. */
 export const useMoveLoopTicket = () =>
-  useLoopMutation(({ id, stage }: { id: string; stage: string }) => api.patch(`/api/work-items/${id}`, { stage }));
+  useLoopMutation(({ id, ...patch }: { id: string; stage?: string; priority?: WorkItemPriority }) =>
+    api.patch(`/api/work-items/${id}`, patch)
+  );
 
 /** Withdraw a directive or overrule a push-back; invalidates every loop, so both sides' logs refresh. */
 export const useOverrideDirective = () =>

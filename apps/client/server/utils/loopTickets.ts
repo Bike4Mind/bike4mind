@@ -4,12 +4,14 @@ import {
   type ILoopEvent,
   type IWorkItem,
   type LoopUnsureFields,
+  type WorkItemBlocker,
   type WorkItemPatch,
   type WorkItemStatus,
 } from '@bike4mind/common';
 import { loopRepository, workItemRepository, type IPendingGate } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLoopsEnabled } from './loopValidation';
+import { validateWorkItemBlocker } from './workItemValidation';
 
 /**
  * The stage rule for loop tickets (WorkItems with a `loopId`), shared by the work-items routes, the
@@ -36,15 +38,19 @@ export function resolveTicketStage(loop: Pick<ILoop, 'stages'>, requested?: unkn
   return requested;
 }
 
+const WAITING_ON_DEPENDENCIES = 'Waiting on dependencies';
+
 /**
- * The stage/status/closedAt/statusReason patch for moving a ticket. `current` is the ticket as stored
+ * The stage/status/closedAt/statusReason/blockedOn patch for moving a ticket. `current` is the ticket as stored
  * (omitted on create). Moving to the last stage closes it; closing moves it to the last stage; reopening a
- * closed ticket puts it back one stage. `in_progress` is the scheduler's alone.
+ * closed ticket puts it back one stage. `in_progress` is the scheduler's alone. `blockedOn` parks a blocked
+ * ticket on a condition the scheduler reopens it from; any other move clears it. The caller checks the
+ * condition can still come true (assertBlockedOnSatisfiable).
  */
 export function ticketMovePatch(
   loop: Pick<ILoop, 'stages'>,
   current: Pick<IWorkItem, 'stage' | 'status'> | undefined,
-  move: { stage?: unknown; status?: WorkItemStatus; reason?: unknown }
+  move: { stage?: unknown; status?: WorkItemStatus; reason?: unknown; blockedOn?: unknown }
 ): WorkItemPatch {
   const stages = loop.stages;
   const last = lastStageOf(loop);
@@ -66,12 +72,15 @@ export function ticketMovePatch(
       : current?.status === 'closed' && move.stage !== undefined
         ? 'open'
         : (current?.status ?? 'open'));
-  const keepsReason = status === 'blocked' && current?.status === 'blocked' && move.reason === undefined;
+  const blockedOn = validateWorkItemBlocker(move.blockedOn);
+  if (blockedOn && status !== 'blocked') throw new BadRequestError('blockedOn is only valid with status blocked');
+  const reason = blockedOn && !move.reason ? WAITING_ON_DEPENDENCIES : move.reason;
+  const keepsReason = status === 'blocked' && current?.status === 'blocked' && reason === undefined;
 
   if (status === 'closed') stage = last;
   else if (stage === last) stage = stages.at(-2)!;
 
-  if (status === 'blocked' && !keepsReason && (typeof move.reason !== 'string' || !move.reason.trim())) {
+  if (status === 'blocked' && !keepsReason && (typeof reason !== 'string' || !reason.trim())) {
     throw new BadRequestError('A reason is required to block a ticket');
   }
 
@@ -79,8 +88,22 @@ export function ticketMovePatch(
     stage,
     status,
     closedAt: status === 'closed' ? (current?.status === 'closed' ? undefined : new Date()) : null,
-    statusReason: keepsReason ? undefined : status === 'blocked' ? (move.reason as string).trim().slice(0, 1000) : null,
+    statusReason: keepsReason ? undefined : status === 'blocked' ? (reason as string).trim().slice(0, 1000) : null,
+    blockedOn: blockedOn ?? (keepsReason ? undefined : null),
   };
+}
+
+/** A ticket parked on its dependencies needs at least one still open, or nothing would ever reopen it. */
+export async function assertBlockedOnSatisfiable(
+  userId: string,
+  dependencies: string[],
+  blockedOn: WorkItemBlocker | null | undefined
+): Promise<void> {
+  if (blockedOn !== 'dependencies') return;
+  const deps = await workItemRepository.findManyByIdsForUser(dependencies, userId);
+  if (!deps.some(dep => dep.status !== 'closed')) {
+    throw new BadRequestError('blockedOn dependencies needs an open dependency');
+  }
 }
 
 /**

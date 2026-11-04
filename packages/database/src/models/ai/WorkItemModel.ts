@@ -6,9 +6,13 @@ import {
   IWorkItemGraphEdge,
   IWorkItemReadyResult,
   IWorkItemRepository,
+  DEFAULT_WORK_ITEM_PRIORITY,
+  WORK_ITEM_BLOCKERS,
+  WORK_ITEM_PRIORITIES,
   WORK_ITEM_STATUSES,
   WorkItemPatch,
   WorkItemStatus,
+  workItemPriorityRank,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
@@ -28,8 +32,15 @@ const ModelName = 'WorkItem';
  */
 export const MAX_GRAPH_ITEMS = 2000;
 
-/** ponytail: candidate window for `listReadyForLoop`; a loop with more open tickets than this can starve the tail. */
+/**
+ * ponytail: candidate window for `listReadyForLoop`, cut after the priority sort and before the dependency
+ * filter. Lower priorities starve only while 200+ higher-or-equal open tickets fill it (even ones still waiting on
+ * open deps), and finish-first applies within the window.
+ */
 const LOOP_READY_CANDIDATES = 200;
+
+/** ponytail: pages of parked tickets `reopenSatisfiedBlocks` reads per call; ones further on wait until earlier ones move. */
+const REOPEN_SCAN_PAGES = 25;
 
 export interface IWorkItemModel extends Model<IWorkItem> {}
 
@@ -127,8 +138,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   }
 
   /**
-   * A loop's open tickets whose dependencies are closed, in the order its runs take them: finish first
-   * (a later stage before an earlier one), then oldest first.
+   * A loop's open tickets whose dependencies are closed, in the order its runs take them: highest priority,
+   * then finish first (a later stage before an earlier one), then oldest first.
    */
   async listReadyForLoop(
     userId: string,
@@ -150,21 +161,26 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     stages: string[],
     stageFilter: Record<string, string[]>
   ): Promise<IWorkItem[]> {
-    // Stages are filtered in the query so excluded ones never eat the candidate window.
-    const candidates = (
-      await this.workItemModel
-        .find({ userId, loopId, deletedAt: null, status: 'open', stage: stageFilter })
-        .sort({ createdAt: 1 })
-        .limit(LOOP_READY_CANDIDATES)
-    ).map(doc => doc.toJSON());
+    // Stages are filtered and priority is ranked in the query, so neither excluded stages nor a backlog of
+    // lower-priority tickets can push a p0 out of the candidate window.
+    const docs = await this.workItemModel.aggregate([
+      { $match: { userId, loopId, deletedAt: null, status: 'open', stage: stageFilter } },
+      { $addFields: { _rank: { $ifNull: ['$priority', DEFAULT_WORK_ITEM_PRIORITY] } } },
+      { $sort: { _rank: 1, createdAt: 1 } },
+      { $limit: LOOP_READY_CANDIDATES },
+      { $project: { _rank: 0 } },
+    ]);
+    const candidates: IWorkItem[] = docs.map(doc => this.workItemModel.hydrate(doc).toJSON());
     const depIds = [...new Set(candidates.flatMap(item => item.dependencies))];
     const deps = await this.findManyByIdsForUser(depIds, userId);
     const open = new Set(deps.filter(dep => dep.status !== 'closed').map(dep => dep.id));
     const stageIndex = (item: IWorkItem) => stages.indexOf(item.stage ?? '');
-    // Array.prototype.sort is stable, so equal stages keep the createdAt order.
+    // Array.prototype.sort is stable, so equal keys keep the createdAt order.
     return candidates
       .filter(item => item.dependencies.every(depId => !open.has(depId)))
-      .sort((a, b) => stageIndex(b) - stageIndex(a));
+      .sort(
+        (a, b) => workItemPriorityRank(a.priority) - workItemPriorityRank(b.priority) || stageIndex(b) - stageIndex(a)
+      );
   }
 
   async claimForRun(id: string, loopId: string): Promise<IWorkItem | null> {
@@ -227,7 +243,8 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
 
   async resumeBlockedRun(id: string, executionId: string): Promise<boolean> {
     const result = await this.workItemModel.updateOne(
-      { _id: id, executionId, status: 'blocked', deletedAt: null },
+      // A ticket its run parked on dependencies stays parked; the sweep reopens it.
+      { _id: id, executionId, status: 'blocked', blockedOn: { $exists: false }, deletedAt: null },
       { $set: { status: 'in_progress' }, $unset: { statusReason: '' } }
     );
     return result.modifiedCount > 0;
@@ -253,9 +270,65 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return result.modifiedCount;
   }
 
+  async reopenSatisfiedBlocks(limit: number): Promise<IWorkItem[]> {
+    const reopened: IWorkItem[] = [];
+    // Paged by _id: a still-waiting ticket is not written, so a read capped at `limit` would rescan the same ones.
+    let after: string | undefined;
+    for (let page = 0; page < REOPEN_SCAN_PAGES && reopened.length < limit; page++) {
+      const parked = (
+        await this.workItemModel
+          .find({
+            blockedOn: 'dependencies',
+            status: 'blocked',
+            loopId: { $exists: true },
+            deletedAt: null,
+            ...(after && { _id: { $gt: after } }),
+          })
+          .sort({ _id: 1 })
+          .limit(limit)
+      ).map(doc => doc.toJSON());
+      if (parked.length === 0) break;
+      after = parked.at(-1)!.id;
+      const depIds = [...new Set(parked.flatMap(item => item.dependencies))].filter(id => mongoose.isValidObjectId(id));
+      // Not user-scoped: deps are always the owner's own (assertDependenciesUsable). A foreign one counts as open.
+      const deps = await this.workItemModel.find({ _id: { $in: depIds }, deletedAt: null });
+      const depById = new Map(deps.map(doc => [String(doc._id), doc]));
+      for (const item of parked) {
+        if (reopened.length >= limit) break;
+        const waiting = item.dependencies.some(depId => {
+          const dep = depById.get(depId);
+          return dep !== undefined && (dep.userId !== item.userId || dep.status !== 'closed');
+        });
+        if (waiting) continue;
+        // Matching the deps read above, so a dependency added meanwhile keeps the ticket parked.
+        const result = await this.workItemModel.findOneAndUpdate(
+          {
+            _id: item.id,
+            status: 'blocked',
+            blockedOn: 'dependencies',
+            dependencies: item.dependencies,
+            deletedAt: null,
+          },
+          { $set: { status: 'open' }, $unset: { statusReason: '', blockedOn: '' } },
+          { new: true }
+        );
+        if (result) reopened.push(result.toJSON());
+      }
+    }
+    return reopened;
+  }
+
   async countBlockedByLoop(userId: string, loopIds: string[]): Promise<Record<string, number>> {
     const rows = await this.workItemModel.aggregate<{ _id: string; count: number }>([
-      { $match: { userId, loopId: { $in: loopIds }, deletedAt: null, status: 'blocked' } },
+      {
+        $match: {
+          userId,
+          loopId: { $in: loopIds },
+          deletedAt: null,
+          status: 'blocked',
+          blockedOn: { $exists: false },
+        },
+      },
       { $group: { _id: '$loopId', count: { $sum: 1 } } },
     ]);
     return Object.fromEntries(rows.map(row => [row._id, row.count]));
@@ -432,6 +505,8 @@ export const WorkItemSchema = new Schema<IWorkItem, IWorkItemModel>(
     executionId: { type: String },
     statusReason: { type: String },
     runCount: { type: Number, default: 0 },
+    priority: { type: String, enum: WORK_ITEM_PRIORITIES },
+    blockedOn: { type: String, enum: WORK_ITEM_BLOCKERS },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },
@@ -452,6 +527,8 @@ WorkItemSchema.index(
 );
 // The loop notice sweep's global read of blocked loop tickets (apps/workers/src/cron/loopNotices.ts).
 WorkItemSchema.index({ status: 1, loopId: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
+// The scheduler's reopen sweep over tickets parked on a testable condition (reopenSatisfiedBlocks).
+WorkItemSchema.index({ blockedOn: 1, status: 1 }, { partialFilterExpression: { blockedOn: { $exists: true } } });
 WorkItemSchema.index({ executionId: 1 }, { partialFilterExpression: { executionId: { $exists: true } } });
 
 export const WorkItem: IWorkItemModel =

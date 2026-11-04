@@ -387,6 +387,7 @@ describe('WorkItemRepository', () => {
         expect.arrayContaining([
           { loopId: 1, deletedAt: 1, status: 1, stage: 1 },
           { status: 1, loopId: 1 },
+          { blockedOn: 1, status: 1 },
           { executionId: 1 },
         ])
       );
@@ -485,6 +486,20 @@ describe('WorkItemRepository', () => {
       expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(false);
     });
 
+    it('resumeBlockedRun leaves a ticket its run parked on dependencies parked', async () => {
+      const t = await ticket('T', {
+        status: 'blocked',
+        statusReason: 'Waiting on dependencies',
+        blockedOn: 'dependencies',
+        executionId: 'exec-1',
+      });
+      expect(await workItemRepository.resumeBlockedRun(t.id, 'exec-1')).toBe(false);
+      expect(await workItemRepository.findByIdForUser(t.id, USER)).toMatchObject({
+        status: 'blocked',
+        blockedOn: 'dependencies',
+      });
+    });
+
     it('listForLoop returns every open ticket and only the newest closed ones', async () => {
       await ticket('Open');
       await ticket('Old', { stage: 'done', status: 'closed', closedAt: new Date(1000) });
@@ -503,6 +518,97 @@ describe('WorkItemRepository', () => {
         oldest.id,
         newer.id,
       ]);
+    });
+
+    it('listReadyForLoop ranks priority first, then furthest stage, then oldest; no priority reads as p2', async () => {
+      const p2Along = await ticket('p2 along', { stage: 'doing', priority: 'p2' });
+      const p3 = await ticket('p3', { priority: 'p3' });
+      const unset = await ticket('unset');
+      const p1 = await ticket('p1', { priority: 'p1' });
+      const p2Old = await ticket('p2 old', { priority: 'p2' });
+      const p0 = await ticket('p0', { priority: 'p0' });
+
+      const ready = await workItemRepository.listReadyForLoop(USER, LOOP, STAGES);
+      expect(ready.map(t => t.id)).toEqual([p0.id, p1.id, p2Along.id, unset.id, p2Old.id, p3.id]);
+      expect(ready[0].id).toEqual(expect.any(String));
+      expect(ready[0]).not.toHaveProperty('_rank');
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES))?.id).toBe(p0.id);
+    });
+
+    it('finds a p0 behind more than a window of older p2 tickets', async () => {
+      const base = Date.now() - 1_000_000;
+      await WorkItem.collection.insertMany(
+        Array.from({ length: 201 }, (_, i) => ({
+          userId: USER,
+          title: `old ${i}`,
+          status: 'open',
+          dependencies: [],
+          loopId: LOOP,
+          stage: 'doing',
+          priority: 'p2',
+          deletedAt: null,
+          createdAt: new Date(base + i),
+          updatedAt: new Date(base + i),
+        }))
+      );
+      const urgent = await ticket('urgent', { priority: 'p0' });
+      expect((await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES))?.id).toBe(urgent.id);
+    });
+
+    it('reopenSatisfiedBlocks reopens only dependency-parked tickets whose deps are closed or gone', async () => {
+      const closedDep = await ticket('Closed dep', { status: 'closed', stage: 'done' });
+      const goneDep = await ticket('Gone dep');
+      await workItemRepository.softDeleteForUser(goneDep.id, USER);
+      const openDep = await ticket('Open dep');
+      const parked = (title: string, deps: string[], extra: Record<string, unknown> = {}) =>
+        ticket(title, { status: 'blocked', dependencies: deps, runCount: 2, executionId: 'exec-1', ...extra });
+
+      const ready = await parked('Ready', [closedDep.id, goneDep.id], {
+        blockedOn: 'dependencies',
+        statusReason: 'Waiting on dependencies',
+      });
+      const waiting = await parked('Waiting', [closedDep.id, openDep.id], { blockedOn: 'dependencies' });
+      const human = await Promise.all(
+        ['Ran 9 times without finishing', 'Unsure: thin results', 'Run failed', 'Needs a login'].map(reason =>
+          parked(reason, [closedDep.id], { statusReason: reason })
+        )
+      );
+
+      const reopened = await workItemRepository.reopenSatisfiedBlocks(50);
+      expect(reopened.map(t => t.id)).toEqual([ready.id]);
+      const after = await workItemRepository.findByIdForUser(ready.id, USER);
+      expect(after).toMatchObject({ status: 'open', runCount: 2, executionId: 'exec-1' });
+      expect(after?.statusReason).toBeUndefined();
+      expect(after?.blockedOn).toBeUndefined();
+      expect(await workItemRepository.findByIdForUser(waiting.id, USER)).toMatchObject({ status: 'blocked' });
+      for (const t of human) {
+        expect(await workItemRepository.findByIdForUser(t.id, USER)).toMatchObject({
+          status: 'blocked',
+          statusReason: t.statusReason,
+        });
+      }
+    });
+
+    it('reopenSatisfiedBlocks respects its limit and treats a foreign dependency as open', async () => {
+      const foreign = await create('Theirs', { userId: OTHER_USER, status: 'closed' });
+      await ticket('Foreign', { status: 'blocked', blockedOn: 'dependencies', dependencies: [foreign.id] });
+      await ticket('A', { status: 'blocked', blockedOn: 'dependencies' });
+      await ticket('B', { status: 'blocked', blockedOn: 'dependencies' });
+      expect(await workItemRepository.reopenSatisfiedBlocks(1)).toHaveLength(1);
+      expect(await workItemRepository.reopenSatisfiedBlocks(1)).toHaveLength(1);
+      expect(await workItemRepository.reopenSatisfiedBlocks(1)).toHaveLength(0);
+    });
+
+    it('reopenSatisfiedBlocks reads past a page of still-waiting tickets and skips deleted or detached ones', async () => {
+      const openDep = await ticket('Open dep');
+      for (const title of ['W1', 'W2']) {
+        await ticket(title, { status: 'blocked', blockedOn: 'dependencies', dependencies: [openDep.id] });
+      }
+      const deleted = await ticket('Deleted', { status: 'blocked', blockedOn: 'dependencies' });
+      await workItemRepository.softDeleteForUser(deleted.id, USER);
+      await create('Detached', { status: 'blocked', blockedOn: 'dependencies' });
+      const ready = await ticket('Ready', { status: 'blocked', blockedOn: 'dependencies' });
+      expect((await workItemRepository.reopenSatisfiedBlocks(2)).map(t => t.id)).toEqual([ready.id]);
     });
 
     it('claimForRun counts a run; releaseClaim and an uncounted fold take it back', async () => {
@@ -542,6 +648,7 @@ describe('WorkItemRepository', () => {
       await workItemRepository.softDeleteForUser(gone.id, USER);
       await create('Other loop', { loopId: 'loop-2', stage: 'todo', status: 'blocked', statusReason: 'x' });
       await create('Theirs', { userId: OTHER_USER, loopId: LOOP, stage: 'todo', status: 'blocked' });
+      await ticket('Parked', { status: 'blocked', blockedOn: 'dependencies', statusReason: 'x' });
 
       expect(await workItemRepository.countBlockedByLoop(USER, [LOOP, 'loop-2', 'loop-3'])).toEqual({
         [LOOP]: 2,

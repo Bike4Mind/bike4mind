@@ -121,6 +121,87 @@ describe('loop_ticket_create', () => {
   });
 });
 
+describe('priority and blockedOn', () => {
+  const DEP = '507f1f77bcf86cd799439021';
+  const tools = () => buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+  it('loop_ticket_create stores a priority (p2 by default) and parks on an open dependency', async () => {
+    items.findManyByIdsForUser.mockResolvedValue([{ id: DEP, status: 'open', dependencies: [] }]);
+    expect(JSON.parse(await run(tools(), 'loop_ticket_create', { title: 'A' }))).toMatchObject({ priority: 'p2' });
+    await run(tools(), 'loop_ticket_create', { title: 'B', priority: 'p0' });
+    expect(items.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'p0' }));
+
+    const parked = JSON.parse(
+      await run(tools(), 'loop_ticket_create', {
+        title: 'C',
+        dependencies: [DEP],
+        status: 'blocked',
+        blockedOn: 'dependencies',
+      })
+    );
+    expect(parked).toMatchObject({
+      status: 'blocked',
+      statusReason: 'Waiting on dependencies',
+      blockedOn: 'dependencies',
+    });
+  });
+
+  it('loop_ticket_create rejects an unknown priority or blockedOn, and blockedOn without an open dependency', async () => {
+    expect(await run(tools(), 'loop_ticket_create', { title: 'A', priority: 'urgent' })).toMatch(/priority must be/);
+    expect(await run(tools(), 'loop_ticket_create', { title: 'A', status: 'blocked', blockedOn: 'ci' })).toMatch(
+      /blockedOn must be/
+    );
+    expect(await run(tools(), 'loop_ticket_create', { title: 'A', blockedOn: 'dependencies' })).toMatch(
+      /only valid with status blocked/
+    );
+    items.findManyByIdsForUser.mockResolvedValue([]);
+    expect(
+      await run(tools(), 'loop_ticket_create', { title: 'A', status: 'blocked', blockedOn: 'dependencies' })
+    ).toMatch(/needs an open dependency/);
+    expect(items.create).not.toHaveBeenCalled();
+  });
+
+  it('loop_ticket_update sets priority, replaces dependencies (rejecting a cycle) and parks on them', async () => {
+    items.findByIdForUser.mockResolvedValue({ id: 't1', loopId: OWN, stage: 'todo', status: 'open', dependencies: [] });
+    items.findManyByIdsForUser.mockResolvedValue([{ id: DEP, status: 'open', dependencies: [] }]);
+
+    await run(tools(), 'loop_ticket_update', { id: 't1', priority: 'p1' });
+    expect(items.updateForUser).toHaveBeenLastCalledWith('t1', 'u1', { priority: 'p1' }, 'open');
+
+    items.detectDependencyCycle.mockResolvedValueOnce(true);
+    expect(await run(tools(), 'loop_ticket_update', { id: 't1', dependencies: [DEP] })).toMatch(/cycle/);
+
+    await run(tools(), 'loop_ticket_update', {
+      id: 't1',
+      dependencies: [DEP],
+      status: 'blocked',
+      blockedOn: 'dependencies',
+    });
+    expect(items.detectDependencyCycle).toHaveBeenLastCalledWith('u1', [DEP], 't1');
+    expect(items.updateForUser).toHaveBeenLastCalledWith(
+      't1',
+      'u1',
+      expect.objectContaining({ dependencies: [DEP], status: 'blocked', blockedOn: 'dependencies' }),
+      'open'
+    );
+  });
+
+  it('loop_ticket_update clears blockedOn on a later status or reason change', async () => {
+    items.findByIdForUser.mockResolvedValue({
+      id: 't1',
+      loopId: OWN,
+      stage: 'todo',
+      status: 'blocked',
+      blockedOn: 'dependencies',
+      dependencies: [DEP],
+    });
+    await run(tools(), 'loop_ticket_update', { id: 't1', status: 'open' });
+    expect(items.updateForUser.mock.lastCall![2]).toMatchObject({ blockedOn: null });
+    await run(tools(), 'loop_ticket_update', { id: 't1', status: 'blocked', reason: 'Needs a login' });
+    expect(items.updateForUser.mock.lastCall![2]).toMatchObject({ blockedOn: null, statusReason: 'Needs a login' });
+  });
+});
+
 describe('loop_ticket_update', () => {
   it('refuses a plain work item as not found', async () => {
     items.findByIdForUser.mockResolvedValue({ id: 'w1', title: 'Plain', status: 'open', dependencies: [] });

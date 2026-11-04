@@ -165,6 +165,19 @@ describe('loop notices', () => {
     expect(byKey[`loop:${loop.id}:ticket:${ran.id}`].link).toBe(`/loops/${loop.id}?run=exec-9`);
   });
 
+  it('sends no notice for a ticket parked on its dependencies, and resolves one when a block becomes a park', async () => {
+    const loop = await createLoop({ status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) });
+    const dep = await blockedTicket(loop.id, { status: 'open', statusReason: undefined, title: 'Dep' });
+    await blockedTicket(loop.id, { blockedOn: 'dependencies', dependencies: [dep.id] });
+    const plain = await blockedTicket(loop.id, { dependencies: [dep.id] });
+    await tick();
+    expect((await openNotices()).map(n => n.sourceKey)).toEqual([`loop:${loop.id}:ticket:${plain.id}`]);
+
+    await WorkItem.updateOne({ _id: plain.id }, { $set: { blockedOn: 'dependencies' } });
+    await tick();
+    expect(await openNotices()).toHaveLength(0);
+  });
+
   it('resolves the notice when the loop goes live again, and reopens on recurrence', async () => {
     const loop = await createLoop({ status: 'paused', statusReason: 'Out of credits' });
     await tick();
