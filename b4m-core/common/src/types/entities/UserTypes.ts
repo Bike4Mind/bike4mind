@@ -929,7 +929,7 @@ export interface IUserRepository
    * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
    * to a client: it carries admin permissions.
    */
-  findAdminTargetsByIds: (
+  findAdminTargetsByIds?: (
     ids: string[]
   ) => Promise<
     Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>

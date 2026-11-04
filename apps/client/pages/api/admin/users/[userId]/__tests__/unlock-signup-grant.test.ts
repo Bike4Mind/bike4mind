@@ -63,6 +63,7 @@ describe('admin signup unlock', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    h.findById.mockReset().mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
     h.selfOrImpersonator.mockImplementation((user: { id: string; impersonatedBy?: string }, targetId: string) =>
       [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase())
     );
@@ -81,6 +82,14 @@ describe('admin signup unlock', () => {
     req.body.reason = '';
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('reason required');
     expect(h.unlock).not.toHaveBeenCalled();
+  });
+  it('does not release or audit when reading the target fails', async () => {
+    h.findById.mockRejectedValueOnce(new Error('lookup unavailable'));
+
+    await expect(h.handler!(request(), { json: vi.fn() })).rejects.toThrow('lookup unavailable');
+
+    expect(h.unlock).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
   });
   it.each([
     { id: 'user-1', isAdmin: true },
@@ -109,7 +118,11 @@ describe('admin signup unlock', () => {
     await adapters.audit({ credits: 28, creditTransactionId: 'tx-1' });
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ action: 'user.credits.adjusted', related: { creditTransactionId: 'tx-1' } })
+      expect.objectContaining({
+        action: 'user.credits.adjusted',
+        target: { kind: 'user', id: 'user-1', displayName: 'user@example.com' },
+        related: { creditTransactionId: 'tx-1' },
+      })
     );
   });
 });

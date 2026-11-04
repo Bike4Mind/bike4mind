@@ -107,4 +107,20 @@ describe('admin block signup grant', () => {
       })
     );
   });
+
+  it('uses the canonical target id for the lookup, block and audit', async () => {
+    const userId = 'ABCDEF012345678901234567';
+    await h.handler!(request({ query: { userId } }), { json: vi.fn() });
+
+    const canonicalUserId = userId.toLowerCase();
+    expect(h.findById).toHaveBeenCalledExactlyOnceWith(canonicalUserId);
+    expect(h.block).toHaveBeenCalledExactlyOnceWith(canonicalUserId, expect.anything());
+    await h.block.mock.calls[0][1].audit();
+    expect(h.audit).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({
+        target: { kind: 'user', id: canonicalUserId, displayName: 'user@example.com' },
+      })
+    );
+  });
 });

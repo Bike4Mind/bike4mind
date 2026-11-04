@@ -19,7 +19,7 @@ export type BulkSignupGrantRow = {
 export type BulkSignupGrantResult = {
   dryRun: boolean;
   results: BulkSignupGrantRow[];
-  /** The accounts this run changed; sending them to the opposite bulk action reverses the run. */
+  /** Accounts whose block flag changed. The opposite action restores the flag; paid credits are not reclaimed. */
   undoUserIds: string[];
 };
 

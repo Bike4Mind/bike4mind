@@ -22,8 +22,9 @@ export async function readSignupGrantAdminAction(
   attempted: AdminAuditAction,
   options: { guardTargetVerb?: string } = {}
 ): Promise<{ userId: string; reason: string; target: SignupGrantAuditTarget }> {
-  const userId = req.query.userId;
-  if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
+  const queryUserId = req.query.userId;
+  if (typeof queryUserId !== 'string' || !queryUserId) throw new BadRequestError('Invalid user ID');
+  const userId = queryUserId.toLowerCase();
   if (!req.user) throw new ForbiddenError('Authentication required');
   if (isSelfOrImpersonator(req.user, userId)) {
     await denySelfAdminAction(req, {

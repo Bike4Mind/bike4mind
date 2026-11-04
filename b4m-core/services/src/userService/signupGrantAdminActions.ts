@@ -56,69 +56,63 @@ export type SignupGrantBlockAdapters = {
 
 export type SignupGrantBlockResult = SignupGrantActionResult & { rewardsAffected: number };
 
-/**
- * Stops every future grant and reward for the account; nothing already granted is taken back. The flag and
- * the user's queued rewards are separate writes, so a repeat on an already-blocked account re-pauses the
- * rewards instead of stopping early, which heals a block that failed between the two.
- */
+/** Stops future grants and pauses queued rewards atomically with the block and its audit entry. */
 export async function blockSignupGrant(
   userId: string,
   adapters: SignupGrantBlockAdapters
 ): Promise<SignupGrantBlockResult> {
   const { users, heldRewards } = adapters;
-  // The staged-grant and reward payouts re-read the flag inside their own transaction, so one racing this
-  // block conflicts and sees it; the other reward paths check it once before paying and are best-effort.
-  const state = await withTransaction<'blocked' | 'already_blocked' | 'no_grant'>(async () => {
+  return withTransaction<SignupGrantBlockResult>(async () => {
     const user = await users.findById(userId);
-    if (!user?.signupGrant) return 'no_grant';
-    if (!classifySignupGrantAction(user, 'block').eligible) return 'already_blocked';
-    const updated = await users.update({
-      id: userId,
-      signupGrant: { ...user.signupGrant, blocked: { at: adapters.now?.() ?? new Date() } },
-    });
-    if (!updated) throw new Error('Signup grant block update failed');
-    await adapters.audit?.();
-    return 'blocked';
+    if (!user?.signupGrant) return { ...noop('no_grant'), rewardsAffected: 0 };
+    const verdict = classifySignupGrantAction(user, 'block');
+    if (verdict.eligible) {
+      const updated = await users.update({
+        id: userId,
+        signupGrant: { ...user.signupGrant, blocked: { at: adapters.now?.() ?? new Date() } },
+      });
+      if (!updated) throw new Error('Signup grant block update failed');
+      await adapters.audit?.();
+    }
+    // Re-pausing also repairs rewards stranded by an older non-atomic block.
+    const rewardsAffected = await heldRewards.pauseForUser(userId);
+    return verdict.eligible
+      ? { outcome: 'applied', credits: 0, rewardsAffected }
+      : { ...noop(verdict.reason), rewardsAffected };
   });
-  if (state === 'no_grant') return { ...noop('no_grant'), rewardsAffected: 0 };
-  const rewardsAffected = await heldRewards.pauseForUser(userId);
-  return state === 'blocked'
-    ? { outcome: 'applied', credits: 0, rewardsAffected }
-    : { ...noop('already_blocked'), rewardsAffected };
 }
 
 /**
- * Resumes the schedule where it stopped and puts the user's paused rewards back in the queue at their place.
- * A tranche whose email was verified during the block is queued for the signup pool so the held-release job
- * pays it; verification already passed, so nothing else would trigger it.
+ * Resumes grants and paused rewards atomically. A tranche verified during the block is queued for the
+ * signup pool, since verification already passed and nothing else would trigger it.
  */
 export async function unblockSignupGrant(
   userId: string,
   adapters: SignupGrantBlockAdapters
 ): Promise<SignupGrantBlockResult> {
   const { users, heldRewards } = adapters;
-  const state = await withTransaction<'unblocked' | 'not_blocked' | 'no_grant'>(async () => {
+  return withTransaction<SignupGrantBlockResult>(async () => {
     const user = await users.findById(userId);
-    if (!user?.signupGrant) return 'no_grant';
-    if (!classifySignupGrantAction(user, 'unblock').eligible) return 'not_blocked';
-    const { blocked: _lifted, ...grant } = user.signupGrant;
-    const requeue = grant.stage === 'pending_email' && !!user.emailVerified && !user.signupGrantHeldReason;
-    const updated = await users.update({
-      id: userId,
-      signupGrant: grant,
-      ...(requeue
-        ? { signupGrantHeldReason: 'budget_exhausted' as const, signupGrantHeldAt: adapters.now?.() ?? new Date() }
-        : {}),
-    });
-    if (!updated) throw new Error('Signup grant unblock update failed');
-    if (requeue) await users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
-    await adapters.audit?.();
-    return 'unblocked';
+    if (!user?.signupGrant) return { ...noop('no_grant'), rewardsAffected: 0 };
+    const verdict = classifySignupGrantAction(user, 'unblock');
+    if (verdict.eligible) {
+      const { blocked: _lifted, ...grant } = user.signupGrant;
+      const requeue = grant.stage === 'pending_email' && !!user.emailVerified && !user.signupGrantHeldReason;
+      const updated = await users.update({
+        id: userId,
+        signupGrant: grant,
+        ...(requeue
+          ? { signupGrantHeldReason: 'budget_exhausted' as const, signupGrantHeldAt: adapters.now?.() ?? new Date() }
+          : {}),
+      });
+      if (!updated) throw new Error('Signup grant unblock update failed');
+      if (requeue) await users.addTagsToUser(userId, [PENDING_FREE_CREDITS_TAG]);
+      await adapters.audit?.();
+    }
+    // Re-resuming also repairs rewards stranded by an older non-atomic unblock.
+    const rewardsAffected = await heldRewards.resumeForUser(userId);
+    return verdict.eligible
+      ? { outcome: 'applied', credits: 0, rewardsAffected }
+      : { ...noop(verdict.reason), rewardsAffected };
   });
-  if (state === 'no_grant') return { ...noop('no_grant'), rewardsAffected: 0 };
-  // Also on 'not_blocked': a retry after a failure between the flag and the rewards finishes the job.
-  const rewardsAffected = await heldRewards.resumeForUser(userId);
-  return state === 'unblocked'
-    ? { outcome: 'applied', credits: 0, rewardsAffected }
-    : { ...noop('not_blocked'), rewardsAffected };
 }
