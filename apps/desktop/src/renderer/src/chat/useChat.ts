@@ -1140,27 +1140,50 @@ export function useConversation(
 
   const clearReturned = useCallback(() => setReturned(null), []);
 
-  const rename = useCallback(
-    async (title: string) => {
+  // A save resolves after the user may have moved to another chat: the list always takes the
+  // result, the open chat only when it is still the one that was saved.
+  const saveSetting = useCallback(
+    async (
+      what: string,
+      save: (id: string) => Promise<ChatSessionSummary | null>,
+      apply: (updated: ChatSessionSummary) => Partial<ChatSession>,
+      clearsNotice = false
+    ) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.renameSession(sessionId, title);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, title: updated.title } : current));
-      onSummaryChanged(updated);
+      try {
+        const updated = await save(sessionId);
+        if (!updated) return;
+        if (clearsNotice && activeSessionId.current === sessionId) setNotice(null);
+        setSession(current => (current?.id === sessionId ? { ...current, ...apply(updated) } : current));
+        onSummaryChanged(updated);
+      } catch (error) {
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not save ${what}. ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     },
     [sessionId, onSummaryChanged]
   );
 
+  const rename = useCallback(
+    (title: string) =>
+      saveSetting(
+        'the title',
+        id => window.b4m.chat.renameSession(id, title),
+        updated => ({ title: updated.title })
+      ),
+    [sessionId, saveSetting]
+  );
+
   const setModel = useCallback(
-    async (model: string) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionModel(sessionId, model);
-      if (!updated) return;
-      setNotice(null);
-      setSession(current => (current ? { ...current, model: updated.model } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+    (model: string) =>
+      saveSetting(
+        'the model',
+        id => window.b4m.chat.setSessionModel(id, model),
+        updated => ({ model: updated.model }),
+        true
+      ),
+    [sessionId, saveSetting]
   );
 
   const settleLocalModel = useCallback(async () => {
@@ -1191,25 +1214,23 @@ export function useConversation(
   );
 
   const setReasoningEffort = useCallback(
-    async (effort: ReasoningEffortSetting) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionReasoningEffort(sessionId, effort);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, reasoningEffort: updated.reasoningEffort } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+    (effort: ReasoningEffortSetting) =>
+      saveSetting(
+        'the reasoning effort',
+        id => window.b4m.chat.setSessionReasoningEffort(id, effort),
+        updated => ({ reasoningEffort: updated.reasoningEffort })
+      ),
+    [sessionId, saveSetting]
   );
 
   const setPromptCacheTtl = useCallback(
-    async (ttl: PromptCacheTtl) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionPromptCacheTtl(sessionId, ttl);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, promptCacheTtl: updated.promptCacheTtl } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+    (ttl: PromptCacheTtl) =>
+      saveSetting(
+        'the prompt cache setting',
+        id => window.b4m.chat.setSessionPromptCacheTtl(id, ttl),
+        updated => ({ promptCacheTtl: updated.promptCacheTtl })
+      ),
+    [sessionId, saveSetting]
   );
 
   const setGeneration = useCallback(
@@ -1243,14 +1264,13 @@ export function useConversation(
   );
 
   const setApprovalMode = useCallback(
-    async (mode: ChatApprovalMode) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setApprovalMode(sessionId, mode);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, approvalMode: updated.approvalMode } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+    (mode: ChatApprovalMode) =>
+      saveSetting(
+        'the approval mode',
+        id => window.b4m.chat.setApprovalMode(id, mode),
+        updated => ({ approvalMode: updated.approvalMode })
+      ),
+    [sessionId, saveSetting]
   );
 
   const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
