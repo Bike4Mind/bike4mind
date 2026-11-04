@@ -129,7 +129,12 @@ describe('CohortsSection', () => {
   it('explains the Signups mode in the caption', async () => {
     renderSection();
     expect(await screen.findByTestId('analytics-cohorts-caption')).toHaveTextContent('not suspected');
+  });
+
+  it('describes every signup when the Signups mode is all', async () => {
     mocks.get.mockResolvedValue({ data: cohorts({ signupsMode: 'all' }) });
+    renderSection();
+    expect(await screen.findByTestId('analytics-cohorts-caption')).toHaveTextContent('all signups');
   });
 
   it('shows a skeleton while loading', async () => {

@@ -7,11 +7,11 @@ import {
   type CohortRow,
 } from '@client/app/utils/analyticsCohorts';
 import type { AnalyticsSignupsMode } from '@client/app/utils/analyticsOverview';
+import { daysBetween, mondayOf } from './analyticsOverview';
 import { formatDay, shiftDay } from './analyticsRollup';
 
 const QUERY_DEADLINE_MS = 30_000;
 
-const mondayOf = (day: string) => shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
 const weekEnd = (weekStart: string) => shiftDay(weekStart, 6);
 
 /**
@@ -27,7 +27,8 @@ export function cohortWeekStarts(asOf: string, weeks: number): string[] {
 /**
  * Counted signups of one day under the Signups toggle. "Legit only" is every counted signup that is not
  * suspected, because the active users are counted by `suspected: false` and the two must agree: a
- * signup too new to classify is `suspected: false` on its user-day rows.
+ * signup too new to classify is `suspected: false` on its user-day rows. Differs from `signupTotal` in
+ * analyticsOverview.ts, which leaves unclassified signups out of the legit count.
  */
 export const cohortSignupCount = (signups: IAnalyticsDailySignups, mode: AnalyticsSignupsMode) =>
   mode === 'legit' ? signups.legit + signups.unclassified : signups.legit + signups.suspected + signups.unclassified;
@@ -35,12 +36,6 @@ export const cohortSignupCount = (signups: IAnalyticsDailySignups, mode: Analyti
 export type CohortDailyRow = { day: string; signups: IAnalyticsDailySignups };
 /** Distinct users active in `week` (a global week index) among those who signed up in cohort `cohort`. */
 export type CohortActiveCount = { cohort: number; week: number; active: number };
-
-const daysIn = (start: string, end: string): string[] =>
-  Array.from(
-    { length: Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000) + 1 },
-    (_, i) => shiftDay(start, i)
-  );
 
 /**
  * Pure assembly of the cohort table from rollup rows, so every rule is unit-testable. A cell is a gap
@@ -65,7 +60,7 @@ export function buildCohorts({
   const active = new Map(activeCounts.map(count => [`${count.cohort}:${count.week}`, count.active]));
 
   const cohorts: CohortRow[] = starts.map((start, index) => {
-    const signupDays = daysIn(start, weekEnd(start));
+    const signupDays = daysBetween(start, weekEnd(start));
     const size = signupDays.every(day => byDay.has(day))
       ? signupDays.reduce((total, day) => total + cohortSignupCount(byDay.get(day)!.signups, mode), 0)
       : null;
@@ -73,14 +68,14 @@ export function buildCohorts({
       const from = shiftDay(start, 7 * offset);
       const to = weekEnd(from);
       if (size === null || size === 0 || to > asOf) return null;
-      if (!daysIn(from, to).every(day => byDay.has(day))) return null;
+      if (!daysBetween(from, to).every(day => byDay.has(day))) return null;
       const count = active.get(`${index}:${index + offset}`) ?? 0;
       return { active: count, percent: (count / size) * 100 };
     });
     return { week: start, size, cells };
   });
 
-  return { missingDays: daysIn(starts[0], asOf).filter(day => !byDay.has(day)), cohorts };
+  return { missingDays: daysBetween(starts[0], asOf).filter(day => !byDay.has(day)), cohorts };
 }
 
 /** `$switch` that maps a `YYYY-MM-DD` field to the index of the Monday-to-Sunday week holding it, else -1. */
