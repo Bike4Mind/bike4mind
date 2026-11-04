@@ -11,7 +11,6 @@
  */
 
 // 2. Import the file here:
-import EnsureAdminSearchIndexes from './20260921239980_ensure-admin-search-indexes';
 // Backdated so the fail-closed OAuth backfill cannot block these indexes.
 import EnsureAdminUserNoteIndexes from './20260921235898_ensure-admin-user-note-indexes';
 // Backdated below the fail-closed OAuth backfill; $setOnInsert makes an old-id rerun safe.
@@ -299,6 +298,7 @@ import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwat
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
 import EnsureBillingMismatchIndexes from './20260921239985_ensure-billing-mismatch-indexes';
 import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-indexes';
+import EnsureAdminSearchIndexes from './20260921239980_ensure-admin-search-indexes';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedule-keys';
