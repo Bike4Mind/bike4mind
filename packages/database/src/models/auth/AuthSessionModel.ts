@@ -56,8 +56,8 @@ const AuthSessionSchema = new Schema<IAuthSessionDocument>(
 
 // Performance/lifecycle indexes (declared together; sid uniqueness is on the field above).
 AuthSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL: drop expired sessions
-AuthSessionSchema.index({ userId: 1, revokedAt: 1 });
-AuthSessionSchema.index({ 'device.ip': 1, lastUsedAt: -1 }, { name: 'auth_session_ip_search' }); // active-sessions lookups
+AuthSessionSchema.index({ userId: 1, revokedAt: 1 }); // active-sessions lookups
+AuthSessionSchema.index({ 'device.ip': 1, lastUsedAt: -1 }, { name: 'auth_session_ip_search' });
 
 export type IAuthSessionModel = Model<IAuthSessionDocument>;
 
