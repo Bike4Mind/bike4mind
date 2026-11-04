@@ -25,6 +25,7 @@ import { type FreeCreditAdapters, releasePendingFreeCredits } from './freeCredit
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 import { assertUsernameNotReserved } from './reservedUsername';
+import { callerTransactionSession } from './callerTransaction';
 import {
   claimRegistrationInvite,
   redeemRegistrationInvite,
@@ -393,9 +394,12 @@ export const registerUser = async (
   try {
     user = await db.users.create(buildUser);
   } catch (err: unknown) {
-    await inviteClaim?.release().catch(() => {
-      logger.warn('Registration invite claim release failed; the code may remain claimed');
-    });
+    // Inside a caller's transaction its rollback restores the claim; a release there would fail on the aborted session.
+    if (!callerTransactionSession()) {
+      await inviteClaim?.release().catch(() => {
+        logger.warn('Registration invite claim release failed; the code may remain claimed');
+      });
+    }
     // E11000: concurrent registration race on the unique email index.
     if ((err as { code?: number }).code === 11000) {
       throw new BadRequestError('Email already in use');

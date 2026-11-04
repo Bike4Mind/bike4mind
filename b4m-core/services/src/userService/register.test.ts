@@ -9,6 +9,12 @@ import {
   RESERVED_USERNAME_MESSAGE,
 } from '@bike4mind/common';
 import * as creditService from '../creditService';
+import { callerTransactionSession } from './callerTransaction';
+
+vi.mock('./callerTransaction', async importOriginal => ({
+  ...(await importOriginal<typeof import('./callerTransaction')>()),
+  callerTransactionSession: vi.fn(() => undefined),
+}));
 
 const baseParams: RegisterUserParameters = {
   username: 'testuser',
@@ -731,6 +737,19 @@ describe('registerUser', () => {
           'Registration invite claim release failed; the code may remain claimed'
         );
         expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+      });
+
+      it("leaves the claim to the caller's transaction rollback when the account create fails inside it", async () => {
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        mockAdapters.db.users.create.mockRejectedValue(new Error('account create failed'));
+        vi.mocked(callerTransactionSession).mockReturnValueOnce({} as ReturnType<typeof callerTransactionSession>);
+
+        await expect(registerUser(baseParams, mockAdapters)).rejects.toThrow('account create failed');
+
+        expect(mockAdapters.db.registrationInvites.releaseClaim).not.toHaveBeenCalled();
+        expect(mockAdapters.logger.warn).not.toHaveBeenCalledWith(
+          'Registration invite claim release failed; the code may remain claimed'
+        );
       });
 
       it('does not record a signup invite for an admin code or an unlimited referral code', async () => {
