@@ -1,4 +1,4 @@
-import { desktopStagesOf, RUNNER_PRESENCE_FRESH_MS } from '@bike4mind/common';
+import { DEFAULT_WORK_ITEM_PRIORITY, desktopStagesOf, RUNNER_PRESENCE_FRESH_MS } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopRepository, loopRunnerPresenceRepository, workItemRepository } from '@bike4mind/database';
@@ -37,6 +37,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         dependencies: ticket.dependencies,
         executionId: ticket.executionId,
         runCount: ticket.runCount ?? 0,
+        priority: ticket.priority ?? DEFAULT_WORK_ITEM_PRIORITY,
+        blockedOn: ticket.blockedOn,
         ready:
           ticket.status === 'open' &&
           !desktopStages.has(ticket.stage ?? '') &&

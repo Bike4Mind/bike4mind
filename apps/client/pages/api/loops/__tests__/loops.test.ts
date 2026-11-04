@@ -615,6 +615,23 @@ describe('GET /api/loops/:id/tickets', () => {
     expect(tickets.listForLoop).toHaveBeenCalledWith('u1', OID, 50);
   });
 
+  it('returns each ticket priority (p2 when unset) and blockedOn', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'done'] }));
+    tickets.listForLoop.mockResolvedValue([
+      ticket({ id: 'a', stage: 'todo', priority: 'p0' }),
+      ticket({ id: 'b', stage: 'todo', status: 'blocked', blockedOn: 'dependencies' }),
+    ]);
+    tickets.findManyByIdsForUser.mockResolvedValue([]);
+
+    const { res, result } = call('tickets', 'get', { query: { id: OID } });
+    await result;
+
+    const [todo] = res._getJSONData().stages;
+    expect(todo.tickets[0]).toMatchObject({ id: 'a', priority: 'p0' });
+    expect(todo.tickets[0]).not.toHaveProperty('blockedOn');
+    expect(todo.tickets[1]).toMatchObject({ id: 'b', priority: 'p2', blockedOn: 'dependencies' });
+  });
+
   it('does not mark an open ticket in a desktop stage as ready', async () => {
     repo.findByIdAndUserId.mockResolvedValue(
       loop({ stages: ['todo', 'review', 'done'], stageConfig: [{ stage: 'review', runner: 'desktop' }] })

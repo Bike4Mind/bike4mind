@@ -7,7 +7,14 @@
 
 import { BadRequestError } from '@bike4mind/utils';
 import { toObjectIdString } from '@bike4mind/server-utils/utils/objectId';
-import { WORK_ITEM_STATUSES, type WorkItemStatus } from '@bike4mind/common';
+import {
+  WORK_ITEM_BLOCKERS,
+  WORK_ITEM_PRIORITIES,
+  WORK_ITEM_STATUSES,
+  type WorkItemBlocker,
+  type WorkItemPriority,
+  type WorkItemStatus,
+} from '@bike4mind/common';
 
 const TITLE_MAX = 300;
 const DESCRIPTION_MAX = 10_000;
@@ -58,6 +65,22 @@ export function validateWorkItemStatus(value: unknown): WorkItemStatus | undefin
     throw new BadRequestError(`status must be one of: ${WORK_ITEM_STATUSES.join(', ')}`);
   }
   return value as WorkItemStatus;
+}
+
+export function validateWorkItemPriority(value: unknown): WorkItemPriority | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !WORK_ITEM_PRIORITIES.includes(value as WorkItemPriority)) {
+    throw new BadRequestError(`priority must be one of: ${WORK_ITEM_PRIORITIES.join(', ')}`);
+  }
+  return value as WorkItemPriority;
+}
+
+export function validateWorkItemBlocker(value: unknown): WorkItemBlocker | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !WORK_ITEM_BLOCKERS.includes(value as WorkItemBlocker)) {
+    throw new BadRequestError(`blockedOn must be one of: ${WORK_ITEM_BLOCKERS.join(', ')}`);
+  }
+  return value as WorkItemBlocker;
 }
 
 /** Parse a repeated or comma-separated `status` query param into a filter list. */

@@ -6,10 +6,16 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
-import { assertLoopTicketAccess, makeDueIfReady, ticketMovePatch } from '@server/utils/loopTickets';
+import {
+  assertBlockedOnSatisfiable,
+  assertLoopTicketAccess,
+  makeDueIfReady,
+  ticketMovePatch,
+} from '@server/utils/loopTickets';
 import {
   validateWorkItemDependencies,
   validateWorkItemDescription,
+  validateWorkItemPriority,
   validateWorkItemStatus,
   validateWorkItemTitle,
   WORK_ITEM_RATE_LIMIT,
@@ -37,10 +43,12 @@ const handler = baseApi()
   .patch(async (req, res) => {
     const id = String(req.query.id);
     // description is widened to allow the explicit null/'' that clears it.
-    const body = req.body as Partial<Omit<IWorkItem, 'description' | 'loopId'>> & {
+    const body = req.body as Partial<Omit<IWorkItem, 'description' | 'loopId' | 'priority' | 'blockedOn'>> & {
       description?: string | null;
       loopId?: string | null;
       reason?: unknown;
+      priority?: unknown;
+      blockedOn?: unknown;
     };
 
     const existing = await findVisible(req, id);
@@ -67,6 +75,7 @@ const handler = baseApi()
     const status = validateWorkItemStatus(body.status);
     const movesLoop = body.loopId !== undefined && body.loopId !== existing.loopId;
     let loop: ILoop | undefined;
+    const loopOnly = (['stage', 'priority', 'blockedOn'] as const).find(field => body[field] != null);
     if (body.loopId === null) {
       if (existing.loopId) {
         await assertLoopTicketAccess(req, existing.loopId);
@@ -76,6 +85,8 @@ const handler = baseApi()
           stage: null,
           statusReason: null,
           executionId: null,
+          priority: null,
+          blockedOn: null,
           ...(existing.status === 'in_progress' && status === undefined && { status: 'open' }),
         });
       }
@@ -84,17 +95,26 @@ const handler = baseApi()
     }
 
     if (loop) {
+      // Not a move: a priority change keeps the ticket's run allowance.
+      const priority = validateWorkItemPriority(body.priority);
+      if (priority) patch.priority = priority;
       // A ticket moved into another loop starts over in that loop.
-      if (movesLoop || body.stage !== undefined || status !== undefined) {
+      if (movesLoop || body.stage !== undefined || status !== undefined || body.blockedOn != null) {
         // An owner move gives the ticket a fresh run allowance (the scheduler blocks it at ticketRunLimit).
         Object.assign(
           patch,
           { loopId: loop.id, runCount: 0 },
-          ticketMovePatch(loop, movesLoop ? undefined : existing, { stage: body.stage, status, reason: body.reason })
+          ticketMovePatch(loop, movesLoop ? undefined : existing, {
+            stage: body.stage,
+            status,
+            reason: body.reason,
+            blockedOn: body.blockedOn,
+          })
         );
+        await assertBlockedOnSatisfiable(req.user!.id, patch.dependencies ?? existing.dependencies, patch.blockedOn);
       }
-    } else if (body.stage !== undefined && body.stage !== null) {
-      throw new BadRequestError('stage is only valid on a loop ticket');
+    } else if (loopOnly) {
+      throw new BadRequestError(`${loopOnly} is only valid on a loop ticket`);
     } else if (status !== undefined && status !== existing.status) {
       patch.status = status;
       // closedAt tracks the latest close, and is cleared when the item reopens.

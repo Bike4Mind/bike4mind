@@ -9,21 +9,32 @@
  * Headless loop runs pre-approve them in `startAgentExecution`. Stage rule: `@server/utils/loopTickets`.
  */
 import {
+  DEFAULT_WORK_ITEM_PRIORITY,
   LOOP_TICKET_TOOL_NAMES,
+  WORK_ITEM_BLOCKERS,
+  WORK_ITEM_PRIORITIES,
   WORK_ITEM_STATUSES,
   type ILoop,
   type IWorkItem,
+  type WorkItemPatch,
   type WorkItemStatus,
 } from '@bike4mind/common';
 import { loopEventRepository, loopRepository, workItemRepository } from '@bike4mind/database';
 import type { ToolDefinition } from '@bike4mind/services/llm';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError } from '@bike4mind/server-utils/utils/errors';
-import { makeDueIfReady, ticketMovePatch, UNSURE_PREFIX, unsureReason } from '@server/utils/loopTickets';
+import {
+  assertBlockedOnSatisfiable,
+  makeDueIfReady,
+  ticketMovePatch,
+  UNSURE_PREFIX,
+  unsureReason,
+} from '@server/utils/loopTickets';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
 import {
   validateWorkItemDependencies,
   validateWorkItemDescription,
+  validateWorkItemPriority,
   validateWorkItemTitle,
 } from '@server/utils/workItemValidation';
 
@@ -74,8 +85,22 @@ const summarize = (ticket: IWorkItem) => ({
   stage: ticket.stage,
   status: ticket.status,
   ...(ticket.statusReason && { statusReason: ticket.statusReason }),
+  ...(ticket.blockedOn && { blockedOn: ticket.blockedOn }),
+  priority: ticket.priority ?? DEFAULT_WORK_ITEM_PRIORITY,
   dependencies: ticket.dependencies,
 });
+
+const PRIORITY_PARAM = {
+  type: 'string',
+  enum: [...WORK_ITEM_PRIORITIES],
+  description: 'p0 is worked first, p3 last. Defaults to p2.',
+};
+const BLOCKED_ON_PARAM = {
+  type: 'string',
+  enum: [...WORK_ITEM_BLOCKERS],
+  description:
+    'With status blocked: park the ticket until every listed dependency closes. It then reopens on its own and the owner is not notified. Needs at least one open dependency.',
+};
 
 /** Validation and authz errors go back to the model as the tool result; anything else is a real failure. */
 export async function asToolResult(run: () => Promise<unknown>): Promise<string> {
@@ -156,6 +181,8 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             dependencies?: unknown;
             status?: unknown;
             reason?: unknown;
+            priority?: unknown;
+            blockedOn?: unknown;
           };
           const loop = await ownLoop(params.loopId ?? loopId);
           if (params.status !== undefined && !['open', 'blocked'].includes(params.status as string)) {
@@ -165,11 +192,14 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
           const description = validateWorkItemDescription(params.description);
           const dependencies = validateWorkItemDependencies(params.dependencies) ?? [];
           await assertDependenciesUsable(userId, dependencies);
+          const priority = validateWorkItemPriority(params.priority) ?? DEFAULT_WORK_ITEM_PRIORITY;
           const move = ticketMovePatch(loop, undefined, {
             stage: params.stage,
             status: params.status as WorkItemStatus | undefined,
             reason: params.reason,
+            blockedOn: params.blockedOn,
           });
+          await assertBlockedOnSatisfiable(userId, dependencies, move.blockedOn);
 
           creates++;
           const created = await workItemRepository.create({
@@ -180,8 +210,10 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             dependencies,
             stage: move.stage!,
             status: move.status!,
+            priority,
             ...(move.closedAt && { closedAt: move.closedAt }),
             ...(move.statusReason && { statusReason: move.statusReason }),
+            ...(move.blockedOn && { blockedOn: move.blockedOn }),
           } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
           await makeDueIfReady(loop);
           return summarize(created);
@@ -189,7 +221,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
       toolSchema: {
         name: 'loop_ticket_create',
         description:
-          "File a ticket into this loop or another of the owner's loops (by loopId). A ticket starts in the loop's first stage unless a stage is given; the target loop works it on its next run. To file a step only the owner can do (a decision, credentials, a human-only action), set status blocked with a reason: the owner is notified.",
+          "File a ticket into this loop or another of the owner's loops (by loopId). A ticket starts in the loop's first stage unless a stage is given; the target loop works it on its next run. To file a step only the owner can do (a decision, credentials, a human-only action), set status blocked with a reason: the owner is notified. To hold a ticket until other tickets close, list them as dependencies and set status blocked with blockedOn dependencies instead: it reopens on its own and the owner is not notified.",
         parameters: {
           type: 'object',
           properties: {
@@ -198,7 +230,12 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             loopId: { type: 'string', description: 'Target loop. Defaults to the loop this run belongs to.' },
             stage: { type: 'string', description: "One of the target loop's stages. Defaults to its first stage." },
             status: { type: 'string', enum: ['open', 'blocked'], description: 'Defaults to open.' },
-            reason: { type: 'string', description: 'Required when status is blocked: what the owner needs to do.' },
+            reason: {
+              type: 'string',
+              description: 'Required when status is blocked without blockedOn: what the owner needs to do.',
+            },
+            priority: PRIORITY_PARAM,
+            blockedOn: BLOCKED_ON_PARAM,
             dependencies: {
               type: 'array',
               items: { type: 'string' },
@@ -224,6 +261,9 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             status?: unknown;
             reason?: unknown;
             loopId?: unknown;
+            priority?: unknown;
+            blockedOn?: unknown;
+            dependencies?: unknown;
           };
           const existing =
             typeof params.id === 'string' ? await workItemRepository.findByIdForUser(params.id, userId) : null;
@@ -236,18 +276,28 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             throw new BadRequestError('status must be one of: open, blocked, closed');
           }
 
-          const patch = {
+          const dependencies = validateWorkItemDependencies(params.dependencies);
+          if (dependencies) await assertDependenciesUsable(userId, dependencies, existing.id);
+          const priority = validateWorkItemPriority(params.priority);
+          const patch: WorkItemPatch = {
             ...(params.title !== undefined && { title: validateWorkItemTitle(params.title) }),
             ...(params.description !== undefined && { description: validateWorkItemDescription(params.description) }),
-            ...((movesLoop || params.stage !== undefined || params.status !== undefined) && {
+            ...(dependencies && { dependencies }),
+            ...(priority && { priority }),
+            ...((movesLoop ||
+              params.stage !== undefined ||
+              params.status !== undefined ||
+              params.blockedOn != null) && {
               loopId: loop.id,
               ...ticketMovePatch(loop, movesLoop ? undefined : existing, {
                 stage: params.stage,
                 status: params.status as WorkItemStatus | undefined,
                 reason: params.reason,
+                blockedOn: params.blockedOn,
               }),
             }),
           };
+          await assertBlockedOnSatisfiable(userId, dependencies ?? existing.dependencies, patch.blockedOn);
           // Conditional on the status the patch was computed from, so a concurrent fold is not overwritten.
           const updated = await workItemRepository.updateForUser(existing.id, userId, patch, existing.status);
           if (!updated) throw new ConflictError('ticket changed while saving; list it again and retry');
@@ -257,7 +307,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
       toolSchema: {
         name: 'loop_ticket_update',
         description:
-          "Change a loop ticket: edit it, move it to another stage or another of the owner's loops, block it (with a reason) or close it. Moving a ticket to the last stage closes it.",
+          "Change a loop ticket: edit it, set its priority or dependencies, move it to another stage or another of the owner's loops, block it or close it. Moving a ticket to the last stage closes it. Block with a reason only for something the owner must do: they are notified. To wait on other tickets, set status blocked with blockedOn dependencies: it reopens on its own when they all close and the owner is not notified.",
         parameters: {
           type: 'object',
           properties: {
@@ -266,7 +316,14 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             description: { type: 'string', description: 'New description (10,000 characters max).' },
             stage: { type: 'string', description: "One of the loop's stages." },
             status: { type: 'string', enum: ['open', 'blocked', 'closed'], description: 'New status.' },
-            reason: { type: 'string', description: 'Required when status is blocked.' },
+            reason: { type: 'string', description: 'Required when status is blocked without blockedOn.' },
+            priority: PRIORITY_PARAM,
+            blockedOn: BLOCKED_ON_PARAM,
+            dependencies: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Replaces the ids of tickets that must close before this one is worked.',
+            },
             loopId: { type: 'string', description: "Move the ticket to another of the owner's loops." },
           },
           required: ['id'],

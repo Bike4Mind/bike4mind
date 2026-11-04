@@ -2,15 +2,21 @@ import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { workItemRepository } from '@bike4mind/database';
-import { IWorkItem } from '@bike4mind/common';
+import { DEFAULT_WORK_ITEM_PRIORITY, IWorkItem } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
 import { verifyOrgAccess } from '@bike4mind/server-utils/utils/orgAccess';
 import { assertDependenciesUsable } from '@server/utils/workItemDependencies';
-import { assertLoopTicketAccess, makeDueIfReady, ticketMovePatch } from '@server/utils/loopTickets';
+import {
+  assertBlockedOnSatisfiable,
+  assertLoopTicketAccess,
+  makeDueIfReady,
+  ticketMovePatch,
+} from '@server/utils/loopTickets';
 import {
   parseStatusFilter,
   validateWorkItemDependencies,
   validateWorkItemDescription,
+  validateWorkItemPriority,
   validateWorkItemStatus,
   validateWorkItemTitle,
   WORK_ITEM_RATE_LIMIT,
@@ -66,7 +72,11 @@ const handler = baseApi()
     res.json(result);
   })
   .post(async (req, res) => {
-    const body = req.body as Partial<IWorkItem> & { reason?: unknown };
+    const body = req.body as Partial<Omit<IWorkItem, 'priority' | 'blockedOn'>> & {
+      reason?: unknown;
+      priority?: unknown;
+      blockedOn?: unknown;
+    };
 
     const title = validateWorkItemTitle(body.title);
     const description = validateWorkItemDescription(body.description);
@@ -74,9 +84,18 @@ const handler = baseApi()
     const dependencies = validateWorkItemDependencies(body.dependencies) ?? [];
     // Same rule as PATCH: `loopId: null` means not linked, and a stage needs a loop.
     const loop = body.loopId != null ? await assertLoopTicketAccess(req, body.loopId) : undefined;
-    if (!loop && body.stage != null) throw new BadRequestError('stage is only valid on a loop ticket');
+    for (const field of ['stage', 'priority', 'blockedOn'] as const) {
+      if (!loop && body[field] != null) throw new BadRequestError(`${field} is only valid on a loop ticket`);
+    }
+    const priority = validateWorkItemPriority(body.priority) ?? DEFAULT_WORK_ITEM_PRIORITY;
     const ticket =
-      loop && ticketMovePatch(loop, undefined, { stage: body.stage, status: requestedStatus, reason: body.reason });
+      loop &&
+      ticketMovePatch(loop, undefined, {
+        stage: body.stage,
+        status: requestedStatus,
+        reason: body.reason,
+        blockedOn: body.blockedOn,
+      });
     const status = ticket?.status ?? requestedStatus ?? 'open';
 
     if (body.organizationId) {
@@ -84,6 +103,7 @@ const handler = baseApi()
     }
 
     await assertDependenciesUsable(req.user!.id, dependencies);
+    await assertBlockedOnSatisfiable(req.user!.id, dependencies, ticket?.blockedOn);
 
     const created = await workItemRepository.create({
       userId: req.user!.id,
@@ -94,8 +114,9 @@ const handler = baseApi()
       status,
       dependencies,
       ...(status === 'closed' && { closedAt: new Date() }),
-      ...(loop && { loopId: loop.id, stage: ticket!.stage }),
+      ...(loop && { loopId: loop.id, stage: ticket!.stage, priority }),
       ...(ticket?.statusReason && { statusReason: ticket.statusReason }),
+      ...(ticket?.blockedOn && { blockedOn: ticket.blockedOn }),
     } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
 
     if (loop) await makeDueIfReady(loop);

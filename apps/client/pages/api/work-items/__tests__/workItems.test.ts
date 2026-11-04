@@ -592,6 +592,76 @@ describe('loop tickets through the work-items routes', () => {
     );
   });
 
+  it('POST stores p2 by default and the given priority otherwise; priority and blockedOn need a loop', async () => {
+    await call('collection', 'post', { body: { title: 'T', loopId: LOOP } }).result;
+    expect(repo.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'p2' }));
+    await call('collection', 'post', { body: { title: 'T', loopId: LOOP, priority: 'p0' } }).result;
+    expect(repo.create).toHaveBeenLastCalledWith(expect.objectContaining({ priority: 'p0' }));
+
+    for (const body of [
+      { title: 'T', priority: 'p0' },
+      { title: 'T', blockedOn: 'dependencies', status: 'blocked' },
+      { title: 'T', loopId: LOOP, priority: 'urgent' },
+      { title: 'T', loopId: LOOP, status: 'blocked', blockedOn: 'ci' },
+    ]) {
+      await expect(call('collection', 'post', { body }).result).rejects.toMatchObject({ statusCode: 400 });
+    }
+    repo.findByIdForUser.mockResolvedValue(item());
+    await expect(call('item', 'patch', { query: { id: OID_A }, body: { priority: 'p0' } }).result).rejects.toThrow(
+      'priority is only valid on a loop ticket'
+    );
+  });
+
+  it('a priority-only PATCH keeps the run allowance and makes the loop due', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', runCount: 2 }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { priority: 'p0' } }).result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(OID_A, 'u1', { priority: 'p0' }, 'open');
+    expect(loopRepo.makeDueNow).toHaveBeenCalledWith(LOOP, expect.any(Date));
+  });
+
+  it('blockedOn dependencies parks a ticket on an open dependency, and any later move clears it', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', dependencies: [OID_B] }));
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { blockedOn: 'dependencies' } }).result
+    ).rejects.toThrow('blockedOn is only valid with status blocked');
+
+    repo.findManyByIdsForUser.mockResolvedValue([item({ id: OID_B, status: 'closed' })]);
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { status: 'blocked', blockedOn: 'dependencies' } }).result
+    ).rejects.toThrow('blockedOn dependencies needs an open dependency');
+
+    repo.findManyByIdsForUser.mockResolvedValue([item({ id: OID_B, status: 'open' })]);
+    await call('item', 'patch', { query: { id: OID_A }, body: { status: 'blocked', blockedOn: 'dependencies' } })
+      .result;
+    expect(repo.updateForUser).toHaveBeenLastCalledWith(
+      OID_A,
+      'u1',
+      expect.objectContaining({
+        status: 'blocked',
+        statusReason: 'Waiting on dependencies',
+        blockedOn: 'dependencies',
+      }),
+      'open'
+    );
+
+    repo.findByIdForUser.mockResolvedValue(
+      item({ loopId: LOOP, stage: 'todo', status: 'blocked', blockedOn: 'dependencies', dependencies: [OID_B] })
+    );
+    for (const body of [{ status: 'open' }, { status: 'blocked', reason: 'Needs a login' }, { status: 'closed' }]) {
+      await call('item', 'patch', { query: { id: OID_A }, body }).result;
+      expect(repo.updateForUser.mock.lastCall![2]).toMatchObject({ blockedOn: null });
+    }
+    // A stage move that stays blocked keeps the reason, so it keeps the condition too.
+    await call('item', 'patch', { query: { id: OID_A }, body: { stage: 'doing' } }).result;
+    expect(repo.updateForUser.mock.lastCall![2]).toMatchObject({ stage: 'doing', blockedOn: undefined });
+  });
+
+  it('detaching a ticket clears its priority and blockedOn', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', priority: 'p0' }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { loopId: null } }).result;
+    expect(repo.updateForUser.mock.lastCall![2]).toMatchObject({ priority: null, blockedOn: null });
+  });
+
   it('loopId: null reopens a running ticket and is a 404 with EnableLoops off', async () => {
     repo.findByIdForUser.mockResolvedValue(
       item({ loopId: LOOP, stage: 'doing', status: 'in_progress', executionId: 'e1' })
