@@ -3416,7 +3416,6 @@ describe('ModelHubService split builds', () => {
   it('downloads each part, hands it to Ollama, then creates the model with the sibling projector and params', async () => {
     const t = await importing();
     try {
-      await mkdir(join(t.root, '999999-crashed'), { recursive: true });
       let finish = () => {};
       t.runtime.create.mockImplementationOnce(async () => {
         t.events.push('create');
@@ -3522,7 +3521,7 @@ describe('ModelHubService split builds', () => {
     }
   });
 
-  it("fails with Ollama's reason, leaves nothing staged, and a retry fetches only what Ollama lacks", async () => {
+  it("fails with Ollama's reason, keeps the staged part, and a retry fetches only what Ollama lacks", async () => {
     const t = await importing();
     try {
       t.runtime.uploadBlob.mockImplementationOnce(async (digest: string) => {
@@ -3538,7 +3537,7 @@ describe('ModelHubService split builds', () => {
         error: { message: expect.stringMatching(/digest mismatch/) },
       });
       expect(t.runtime.create).not.toHaveBeenCalled();
-      expect(await t.left()).toEqual([]);
+      expect(await t.left()).toHaveLength(1);
 
       t.hub.download.mockClear();
       await expect(t.service.pull(splitRequest)).resolves.toEqual({ ok: true, ref: SPLIT_REF });
@@ -3546,6 +3545,20 @@ describe('ModelHubService split builds', () => {
         `${SPLIT_ID}-00002-of-00002.gguf`,
         'mmproj-F16.gguf',
       ]);
+      expect(await t.left()).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('removes the staged parts of a failed import when the user dismisses it', async () => {
+    const t = await importing();
+    try {
+      t.runtime.uploadBlob.mockRejectedValueOnce(new LocalRuntimeError('ollama could not take the part', 'ollama'));
+      await t.service.pull(splitRequest);
+      expect(await t.left()).toHaveLength(1);
+      t.service.dismiss(pullKey(REPO, SPLIT_ID));
+      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
     } finally {
       await t.cleanup();
     }

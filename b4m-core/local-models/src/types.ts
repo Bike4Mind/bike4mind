@@ -100,7 +100,7 @@ export interface ModelImportRuntime {
   uploadBlob(
     digest: string,
     path: string,
-    options?: { signal?: AbortSignal; onProgress?: (sentBytes: number) => void }
+    options?: { signal?: AbortSignal; onProgress?: (sentBytes: number) => void; idleTimeoutMs?: number }
   ): Promise<void>;
   create(request: OllamaCreateRequest, options?: { signal?: AbortSignal }): Promise<void>;
 }

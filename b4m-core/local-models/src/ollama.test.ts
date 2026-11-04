@@ -885,6 +885,37 @@ describe('OllamaRuntime blobs and create', () => {
     }
   });
 
+  it('throttles upload progress and always reports the final byte count', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, Buffer.alloc(8 * 1024 * 1024, 1));
+      server = await startFakeServer({
+        [`POST /api/blobs/${digest}`]: (_request, response) => response.writeHead(201).end(),
+      });
+      const sent: number[] = [];
+      await runtimeFor(server).uploadBlob(digest, file, { onProgress: bytes => sent.push(bytes) });
+      expect(sent.at(-1)).toBe(8 * 1024 * 1024);
+      expect(sent.length).toBeLessThanOrEqual(8);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('gives up on an upload the daemon stops answering', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, 'x');
+      server = await startFakeServer({ [`POST /api/blobs/${digest}`]: () => {} });
+      await expect(runtimeFor(server).uploadBlob(digest, file, { idleTimeoutMs: 100 })).rejects.toThrow(
+        /stopped taking/
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces a digest mismatch the daemon reports on upload', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
     try {

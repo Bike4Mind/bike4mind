@@ -609,6 +609,21 @@ describe('HuggingFaceHub.getModel', () => {
     expect(await hub.getModel(named)).toMatchObject({ licenses: ['other'], licenseName: 'custom-terms' });
   });
 
+  it('lists a set whose files disagree on the shard total as incomplete', async () => {
+    const repo = 'someone/mixed-GGUF';
+    const sha = 'a'.repeat(40);
+    const file = (path: string) => ({ type: 'file', path, size: 3, lfs: { oid: 'b'.repeat(64), size: 3 } });
+    const server = await serve(
+      repoRoutes(repo, sha, { id: repo, sha }, [
+        file('m-00001-of-00003.gguf'),
+        file('m-00002-of-00003.gguf'),
+        file('m-00003-of-00004.gguf'),
+      ])
+    );
+    const detail = await new HuggingFaceHub({ endpoint: server.baseUrl }).getModel(repo);
+    expect(detail.builds.map(build => [build.id, build.complete])).toEqual([['m', false]]);
+  });
+
   it('flags missing shards and picks a tag no earlier file name ends with', async () => {
     const repo = 'someone/odd-GGUF';
     const sha = 'a'.repeat(40);

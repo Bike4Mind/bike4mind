@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { stat, statfs } from 'node:fs/promises';
+import { rm, stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
@@ -15,6 +15,7 @@ import {
   ollamaLibraryLayers,
   probeHardware,
   resolveCuratedUrl,
+  sweepSplitImports,
 } from '@bike4mind/local-models';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { CuratedList, CuratedListSettings, CuratedSourceView, HfTokenResult, ModelPull } from '@shared/models';
@@ -35,6 +36,18 @@ import { probeIntegratedGpu, runsInWsl } from './wslGpuCap';
 // Room for a daemon busy finishing a pull on a loaded machine, which the library's short default reads as stopped.
 const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
 const LINUX_SERVICE_STORE = '/usr/share/ollama/.ollama/models';
+
+// Local cache, not userData: that is Roaming on Windows and parts run to tens of GB.
+function splitImportRoot(): string {
+  const home = app.getPath('home');
+  const cache =
+    process.platform === 'win32'
+      ? (process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'))
+      : process.platform === 'darwin'
+        ? join(home, 'Library', 'Caches')
+        : (process.env.XDG_CACHE_HOME ?? join(home, '.cache'));
+  return join(cache, 'bike4mind-desktop', 'model-imports');
+}
 
 const warn = (message: string) => console.warn(message);
 
@@ -154,7 +167,7 @@ export function registerModels(
     pathExists: async path => (await stat(path)).isDirectory(),
     wslHost: process.platform === 'win32' || (process.platform === 'linux' && runsInWsl(process.env, procVersion())),
     integratedGpu: () => probeIntegratedGpu(),
-    importDir: () => join(app.getPath('userData'), 'model-imports'),
+    importDir: splitImportRoot,
     sameDisk: async (a, b) => (await deviceOf(a)) === (await deviceOf(b)),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
     onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
@@ -176,6 +189,9 @@ export function registerModels(
     send(IPC_CHANNELS.modelsCuratedChanged);
   });
   registerModelsIpc(ipcMain, service);
+  // Folders a failed import left for its retry; older ones, and the pre-cache location, are removed.
+  void rm(join(app.getPath('userData'), 'model-imports'), { recursive: true, force: true }).catch(() => undefined);
+  void sweepSplitImports(splitImportRoot()).catch(() => undefined);
 
   // Opening Models lists the curated models, so this is where a due check starts; it never blocks the list.
   ipcMain.handle(

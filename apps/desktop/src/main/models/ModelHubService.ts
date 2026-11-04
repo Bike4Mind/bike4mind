@@ -29,15 +29,15 @@ import {
   ollamaPullRef,
   ollamaRefAliases,
   planSplitImport,
+  removeSplitStaging,
   pullBlock,
   runSplitImport,
   sameRepo,
   siblingLayers,
   splitImportBlock,
   splitImportName,
-  splitImportRunDir,
   splitImportSpace,
-  sweepSplitImports,
+  splitImportStageDir,
   type ApprovalFailure,
   type DownloadOptions,
   type DownloadResult,
@@ -1746,7 +1746,7 @@ export class ModelHubService {
     });
   }
 
-  /** Downloads each part Ollama lacks, hands it over, then creates the model; staged files never outlive the run. */
+  /** Downloads each part Ollama lacks, hands it over, then creates the model; a failed run keeps its staging so a retry resumes. */
   async #import(key: string, entry: PullEntry, target: Target, plan: SplitImportPlan): Promise<ModelPullResult> {
     const { signal } = entry.controller;
     const root = this.#deps.importDir?.();
@@ -1764,11 +1764,10 @@ export class ModelHubService {
     };
     this.#push(true);
     try {
-      await sweepSplitImports(root);
       await runSplitImport(plan, {
         hub,
         runtime,
-        dir: splitImportRunDir(root),
+        dir: splitImportStageDir(root, plan),
         signal,
         onProgress: progress => {
           const phase = progress.status === 'creating' ? 'finishing' : 'downloading';
@@ -1784,6 +1783,7 @@ export class ModelHubService {
       });
     } catch (error) {
       if (signal.aborted) {
+        await removeSplitStaging(splitImportStageDir(root, plan));
         this.#drop(key, entry);
         return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
       }
@@ -1947,6 +1947,8 @@ export class ModelHubService {
   #drop(key: string, entry: PullEntry): void {
     if (this.#pulls.get(key) !== entry) return;
     this.#pulls.delete(key);
+    const root = this.#deps.importDir?.();
+    if (entry.import && root) void removeSplitStaging(splitImportStageDir(root, entry.import));
     this.#push(true);
   }
 

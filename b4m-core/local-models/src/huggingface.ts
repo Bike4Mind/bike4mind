@@ -642,7 +642,10 @@ function groupGgufFiles(
   url: (path: string) => string,
   pinned: boolean
 ): { builds: HubGgufBuild[]; projectors: HubGgufProjector[] } {
-  const groups = new Map<string, { id: string; total: number; shards: { index: number; file: HubGgufFile }[] }>();
+  const groups = new Map<
+    string,
+    { id: string; total: number; totalsAgree: boolean; shards: { index: number; file: HubGgufFile }[] }
+  >();
   const projectors: HubGgufProjector[] = [];
   for (const entry of entries) {
     if (entry.type !== 'file' || !/\.gguf$/i.test(entry.path)) continue;
@@ -665,7 +668,8 @@ function groupGgufFiles(
     const shard = SHARD_RE.exec(entry.path);
     const id = shard ? entry.path.slice(0, shard.index) : entry.path.replace(/\.gguf$/i, '');
     const key = `${shard ? 'split' : 'single'}:${id}`;
-    const group = groups.get(key) ?? { id, total: shard ? Number(shard[2]) : 1, shards: [] };
+    const group = groups.get(key) ?? { id, total: shard ? Number(shard[2]) : 1, totalsAgree: true, shards: [] };
+    if (shard && Number(shard[2]) !== group.total) group.totalsAgree = false;
     group.shards.push({ index: shard ? Number(shard[1]) : 1, file });
     groups.set(key, group);
   }
@@ -674,7 +678,8 @@ function groupGgufFiles(
     const shards = group.shards.sort((a, b) => a.index - b.index);
     const files = shards.map(shard => shard.file);
     const split = group.total > 1 || shards.length > 1;
-    const complete = shards.length === group.total && shards.every((shard, i) => shard.index === i + 1);
+    const complete =
+      group.totalsAgree && shards.length === group.total && shards.every((shard, i) => shard.index === i + 1);
     const collides = key.startsWith('split:') && groups.has(`single:${group.id}`);
     return {
       id: collides && files[0] ? files[0].path.replace(/\.gguf$/i, '') : group.id,

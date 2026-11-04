@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,8 +12,8 @@ import {
   siblingLayers,
   splitImportBlock,
   splitImportCreateRequest,
-  splitImportRunDir,
   splitImportSpace,
+  splitImportStageDir,
   sweepSplitImports,
   type SplitImportPlan,
 } from './splitImport';
@@ -68,6 +68,18 @@ describe('splitImportBlock', () => {
     expect(splitImportBlock(detail, upper)).toBe('unsupported-name');
     expect(splitImportBlock(detail, splitBuild({ label: 'bad tag' }))).toBe('unsupported-name');
     expect(splitImportBlock(hubDetail({ id: 'my.org/repo' }), splitBuild())).toBe('unsupported-name');
+  });
+
+  it('refuses a shard name Ollama rejects at create time, and keeps a subfolder', () => {
+    const named = (path: string) => splitBuild({ files: [shard(1, 1, { path }), shard(2, 1), shard(3, 1)] });
+    for (const path of [
+      '..\\..\\x-00001-of-00003.gguf',
+      'C:x-00001-of-00003.gguf',
+      'Q8_0\\x-00001-of-00003.gguf',
+      'a:b/x-00001-of-00003.gguf\\',
+    ])
+      expect(splitImportBlock(detail, named(path))).toBe('unsupported-name');
+    expect(splitImportBlock(detail, named('Q4_K_M/deep/x-00001-of-00003.gguf'))).toBeNull();
   });
 
   it('tells a hidden checksum on a gated repo from one the Hub never published', () => {
@@ -314,48 +326,78 @@ describe('runSplitImport', () => {
     await expect(stat(dir)).rejects.toThrow();
   });
 
-  it('removes its folder and creates nothing when a part fails', async () => {
+  it('keeps its folder and creates nothing when a part fails', async () => {
     const { hub, runtime } = fakes({ failUpload: `sha256:${hex('2')}` });
     const dir = join(root, 'run');
     await expect(runSplitImport(plan(), { hub, runtime, dir })).rejects.toThrow('upload refused');
     expect(runtime.create).not.toHaveBeenCalled();
-    await expect(stat(dir)).rejects.toThrow();
+    await expect(stat(dir)).resolves.toBeDefined();
   });
 
-  it('removes its folder when Ollama refuses the create', async () => {
+  it('keeps its folder when Ollama refuses the create', async () => {
     const { hub, runtime } = fakes({ failCreate: true });
     const dir = join(root, 'run');
     await expect(runSplitImport(plan(), { hub, runtime, dir })).rejects.toThrow('invalid split GGUF');
-    await expect(stat(dir)).rejects.toThrow();
+    await expect(stat(dir)).resolves.toBeDefined();
   });
 
-  it('removes its folder, partial download included, when cancelled', async () => {
+  it('leaves a partial download in place so the next run resumes it', async () => {
     const { runtime } = fakes();
     const controller = new AbortController();
-    const dir = join(root, 'run');
+    const dir = splitImportStageDir(root, plan());
+    const seen: string[] = [];
     const hub = {
-      download: vi.fn(async (_file: HubGgufFile, destination: string) => {
-        await writeFile(`${destination}.partial`, 'half');
-        controller.abort();
-        throw new DOMException('aborted', 'AbortError');
+      download: vi.fn(async (file: HubGgufFile, destination: string) => {
+        seen.push(destination);
+        if (seen.length === 1) {
+          await writeFile(`${destination}.partial`, 'half');
+          controller.abort();
+          throw new DOMException('aborted', 'AbortError');
+        }
+        if (seen.length === 2) expect(await readdir(dir)).toContain(`${basename(destination)}.partial`);
+        await writeFile(destination, 'x');
+        return { path: destination, sizeBytes: file.sizeBytes, sha256: file.sha256, resumedBytes: 4 };
       }),
     };
     await expect(runSplitImport(plan(), { hub, runtime, dir, signal: controller.signal })).rejects.toThrow('aborted');
     expect(runtime.uploadBlob).not.toHaveBeenCalled();
-    expect(runtime.create).not.toHaveBeenCalled();
+    expect(splitImportStageDir(root, plan())).toBe(dir);
+    await runSplitImport(plan(), { hub, runtime, dir });
+    expect(seen[1]).toBe(seen[0]);
     await expect(stat(dir)).rejects.toThrow();
+  });
+
+  it('keys the staging folder to the repo, revision and file set', () => {
+    const base = plan();
+    const moved = plan();
+    moved.parts[0] = { ...moved.parts[0], file: { ...moved.parts[0].file, url: 'https://hf.test/other-revision' } };
+    expect(splitImportStageDir(root, base)).toBe(splitImportStageDir(root, plan()));
+    expect(splitImportStageDir(root, moved)).not.toBe(splitImportStageDir(root, base));
+  });
+
+  it('refuses a bad name before downloading anything', async () => {
+    const { hub, runtime } = fakes();
+    const bad = plan();
+    bad.parts[2] = { ...bad.parts[2], name: '..\\..\\x-00003-of-00003.gguf' };
+    await expect(runSplitImport(bad, { hub, runtime, dir: join(root, 'run') })).rejects.toThrow(/cannot be imported/);
+    expect(hub.download).not.toHaveBeenCalled();
   });
 });
 
 describe('sweepSplitImports', () => {
-  it('removes run folders of processes that are gone and keeps the rest', async () => {
+  it('removes staging folders untouched for longer than the age limit and keeps recent ones', async () => {
     const root = await mkdtemp(join(tmpdir(), 'split-sweep-'));
     try {
-      const mine = splitImportRunDir(root);
-      for (const dir of [mine, join(root, '999999-gone'), join(root, '424242-alive'), join(root, 'other')])
-        await mkdir(dir, { recursive: true });
-      await sweepSplitImports(root, pid => pid === process.pid || pid === 424242);
-      expect((await readdir(root)).sort()).toEqual(['424242-alive', basename(mine), 'other'].sort());
+      const old = join(root, 'build-old');
+      const recent = join(root, 'build-recent');
+      for (const dir of [old, recent]) await mkdir(dir, { recursive: true });
+      await writeFile(join(old, 'part.partial'), 'x');
+      await writeFile(join(recent, 'part.partial'), 'x');
+      const week = 7 * 24 * 60 * 60 * 1000;
+      const aged = new Date(Date.now() - 2 * week);
+      for (const path of [join(old, 'part.partial'), old]) await utimes(path, aged, aged);
+      await sweepSplitImports(root, week);
+      expect((await readdir(root)).sort()).toEqual(['build-recent']);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -46,6 +46,8 @@ export const OLLAMA_SHOW_CONCURRENCY = 4;
 /** Digest verification of a large blob can be silent for minutes. */
 export const DEFAULT_PULL_IDLE_TIMEOUT_MS = 5 * 60_000;
 const MAX_TIMER_MS = 2 ** 31 - 1;
+const DEFAULT_UPLOAD_IDLE_TIMEOUT_MS = 2 * 60_000;
+const UPLOAD_PROGRESS_INTERVAL_MS = 250;
 
 export interface OllamaRuntimeOptions {
   baseUrl?: string;
@@ -407,21 +409,56 @@ export class OllamaRuntime implements LocalRuntime, ModelImportRuntime {
   async uploadBlob(
     digest: string,
     path: string,
-    options: { signal?: AbortSignal; onProgress?: (sentBytes: number) => void } = {}
+    options: { signal?: AbortSignal; onProgress?: (sentBytes: number) => void; idleTimeoutMs?: number } = {}
   ): Promise<void> {
     const route = blobPath(digest, this.id);
+    const idleMs = Math.min(options.idleTimeoutMs ?? DEFAULT_UPLOAD_IDLE_TIMEOUT_MS, MAX_TIMER_MS);
+    // After the last byte Ollama hashes the blob, which stays silent for minutes on a large part.
+    const hashMs = Math.min(options.idleTimeoutMs ?? DEFAULT_PULL_IDLE_TIMEOUT_MS, MAX_TIMER_MS);
+    const idle = new AbortController();
+    const idleError = new LocalRuntimeError(
+      `${this.id} stopped taking ${route} for ${Math.round(idleMs / 1000)}s`,
+      this.id
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => idle.abort(idleError), ms);
+    };
     let sent = 0;
+    let lastReport = 0;
     const counted = (Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>).pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
         transform: (chunk, controller) => {
           sent += chunk.byteLength;
-          options.onProgress?.(sent);
+          arm(idleMs);
+          const now = Date.now();
+          if (now - lastReport >= UPLOAD_PROGRESS_INTERVAL_MS) {
+            lastReport = now;
+            options.onProgress?.(sent);
+          }
           controller.enqueue(chunk);
+        },
+        flush: () => {
+          arm(hashMs);
+          options.onProgress?.(sent);
         },
       })
     );
-    const response = await send(this.client, route, { method: 'POST', stream: counted, signal: options.signal });
-    await response.body?.cancel().catch(() => undefined);
+    arm(idleMs);
+    try {
+      const response = await send(this.client, route, {
+        method: 'POST',
+        stream: counted,
+        signal: options.signal ? AbortSignal.any([options.signal, idle.signal]) : idle.signal,
+      });
+      await response.body?.cancel().catch(() => undefined);
+    } catch (error) {
+      if (idle.signal.aborted && !options.signal?.aborted) throw idleError;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Streams `/api/create`; resolves on its `success` line. */

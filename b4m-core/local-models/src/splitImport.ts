@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { DownloadOptions, DownloadResult } from './download';
 import {
   ollamaHubName,
@@ -42,6 +42,23 @@ export type SplitImportBlock = Extract<PullBlock, 'incomplete' | 'unsupported-na
 
 const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
+/** Why Ollama's create would refuse `name` as a file key (validateCreateFilePath in server/create.go), else null. */
+export function createFileNameProblem(name: string): string | null {
+  if (name === '' || name === '.' || name === '..') return `${JSON.stringify(name)} is not a file name`;
+  if (/[\\:/]/.test(name) || [...name].some(char => char.charCodeAt(0) < 0x20))
+    return `${name} has a character Ollama refuses in file names (backslash, colon or a control character)`;
+  return null;
+}
+
+/** The path of a staged part, which must stay inside `dir` even on Windows. */
+function stagedPath(dir: string, name: string): string {
+  const path = resolve(dir, name);
+  const from = relative(resolve(dir), path);
+  if (createFileNameProblem(name) || !from || from.startsWith('..') || isAbsolute(from))
+    throw new Error(`${name} cannot be staged inside the import folder`);
+  return path;
+}
+
 /** The name a split build is created under: the `hf.co` ref Ollama would pull it by if the registry served splits. */
 export function splitImportName(repo: string, build: Pick<HubGgufBuild, 'label'>): string | null {
   return ollamaHubName(repo, build.label);
@@ -53,7 +70,13 @@ export function splitImportBlock(
   build: HubGgufBuild
 ): SplitImportBlock | null {
   if (!build.complete) return 'incomplete';
-  if (!splitImportName(detail.id, build) || build.files.some(file => !OLLAMA_SHARD_NAME_RE.test(fileName(file.path))))
+  if (
+    !splitImportName(detail.id, build) ||
+    build.files.some(file => {
+      const name = fileName(file.path);
+      return !OLLAMA_SHARD_NAME_RE.test(name) || createFileNameProblem(name) !== null;
+    })
+  )
     return 'unsupported-name';
   // The Hub hides a gated or private file's checksum from a reader without access.
   const hidden = build.files.some(file => !file.sha256);
@@ -123,7 +146,9 @@ export function importProjector(
   quant: string | null,
   siblingSha256: string | null
 ): HubGgufProjector | null {
-  const usable = projectors.filter(projector => projector.sha256);
+  const usable = projectors.filter(
+    projector => projector.sha256 && createFileNameProblem(fileName(projector.path)) === null
+  );
   const paired =
     usable.find(projector => quant !== null && projector.quant === quant) ??
     usable.find(projector => projector.sha256 === siblingSha256);
@@ -161,12 +186,23 @@ export function planSplitImport(
     throw new Error(`${detail.id} ${build.id} is not a split build that can be imported`);
   const projector = importProjector(detail.projectors, build.quant, sibling.projectorSha256);
   const files: HubGgufFile[] = projector ? [...build.files, projector] : build.files;
+  assertImportNames(files.map(file => fileName(file.path)));
   return {
     model,
     parts: files.map(file => ({ file, name: fileName(file.path), digest: `sha256:${file.sha256}` })),
     parameters: sibling.parameters,
     totalBytes: files.reduce((sum, file) => sum + file.sizeBytes, 0),
   };
+}
+
+/** Throws before any download when Ollama would refuse a name or two parts would share one. */
+function assertImportNames(names: readonly string[]): void {
+  for (const name of names) {
+    const problem = createFileNameProblem(name);
+    if (problem) throw new Error(`This build cannot be imported: ${problem}.`);
+  }
+  const duplicate = names.find((name, i) => names.indexOf(name) !== i);
+  if (duplicate) throw new Error(`This build cannot be imported: two files are both named ${duplicate}.`);
 }
 
 export function splitImportCreateRequest(plan: SplitImportPlan): OllamaCreateRequest {
@@ -222,7 +258,7 @@ export interface SplitImportProgress {
 export interface SplitImportDeps {
   hub: { download(file: HubGgufFile, destination: string, options?: DownloadOptions): Promise<DownloadResult> };
   runtime: ModelImportRuntime;
-  /** This run's own folder; removed when the run ends, however it ends. */
+  /** Staging folder for this build (see `splitImportStageDir`); removed after a successful create, kept otherwise. */
   dir: string;
   signal?: AbortSignal;
   onProgress?: (progress: SplitImportProgress) => void;
@@ -230,65 +266,78 @@ export interface SplitImportDeps {
 
 /**
  * Downloads each part Ollama lacks, hands it to Ollama and deletes it before the next, then creates the model.
- * A part Ollama already holds is skipped, so a retry after a failure only fetches what is still missing.
+ * A part Ollama already holds is skipped, and a part cut short resumes from its partial file in `dir`.
  */
 export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDeps): Promise<void> {
   const { hub, runtime, dir, signal } = deps;
   const report = (completedBytes: number, status: SplitImportProgress['status'] = 'downloading') =>
     deps.onProgress?.({ status, completedBytes: Math.floor(completedBytes), totalBytes: plan.totalBytes });
+  assertImportNames(plan.parts.map(part => part.name));
   await mkdir(dir, { recursive: true });
-  try {
-    let done = 0;
-    report(0);
-    for (const part of plan.parts) {
-      signal?.throwIfAborted();
-      const size = part.file.sizeBytes;
-      if (!(await runtime.hasBlob(part.digest, { signal }))) {
-        const path = join(dir, part.name);
-        await hub.download(part.file, path, {
-          signal,
-          onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
-        });
-        await runtime.uploadBlob(part.digest, path, {
-          signal,
-          onProgress: sent => report(done + (size + Math.min(sent, size)) / 2),
-        });
-        await rm(path, { force: true });
-      }
-      done += size;
-      report(done);
-    }
+  let done = 0;
+  report(0);
+  for (const part of plan.parts) {
     signal?.throwIfAborted();
-    report(done, 'creating');
-    await runtime.create(splitImportCreateRequest(plan), { signal });
-  } finally {
-    // A Windows handle can outlive the run; sweepSplitImports removes what is left.
-    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+    const size = part.file.sizeBytes;
+    if (!(await runtime.hasBlob(part.digest, { signal }))) {
+      const path = stagedPath(dir, part.name);
+      await hub.download(part.file, path, {
+        signal,
+        onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
+      });
+      await runtime.uploadBlob(part.digest, path, {
+        signal,
+        onProgress: sent => report(done + (size + Math.min(sent, size)) / 2),
+      });
+      await rm(path, { force: true });
+    }
+    done += size;
+    report(done);
   }
+  signal?.throwIfAborted();
+  report(done, 'creating');
+  await runtime.create(splitImportCreateRequest(plan), { signal });
+  // A Windows handle can outlive the run; sweepSplitImports removes what is left.
+  await removeSplitStaging(dir);
 }
 
-/** A run folder under `root` that `sweepSplitImports` can tell belongs to this process. */
-export function splitImportRunDir(root: string): string {
-  return join(root, `${process.pid}-${randomUUID()}`);
+/** Staging folder for one build: the same repo, revision and file set always map to the same folder. */
+export function splitImportStageDir(root: string, plan: SplitImportPlan): string {
+  const key = JSON.stringify([
+    plan.model,
+    plan.parts.map(part => [part.file.url, part.digest, part.file.sizeBytes, part.name]),
+  ]);
+  return join(root, `build-${createHash('sha256').update(key).digest('hex').slice(0, 32)}`);
 }
 
-function processAlive(pid: number): boolean {
-  if (pid === process.pid) return true;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
+export async function removeSplitStaging(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+}
+
+export const SPLIT_STAGING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+async function lastTouched(path: string): Promise<number> {
+  const info = await stat(path);
+  let newest = info.mtimeMs;
+  if (info.isDirectory()) {
+    for (const name of await readdir(path).catch(() => [] as string[]))
+      newest = Math.max(newest, (await stat(join(path, name)).catch(() => info)).mtimeMs);
   }
+  return newest;
 }
 
-/** Removes run folders whose process is gone, e.g. after a crash or a quit mid-import. */
-export async function sweepSplitImports(root: string, alive: (pid: number) => boolean = processAlive): Promise<void> {
+/** Removes staging folders nothing has written to for `maxAgeMs`; a recent one may be a retry's resume point. */
+export async function sweepSplitImports(
+  root: string,
+  maxAgeMs: number = SPLIT_STAGING_MAX_AGE_MS,
+  now: number = Date.now()
+): Promise<void> {
   const names = await readdir(root).catch(() => [] as string[]);
   await Promise.all(
     names.map(async name => {
-      const pid = Number(/^(\d+)-/.exec(name)?.[1] ?? 0);
-      if (pid > 0 && !alive(pid)) await rm(join(root, name), { recursive: true, force: true }).catch(() => undefined);
+      const path = join(root, name);
+      const touched = await lastTouched(path).catch(() => null);
+      if (touched !== null && now - touched > maxAgeMs) await removeSplitStaging(path);
     })
   );
 }
