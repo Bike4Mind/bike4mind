@@ -23,7 +23,7 @@ export type PaymentUnlockReason = (typeof PAYMENT_UNLOCK_REASONS)[number];
 export const isPaymentUnlockReason = (reason: unknown): reason is PaymentUnlockReason =>
   (PAYMENT_UNLOCK_REASONS as readonly unknown[]).includes(reason);
 
-/** Payment events that cancel a held payment unlock and close payment unlocks for the account. */
+/** Payment events that cancel a held payment unlock and close every non-admin signup release for the account. */
 export const SIGNUP_UNLOCK_FORFEIT_CAUSES = ['dispute', 'refund', 'fraud_warning'] as const;
 export type SignupUnlockForfeitCause = (typeof SIGNUP_UNLOCK_FORFEIT_CAUSES)[number];
 
@@ -56,7 +56,7 @@ export interface SignupGrant {
   activity?: { day: string; ms: number; lastAt: Date; period?: string };
   /** A payment unlock waiting for its payment to settle; the held-release job pays it from `releaseAt`. */
   heldUnlock?: { reason: PaymentUnlockReason; heldAt: Date; releaseAt: Date };
-  /** A disputed, refunded or fraud-warned payment: no later payment can unlock the remainder. */
+  /** A disputed, refunded or fraud-warned payment: only an admin can release more of the grant. */
   unlockForfeited?: { cause: SignupUnlockForfeitCause; at: Date };
 }
 

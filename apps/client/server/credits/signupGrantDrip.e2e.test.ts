@@ -414,6 +414,46 @@ describe('signup activity drip', () => {
     expect(await creditsOf(user.id)).toBe(10000);
   });
 
+  it.each(['refund', 'dispute'] as const)(
+    'after a %s forfeit, pays no drip or non-admin unlock but still honors an admin release',
+    async cause => {
+      const user = await createSignupStageUser();
+      expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+      const paidAt = new Date('2030-01-01T00:00:00Z');
+      await User.updateOne({ _id: user.id }, { lastCreditsPurchasedAt: paidAt });
+      const forfeit = () => userService.forfeitPaymentUnlock(user.id, cause, adapters);
+      expect(await forfeit()).toEqual({ outcome: 'forfeited' });
+      expect(await forfeit()).toEqual({ outcome: 'already_forfeited' });
+
+      expect((await drip(user.id, 1)).creditsGranted).toBe(0);
+      const unlock = (reason: 'org_invite' | 'activity' | 'credit_purchase' | 'admin') =>
+        userService.unlockSignupGrant(user.id, reason, {
+          ...adapters,
+          audit: async () => {},
+          validators: { [reason]: async () => true },
+        });
+      for (const reason of ['org_invite', 'activity', 'credit_purchase'] as const)
+        expect((await unlock(reason)).creditsGranted).toBe(0);
+      expect(await creditsOf(user.id)).toBe(2000);
+      const after = await User.findById(user.id);
+      expect(after?.lastCreditsPurchasedAt).toEqual(paidAt);
+      expect(after?.signupGrant?.unlockForfeited).toMatchObject({ cause });
+
+      expect((await unlock('admin')).creditsGranted).toBe(8000);
+      expect(await creditsOf(user.id)).toBe(10000);
+    }
+  );
+
+  it('drops the budget hold of a forfeited account so it never queues new signups', async () => {
+    config.signupGrantSignupPoolDaily = '0';
+    const user = await createUser();
+    expect(await userService.releaseSignupTranche(user.id, adapters)).toMatchObject({ budgetExhausted: true });
+    expect(await userService.forfeitPaymentUnlock(user.id, 'refund', adapters)).toEqual({ outcome: 'forfeited' });
+    expect((await User.findById(user.id))?.signupGrantHeldReason).toBeFalsy();
+    config.signupGrantSignupPoolDaily = UNCAPPED;
+    expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(0);
+  });
+
   it('pays no free grant with both pools at 0', async () => {
     const dripper = await createSignupStageUser(0);
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '0';
