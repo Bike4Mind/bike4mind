@@ -248,4 +248,14 @@ describe('agentNowText', () => {
       activityLabel({ kind: 'phase', phase: 'thinking' })
     );
   });
+
+  it('names the call an agent is waiting to have approved', () => {
+    const activity = { kind: 'tool', tool: 'bash_execute', detail: 'git push' } as const;
+    expect(agentNowText({ state: 'needs-you', activity, lastSnippet: 'older' })).toBe(
+      'Waiting for approval: bash_execute git push'
+    );
+    expect(
+      agentNowText({ state: 'needs-you', activity: { kind: 'phase', phase: 'waiting' }, lastSnippet: 'older' })
+    ).toBe('older');
+  });
 });

@@ -1,6 +1,7 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Switch from '@mui/joy/Switch';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, type ReactNode, useState } from 'react';
@@ -118,6 +119,19 @@ export function OrchestratorStage({
   const parentNeedsYou = parent.status === 'needs-action';
   const needsYou = counts['needs-you'] + (parentNeedsYou ? 1 : 0);
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
+  const firstFailed = agents.find(agent => agent.state === 'failed');
+  const needsYouPill = needsYou > 0 && (firstNeedsYou !== undefined || onParentFocus !== undefined);
+  // Zero counts are noise, and the two that call for action get their own buttons instead.
+  const summary = [
+    `${total} ${total === 1 ? 'agent' : 'agents'}`,
+    counts.working > 0 && `${counts.working} working`,
+    needsYou > 0 && !needsYouPill && `${needsYou} need you`,
+    counts.done > 0 && `${counts.done} done`,
+    counts.failed > 0 && !firstFailed && `${counts.failed} failed`,
+    `${costPartial ? '~' : ''}${cost}`,
+  ]
+    .filter(Boolean)
+    .join(' \u00B7 ');
 
   const finale = useFinale(rootId, agents, parent, report);
   useEffect(() => {
@@ -154,12 +168,30 @@ export function OrchestratorStage({
       data-testid="orchestrator-stage"
       sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1, flexWrap: 'wrap' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1 }}>
         <ViewSwitcher view={view} onViewChange={onViewChange} />
-        <Typography level="body-sm" data-testid="orchestrator-summary-strip">
-          {`${total} ${total === 1 ? 'agent' : 'agents'} \u00B7 ${counts.working} working \u00B7 ${needsYou} need you \u00B7 ${counts.done} done \u00B7 ${counts.failed} failed \u00B7 ${costPartial ? '~' : ''}${cost}`}
+        <Typography
+          level="body-sm"
+          noWrap
+          title={summary}
+          data-testid="orchestrator-summary-strip"
+          sx={{ flex: '0 1 auto', minWidth: 0 }}
+        >
+          {summary}
         </Typography>
-        {needsYou > 0 && (firstNeedsYou || onParentFocus) && (
+        {firstFailed && (
+          <Button
+            size="sm"
+            color="danger"
+            variant="soft"
+            data-testid="orchestrator-failed-pill"
+            onClick={() => setSelectedId(firstFailed.id)}
+            sx={{ flexShrink: 0 }}
+          >
+            {counts.failed} failed
+          </Button>
+        )}
+        {needsYouPill && (
           <Button
             size="sm"
             color="warning"
@@ -167,6 +199,7 @@ export function OrchestratorStage({
             data-testid="orchestrator-needs-you-pill"
             onClick={() => (firstNeedsYou ? setSelectedId(firstNeedsYou.id) : onParentFocus?.())}
             sx={{
+              flexShrink: 0,
               animation: `${pulse} 1.6s ease-in-out infinite`,
               '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
             }}
@@ -176,16 +209,24 @@ export function OrchestratorStage({
         )}
         <Box sx={{ flex: 1 }} />
         {delegate && (
-          <Typography
-            component="label"
-            level="body-sm"
-            data-testid="orchestrator-delegate-switch"
-            startDecorator={
-              <Switch size="sm" checked={delegate.on} onChange={event => delegate.onChange(event.target.checked)} />
-            }
+          <Tooltip
+            title="On: the assistant splits new work across agents and coordinates them. Off: it does the work itself in this conversation."
+            placement="bottom-end"
+            sx={{ maxWidth: 280 }}
           >
-            Delegate to agents
-          </Typography>
+            <Typography
+              component="label"
+              level="body-sm"
+              noWrap
+              data-testid="orchestrator-delegate-switch"
+              sx={{ flexShrink: 0 }}
+              startDecorator={
+                <Switch size="sm" checked={delegate.on} onChange={event => delegate.onChange(event.target.checked)} />
+              }
+            >
+              Delegate to agents
+            </Typography>
+          </Tooltip>
         )}
         {dockControl}
       </Box>

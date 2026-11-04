@@ -102,7 +102,8 @@ export interface CreateOptions {
  * `list` never mistakes it for a session.
  */
 const SUMMARY_INDEX = '.summary-index';
-const SUMMARY_INDEX_VERSION = 2;
+// Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
+const SUMMARY_INDEX_VERSION = 4;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;

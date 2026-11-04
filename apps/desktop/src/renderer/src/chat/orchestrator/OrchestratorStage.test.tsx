@@ -133,15 +133,13 @@ describe('OrchestratorStage', () => {
   it('summarises the roster, with ~ when a cost is unknown', async () => {
     await renderStage(FIXTURE);
     expect(query('orchestrator-summary-strip')?.textContent).toBe(
-      '4 agents \u00B7 2 working \u00B7 1 need you \u00B7 1 done \u00B7 0 failed \u00B7 ~$3.00'
+      '4 agents \u00B7 2 working \u00B7 1 done \u00B7 ~$3.00'
     );
   });
 
   it('uses the singular for one agent', async () => {
     await renderStage([agentFixture('w', 'working', { usdCost: 0.5 })]);
-    expect(query('orchestrator-summary-strip')?.textContent).toBe(
-      '1 agent \u00B7 1 working \u00B7 0 need you \u00B7 0 done \u00B7 0 failed \u00B7 $0.50'
-    );
+    expect(query('orchestrator-summary-strip')?.textContent).toBe('1 agent \u00B7 1 working \u00B7 $0.50');
   });
 
   it('marks the dollar total partial when an agent only reported credits', async () => {
@@ -167,10 +165,22 @@ describe('OrchestratorStage', () => {
         introPlaying={false}
       />
     );
-    expect(el('orchestrator-summary-strip').textContent).toContain('\u00B7 1 need you \u00B7');
+    expect(el('orchestrator-needs-you-pill').textContent).toBe('1 need you');
+    expect(el('orchestrator-summary-strip').textContent).not.toContain('need you');
     await act(async () => el('orchestrator-needs-you-pill').click());
     expect(onParentFocus).toHaveBeenCalledTimes(1);
     expect(query('orchestrator-peek-drawer')).toBeNull();
+  });
+
+  it('opens the first failed agent from the failed pill, and leaves it out when none failed', async () => {
+    await renderStage([agentFixture('d', 'done'), agentFixture('f', 'failed'), agentFixture('g', 'failed')]);
+    expect(el('orchestrator-summary-strip').textContent).not.toContain('failed');
+    expect(el('orchestrator-failed-pill').textContent).toBe('2 failed');
+    await act(async () => el('orchestrator-failed-pill').click());
+    expect(el('orchestrator-peek-drawer').textContent).toContain('Agent f');
+
+    await renderStage(FIXTURE);
+    expect(query('orchestrator-failed-pill')).toBeNull();
   });
 
   it('hides the needs-you pill when nothing needs the user', async () => {

@@ -18,9 +18,9 @@ const COLUMNS: ReadonlyArray<{ id: ColumnId; label: string; states: readonly Age
 ];
 
 const FLIP_MS = 250;
-// Columns share the board's width and shrink to this before it scrolls sideways: four of them still
-// fit beside the 380px conversation dock in a 1440px window with the default sidebar.
-const COLUMN_MIN_WIDTH = 160;
+// Columns with cards share the board's width and shrink to this before it scrolls sideways; an empty
+// column folds to its header, so the usual board (most agents in one or two states) never scrolls.
+const COLUMN_MIN_WIDTH = 150;
 
 const lineClamp = (lines: number) =>
   ({
@@ -213,17 +213,19 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
     <Box
       ref={boardRef}
       data-testid="orchestrator-board"
-      sx={{ display: 'flex', gap: 1.5, flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', p: 1.5 }}
+      sx={{ display: 'flex', gap: 1.25, flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', p: 1.5 }}
     >
       {COLUMNS.map(column => {
         const cards = columnCards(agents, column.states);
+        const empty = cards.length === 0;
         return (
           <Box
             key={column.id}
             data-testid={`orchestrator-board-column-${column.id}`}
+            data-empty={empty || undefined}
             sx={{
-              flex: '1 1 0',
-              minWidth: COLUMN_MIN_WIDTH,
+              flex: empty ? '0 0 auto' : '1 1 0',
+              minWidth: empty ? 0 : COLUMN_MIN_WIDTH,
               minHeight: 0,
               display: 'flex',
               flexDirection: 'column',
@@ -231,7 +233,9 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-              <Typography level="title-sm">{column.label}</Typography>
+              <Typography level="title-sm" textColor={empty ? 'text.tertiary' : undefined} noWrap>
+                {column.label}
+              </Typography>
               <Typography
                 level="body-sm"
                 textColor="text.tertiary"
@@ -242,21 +246,15 @@ export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProp
               </Typography>
             </Box>
             <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {cards.length === 0 ? (
-                <Typography level="body-xs" textColor="text.tertiary">
-                  Nothing here
-                </Typography>
-              ) : (
-                cards.map(agent => (
-                  <BoardCard
-                    key={agent.id}
-                    agent={agent}
-                    selected={agent.id === selectedId}
-                    onSelect={onSelect}
-                    cardRef={refFor(agent.id)}
-                  />
-                ))
-              )}
+              {cards.map(agent => (
+                <BoardCard
+                  key={agent.id}
+                  agent={agent}
+                  selected={agent.id === selectedId}
+                  onSelect={onSelect}
+                  cardRef={refFor(agent.id)}
+                />
+              ))}
             </Box>
           </Box>
         );

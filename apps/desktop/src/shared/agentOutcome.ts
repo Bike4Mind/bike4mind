@@ -52,7 +52,7 @@ export function snippetOf(text: string, max: number = SNIPPET_MAX): string {
 export function summarizeSession(session: ChatSession): ChatSessionSummary {
   const { messages, spawnSuggestions: _suggestions, ...summary } = session;
   const lastAssistant = [...messages].reverse().find(message => message.role === 'assistant');
-  const lastSnippet = lastAssistant ? snippetOf(lastAssistant.content) : '';
+  const lastSnippet = lastAssistant ? snippetOf(plainText(closingText(lastAssistant))) : '';
   const totalUsdCost = sumUsage(messages, 'usdCost');
   const totalCredits = sumUsage(messages, 'creditsUsed');
   return {
@@ -63,6 +63,26 @@ export function summarizeSession(session: ChatSession): ChatSessionSummary {
     ...(totalUsdCost !== undefined ? { totalUsdCost } : {}),
     ...(totalCredits !== undefined ? { totalCredits } : {}),
   };
+}
+
+/**
+ * The prose a reply ended on. A tool-using reply's `content` opens with its first round's narration
+ * ("Let me look at..."), so the last round that said anything is where its result is.
+ */
+function closingText(message: ChatMessage): string {
+  const spoken = message.rounds?.filter(round => round.text.trim() !== '');
+  return spoken?.length ? spoken[spoken.length - 1].text : message.content;
+}
+
+/** Markdown syntax that reads as noise in a one-line excerpt: headings, emphasis, code ticks, links, list and quote markers. */
+export function plainText(markdown: string): string {
+  return markdown
+    .replace(/```[^\n]*\n?/g, '')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/gm, '')
+    .replace(/(\*\*|__)(.+?)\1/g, '$2')
+    .replace(/(^|[^\w*])\*(?!\s)([^*\n]+?)\*(?!\w)/g, '$1$2')
+    .replace(/`([^`\n]*)`/g, '$1');
 }
 
 /** Sum of one usage field over every message, or undefined when no message reported it. */

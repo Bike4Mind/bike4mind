@@ -51,10 +51,15 @@ describe('BoardView', () => {
     expect(el('orchestrator-board-count-done').textContent).toBe('0');
   });
 
-  it('shows Nothing here in an empty column only', async () => {
+  it('folds an empty column to its header and lets columns with cards take the width', async () => {
     await renderBoard([agentFixture('a', 'working')]);
-    expect(el('orchestrator-board-column-failed').textContent).toContain('Nothing here');
-    expect(el('orchestrator-board-column-working').textContent).not.toContain('Nothing here');
+    const failed = el('orchestrator-board-column-failed');
+    const working = el('orchestrator-board-column-working');
+    expect(failed.dataset.empty).toBe('true');
+    expect(failed.textContent).toBe('Failed0');
+    expect(getComputedStyle(failed).minWidth).toBe('0px');
+    expect(working.dataset.empty).toBeUndefined();
+    expect(getComputedStyle(working).minWidth).toBe('150px');
   });
 
   it('calls onSelect with the card id', async () => {
@@ -86,7 +91,12 @@ describe('BoardView', () => {
   });
 
   it('fits all four columns beside the docked conversation in a 1440px window', async () => {
-    await renderBoard([]);
+    await renderBoard([
+      agentFixture('a', 'needs-you'),
+      agentFixture('b', 'working'),
+      agentFixture('c', 'done'),
+      agentFixture('d', 'failed'),
+    ]);
     const px = (value: string) => Number.parseFloat(value) || 0;
     const board = getComputedStyle(el('orchestrator-board'));
     const columns = ['needs-you', 'working', 'done', 'failed'].map(id =>
