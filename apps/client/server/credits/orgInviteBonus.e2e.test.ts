@@ -154,6 +154,47 @@ describe('payOrgInviteBonus', () => {
     expect((await User.findById(user.id).lean())?.signupInvite).toBeUndefined();
   });
 
+  it('does not use a later organization to fund a bonus attributed to another organization', async () => {
+    await createOrganization(true);
+    const invite = await createInvite();
+    const originatingOrganizationId = new mongoose.Types.ObjectId().toHexString();
+    await Organization.collection.insertOne({
+      _id: new mongoose.Types.ObjectId(originatingOrganizationId),
+      name: 'Origin',
+      seats: 5,
+    });
+    const user = await createUser('earlier-org', {
+      ...released,
+      signupInvite: {
+        source: 'organization',
+        inviteId: 'earlier',
+        organizationId: originatingOrganizationId,
+        at: new Date(),
+      },
+    });
+
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    expect(await retryOrgInviteBonus(user.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+    const organization = await Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(organizationId) });
+    expect(organization?.signupInviteBonusCount).toBeUndefined();
+    expect((await User.findById(user.id).lean())?.signupInvite?.organizationId).toBe(originatingOrganizationId);
+  });
+
+  it('does not spend an organization bonus seat on an account attributed to a referral', async () => {
+    await createOrganization(true);
+    const invite = await createInvite();
+    const user = await createUser('referral', {
+      ...released,
+      signupInvite: { source: 'referral', inviteId: 'earlier', at: new Date() },
+    });
+
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+    const organization = await Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(organizationId) });
+    expect(organization?.signupInviteBonusCount).toBeUndefined();
+  });
+
   it('pays no more bonuses than the organization has seats and hands back an unpaid hold', async () => {
     await createOrganization(true);
     await Organization.collection.updateOne(

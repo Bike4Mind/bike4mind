@@ -38,7 +38,7 @@ export function isInviteBonusEligible(
 /**
  * Pays the live signupGrantInviteBonusCredits once to an invited account, from the signup pool and
  * outside the staged grant (see SignupGrant.inviteBonusPaid), so the drip pays what it would without it.
- * A bonus of 0 writes nothing. An exhausted pool leaves it unpaid for a later call to retry.
+ * A bonus of 0 settles the account without a payout. An exhausted pool leaves it unpaid for a later retry.
  */
 export async function payInviteBonus(userId: string, adapters: InviteBonusAdapters): Promise<InviteBonusResult> {
   const { db } = adapters;
@@ -62,6 +62,8 @@ export async function payInviteBonus(userId: string, adapters: InviteBonusAdapte
         const reservation = await reserveSignupGrantBudget(db, transactionId, amount, { pool: 'signup' });
         reservations.push(reservation);
         if (reservation.outcome === 'exhausted') return { creditsGranted: 0, budgetExhausted: true };
+        // Another attempt may refund its draw. A transaction retry can reuse our own earlier draw.
+        if (reservation.outcome === 'reserved' && !reservations.some(held => held.fresh)) return { creditsGranted: 0 };
       }
       // A denied claim may have aborted the Mongo transaction, so leave it by throwing.
       if (!(await db.users.claimFreeCreditGrant(userId))) throw new InviteBonusClaimDeniedError();

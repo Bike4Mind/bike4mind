@@ -21,6 +21,7 @@ const mockUpdateInvite = vi.fn();
 const mockClaimInvite = vi.fn();
 const mockReleaseInviteClaim = vi.fn();
 const mockInviteCodeFor = vi.fn();
+const mockFindSetting = vi.fn();
 vi.mock('@server/auth/passportOAuthStateStore', () => ({
   readOAuthInviteCode: (req: object) => mockInviteCodeFor(req),
 }));
@@ -37,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   authSessionRepository: { revokeAllByUserId: (...args: unknown[]) => mockRevokeAllByUserId(...args) },
   realtimeConnectionRepository: { endConnections: (...args: unknown[]) => mockEndConnections(...args) },
-  adminSettingsRepository: { findBySettingName: async () => null },
+  adminSettingsRepository: { findBySettingName: (...args: unknown[]) => mockFindSetting(...args) },
   registrationInviteRepository: {
     findByCode: (...args: unknown[]) => mockFindInviteByCode(...args),
     update: (...args: unknown[]) => mockUpdateInvite(...args),
@@ -187,6 +188,8 @@ beforeEach(() => {
   mockCreateSignupRiskCollector.mockImplementation(network => ({ collectorFor: network ?? null }));
   mockFindInviteByCode.mockReset();
   mockFindInviteByCode.mockResolvedValue(null);
+  mockFindSetting.mockReset();
+  mockFindSetting.mockResolvedValue(null);
   mockUpdateInvite.mockReset();
   mockUpdateInvite.mockResolvedValue(undefined);
   mockClaimInvite.mockReset();
@@ -1783,6 +1786,35 @@ describe('OAuth signup with an invite code carried through state', () => {
     expect(mockUpdateInvite).not.toHaveBeenCalled();
   });
 
+  it('completes the login uninvited when resolving referral credits fails', async () => {
+    mockFindInviteByCode.mockResolvedValue(referral());
+    mockFindSetting.mockRejectedValueOnce(new Error('referral setting unavailable'));
+
+    const { err, user } = await runSelfServe();
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockFindSetting).toHaveBeenCalledWith('ReferralCreditsAmount');
+    expect(mockClaimInvite).not.toHaveBeenCalled();
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupInvite');
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('referredByUserId');
+    expect(mockUpdateInvite).not.toHaveBeenCalled();
+  });
+
+  it('completes the login uninvited when claiming the invite fails', async () => {
+    mockFindInviteByCode.mockResolvedValue(referral());
+    mockClaimInvite.mockRejectedValueOnce(new Error('invite claim unavailable'));
+
+    const { err, user } = await runSelfServe();
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockClaimInvite).toHaveBeenCalledWith('invite-1', expect.any(Date));
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signupInvite');
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('referredByUserId');
+    expect(mockUpdateInvite).not.toHaveBeenCalled();
+  });
+
   it('reopens the claimed code when the account create fails', async () => {
     mockFindInviteByCode.mockResolvedValue(referral());
     mockCreate.mockRejectedValue(new Error('db down'));
@@ -1792,6 +1824,23 @@ describe('OAuth signup with an invite code carried through state', () => {
 
     const [claimedId, claimedAt] = mockClaimInvite.mock.calls[0];
     expect(mockReleaseInviteClaim).toHaveBeenCalledWith(claimedId, claimedAt, expect.any(String));
+    expect(mockUpdateInvite).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed claim release and preserves the account creation failure', async () => {
+    const createError = new Error('account create failed');
+    mockFindInviteByCode.mockResolvedValue(referral());
+    mockCreate.mockRejectedValue(createError);
+    mockReleaseInviteClaim.mockRejectedValue(new Error('claim release failed'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const { user, info } = await runSelfServe();
+
+    expect(user).toBeUndefined();
+    expect(info).toMatchObject({ code: 'internal', message: 'account create failed' });
+    expect(warn).toHaveBeenCalledWith('[oauth signup] invite claim release failed; the code may remain claimed');
+    expect(error).toHaveBeenCalledWith('[verifyCallback] authenticateUser threw:', createError);
     expect(mockUpdateInvite).not.toHaveBeenCalled();
   });
 

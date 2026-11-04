@@ -53,7 +53,9 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
  * yet eligible takes no hold, so its retries cannot crowd out an eligible one at the last seat.
  */
 async function payForPayingOrganization(userId: string, organizationId: string): Promise<number> {
-  if (!userService.isInviteBonusEligible(await userRepository.findById(userId), true)) return 0;
+  const user = await userRepository.findById(userId);
+  if (user?.signupInvite?.source !== 'organization' || user.signupInvite.organizationId !== organizationId) return 0;
+  if (!userService.isInviteBonusEligible(user, true)) return 0;
   if (!(await isPayingOrganization(organizationId))) return 0;
   const reservation = await Organization.updateOne(
     {

@@ -719,6 +719,20 @@ describe('registerUser', () => {
         expect(mockAdapters.db.registrationInvites.releaseClaim).toHaveBeenCalledWith(id, usedAt, expect.any(String));
       });
 
+      it('reports a failed claim release and preserves the account creation failure', async () => {
+        const createError = new Error('account create failed');
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
+        mockAdapters.db.users.create.mockRejectedValue(createError);
+        mockAdapters.db.registrationInvites.releaseClaim.mockRejectedValue(new Error('claim release failed'));
+
+        await expect(registerUser(baseParams, mockAdapters)).rejects.toBe(createError);
+
+        expect(mockAdapters.logger.warn).toHaveBeenCalledWith(
+          'Registration invite claim release failed; the code may remain claimed'
+        );
+        expect(mockAdapters.db.registrationInvites.update).not.toHaveBeenCalled();
+      });
+
       it('does not record a signup invite for an admin code or an unlimited referral code', async () => {
         await registerUser(baseParams, mockAdapters);
         expect(created().signupInvite).toBeUndefined();

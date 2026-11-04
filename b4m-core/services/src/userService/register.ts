@@ -393,7 +393,9 @@ export const registerUser = async (
   try {
     user = await db.users.create(buildUser);
   } catch (err: unknown) {
-    await inviteClaim?.release().catch(() => undefined);
+    await inviteClaim?.release().catch(() => {
+      logger.warn('Registration invite claim release failed; the code may remain claimed');
+    });
     // E11000: concurrent registration race on the unique email index.
     if ((err as { code?: number }).code === 11000) {
       throw new BadRequestError('Email already in use');

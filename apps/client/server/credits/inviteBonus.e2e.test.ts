@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
 import { newSignupGrant } from '@bike4mind/common';
 import type { SignupProtection } from '@bike4mind/common';
@@ -60,6 +60,9 @@ beforeAll(async () => {
 afterAll(async () => {
   await mongoose.disconnect();
   await server?.stop();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 beforeEach(async () => {
   await User.collection.deleteMany({});
@@ -218,6 +221,49 @@ describe('invite bonus', () => {
       userService.payInviteBonus(invited.id, adapters),
     ]);
     expect(results.map(result => result.creditsGranted).sort()).toEqual([0, 2000]);
+    expect(await creditsOf(invited.id)).toBe(3000);
+    expect(await bonusRows()).toBe(1);
+    expect(await spent('signup')).toBe(3000);
+  });
+
+  it('does not pay on a competing reservation that its owner can still refund', async () => {
+    config.signupGrantInviteBonusCredits = '0';
+    const invited = await createUser(1, true);
+    await userService.releaseSignupTranche(invited.id, adapters);
+    await User.collection.updateOne({ _id: invited._id }, { $unset: { 'signupGrant.inviteBonusPaid': '' } });
+    config.signupGrantInviteBonusCredits = '2000';
+
+    let signalClaimStarted: () => void = () => {};
+    const claimStarted = new Promise<void>(resolve => {
+      signalClaimStarted = resolve;
+    });
+    let releaseOwner: () => void = () => {};
+    const ownerReleased = new Promise<void>(resolve => {
+      releaseOwner = resolve;
+    });
+    vi.spyOn(userRepository, 'claimFreeCreditGrant').mockImplementationOnce(async () => {
+      signalClaimStarted();
+      await ownerReleased;
+      throw new Error('owner claim failed');
+    });
+
+    const owner = userService.payInviteBonus(invited.id, adapters);
+    const ownerFailure = expect(owner).rejects.toThrow('owner claim failed');
+    try {
+      await claimStarted;
+      expect(await spent('signup')).toBe(3000);
+      expect((await userService.payInviteBonus(invited.id, adapters)).creditsGranted).toBe(0);
+      expect(await bonusRows()).toBe(0);
+    } finally {
+      releaseOwner();
+      await ownerFailure;
+    }
+
+    expect(await spent('signup')).toBe(1000);
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+    expect((await userService.payInviteBonus(invited.id, adapters)).creditsGranted).toBe(2000);
+    expect(await spent('signup')).toBe(3000);
     expect(await creditsOf(invited.id)).toBe(3000);
     expect(await bonusRows()).toBe(1);
   });

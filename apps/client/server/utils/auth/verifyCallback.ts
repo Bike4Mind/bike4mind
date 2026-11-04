@@ -49,13 +49,18 @@ export type OAuthUser = IUserObject & {
 };
 
 type ResolvedReferral = NonNullable<Awaited<ReturnType<typeof userService.resolveRegistrationInvite>>>;
+type PreparedOAuthReferral = {
+  resolved: ResolvedReferral;
+  claim: NonNullable<Awaited<ReturnType<typeof userService.claimRegistrationInvite>>>;
+  grantCredits: number;
+};
 
 /**
  * The refer-flow invite an OAuth signup carried, checked with the same expiry, single-use and
  * email-binding rules as registerUser. Any other outcome (bad code, admin or unlimited code, read
  * error) signs up uninvited: a code typed alongside a social login must never fail the login.
  */
-async function resolveOAuthReferral(code: string, verifiedEmail: string): Promise<ResolvedReferral | null> {
+async function prepareOAuthReferral(code: string, verifiedEmail: string): Promise<PreparedOAuthReferral | null> {
   try {
     const resolved = await userService.resolveRegistrationInvite(
       code,
@@ -67,10 +72,17 @@ async function resolveOAuthReferral(code: string, verifiedEmail: string): Promis
       Logger.globalInstance.info('[oauth signup] invite code ignored: not a referral invite');
       return null;
     }
-    return resolved;
+    // Resolve credits before claiming: a failed read must leave the code available.
+    const grantCredits = await userService.referralInviteCredits(resolved.invite, adminSettingsRepository);
+    const claim = await userService.claimRegistrationInvite(resolved, registrationInviteRepository);
+    if (!claim) {
+      console.warn('[oauth signup] invite already redeemed; signing up uninvited');
+      return null;
+    }
+    return { resolved, claim, grantCredits };
   } catch (e) {
     // BadRequestError messages are fixed strings with no user data.
-    const reason = e instanceof BadRequestError ? e.message : 'lookup failed';
+    const reason = e instanceof BadRequestError ? e.message : 'preparation failed';
     Logger.globalInstance.info(`[oauth signup] invite code ignored: ${reason}`);
     return null;
   }
@@ -311,25 +323,15 @@ const authenticateUser = async (
       // the email was just required to be provider-verified, so the email binding holds.
       const referral =
         inviteCode && pendingFreeCredits && emailForNewAccount
-          ? await resolveOAuthReferral(inviteCode, emailForNewAccount)
+          ? await prepareOAuthReferral(inviteCode, emailForNewAccount)
           : null;
-      const referralGrantCredits = referral
-        ? await userService.referralInviteCredits(referral.invite, adminSettingsRepository)
-        : 0;
-      // Taken before the account exists so a concurrent signup cannot redeem the same code; nothing
-      // that can throw sits between the claim and the create, whose failure releases it.
-      const referralClaim = referral
-        ? await userService.claimRegistrationInvite(referral, registrationInviteRepository)
-        : null;
-      if (referral && !referralClaim) console.warn('[oauth signup] invite already redeemed; signing up uninvited');
-      const referralInvite =
-        referral && referralClaim
-          ? {
-              inviteId: referral.invite.id,
-              inviterId: referral.invite.userId ?? null,
-              grantCredits: referralGrantCredits,
-            }
-          : undefined;
+      const referralInvite = referral
+        ? {
+            inviteId: referral.resolved.invite.id,
+            inviterId: referral.resolved.invite.userId ?? null,
+            grantCredits: referral.grantCredits,
+          }
+        : undefined;
       try {
         user = await createUniqueOAuthUser({
           name,
@@ -341,13 +343,15 @@ const authenticateUser = async (
           ...(referralInvite ? { referralInvite } : {}),
         });
       } catch (e) {
-        await referralClaim?.release().catch(() => undefined);
+        await referral?.claim.release().catch(() => {
+          console.warn('[oauth signup] invite claim release failed; the code may remain claimed');
+        });
         throw e;
       }
       const newUserId = String(user._id);
-      if (referral && referralClaim) {
+      if (referral) {
         try {
-          await userService.redeemRegistrationInvite(referral, newUserId, registrationInviteRepository);
+          await userService.redeemRegistrationInvite(referral.resolved, newUserId, registrationInviteRepository);
         } catch (e) {
           // The code is already closed by the claim; this only loses its usedbyId/history entry.
           console.error('[oauth signup] invite redeem failed:', e);
