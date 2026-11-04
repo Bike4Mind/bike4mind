@@ -127,23 +127,34 @@ describe('AuditNeedsReviewPanel', () => {
   });
 
   it('undoes a review by unmarking exactly the reviewed ids, and reports skipped entries', async () => {
-    mocks.markAsync.mockImplementation(async ({ entryIds }: { entryIds: string[] }) => ({
-      reviewed: entryIds,
+    setQueue([
+      makeReviewQueueEntry({ id: 'c1' }),
+      makeReviewQueueEntry({ id: 'c2' }),
+      makeReviewQueueEntry({ id: 'c3' }),
+    ]);
+    mocks.markAsync.mockResolvedValue({
+      reviewed: ['c1'],
       skipped: [
         { id: 'c2', reason: 'already_reviewed' },
         { id: 'c3', reason: 'already_reviewed' },
       ],
-    }));
+    });
     renderPanel();
-    fireEvent.click(
-      within(screen.getByTestId('audit-needs-review-table-row-c1')).getByTestId('audit-needs-review-row-mark-btn')
-    );
+    for (const id of ['c1', 'c2', 'c3']) {
+      fireEvent.click(within(screen.getByTestId(`audit-needs-review-table-row-${id}`)).getAllByRole('checkbox')[0]);
+    }
+    fireEvent.click(screen.getByTestId('audit-needs-review-bulk-mark-btn'));
 
     expect((await screen.findByTestId('undo-toast-message')).textContent).toBe(
       'Marked 1 as reviewed. 2 were already reviewed.'
     );
+    expect(mocks.markAsync).toHaveBeenCalledTimes(1);
+    const sent = (mocks.markAsync.mock.calls[0][0] as { entryIds: string[] }).entryIds;
+    expect([...sent].sort()).toEqual(['c1', 'c2', 'c3']);
+
     fireEvent.click(screen.getByTestId('undo-toast-undo-btn'));
     await waitFor(() => expect(mocks.unmarkAsync).toHaveBeenCalledWith({ entryIds: ['c1'] }));
+    expect(mocks.unmarkAsync).toHaveBeenCalledTimes(1);
   });
 
   it('words every skip reason in the toast, including entries about the viewer', async () => {

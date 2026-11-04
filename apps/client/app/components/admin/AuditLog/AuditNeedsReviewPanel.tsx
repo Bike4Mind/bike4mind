@@ -47,7 +47,13 @@ const describeCriticalRules = (alertStatus: AuditAlertStatus | undefined): strin
     ? `credit grants above ${formatCredits(alertStatus.singleGrantCredits)} credits or past ` +
       `${formatCredits(alertStatus.dailyGrantCredits)} credits per admin in 24 hours`
     : 'credit grants above the configured thresholds';
-  return `Critical entries: admin role changes, impersonation, suspensions, deletions, denied self-actions, and ${grants}.`;
+  // Keep in sync with the critical actions in adminAuditCatalogue.ts.
+  return (
+    'Critical entries: admin role and throttle tier changes, impersonation, suspensions and bans, ' +
+    'account creation and deletion, subscription removals, API key changes, emergency logins, ' +
+    'system secret, integration and SSO changes, blocked IP removals, curated model imports, email ' +
+    `sends, denied self-actions, and ${grants}.`
+  );
 };
 
 type AuditNeedsReviewPanelProps = {
