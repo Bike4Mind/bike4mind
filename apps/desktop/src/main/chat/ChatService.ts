@@ -4230,6 +4230,9 @@ export class ChatService {
       if (!(inProject.ok === false && inProject.reason === 'no-target')) return inProject;
       return resolveSessionRef(ref, all);
     };
+    // session_send's approval card resolves its ref before the send does; the send reuses that
+    // answer, so it lists once and goes to the conversation the card named.
+    let approvedRef: { ref: string; found: Awaited<ReturnType<typeof resolveAnywhere>> } | undefined;
 
     return {
       spawn: (prompt, title, placement) => this.spawnSession(session, prompt, title, placement),
@@ -4283,6 +4286,7 @@ export class ChatService {
       describeSession: async (ref, options) => {
         if (options?.scope === 'all') {
           const found = await resolveAnywhere(ref);
+          approvedRef = { ref, found };
           return found.ok ? visibleTitle(found.session) : null;
         }
         const found = await addressable(ref);
@@ -4290,7 +4294,8 @@ export class ChatService {
       },
 
       sendTo: async (ref, message, { notify }) => {
-        const found = await resolveAnywhere(ref);
+        const found = approvedRef?.ref === ref ? approvedRef.found : await resolveAnywhere(ref);
+        approvedRef = undefined;
         if (!found.ok) return { ok: false, reason: found.reason, message: found.message };
         const target = await this.deps.store.get(found.session.id);
         return this.relayMessage(session, target, found.session.id, message, notify);
