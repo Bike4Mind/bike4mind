@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAdminSubscriptionCancel, useAdminSubscriptionResume } from '@client/app/hooks/data/adminSubscriptionDetail';
-import { ActionDialog, ADMIN_REASON_PRESETS, useUndoToast } from '../../../shared';
-import { formatDate, ownerDisplayName, undoReason, type SubscriptionDialogProps } from '../subscriptionDetailModel';
+import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
+import { formatDate, ownerDisplayName, type SubscriptionDialogProps } from '../subscriptionDetailModel';
 
 /**
  * Cancel at period end: the customer keeps access and credits until the period ends, and nothing is refunded.
@@ -18,19 +18,19 @@ export const CancelSubscriptionDialog: React.FC<SubscriptionDialogProps> = ({ de
   const endDate = formatDate(subscription.periodEndsAt) ?? 'the end of the period';
 
   const handleConfirm = async (reason: string) => {
-    const { lastSyncedAt } = await cancel.mutateAsync({
+    const { stripe } = await cancel.mutateAsync({
       reason,
       idempotencyKey,
-      expectedLastSyncedAt: detail.stripe?.lastSyncedAt ?? null,
+      expectedState: detail.stripe?.stateToken ?? '',
     });
     onClose();
     showUndo({
       message: `Cancellation scheduled for ${name}`,
       onUndo: async () => {
         await resume.mutateAsync({
-          reason: undoReason(reason),
+          reason: undoAdminReason(reason),
           idempotencyKey: crypto.randomUUID(),
-          expectedLastSyncedAt: lastSyncedAt,
+          expectedState: stripe.stateToken,
         });
       },
       onViewAudit: onAudit,
@@ -48,6 +48,12 @@ export const CancelSubscriptionDialog: React.FC<SubscriptionDialogProps> = ({ de
       tone="danger"
       onConfirm={handleConfirm}
       data-testid="cancel-subscription-dialog"
-    />
+    >
+      <ChangePreview
+        before={`Renews ${endDate}`}
+        after={`Cancels ${endDate}`}
+        data-testid="cancel-subscription-preview"
+      />
+    </ActionDialog>
   );
 };

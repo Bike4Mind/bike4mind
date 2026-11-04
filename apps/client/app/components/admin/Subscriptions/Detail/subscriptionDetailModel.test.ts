@@ -61,6 +61,11 @@ describe('subscriptionActionAvailability', () => {
       buildDetail({ subscription: { ...scheduled, periodEndsAt: past, cancelAt: past } })
     );
     expect([lapsed.stripeCancel, lapsed.stripeResume]).toEqual([false, false]);
+
+    const noPeriodEnd = subscriptionActionAvailability(
+      buildDetail({ subscription: { ...scheduled, periodEndsAt: null } })
+    );
+    expect(noPeriodEnd.stripeResume).toBe(false);
   });
 
   it('disables credits and remove when no account can act for the owner', () => {

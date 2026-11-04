@@ -1,5 +1,6 @@
 import {
   isCompSubscription,
+  isScheduledToCancel,
   isTerminalSubscriptionStatus,
   type AdminSubscriptionDetail,
   type AdminSubscriptionRow,
@@ -54,8 +55,9 @@ export const subscriptionActionAvailability = (
   const terminal = isTerminalSubscriptionStatus(subscription.status);
   const noActor = actingUserId === null ? NO_ACTING_USER_REASON : null;
   const live = isLiveStripeSubscription(subscription);
-  const scheduled = Boolean(subscription.cancelAt);
-  const periodRunning = !subscription.periodEndsAt || new Date(subscription.periodEndsAt).getTime() > Date.now();
+  const scheduled = isScheduledToCancel(subscription);
+  const { periodEndsAt } = subscription;
+  const periodRunning = periodEndsAt !== null && new Date(periodEndsAt).getTime() > Date.now();
   return {
     stripeCancel: live && !scheduled,
     stripeResume: live && scheduled && periodRunning,
@@ -132,6 +134,3 @@ export type SubscriptionDialogProps = {
   onClose: () => void;
   onAudit: () => void;
 };
-
-/** The audit reason of an undo, the same convention as the profile's Undo toasts. */
-export const undoReason = (reason: string): string => `Undo: ${reason}`.slice(0, 500);

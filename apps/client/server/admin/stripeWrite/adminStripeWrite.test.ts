@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const dedup = new Map<string, Record<string, unknown>>();
 const mockUserFindById = vi.fn();
+const mockOrgFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
-  organizationRepository: { findById: vi.fn() },
+  organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
   withTransaction: async (fn: () => Promise<unknown>) => fn(),
   cacheRepository: {
     claimDedup: async (key: string, data: Record<string, unknown>) => {
@@ -68,11 +69,22 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
   };
 });
 
-import { assertStripeKeyMatchesStage, runAdminStripeWrite } from './adminStripeWrite';
+import { stripeStateToken } from '@client/app/utils/adminSubscriptionDetail';
+import { assertStripeKeyMatchesStage, runAdminStripeWrite, type AdminStripeWriteAction } from './adminStripeWrite';
 
 const ID = 'c'.repeat(24);
 const SYNCED = '2026-11-01T00:00:00.000Z';
 const KEY = 'idem-key-0001';
+const PERIOD_END = new Date('2026-12-01T00:00:00.000Z');
+const baseRow = {
+  ownerType: 'User',
+  ownerId: 'u1',
+  subscriptionId: 'sub_123',
+  status: 'active',
+  periodEndsAt: PERIOD_END,
+  lastSyncedAt: new Date(SYNCED),
+};
+const STATE = stripeStateToken(baseRow);
 
 const stripeSub = {
   cancel_at_period_end: true,
@@ -88,20 +100,23 @@ const stripeSub = {
 
 const makeReq = (overrides: Record<string, unknown> = {}) => ({
   user: { id: 'admin-1', isAdmin: true },
-  body: { reason: 'Customer request', idempotencyKey: KEY, expectedLastSyncedAt: SYNCED },
+  body: { reason: 'Customer request', idempotencyKey: KEY, expectedState: STATE },
   logger: { error: vi.fn() },
   ...overrides,
 });
 
-const run = (req: ReturnType<typeof makeReq>, precheck: (s: unknown) => void = () => undefined) =>
+const run = (
+  req: ReturnType<typeof makeReq>,
+  precheck: (s: unknown) => void = () => undefined,
+  action: AdminStripeWriteAction = 'billing.subscription.cancel_scheduled'
+) =>
   runAdminStripeWrite({
     req: req as never,
     id: ID,
-    action: 'billing.subscription.cancel_scheduled',
+    action,
     summary: 'scheduled cancellation at period end',
     precheck,
-    mutate: (stripe, { idempotencyKey, stripeSubscriptionId }) =>
-      stripe.subscriptions.update(stripeSubscriptionId, { cancel_at_period_end: true }, { idempotencyKey }) as never,
+    params: () => ({ cancel_at_period_end: true }),
     changes: () => [{ field: 'cancelAtPeriodEnd', before: false, after: true }],
   });
 
@@ -126,15 +141,10 @@ describe('runAdminStripeWrite', () => {
     vi.clearAllMocks();
     dedup.clear();
     production = true;
-    mockFindById.mockResolvedValue({
-      ownerType: 'User',
-      ownerId: 'u1',
-      subscriptionId: 'sub_123',
-      lastSyncedAt: new Date(SYNCED),
-    });
+    mockFindById.mockResolvedValue(baseRow);
     mockUserFindById.mockResolvedValue({ id: 'u1', email: 'u1@example.com' });
     mockStripeUpdate.mockResolvedValue(stripeSub);
-    mockModelFindById.mockResolvedValue({ _id: ID });
+    mockModelFindById.mockResolvedValue({ _id: ID, ...baseRow });
     mockFindOneAndUpdate.mockResolvedValue(null);
     mockRecordAdminAction.mockResolvedValue(null);
   });
@@ -151,6 +161,40 @@ describe('runAdminStripeWrite', () => {
       details: { stripeRequestId: 'req_1', subscriptionId: 'sub_123' },
     });
     expect(response.subscription).toEqual({ id: 'row' });
+    expect(response.stripe).toEqual({ lastSyncedAt: SYNCED, cancelAtPeriodEnd: false, stateToken: STATE });
+  });
+
+  it('mirrors the Stripe response with a newer-wins filter that also matches a missing or null stamp', async () => {
+    await run(makeReq());
+
+    const [filter, update] = mockFindOneAndUpdate.mock.calls[0];
+    expect(filter._id).toBe(ID);
+    expect(filter.$or).toEqual([{ lastSyncedAt: { $lte: expect.any(Date) } }, { lastSyncedAt: null }]);
+    expect(update.$set).toMatchObject({ cancelAtPeriodEnd: true, lastSyncedAt: filter.$or[0].lastSyncedAt.$lte });
+  });
+
+  it('accepts a write after our own webhook re-stamped lastSyncedAt without changing the business state', async () => {
+    mockFindById.mockResolvedValue({ ...baseRow, lastSyncedAt: new Date('2026-11-04T10:00:05.000Z') });
+    await run(makeReq());
+    expect(mockStripeUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replay another action that reused the same idempotency key', async () => {
+    await run(makeReq());
+    await run(makeReq(), () => undefined, 'billing.subscription.resumed');
+
+    expect(mockStripeUpdate).toHaveBeenCalledTimes(2);
+    expect(mockRecordAdminAction.mock.calls.map(([, entry]) => entry.action)).toEqual([
+      'billing.subscription.cancel_scheduled',
+      'billing.subscription.resumed',
+    ]);
+  });
+
+  it('denies a write on an org-owned subscription whose billing owner is the admin', async () => {
+    mockFindById.mockResolvedValue({ ...baseRow, ownerType: 'Organization', ownerId: 'org-1' });
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', userId: 'admin-1' });
+    await expect(run(makeReq())).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockStripeUpdate).not.toHaveBeenCalled();
   });
 
   it('makes one Stripe call for a concurrent double submit and replays the stored response afterwards', async () => {
@@ -172,18 +216,39 @@ describe('runAdminStripeWrite', () => {
     expect(mockRecordAdminAction).toHaveBeenCalledTimes(1);
   });
 
-  it('releases the claim when the audit write fails so a same-key retry re-runs with the same Stripe key', async () => {
+  it('writes the audit on a same-key retry after the audit failed, even once the row has changed', async () => {
     mockRecordAdminAction.mockRejectedValueOnce(new Error('audit down'));
     await expect(run(makeReq())).rejects.toThrow('audit down');
 
+    // Our webhook landed: the row now shows the cancel and a newer stamp, so the state check and precheck would fail.
+    mockFindById.mockResolvedValue({ ...baseRow, cancelAtPeriodEnd: true, lastSyncedAt: new Date() });
+    const strictPrecheck = vi.fn(() => {
+      throw new Error('already scheduled');
+    });
+    const response = await run(makeReq(), strictPrecheck);
+
+    expect(strictPrecheck).not.toHaveBeenCalled();
+    expect(mockStripeUpdate).toHaveBeenCalledTimes(2);
+    expect(mockStripeUpdate.mock.calls[1]).toEqual(mockStripeUpdate.mock.calls[0]);
+    const audits = mockRecordAdminAction.mock.calls.filter(([, entry]) => entry.action.startsWith('billing.'));
+    expect(audits).toHaveLength(2);
+    expect(audits[1][1]).toMatchObject({
+      action: 'billing.subscription.cancel_scheduled',
+      changes: [{ field: 'cancelAtPeriodEnd', before: false, after: true }],
+    });
+    expect(response.subscription).toEqual({ id: 'row' });
+  });
+
+  it('releases the claim when Stripe itself fails so the retry starts clean', async () => {
+    mockStripeUpdate.mockRejectedValueOnce(new Error('stripe down'));
+    await expect(run(makeReq())).rejects.toThrow('stripe down');
+    expect(dedup.size).toBe(0);
     await run(makeReq());
     expect(mockStripeUpdate).toHaveBeenCalledTimes(2);
-    expect(mockStripeUpdate.mock.calls[1][2]).toEqual({ idempotencyKey: KEY });
-    expect(mockRecordAdminAction).toHaveBeenCalledTimes(2);
   });
 
   it('409s on a stale preview without calling Stripe, and frees the key', async () => {
-    const req = makeReq({ body: { reason: 'Customer request', idempotencyKey: KEY, expectedLastSyncedAt: null } });
+    const req = makeReq({ body: { reason: 'Customer request', idempotencyKey: KEY, expectedState: 'stale' } });
     await expect(run(req)).rejects.toMatchObject({
       statusCode: 409,
       message: 'This subscription changed. Review and try again.',
@@ -218,11 +283,11 @@ describe('runAdminStripeWrite', () => {
   });
 
   it('400s without a reason or with a short key', async () => {
-    await expect(run(makeReq({ body: { idempotencyKey: KEY, expectedLastSyncedAt: SYNCED } }))).rejects.toMatchObject({
+    await expect(run(makeReq({ body: { idempotencyKey: KEY, expectedState: STATE } }))).rejects.toMatchObject({
       statusCode: 400,
     });
     await expect(
-      run(makeReq({ body: { reason: 'Customer request', idempotencyKey: 'short', expectedLastSyncedAt: SYNCED } }))
+      run(makeReq({ body: { reason: 'Customer request', idempotencyKey: 'short', expectedState: STATE } }))
     ).rejects.toMatchObject({ statusCode: 400 });
     expect(mockStripeUpdate).not.toHaveBeenCalled();
   });

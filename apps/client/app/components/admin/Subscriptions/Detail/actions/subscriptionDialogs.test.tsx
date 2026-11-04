@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { ExtendCompDialog } from './ExtendCompDialog';
 import { EndCompDialog } from './EndCompDialog';
@@ -51,8 +51,8 @@ beforeEach(() => {
   mocks.comp.mockResolvedValue({});
   mocks.credits.mockResolvedValue({});
   mocks.remove.mockResolvedValue({});
-  mocks.cancel.mockResolvedValue({ lastSyncedAt: '2026-11-04T10:00:00.000Z' });
-  mocks.resume.mockResolvedValue({ lastSyncedAt: '2026-11-04T10:01:00.000Z' });
+  mocks.cancel.mockResolvedValue({ stripe: { stateToken: 'state-after-cancel' } });
+  mocks.resume.mockResolvedValue({ stripe: { stateToken: 'state-after-resume' } });
 });
 
 describe('ExtendCompDialog', () => {
@@ -268,11 +268,24 @@ describe('CancelSubscriptionDialog', () => {
   const stripeDetail = () =>
     buildDetail({
       subscription: { ...STRIPE_ROW, periodEndsAt: '2026-12-01T00:00:00.000Z' },
-      stripe: { lastSyncedAt: '2026-11-01T00:00:00.000Z', cancelAtPeriodEnd: false },
+      stripe: { lastSyncedAt: '2026-11-01T00:00:00.000Z', cancelAtPeriodEnd: false, stateToken: 'state-reviewed' },
     });
+
+  it('mints a fresh idempotency key on each open', async () => {
+    for (let i = 0; i < 2; i++) {
+      const { onClose } = open(CancelSubscriptionDialog, stripeDetail());
+      pickReason('cancel-subscription-dialog');
+      confirm('cancel-subscription-dialog');
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      cleanup();
+    }
+    expect(mocks.cancel.mock.calls[1][0].idempotencyKey).not.toBe(mocks.cancel.mock.calls[0][0].idempotencyKey);
+  });
 
   it('states the end date and that there is no refund, and requires a reason', () => {
     open(CancelSubscriptionDialog, stripeDetail());
+    expect(screen.getByTestId('cancel-subscription-preview-before')).toHaveTextContent('Renews 1 Dec 2026');
+    expect(screen.getByTestId('cancel-subscription-preview-after')).toHaveTextContent('Cancels 1 Dec 2026');
 
     expect(screen.getByTestId('cancel-subscription-dialog')).toHaveTextContent(
       'Cancels at the end of the period on 1 Dec 2026. They keep access and credits until then. No refund.'
@@ -281,7 +294,7 @@ describe('CancelSubscriptionDialog', () => {
     expect(mocks.cancel).not.toHaveBeenCalled();
   });
 
-  it('sends the reviewed sync stamp, reuses one key across a failed retry, and undoes with a fresh key', async () => {
+  it('sends the reviewed state, reuses one key across a failed retry, and undoes with a fresh key', async () => {
     mocks.cancel.mockRejectedValueOnce(new Error('boom'));
     const { onClose } = open(CancelSubscriptionDialog, stripeDetail());
 
@@ -295,30 +308,36 @@ describe('CancelSubscriptionDialog', () => {
     const [first] = mocks.cancel.mock.calls[0];
     const [second] = mocks.cancel.mock.calls[1];
     expect(second.idempotencyKey).toBe(first.idempotencyKey);
-    expect(second.expectedLastSyncedAt).toBe('2026-11-01T00:00:00.000Z');
+    expect(second.expectedState).toBe('state-reviewed');
 
     undo();
     await waitFor(() => expect(mocks.resume).toHaveBeenCalledTimes(1));
     const [resumeBody] = mocks.resume.mock.calls[0];
     expect(resumeBody.idempotencyKey).not.toBe(first.idempotencyKey);
     expect(resumeBody.reason).toBe(`Undo: ${first.reason}`);
-    expect(resumeBody.expectedLastSyncedAt).toBe('2026-11-04T10:00:00.000Z');
+    expect(resumeBody.expectedState).toBe('state-after-cancel');
   });
 });
 
 describe('ResumeSubscriptionDialog', () => {
-  it('resumes against the reviewed sync stamp', async () => {
+  it('previews the change and resumes against the reviewed state, reusing one key across a failed retry', async () => {
+    mocks.resume.mockRejectedValueOnce(new Error('boom'));
     const { onClose } = open(
       ResumeSubscriptionDialog,
       buildDetail({
         subscription: { ...STRIPE_ROW, periodEndsAt: '2026-12-01T00:00:00.000Z' },
-        stripe: { lastSyncedAt: '2026-11-01T00:00:00.000Z', cancelAtPeriodEnd: true },
+        stripe: { lastSyncedAt: '2026-11-01T00:00:00.000Z', cancelAtPeriodEnd: true, stateToken: 'state-reviewed' },
       })
     );
 
+    expect(screen.getByTestId('resume-subscription-preview-before')).toHaveTextContent('Cancels 1 Dec 2026');
+    expect(screen.getByTestId('resume-subscription-preview-after')).toHaveTextContent('Renews 1 Dec 2026');
     pickReason('resume-subscription-dialog');
     confirm('resume-subscription-dialog');
+    await waitFor(() => expect(mocks.resume).toHaveBeenCalledTimes(1));
+    confirm('resume-subscription-dialog');
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(mocks.resume.mock.calls[0][0]).toMatchObject({ expectedLastSyncedAt: '2026-11-01T00:00:00.000Z' });
+    expect(mocks.resume.mock.calls[1][0]).toMatchObject({ expectedState: 'state-reviewed' });
+    expect(mocks.resume.mock.calls[1][0].idempotencyKey).toBe(mocks.resume.mock.calls[0][0].idempotencyKey);
   });
 });

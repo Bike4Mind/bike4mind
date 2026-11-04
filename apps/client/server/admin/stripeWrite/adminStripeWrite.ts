@@ -12,6 +12,8 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 import {
   AdminStripeWriteBodySchema,
+  stripeStateOf,
+  stripeStateToken,
   type AdminStripeWriteResponse,
   type AdminSubscriptionRow,
 } from '@client/app/utils/adminSubscriptionDetail';
@@ -45,11 +47,11 @@ type AdminStripeWriteArgs = {
   summary: string;
   /** Throws a 409 when the freshly read row cannot take this write. Runs after the replay check. */
   precheck: (subscription: ISubscription) => void;
-  /** Performs the Stripe mutation. Update `stripeSubscriptionId`, and pass `idempotencyKey` through so Stripe dedupes a repeated call too. */
-  mutate: (
-    stripe: Stripe,
-    options: { idempotencyKey: string; subscription: ISubscription; stripeSubscriptionId: string }
-  ) => Promise<Stripe.Response<Stripe.Subscription>>;
+  /**
+   * The Stripe update params for this row. Must be pure: the guard stores them with the claim so a recovery
+   * retry replays exactly the same request under the same idempotency key.
+   */
+  params: (subscription: ISubscription) => Stripe.SubscriptionUpdateParams;
   changes: (before: ISubscription, after: Stripe.Subscription) => AuditChange[];
 };
 
@@ -72,14 +74,12 @@ export const assertStripeKeyMatchesStage = ({
   }
 };
 
-const readRow = async (id: string): Promise<AdminSubscriptionRow> => {
+const readRow = async (id: string): Promise<{ row: AdminSubscriptionRow; doc: SubscriptionDoc }> => {
   const doc = await Subscription.findById(id).lean<SubscriptionDoc>();
   if (!doc) throw new NotFoundError('Subscription not found');
   const [row] = await toAdminSubscriptionRows([doc], subscriptionPlanCatalog());
-  return row;
+  return { row, doc };
 };
-
-const iso = (date: Date | null | undefined) => (date ? new Date(date).toISOString() : null);
 
 const notifyOwner = async (req: GuardRequest, ids: { notifyUserId: string | null; actingUserId: string | null }) => {
   try {
@@ -103,12 +103,14 @@ const notifyOwner = async (req: GuardRequest, ids: { notifyUserId: string | null
 /**
  * The one path for an admin write to Stripe (docs/admin-subscriptions-spec.md section 7). Guards, in order: admin
  * only, no impersonation, no self-target, live-key refusal off production, a required reason, an idempotency claim
- * (a repeat of a finished write replays its response with no Stripe call), the `lastSyncedAt` concurrency check,
+ * (a repeat of a finished write replays its response with no Stripe call), the business-state concurrency check,
  * then the Stripe call and, in one transaction, the mirror write plus its strict critical audit entry.
  *
- * If anything after the Stripe call fails the claim is released: the same key retried replays Stripe's response, so
- * the money effect still happens once and the audit row gets written. The 10 writes/admin/minute limit is the
- * routes' `rateLimit` middleware.
+ * Failure before the Stripe call releases the claim. Failure after it parks the claim as `stripe_done` with the
+ * request params and audit changes; a same-key retry takes it over and skips the state check and precheck (our own
+ * webhook has changed the row by then), replays the identical Stripe request, and writes the audit row. A claim
+ * left `pending` by a crash mid-write expires with the 24h TTL; retries get "already in progress" until then.
+ * The 10 writes/admin/minute limit is the routes' `rateLimit` middleware.
  */
 export const runAdminStripeWrite = async ({
   req,
@@ -116,7 +118,7 @@ export const runAdminStripeWrite = async ({
   action,
   summary,
   precheck,
-  mutate,
+  params,
   changes,
 }: AdminStripeWriteArgs): Promise<AdminStripeWriteResponse> => {
   const admin = req.user;
@@ -131,7 +133,7 @@ export const runAdminStripeWrite = async ({
 
   const parsed = AdminStripeWriteBodySchema.safeParse(req.body);
   if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'Invalid request body');
-  const { idempotencyKey, expectedLastSyncedAt } = parsed.data;
+  const { idempotencyKey, expectedState } = parsed.data;
   const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
 
   const subscription = /^[0-9a-f]{24}$/i.test(id) ? await subscriptionRepository.findById(id) : null;
@@ -146,28 +148,57 @@ export const runAdminStripeWrite = async ({
     });
   }
 
-  const claimKey = `admin-stripe-write:${admin.id}:${id}:${idempotencyKey}`;
+  const claimKey = `admin-stripe-write:${admin.id}:${id}:${action}:${idempotencyKey}`;
   const token = randomUUID();
-  const claim = await cacheRepository.claimDedup(claimKey, { state: 'pending', token }, CLAIM_TTL_MS);
+  const requestParams = params(subscription);
+  type StripeSent = { params: Stripe.SubscriptionUpdateParams; changes: AuditChange[] };
+  // A holder, not a `let`: TS cannot see the catch block's reads of an assignment made inside the try.
+  const progress: { stripeDone: StripeSent | null } = { stripeDone: null };
+  let recovered: StripeSent | null = null;
+
+  const claim = await cacheRepository.claimDedup(
+    claimKey,
+    { state: 'pending', token, params: requestParams },
+    CLAIM_TTL_MS
+  );
   if (!claim.claimed) {
     const existing = claim.existingData;
     if (existing?.state === 'done') return existing.response as AdminStripeWriteResponse;
-    throw new ConflictError('This change is already in progress.');
+    const takeover =
+      existing?.state === 'stripe_done' &&
+      typeof existing.token === 'string' &&
+      (await cacheRepository.casUpdateDedup(
+        claimKey,
+        'token',
+        existing.token,
+        { state: 'pending', token, params: existing.params },
+        CLAIM_TTL_MS
+      ));
+    if (!takeover) throw new ConflictError('This change is already in progress.');
+    recovered = {
+      params: existing?.params as Stripe.SubscriptionUpdateParams,
+      changes: existing?.changes as AuditChange[],
+    };
   }
 
   try {
-    if (iso(subscription.lastSyncedAt) !== expectedLastSyncedAt) throw new ConflictError(STRIPE_WRITE_CHANGED_MESSAGE);
-    precheck(subscription);
+    if (!recovered) {
+      if (stripeStateToken(subscription) !== expectedState) throw new ConflictError(STRIPE_WRITE_CHANGED_MESSAGE);
+      precheck(subscription);
+    }
 
     const stripeSubscriptionId = subscription.subscriptionId;
     if (!stripeSubscriptionId) throw new ConflictError('This subscription has no Stripe id.');
-    const updated = await mutate(getStripe(), { idempotencyKey, subscription, stripeSubscriptionId });
+    const sentParams = recovered?.params ?? requestParams;
+    const updated = await getStripe().subscriptions.update(stripeSubscriptionId, sentParams, { idempotencyKey });
+    const auditChanges = recovered?.changes ?? changes(subscription, updated);
+    progress.stripeDone = { params: sentParams, changes: auditChanges };
     const syncedAt = new Date();
 
     await withTransaction(async () => {
       // Newer-wins: our own customer.subscription.updated webhook may already have landed with a later stamp.
       await Subscription.findOneAndUpdate(
-        { _id: id, $or: [{ lastSyncedAt: { $lte: syncedAt } }, { lastSyncedAt: { $exists: false } }] },
+        { _id: id, $or: [{ lastSyncedAt: { $lte: syncedAt } }, { lastSyncedAt: null }] },
         { $set: stripeMirrorFields(updated, syncedAt) }
       );
       await recordAdminActionFromRequest(req, {
@@ -176,7 +207,7 @@ export const runAdminStripeWrite = async ({
         organizationId: owner.organizationId,
         summary,
         reason,
-        changes: changes(subscription, updated),
+        changes: auditChanges,
         details: {
           subscriptionId: subscription.subscriptionId,
           subscriptionRecordId: id,
@@ -186,15 +217,25 @@ export const runAdminStripeWrite = async ({
     });
 
     await notifyOwner(req, owner);
-    const row = await readRow(id);
-    const response: AdminStripeWriteResponse = { subscription: row, lastSyncedAt: syncedAt.toISOString() };
+    const { row, doc } = await readRow(id);
+    const response: AdminStripeWriteResponse = { subscription: row, stripe: stripeStateOf(doc) };
     await cacheRepository
       .casUpdateDedup(claimKey, 'token', token, { state: 'done', token, response }, CLAIM_TTL_MS)
       .catch((error: unknown) => req.logger.error('Failed to store an admin Stripe write for replay', error));
     return response;
   } catch (error) {
-    await cacheRepository.casDeleteDedup(claimKey, 'token', token).catch((releaseError: unknown) => {
-      req.logger.error('Failed to release an admin Stripe write claim', releaseError);
+    const { stripeDone } = progress;
+    const settle = stripeDone
+      ? cacheRepository.casUpdateDedup(
+          claimKey,
+          'token',
+          token,
+          { state: 'stripe_done', token, ...stripeDone },
+          CLAIM_TTL_MS
+        )
+      : cacheRepository.casDeleteDedup(claimKey, 'token', token);
+    await settle.catch((settleError: unknown) => {
+      req.logger.error('Failed to settle an admin Stripe write claim', settleError);
     });
     throw error;
   }

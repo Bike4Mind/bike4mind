@@ -75,6 +75,8 @@ vi.mock('@server/utils/adminAudit', async importOriginal => {
 import { ADMIN_ACTION_REASON_MISSING_MESSAGE } from '@server/utils/adminAudit';
 import handler from '../cancel';
 
+import { stripeStateToken } from '@client/app/utils/adminSubscriptionDetail';
+
 const ID = 'd'.repeat(24);
 const SYNCED = '2026-11-01T00:00:00.000Z';
 const DAY = 86_400_000;
@@ -105,14 +107,18 @@ const stripeRow = (overrides: Record<string, unknown> = {}) => ({
 });
 
 let keyCounter = 0;
-function call(handler: unknown, options: { isAdmin?: boolean; body?: Record<string, unknown>; adminId?: string } = {}) {
+async function call(
+  handler: unknown,
+  options: { isAdmin?: boolean; body?: Record<string, unknown>; adminId?: string } = {}
+) {
+  const expectedState = stripeStateToken(await mockFindById());
   const { req, res } = createMocks({
     method: 'POST',
     query: { id: ID },
     body: {
       reason: 'Customer request',
       idempotencyKey: `route-test-key-${++keyCounter}`,
-      expectedLastSyncedAt: SYNCED,
+      expectedState,
       ...(options.body ?? {}),
     },
   });
@@ -120,7 +126,8 @@ function call(handler: unknown, options: { isAdmin?: boolean; body?: Record<stri
     user: { isAdmin: options.isAdmin ?? true, id: options.adminId ?? 'admin-1' },
     logger: { info: vi.fn(), error: vi.fn() },
   });
-  return (handler as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res).then(() => res);
+  await (handler as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
+  return res;
 }
 
 describe('POST /api/admin/subscriptions/[id]/cancel', () => {
@@ -159,7 +166,7 @@ describe('POST /api/admin/subscriptions/[id]/cancel', () => {
       ],
       details: { stripeRequestId: 'req_1' },
     });
-    expect(res._getJSONData().lastSyncedAt).toEqual(expect.any(String));
+    expect(res._getJSONData().stripe).toMatchObject({ stateToken: expect.any(String), cancelAtPeriodEnd: false });
   });
 
   it.each([
@@ -172,6 +179,13 @@ describe('POST /api/admin/subscriptions/[id]/cancel', () => {
     await expect(call(handler)).rejects.toMatchObject({ statusCode: 409 });
     expect(mockStripeUpdate).not.toHaveBeenCalled();
     expect(mockRecordAdminAction).not.toHaveBeenCalled();
+  });
+
+  it('409s when the reviewed state no longer matches the row, without calling Stripe', async () => {
+    await expect(call(handler, { body: { expectedState: '["active",true,null,null]' } })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(mockStripeUpdate).not.toHaveBeenCalled();
   });
 
   it('400s without a reason and 403s for a non-admin', async () => {

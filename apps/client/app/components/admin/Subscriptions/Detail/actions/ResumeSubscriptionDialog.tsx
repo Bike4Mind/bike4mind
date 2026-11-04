@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAdminSubscriptionResume } from '@client/app/hooks/data/adminSubscriptionDetail';
-import { ActionDialog, ADMIN_REASON_PRESETS, useUndoToast } from '../../../shared';
+import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, useUndoToast } from '../../../shared';
 import { formatDate, ownerDisplayName, type SubscriptionDialogProps } from '../subscriptionDetailModel';
 
 /** Resume: clears the scheduled cancellation so the subscription renews as normal. */
@@ -13,7 +13,7 @@ export const ResumeSubscriptionDialog: React.FC<SubscriptionDialogProps> = ({ de
   const endDate = formatDate(subscription.periodEndsAt) ?? 'the end of the period';
 
   const handleConfirm = async (reason: string) => {
-    await resume.mutateAsync({ reason, idempotencyKey, expectedLastSyncedAt: detail.stripe?.lastSyncedAt ?? null });
+    await resume.mutateAsync({ reason, idempotencyKey, expectedState: detail.stripe?.stateToken ?? '' });
     onClose();
     showUndo({ message: `Subscription resumed for ${name}`, onViewAudit: onAudit });
   };
@@ -28,6 +28,12 @@ export const ResumeSubscriptionDialog: React.FC<SubscriptionDialogProps> = ({ de
       confirmLabel="Resume subscription"
       onConfirm={handleConfirm}
       data-testid="resume-subscription-dialog"
-    />
+    >
+      <ChangePreview
+        before={`Cancels ${endDate}`}
+        after={`Renews ${endDate}`}
+        data-testid="resume-subscription-preview"
+      />
+    </ActionDialog>
   );
 };

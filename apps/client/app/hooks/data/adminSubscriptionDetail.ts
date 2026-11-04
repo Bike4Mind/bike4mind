@@ -110,16 +110,18 @@ const useAdminStripeWrite = (id: string, path: 'cancel' | 'resume') => {
   return useMutation({
     mutationFn: async (body: AdminStripeWriteRequest): Promise<AdminStripeWriteResponse> =>
       (await api.post<AdminStripeWriteResponse>(`${subscriptionPath(id)}/${path}`, body)).data,
-    onSuccess: ({ subscription }) => {
+    onSuccess: ({ subscription, stripe }) => {
       queryClient.setQueryData<AdminSubscriptionDetail>(adminSubscriptionDetailKey(id), current =>
-        current ? { ...current, subscription } : current
+        current ? { ...current, subscription, stripe } : current
       );
       void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
     },
     // A 409 carries the server's plain-language message ("This subscription changed. Review and try again.").
+    // Refetch so the retry reviews the current state instead of resending the stale token.
     onError: error => {
       toast.error(getErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: adminSubscriptionDetailKey(id) });
     },
   });
 };

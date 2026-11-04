@@ -50,7 +50,7 @@ describe('SubscriptionDetailHeader', () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it('shows Cancel on a live Stripe row, Resume once a cancel is scheduled, and neither on a comp', () => {
+  it('shows Cancel and no Resume on a live Stripe row with nothing scheduled', () => {
     const { onAction } = setup(buildDetail({ subscription: STRIPE_ROW }));
     expect(screen.queryByTestId('subscription-detail-resume-btn')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('subscription-detail-cancel-btn'));
