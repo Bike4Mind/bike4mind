@@ -416,6 +416,10 @@ describe('Claude Code import', () => {
     expect(mapToolCall('mcp__server__tool', { q: 1 })).toEqual({ name: 'mcp__server__tool', input: { q: 1 } });
     expect(mapToolCall('Agent', 'not an object')).toEqual({ name: 'Agent', input: {} });
   });
+  it('keeps a tool or argument named after an Object member as it is', () => {
+    expect(mapToolCall('constructor', { toString: 'a' })).toEqual({ name: 'constructor', input: { toString: 'a' } });
+    expect(mapToolCall('Edit', { constructor: 'x' })).toEqual({ name: 'file_edit', input: { constructor: 'x' } });
+  });
   it('keeps a deletion made while an import is waiting on project resolution', async () => {
     const { transcriptPath, store, deps } = await setup();
     const first = await importTranscript(await indexed(transcriptPath), undefined, deps);
