@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { AnalyticsDaily, AnalyticsUserDay, UsageEvent, User, UserApiKey } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { rollupDay } from './analyticsRollup';
-import { getAnalyticsOverview } from './analyticsOverview';
+import { getAnalyticsOverview, loadLiveDay } from './analyticsOverview';
 
 const liveFailure = vi.hoisted(() => ({ error: null as Error | null }));
 vi.mock('./analyticsRollup', async importOriginal => {
@@ -122,6 +122,31 @@ describe('getAnalyticsOverview', () => {
     });
     expect((liveSignups?.legit ?? 0) + (liveSignups?.suspected ?? 0)).toBe(1);
     expect(nightly?.signups.unclassified).toBe(0);
+  });
+
+  it('live WAU/MAU and the api series equal the nightly row with API-only users in past and unrolled days', async () => {
+    const [apiPast, apiYesterday] = [oid(), oid()];
+    await seedUser(apiPast);
+    await seedUser(apiYesterday);
+    await seedEvent(users.a, '2026-06-10T10:00:00Z');
+    await seedEvent(apiPast, '2026-06-11T10:00:00Z', { source: 'api' });
+    await rollupDay('2026-06-10', { now: NOW });
+    await rollupDay('2026-06-11', { now: NOW });
+    await seedEvent(apiYesterday, '2026-06-14T22:00:00Z', { source: 'api' });
+    await seedEvent(users.b, '2026-06-14T22:00:00Z');
+    await seedEvent(users.c, `${TODAY}T08:00:00Z`);
+    await seedEvent(apiPast, `${TODAY}T08:00:00Z`, { source: 'api' });
+
+    const live = await loadLiveDay(TODAY, NOW);
+    for (const day of ['2026-06-14', TODAY]) await rollupDay(day, { now: NOW });
+    const nightly = await AnalyticsDaily.findOne({ day: TODAY }).lean();
+    expect({ dau: live.dau, wau: live.wau, mau: live.mau, api: live.api }).toEqual({
+      dau: nightly?.dau,
+      wau: nightly?.wau,
+      mau: nightly?.mau,
+      api: nightly?.api,
+    });
+    expect(nightly).toMatchObject({ wau: 3, mau: 3, api: { dau: 1, wau: 2, mau: 2 } });
   });
 
   it("counts yesterday's users in today's WAU/MAU before the nightly rollup has written yesterday", async () => {

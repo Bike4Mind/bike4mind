@@ -11,7 +11,10 @@ import {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const USER_BATCH = 1000;
 
-/** Days after account creation in which an AI request makes a signup real. Keep in sync with ACTIVATION_WINDOW_DAYS (activationFunnel.ts). */
+/**
+ * Days after account creation in which an AI request makes a signup real: exactly 7x24h from createdAt.
+ * ACTIVATION_WINDOW_DAYS (activationFunnel.ts) is the same number but counts UTC days, so the two differ.
+ */
 export const REAL_SIGNUP_WINDOW_DAYS = 7;
 
 export type RealSignupVerdict = 'legit' | 'suspected';

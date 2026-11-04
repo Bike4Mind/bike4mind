@@ -17,7 +17,7 @@ const HOUR_MS = 60 * 60 * 1000;
 const USER_BATCH = 1000;
 const OBJECT_ID = /^[a-f\d]{24}$/i;
 
-export type UserFlags = {
+export type UserFlags = Parameters<typeof aiAccessDeniedMessage>[0] & {
   _id: unknown;
   email?: string;
   createdAt?: Date;
@@ -30,8 +30,6 @@ export type UserFlags = {
   isBanned?: boolean;
   isModerated?: boolean;
   disputePending?: boolean;
-  moderation?: { status?: string | null } | null;
-  riskScore?: { reviewState?: string | null } | null;
 };
 
 export const USER_FLAG_FIELDS =
@@ -64,8 +62,9 @@ export async function loadCountingContext(): Promise<CountingContext> {
   let testDomains: string[] = [];
   try {
     testDomains = parseSyntheticDomainList(await adminSettingsRepository.getSettingsValue('syntheticUserEmailDomains'));
-  } catch {
+  } catch (error) {
     // A failed settings read leaves the e2e domain rule off rather than failing the rollup.
+    console.warn('[b4m-analytics] test-domain setting unavailable; e2e domain rule off for this run', error);
   }
   return {
     staffRegex: internalStaffEmailRegex(parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS)),

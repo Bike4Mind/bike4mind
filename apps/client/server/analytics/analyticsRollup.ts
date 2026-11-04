@@ -56,7 +56,7 @@ export async function classifyCohort(
     classifyRealSignups(start, end, { deadlineMs: maxTimeMS }),
     classifySignupWindow(start, end, { now, deadlineMs: maxTimeMS }),
   ]);
-  // The scan only feeds bySignal now, so a truncated one no longer changes the real/suspected counts.
+  // The scan only feeds bySignal; truncation cannot change the real/suspected split.
   if (truncated) logger.warn(`analytics rollup: signup candidate scan truncated for ${day}`);
 
   const signups: IAnalyticsDailySignups = {

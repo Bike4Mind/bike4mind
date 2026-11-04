@@ -72,7 +72,10 @@ export const formatCreatedWindow = (from: string | undefined, to: string | undef
 export const formatActiveWindow = (from: string | undefined, to: string | undefined) =>
   !from || !to || from === to ? `${from ?? to} UTC` : `${from} \u2013 ${to} UTC`;
 
-const VERDICT_OPTIONS: FilterChipOption[] = USER_VERDICT_FILTERS.map(value => ({ value, label: capitalize(value) }));
+const VERDICT_OPTIONS: FilterChipOption[] = USER_VERDICT_FILTERS.map(value => ({
+  value,
+  label: value === 'legit' ? 'Real' : capitalize(value),
+}));
 
 const FUNNEL_STEP_LABELS: Record<UserFunnelStep, string> = {
   signedUp: 'Signed up, no AI use',

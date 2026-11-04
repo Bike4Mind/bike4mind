@@ -267,6 +267,8 @@ describe('AnalyticsTab', () => {
     expect(screen.getByTestId('analytics-signups')).not.toHaveTextContent('Not classified');
     expect(screen.getByTestId('analytics-signups')).toHaveTextContent('3 real, 3 suspected');
     expect(screen.getByTestId('analytics-signups-mode-legit')).toHaveTextContent('Real only');
+    fireEvent.click(screen.getByTestId('analytics-signups-table-toggle-btn'));
+    expect(await screen.findByTestId('analytics-signups-table')).not.toHaveTextContent('Not classified');
     fireEvent.click(screen.getByTestId('analytics-active-users-table-toggle-btn'));
     expect(await screen.findByTestId('analytics-active-users-table')).toHaveTextContent('API users (not counted)');
   });

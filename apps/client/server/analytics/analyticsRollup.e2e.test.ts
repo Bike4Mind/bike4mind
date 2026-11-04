@@ -181,17 +181,18 @@ describe('rollupDay', () => {
   });
 
   it('WAU and MAU count active days only; API users are in api.wau and api.mau', async () => {
-    const [mixedDays, apiOnly] = [oid(), oid()];
-    await seedUser(mixedDays);
-    await seedUser(apiOnly);
+    const [mixedDays, apiOnly, webOnly1, webOnly2] = [oid(), oid(), oid(), oid()];
+    for (const id of [mixedDays, apiOnly, webOnly1, webOnly2]) await seedUser(id);
+    await seedEvent(webOnly1, '2026-05-31T10:00:00Z', { source: 'web' });
+    await seedEvent(webOnly2, '2026-05-31T10:00:00Z', { source: 'web' });
     await seedEvent(mixedDays, '2026-05-31T10:00:00Z', { source: 'api' });
     await seedEvent(mixedDays, `${DAY}T10:00:00Z`, { source: 'web' });
     await seedEvent(apiOnly, '2026-05-31T10:00:00Z', { source: 'api' });
     for (const d of ['2026-05-31', DAY]) await rollupDay(d, { now: NOW });
     expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
       dau: 1,
-      wau: 1,
-      mau: 1,
+      wau: 3,
+      mau: 3,
       api: { dau: 0, wau: 2, mau: 2 },
     });
   });
@@ -237,10 +238,18 @@ describe('rollupDay', () => {
   it('refreshes WAU/MAU of later days when an earlier day lands afterwards', async () => {
     await seedEvent(users.a, `${DAY}T10:00:00Z`);
     await seedEvent(users.b, '2026-05-30T10:00:00Z');
+    const apiUser = oid();
+    await seedUser(apiUser);
+    await seedEvent(apiUser, '2026-05-30T10:00:00Z', { source: 'api' });
     await rollupDay(DAY, { now: NOW });
-    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ wau: 1, mau: 1 });
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ wau: 1, mau: 1, api: { wau: 0, mau: 0 } });
     await rollupDay('2026-05-30', { now: NOW });
-    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ dau: 1, wau: 2, mau: 2 });
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      dau: 1,
+      wau: 2,
+      mau: 2,
+      api: { wau: 1, mau: 1 },
+    });
     await AnalyticsUserDay.deleteMany({});
     await seedEvent(users.c, '2026-05-31T10:00:00Z');
     await rollupDay('2026-05-31', { now: NOW });
@@ -403,6 +412,12 @@ describe('rollupDay', () => {
       unclassified: 0,
     });
     expect(warn).toHaveBeenCalled();
+    expect(
+      await signupVerdictUserIds(
+        { start: new Date(`${DAY}T00:00:00Z`), end: new Date('2026-06-02T00:00:00Z'), verdict: 'suspected' },
+        { deadlineMs: 30_000 }
+      )
+    ).toEqual([String(users.a)]);
     expect(await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean()).toMatchObject({ suspected: true });
   });
 

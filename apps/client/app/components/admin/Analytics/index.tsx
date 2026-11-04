@@ -292,9 +292,10 @@ const AnalyticsTab = () => {
       </Box>
 
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
-        Active users: an AI request that UTC day from the web app, CLI or Desktop. Counts exclude admin,
-        Developer-tagged, test, banned and AI-held accounts. API users are shown separately and not counted. Days are
-        UTC.
+        Active users: an AI request that UTC day from the web app, CLI, Desktop or an agent run; admin, Developer-tagged,
+        test, banned and AI-held accounts are not counted. A signup is real when the email is verified, the account is
+        not banned or held, and it made an AI request within 7 days; every other signup, banned or held ones included,
+        is suspected. API users are shown separately and not counted. Days are UTC.
       </Typography>
     </Stack>
   );
