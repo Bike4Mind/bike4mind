@@ -1,4 +1,9 @@
-import { SUBSCRIBER_SOURCES, TURNSTILE_ACTION_SUBSCRIBE, escapeSlackLine } from '@bike4mind/common';
+import {
+  SUBSCRIBER_SOURCES,
+  TURNSTILE_ACTION_SUBSCRIBE,
+  escapeSlackLine,
+  neutralizeSlackBroadcastMentions,
+} from '@bike4mind/common';
 import { Subscriber } from '@bike4mind/database';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -20,6 +25,13 @@ function isDuplicateKeyError(error: unknown): boolean {
 }
 
 const { perIp, perIpDaily } = SUBSCRIBER_LIMITS;
+
+// Names come from an anonymous caller. Escaping disarms `<!channel>` and `<url|label>` markup; this
+// also breaks bare `@here`-style words and anything Slack would auto-link (`evil.com`, `https://...`)
+// by putting a zero-width space after each dot and colon.
+function slackSafeName(value: string): string {
+  return neutralizeSlackBroadcastMentions(escapeSlackLine(value)).replace(/[.:]/g, '$&\u200B');
+}
 
 // Every accepted signup stores a row and pages the team on Slack, and nothing proves who is asking,
 // so the source is bounded the same way as a sign-in code request: a bot challenge first, then
@@ -88,7 +100,7 @@ const handler = baseApi({ auth: false })
             : `\nThey tried to sign up while registration was closed (source: \`${validatedBody.source}\`).\n`;
         const slackMessage = `🎯 **New Subscriber Alert!**
 
-📧 **${escapeSlackLine(validatedBody.firstName)} ${escapeSlackLine(validatedBody.lastName)}** (${escapeSlackLine(validatedBody.email)}) just requested an invite code!
+📧 **${slackSafeName(validatedBody.firstName)} ${slackSafeName(validatedBody.lastName)}** (${escapeSlackLine(validatedBody.email)}) just requested an invite code!
 ${blockedSignupNote}
 👋 They're waiting at the door and ready to join${brand ? ` ${brand}` : ''}. Time to roll out the red carpet!
 
