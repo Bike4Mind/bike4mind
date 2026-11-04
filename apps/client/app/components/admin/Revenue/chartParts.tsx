@@ -44,10 +44,14 @@ export const ChartSwatch: React.FC<{ color: string; opacity?: number; dashed?: b
   />
 );
 
-/** Exact values, labeled, so no series is told apart by color alone. */
-export const ChartTooltipBox: React.FC<{ title: string; lines: readonly ChartTooltipLine[] }> = ({ title, lines }) => (
+/** Exact values, labeled, so no series is told apart by color alone. `testId` is the chart's, suffixed `-tooltip`. */
+export const ChartTooltipBox: React.FC<{ testId: string; title: string; lines: readonly ChartTooltipLine[] }> = ({
+  testId,
+  title,
+  lines,
+}) => (
   <Box
-    data-testid="admin-revenue-chart-tooltip"
+    data-testid={`${testId}-tooltip`}
     sx={{
       bgcolor: 'admin.surface',
       border: '1px solid',
@@ -80,8 +84,8 @@ export const ChartTooltipBox: React.FC<{ title: string; lines: readonly ChartToo
 
 export type ChartLegendItem = { label: string; color: string; opacity?: number; dashed?: boolean };
 
-export const ChartLegend: React.FC<{ items: readonly ChartLegendItem[] }> = ({ items }) => (
-  <Stack direction="row" flexWrap="wrap" columnGap={2} rowGap={0.5} data-testid="admin-revenue-chart-legend">
+export const ChartLegend: React.FC<{ testId: string; items: readonly ChartLegendItem[] }> = ({ testId, items }) => (
+  <Stack direction="row" flexWrap="wrap" columnGap={2} rowGap={0.5} data-testid={`${testId}-legend`}>
     {items.map(item => (
       <Stack key={item.label} direction="row" alignItems="center" gap={0.75}>
         <ChartSwatch color={item.color} opacity={item.opacity} dashed={item.dashed} />

@@ -280,26 +280,28 @@ describe('AdminSubscriptions', () => {
     expect(screen.queryByTestId('admin-subscriptions-new-s2')).toBeNull();
   });
 
-  it('draws snapshot sparklines on the Paying, MRR and Past due tiles only in views that count every paying row', async () => {
-    const trendPoint = (date: string, mrr: number) => ({
-      date,
-      mrr,
-      payingCount: 2,
-      newMrr: 0,
-      churnedMrr: 0,
-      pastDueMrr: 0,
-      cancelingMrr: 0,
-      payingUsers: 2,
-      payingOrgs: 0,
-      mrrByPlan: {},
-    });
+  const trendPoint = (date: string, mrr: number) => ({
+    date,
+    mrr,
+    payingCount: 2,
+    newMrr: 0,
+    churnedMrr: 0,
+    pastDueMrr: 0,
+    cancelingMrr: 0,
+    payingUsers: 2,
+    payingOrgs: 0,
+    mrrByPlan: {},
+  });
+  const isTrendRequest = (url: string, config?: { params?: Record<string, unknown> }) =>
+    url === ADMIN_REVENUE_PATH && config?.params?.part === 'trend';
+  const mockTrend = (trend: ReturnType<typeof trendPoint>[]) =>
     apiGet.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
-      if (url === ADMIN_REVENUE_PATH && config?.params?.part === 'trend')
-        return {
-          data: { stripeConfigured: true, trend: [trendPoint('2026-10-28', 1_900), trendPoint('2026-10-29', 3_800)] },
-        };
+      if (isTrendRequest(url, config)) return { data: { stripeConfigured: true, trend } };
       return { data: url === SUMMARY_PATH ? SUMMARY : listResponse() };
     });
+
+  it('draws snapshot sparklines on the Paying, MRR and Past due tiles only in views that count every paying row', async () => {
+    mockTrend([trendPoint('2026-10-28', 1_900), trendPoint('2026-10-29', 3_800)]);
     renderTab();
     await waitFor(() => expect(screen.getAllByTestId('admin-stat-sparkline')).toHaveLength(3));
     expect(screen.getAllByTestId('admin-stat-sparkline').map(line => line.getAttribute('aria-label'))).toEqual([
@@ -308,8 +310,24 @@ describe('AdminSubscriptions', () => {
       'MRR at risk from past due subscriptions, daily, last 30 days',
     ]);
 
+    fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), { target: { value: 'ada' } });
+    await waitFor(() => expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0));
+    fireEvent.change(screen.getByTestId('admin-subscriptions-search-input'), { target: { value: '' } });
+    await waitFor(() => expect(screen.getAllByTestId('admin-stat-sparkline')).toHaveLength(3));
+
     fireEvent.click(screen.getByTestId('admin-subscriptions-views-comped-btn'));
     await waitFor(() => expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0));
+    fireEvent.click(screen.getByTestId('admin-subscriptions-views-all-btn'));
+    await waitFor(() => expect(screen.getAllByTestId('admin-stat-sparkline')).toHaveLength(3));
+  });
+
+  it('draws no sparklines until there are two days of snapshots', async () => {
+    mockTrend([trendPoint('2026-10-29', 3_800)]);
+    renderTab();
+    await screen.findByTestId('admin-subscriptions-row-s1');
+    await waitFor(() => expect(apiGet.mock.calls.some(([url, config]) => isTrendRequest(url, config))).toBe(true));
+    await act(() => new Promise(resolve => setTimeout(resolve, 0)));
+    expect(screen.queryAllByTestId('admin-stat-sparkline')).toHaveLength(0);
   });
 
   it('applies built-in views through the URL and sends their filters', async () => {

@@ -37,6 +37,10 @@ import { OTHER_PLANS_KEY, type PlanPoint, type PlanSeries, type RevenuePeriod } 
 import { formatTrendDay } from './revenueFormat';
 
 const CHART_HEIGHT = 200;
+const MOVEMENT_TEST_ID = 'admin-revenue-movement-chart';
+const BY_PLAN_TEST_ID = 'admin-revenue-by-plan-chart';
+const BY_OWNER_TEST_ID = 'admin-revenue-by-owner-chart';
+const AT_RISK_TEST_ID = 'admin-revenue-at-risk-chart';
 const SURFACE = 'var(--joy-palette-admin-surface)';
 
 const money = (amount: number) => formatMoney(amount, MRR_CURRENCY);
@@ -45,12 +49,12 @@ const compactMoney = (amount: number) => formatMoney(amount, MRR_CURRENCY, { com
 type TooltipProps<Row> = { active?: boolean; payload?: Array<{ payload: Row }> };
 
 /** Builds a recharts tooltip from a row; recharts clones `content`, so it must be an element. */
-function tooltipFor<Row>(render: (row: Row) => { title: string; lines: ChartTooltipLine[] }) {
+function tooltipFor<Row>(testId: string, render: (row: Row) => { title: string; lines: ChartTooltipLine[] }) {
   const ChartTooltip = ({ active, payload }: TooltipProps<Row>) => {
     const row = payload?.[0]?.payload;
     if (!active || !row) return null;
     const { title, lines } = render(row);
-    return <ChartTooltipBox title={title} lines={lines} />;
+    return <ChartTooltipBox testId={testId} title={title} lines={lines} />;
   };
   return <ChartTooltip />;
 }
@@ -66,7 +70,7 @@ const ChartFrame: React.FC<{ testId: string; legend: readonly ChartLegendItem[];
         {children}
       </ResponsiveContainer>
     </Box>
-    <ChartLegend items={legend} />
+    <ChartLegend testId={testId} items={legend} />
   </Stack>
 );
 
@@ -78,7 +82,7 @@ const MOVEMENT_LEGEND: ChartLegendItem[] = [
 
 /** Diverging bars: new above zero, churned below, net as a line. */
 export const MrrMovementChart: React.FC<{ periods: readonly RevenuePeriod[] }> = ({ periods }) => (
-  <ChartFrame testId="admin-revenue-movement-chart" legend={MOVEMENT_LEGEND}>
+  <ChartFrame testId={MOVEMENT_TEST_ID} legend={MOVEMENT_LEGEND}>
     <ComposedChart
       data={periods.map(period => ({ ...period, churnedBelow: -period.churnedMrr }))}
       stackOffset="sign"
@@ -90,7 +94,7 @@ export const MrrMovementChart: React.FC<{ periods: readonly RevenuePeriod[] }> =
       <ReferenceLine y={0} stroke={INK_MUTED} />
       <Tooltip
         cursor={{ fill: BORDER, fillOpacity: 0.4 }}
-        content={tooltipFor<RevenuePeriod>(period => ({
+        content={tooltipFor<RevenuePeriod>(MOVEMENT_TEST_ID, period => ({
           title: period.label,
           lines: [
             { label: 'New', value: money(period.newMrr), color: GOOD },
@@ -126,7 +130,7 @@ export const MrrByPlanChart: React.FC<{ points: readonly PlanPoint[]; series: re
   series,
 }) => (
   <ChartFrame
-    testId="admin-revenue-by-plan-chart"
+    testId={BY_PLAN_TEST_ID}
     legend={series.map(entry => ({ label: entry.label, ...planColor(series, entry.key) }))}
   >
     <AreaChart data={[...points]} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
@@ -135,7 +139,7 @@ export const MrrByPlanChart: React.FC<{ points: readonly PlanPoint[]; series: re
       <YAxis tickFormatter={compactMoney} width={72} {...yAxisProps} />
       <Tooltip
         cursor={{ stroke: BORDER }}
-        content={tooltipFor<PlanPoint>(point => ({
+        content={tooltipFor<PlanPoint>(BY_PLAN_TEST_ID, point => ({
           title: formatTrendDay(point.date),
           lines: [
             ...series.map(entry => ({
@@ -175,14 +179,14 @@ const OWNER_LEGEND: ChartLegendItem[] = [
 ];
 
 export const PayingByOwnerChart: React.FC<{ periods: readonly RevenuePeriod[] }> = ({ periods }) => (
-  <ChartFrame testId="admin-revenue-by-owner-chart" legend={OWNER_LEGEND}>
+  <ChartFrame testId={BY_OWNER_TEST_ID} legend={OWNER_LEGEND}>
     <BarChart data={[...periods]} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
       <CartesianGrid vertical={false} stroke={BORDER} />
       <XAxis dataKey="label" {...xAxisProps} />
       <YAxis allowDecimals={false} width={48} {...yAxisProps} />
       <Tooltip
         cursor={{ fill: BORDER, fillOpacity: 0.4 }}
-        content={tooltipFor<RevenuePeriod>(period => ({
+        content={tooltipFor<RevenuePeriod>(BY_OWNER_TEST_ID, period => ({
           title: period.label,
           lines: [
             { label: 'Individuals', value: period.payingUsers.toLocaleString(), color: ACCENT },
@@ -215,14 +219,14 @@ const AT_RISK_LEGEND: ChartLegendItem[] = [
 
 // Not stacked: the snapshot stores the two separately, and a row can be both.
 export const AtRiskChart: React.FC<{ points: readonly RevenueTrendPoint[] }> = ({ points }) => (
-  <ChartFrame testId="admin-revenue-at-risk-chart" legend={AT_RISK_LEGEND}>
+  <ChartFrame testId={AT_RISK_TEST_ID} legend={AT_RISK_LEGEND}>
     <AreaChart data={[...points]} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
       <CartesianGrid vertical={false} stroke={BORDER} />
       <XAxis dataKey="date" tickFormatter={formatTrendDay} {...xAxisProps} />
       <YAxis tickFormatter={compactMoney} width={72} {...yAxisProps} />
       <Tooltip
         cursor={{ stroke: BORDER }}
-        content={tooltipFor<RevenueTrendPoint>(point => ({
+        content={tooltipFor<RevenueTrendPoint>(AT_RISK_TEST_ID, point => ({
           title: formatTrendDay(point.date),
           lines: [
             { label: 'Past due', value: money(point.pastDueMrr), color: WARN, opacity: 0.6 },

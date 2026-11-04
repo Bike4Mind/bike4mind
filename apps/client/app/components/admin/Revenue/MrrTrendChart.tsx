@@ -7,6 +7,8 @@ import { formatMoney } from '../shared/formatMoney';
 import { ACCENT, AXIS_TICK, BORDER, COMPARISON_OPACITY, ChartLegend, ChartTooltipBox, INK_MUTED } from './chartParts';
 import { formatTrendDay } from './revenueFormat';
 
+const TREND_TEST_ID = 'admin-revenue-chart';
+
 const TrendTooltip: React.FC<{ active?: boolean; payload?: Array<{ payload: RevenueTrendPoint }> }> = ({
   active,
   payload,
@@ -15,6 +17,7 @@ const TrendTooltip: React.FC<{ active?: boolean; payload?: Array<{ payload: Reve
   if (!active || !point) return null;
   return (
     <ChartTooltipBox
+      testId={TREND_TEST_ID}
       title={formatTrendDay(point.date)}
       lines={[
         { label: 'MRR', value: formatMoney(point.mrr, MRR_CURRENCY), color: ACCENT },
@@ -36,7 +39,7 @@ const LEGEND = [
 
 export const MrrTrendChart: React.FC<{ points: readonly RevenueTrendPoint[] }> = ({ points }) => (
   <Stack gap={1}>
-    <Box data-testid="admin-revenue-chart" sx={{ height: 240, minWidth: 0 }}>
+    <Box data-testid={TREND_TEST_ID} sx={{ height: 240, minWidth: 0 }}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={[...points]} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke={BORDER} />
@@ -88,6 +91,6 @@ export const MrrTrendChart: React.FC<{ points: readonly RevenueTrendPoint[] }> =
         </LineChart>
       </ResponsiveContainer>
     </Box>
-    <ChartLegend items={LEGEND} />
+    <ChartLegend testId={TREND_TEST_ID} items={LEGEND} />
   </Stack>
 );
