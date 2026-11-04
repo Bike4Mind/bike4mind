@@ -21,9 +21,9 @@ const onViewChange = vi.fn();
 const actions = { open: vi.fn(), stop: vi.fn(), archive: vi.fn() };
 const themed = createThemedMount();
 
-const onDelegateChange = vi.fn();
+const onTurnOn = vi.fn();
 
-const renderStage = (agents: AgentView[], dockControl?: ReactNode, delegate?: boolean) =>
+const renderStage = (agents: AgentView[], dockControl?: ReactNode, turnOn?: () => void) =>
   themed.render(
     <OrchestratorStage
       agents={agents}
@@ -32,7 +32,7 @@ const renderStage = (agents: AgentView[], dockControl?: ReactNode, delegate?: bo
       actions={actions}
       introPlaying={false}
       dockControl={dockControl}
-      delegate={delegate === undefined ? undefined : { on: delegate, onChange: onDelegateChange }}
+      onTurnOn={turnOn}
     />
   );
 
@@ -113,21 +113,14 @@ describe('OrchestratorStage', () => {
     });
   });
 
-  it('reflects and sets the delegate switch, and leaves it out when not offered', async () => {
-    await renderStage([], undefined, true);
-    const input = () => el('orchestrator-delegate-switch').querySelector('input');
-    expect(el('orchestrator-delegate-switch').textContent).toContain('Delegate to agents');
-    expect(input()?.checked).toBe(true);
-    act(() => input()?.click());
-    expect(onDelegateChange).toHaveBeenCalledWith(false);
-
-    await renderStage([], undefined, false);
-    expect(input()?.checked).toBe(false);
-    act(() => input()?.click());
-    expect(onDelegateChange).toHaveBeenLastCalledWith(true);
+  it('offers to turn Orchestrate on from the empty stage while it is off', async () => {
+    await renderStage([], undefined, onTurnOn);
+    expect(el('orchestrator-empty-state').textContent).toContain('Orchestrate is off');
+    act(() => el('orchestrator-turn-on-btn').click());
+    expect(onTurnOn).toHaveBeenCalledTimes(1);
 
     await renderStage([]);
-    expect(query('orchestrator-delegate-switch')).toBeNull();
+    expect(query('orchestrator-turn-on-btn')).toBeNull();
   });
 
   it('summarises the roster, with ~ when a cost is unknown', async () => {

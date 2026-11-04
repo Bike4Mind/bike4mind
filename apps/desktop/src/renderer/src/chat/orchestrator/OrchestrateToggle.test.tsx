@@ -8,18 +8,11 @@ import type { AgentState } from './roster';
 import { createThemedMount, el, query } from './testUtils';
 
 const onSurfaceChange = vi.fn();
-const onStart = vi.fn();
 const themed = createThemedMount();
 
 const renderToggle = (states: AgentState[], surface: SessionSurface = 'chat', canStart = false) =>
   themed.render(
-    <OrchestrateToggle
-      states={states}
-      surface={surface}
-      onSurfaceChange={onSurfaceChange}
-      canStart={canStart}
-      onStart={onStart}
-    />
+    <OrchestrateToggle states={states} surface={surface} onSurfaceChange={onSurfaceChange} canStart={canStart} />
   );
 
 afterEach(() => {
@@ -34,35 +27,28 @@ describe('OrchestrateToggle', () => {
     expect(query('chat-surface-toggle-chat')).toBeNull();
   });
 
-  it('shows the segmented control on the chat surface of an agentless code session, and starting turns Orchestrate on', async () => {
+  it('opens the agents view of an agentless code session, icon-only with named buttons', async () => {
     await renderToggle([], 'chat', true);
-    expect(el('chat-surface-toggle-chat')).not.toBeNull();
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
+    expect(el('chat-surface-toggle-chat').getAttribute('aria-label')).toBe('Conversation');
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe('Agents');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('');
     expect(query('chat-orchestrate-count')).toBeNull();
     act(() => el('chat-surface-toggle-orchestrate').click());
-    expect(onStart).toHaveBeenCalledTimes(1);
-    expect(onSurfaceChange).not.toHaveBeenCalled();
+    expect(onSurfaceChange).toHaveBeenCalledWith('orchestrate');
   });
 
-  it('keeps the same control once orchestrating an agentless code session, and Chat switches back', async () => {
+  it('switches back to the conversation, and ignores a click on the shown view', async () => {
     await renderToggle([], 'orchestrate', true);
     act(() => el('chat-surface-toggle-orchestrate').click());
-    expect(onStart).not.toHaveBeenCalled();
+    expect(onSurfaceChange).not.toHaveBeenCalled();
     act(() => el('chat-surface-toggle-chat').click());
     expect(onSurfaceChange).toHaveBeenCalledWith('chat');
-  });
-
-  it('switches the surface from the Orchestrate segment once agents exist, even on a code session', async () => {
-    await renderToggle(['working'], 'chat', true);
-    act(() => el('chat-surface-toggle-orchestrate').click());
-    expect(onSurfaceChange).toHaveBeenCalledWith('orchestrate');
-    expect(onStart).not.toHaveBeenCalled();
   });
 
   it('badges the agent count on the Agents segment, neutral when nothing needs attention', async () => {
     await renderToggle(['done', 'idle', 'stopped']);
     expect(el('chat-orchestrate-count').textContent).toBe('3');
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents3');
+    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('3');
     expect(el('chat-orchestrate-count').dataset.tone).toBe('neutral');
     expect(query('chat-orchestrate-working')).toBeNull();
   });
@@ -123,15 +109,14 @@ describe('OrchestrateToggle', () => {
       expect(onSurfaceChange).toHaveBeenLastCalledWith('chat');
     });
 
-    it('starts Orchestrate on an agentless code session, and does nothing where the switch is absent', async () => {
+    it('opens the agents view of an agentless code session, and does nothing where the switch is absent', async () => {
       await renderToggle([], 'chat', true);
       press();
-      expect(onStart).toHaveBeenCalledTimes(1);
+      expect(onSurfaceChange).toHaveBeenCalledTimes(1);
 
       await renderToggle([], 'chat', false);
       press();
-      expect(onStart).toHaveBeenCalledTimes(1);
-      expect(onSurfaceChange).not.toHaveBeenCalled();
+      expect(onSurfaceChange).toHaveBeenCalledTimes(1);
     });
   });
 });

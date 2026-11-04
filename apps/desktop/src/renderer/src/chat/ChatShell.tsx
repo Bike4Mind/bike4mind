@@ -101,6 +101,7 @@ import { useSessionStartTiming } from './useSessionStartTiming';
 import { SpawnFailureToast } from './SpawnFailureToast';
 import { useCreationTools } from './useCreationTools';
 import { BoardView } from './orchestrator/BoardView';
+import { OrchestratePill } from './orchestrator/OrchestratePill';
 import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
@@ -617,15 +618,10 @@ export function ChatShell({
     canSpawnDeeper(activeSummary) &&
     modelSupportsTools(activeSummary.model, findModelOption(catalog.models, activeSummary.model));
   const delegating = activeSummary?.orchestrate === true;
-  // With no agents the stage is only worth showing while Orchestrate is on; a surface left on
-  // 'orchestrate' with the flag off (or reset by a relaunch) opens on the conversation.
-  const orchestrating =
-    orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || (orchestrateCapable && delegating));
+  // Showing the stage never changes the behaviour: an agentless Code session gets the empty stage,
+  // which offers to turn Orchestrate on. A Chat session with no agents has no stage at all.
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || orchestrateCapable);
   const { setOrchestrate } = conversation;
-  const startOrchestrating = useCallback(() => {
-    if (!delegating) void setOrchestrate(true);
-    setOrchestratorSurface('orchestrate');
-  }, [delegating, setOrchestrate, setOrchestratorSurface]);
 
   // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode. Held back
@@ -1423,7 +1419,6 @@ export function ChatShell({
                 surface={orchestrating ? 'orchestrate' : 'chat'}
                 onSurfaceChange={orchestratorPrefs.setSurface}
                 canStart={orchestrateCapable}
-                onStart={startOrchestrating}
               />
               {!opening && conversation.session?.historyEnabled === true && (
                 <Tooltip
@@ -1574,9 +1569,7 @@ export function ChatShell({
                   focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
                   onFocusAgentConsumed={clearNoticeFocus}
                   onExampleQuest={pickExampleQuest}
-                  delegate={
-                    orchestrateCapable ? { on: delegating, onChange: on => void setOrchestrate(on) } : undefined
-                  }
+                  onTurnOn={orchestrateCapable && !delegating ? () => void setOrchestrate(true) : undefined}
                   dockControl={
                     <Tooltip
                       size="sm"
@@ -1817,11 +1810,16 @@ export function ChatShell({
             skills={skills}
             mentionSessions={sessions}
             leading={
-              <ApprovalModePill
-                mode={conversation.session?.approvalMode ?? 'ask'}
-                disabled={!activeId}
-                onSelect={mode => void conversation.setApprovalMode(mode)}
-              />
+              <>
+                <ApprovalModePill
+                  mode={conversation.session?.approvalMode ?? 'ask'}
+                  disabled={!activeId}
+                  onSelect={mode => void conversation.setApprovalMode(mode)}
+                />
+                {orchestrateCapable && (
+                  <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
+                )}
+              </>
             }
             footer={
               <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>

@@ -360,44 +360,43 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('chat-surface-toggle-orchestrate')).toBeNull();
   });
 
-  it('starts orchestrating an empty code session from its toggle, with an empty stage and the delegate switch on', async () => {
+  it('opens the empty stage of an agentless code session without turning Orchestrate on', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     listed = [...SESSIONS, CODE];
     await openParent(CODE.title, 'code');
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe('Agents');
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('false');
 
     await act(async () => el('chat-surface-toggle-orchestrate').click());
+    expect(setSessionOrchestrate).not.toHaveBeenCalled();
+    expect(el('orchestrator-empty-state').textContent).toContain('Orchestrate is off');
+    expect(query('orchestrator-example-quest-1')).toBeNull();
+
+    await act(async () => el('orchestrator-turn-on-btn').click());
     expect(setSessionOrchestrate).toHaveBeenCalledWith(CODE.id, true);
-    expect(el('orchestrator-empty-state').textContent).toContain('Describe the work');
+    expect(query('orchestrator-turn-on-btn')).toBeNull();
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('true');
     act(() => el('orchestrator-example-quest-1').click());
     const composer = el('chat-composer-input') as HTMLTextAreaElement;
     expect(composer.value).toMatch(/^Audit this repository using several agents in parallel/);
     expect(document.activeElement).toBe(composer);
     expect(el('orchestrator-dock').querySelector('[data-testid="chat-thread-empty-host"]')).not.toBeNull();
-    const delegate = () => el('orchestrator-delegate-switch').querySelector('input');
-    expect(delegate()?.checked).toBe(true);
 
-    // Back to Chat leaves the behaviour on; only the switch turns it off.
+    // Back to the conversation leaves the behaviour on; only the composer toggle turns it off.
     act(() => el('chat-surface-toggle-chat').click());
     expect(query('orchestrator-stage')).toBeNull();
     expect(setSessionOrchestrate).toHaveBeenCalledTimes(1);
-
-    await act(async () => el('chat-surface-toggle-orchestrate').click());
-    expect(setSessionOrchestrate).toHaveBeenCalledTimes(1);
-    await act(async () => delegate()?.click());
+    await act(async () => el('composer-orchestrate-toggle').click());
     expect(setSessionOrchestrate).toHaveBeenLastCalledWith(CODE.id, false);
-    // Off with no agents, the stage has nothing to show and falls back to the conversation.
     expect(query('orchestrator-stage')).toBeNull();
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
   });
 
-  it('reopens an empty code session on the conversation when its surface was left on orchestrate but the flag is off', async () => {
+  it('reopens an agentless code session on its empty stage when its surface was left on agents', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.surface.${CODE.id}`, 'orchestrate');
     listed = [...SESSIONS, CODE];
     await openParent(CODE.title, 'code');
-    expect(query('orchestrator-stage')).toBeNull();
-    expect(query('chat-thread-empty-host')).not.toBeNull();
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
+    expect(query('orchestrator-turn-on-btn')).not.toBeNull();
   });
 
   it('keeps the empty stage for a code session whose flag is on', async () => {
@@ -416,7 +415,7 @@ describe('orchestrate mode in the chat shell', () => {
     await openParent(CODE.title, 'code');
     expect(query('chat-surface-toggle-orchestrate')).toBeNull();
     expect(query('orchestrator-stage')).toBeNull();
-    expect(query('orchestrator-delegate-switch')).toBeNull();
+    expect(query('composer-orchestrate-toggle')).toBeNull();
   });
 
   it('offers no orchestrate controls on a code agent at the spawn depth cap, even with the flag on', async () => {
@@ -434,7 +433,7 @@ describe('orchestrate mode in the chat shell', () => {
     expect(el('chat-session-title').textContent).toBe(deep.title);
     expect(query('chat-surface-toggle-orchestrate')).toBeNull();
     expect(query('orchestrator-stage')).toBeNull();
-    expect(query('orchestrator-delegate-switch')).toBeNull();
+    expect(query('composer-orchestrate-toggle')).toBeNull();
   });
 
   it('offers the toggle on a code agent below the depth cap', async () => {
@@ -447,15 +446,17 @@ describe('orchestrate mode in the chat shell', () => {
     listed = [...SESSIONS, CODE, shallow];
     await openParent(shallow.title, 'code');
     expect(el('chat-session-title').textContent).toBe(shallow.title);
-    expect(el('chat-surface-toggle-orchestrate').textContent).toBe('Agents');
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe('Agents');
+    expect(query('composer-orchestrate-toggle')).not.toBeNull();
   });
 
-  it('leaves the delegate switch out of a chat session stage', async () => {
+  it('leaves the Orchestrate toggle out of a chat session', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent();
     await enterOrchestrate();
     expect(query('orchestrator-stage')).not.toBeNull();
-    expect(query('orchestrator-delegate-switch')).toBeNull();
+    expect(query('composer-orchestrate-toggle')).toBeNull();
+    expect(query('orchestrator-turn-on-btn')).toBeNull();
   });
 
   it('brings the parent conversation forward when the Innkeeper is clicked, reopening a hidden dock', async () => {

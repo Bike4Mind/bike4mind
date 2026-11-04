@@ -1,7 +1,5 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
-import Switch from '@mui/joy/Switch';
-import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, type ReactNode, useState } from 'react';
@@ -61,8 +59,8 @@ export interface OrchestratorStageProps {
   renderView?(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode;
   /** Rendered at the end of the header row. */
   dockControl?: ReactNode;
-  /** The session's Orchestrate behaviour, separate from which surface is shown; Code sessions only. */
-  delegate?: { on: boolean; onChange(on: boolean): void };
+  /** Set while the session's Orchestrate behaviour is off: the empty stage offers to turn it on. */
+  onTurnOn?(): void;
 }
 
 const NO_PARENT: ParentView = {};
@@ -88,7 +86,7 @@ export function OrchestratorStage({
   introPlaying,
   renderView,
   dockControl,
-  delegate,
+  onTurnOn,
 }: OrchestratorStageProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Keyed on ids, creation times and titles so status churn does not recompute names; the seed prompt
@@ -208,26 +206,6 @@ export function OrchestratorStage({
           </Button>
         )}
         <Box sx={{ flex: 1 }} />
-        {delegate && (
-          <Tooltip
-            title="On: the assistant splits new work across agents and coordinates them. Off: it does the work itself in this conversation."
-            placement="bottom-end"
-            sx={{ maxWidth: 280 }}
-          >
-            <Typography
-              component="label"
-              level="body-sm"
-              noWrap
-              data-testid="orchestrator-delegate-switch"
-              sx={{ flexShrink: 0 }}
-              startDecorator={
-                <Switch size="sm" checked={delegate.on} onChange={event => delegate.onChange(event.target.checked)} />
-              }
-            >
-              Delegate to agents
-            </Typography>
-          </Tooltip>
-        )}
         {dockControl}
       </Box>
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -247,6 +225,7 @@ export function OrchestratorStage({
             <EmptyStage
               tavern={view === 'tavern' && renderView ? renderView(view, viewProps) : null}
               onExampleQuest={onExampleQuest}
+              onTurnOn={onTurnOn}
             />
           ) : renderView ? (
             renderView(view, viewProps)
@@ -268,9 +247,27 @@ export function OrchestratorStage({
   );
 }
 
-/** With no agents yet: the Tavern still opens with the Innkeeper at the bar; Board and Table show a line. */
-function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQuest?(prompt: string): void }) {
-  const quests = onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />;
+/**
+ * With no agents yet: the Tavern still opens with the Innkeeper at the bar; Board and Table show a line.
+ * While Orchestrate is off, the example quests give way to the switch: a quest sent then would not delegate.
+ */
+function EmptyStage({
+  tavern,
+  onExampleQuest,
+  onTurnOn,
+}: {
+  tavern: ReactNode;
+  onExampleQuest?(prompt: string): void;
+  onTurnOn?(): void;
+}) {
+  const quests = onTurnOn ? (
+    <Button size="sm" variant="solid" color="primary" onClick={onTurnOn} data-testid="orchestrator-turn-on-btn">
+      Turn on Orchestrate
+    </Button>
+  ) : (
+    onExampleQuest && <ExampleQuestButtons onPick={onExampleQuest} />
+  );
+  const offLine = 'Orchestrate is off, so the assistant does the work itself in the conversation.';
   if (tavern) {
     return (
       <Box
@@ -280,7 +277,7 @@ function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQu
         {tavern}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            No quests yet. Describe the work and the Innkeeper will split it across agents.
+            {onTurnOn ? offLine : 'No quests yet. Describe the work and the Innkeeper will split it across agents.'}
           </Typography>
           {quests}
         </Box>
@@ -301,7 +298,7 @@ function EmptyStage({ tavern, onExampleQuest }: { tavern: ReactNode; onExampleQu
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        No agents yet. Describe the work and it will be split across agents.
+        {onTurnOn ? offLine : 'No agents yet. Describe the work and it will be split across agents.'}
       </Typography>
       {quests}
     </Box>
