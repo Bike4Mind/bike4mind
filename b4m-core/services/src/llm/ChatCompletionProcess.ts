@@ -194,7 +194,6 @@ import {
   type ModelAdmission,
 } from './modelAdmission';
 import {
-  OUT_OF_CREDITS_NOTICE,
   TurnCreditLimiter,
   accumulatedRoundsUsd,
   adoptAccumulatedUsage,
@@ -202,6 +201,7 @@ import {
   completionOverdraftAllowance,
   conservativeRoundInputUsd,
   estimateAddedInputTokens,
+  outOfCreditsNotice,
 } from './chatCreditCap';
 import { capRoundOutput, gateEveryRound } from '../completionCreditBudget';
 import {
@@ -6399,7 +6399,7 @@ export class ChatCompletionProcess {
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
         const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
         const turnNotice = this.turnCreditLimiter?.stoppedForCredits
-          ? OUT_OF_CREDITS_NOTICE
+          ? outOfCreditsNotice(organization?.name)
           : narratedCallLeftNoAnswer
             ? NARRATED_TOOL_CALL_NOTICE
             : incompleteAnswerNotice;

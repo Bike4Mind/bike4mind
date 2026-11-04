@@ -25,7 +25,7 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
-import { OUT_OF_CREDITS_NOTICE } from './chatCreditCap';
+import { outOfCreditsNotice } from './chatCreditCap';
 import {
   buildAndSortMessages,
   calculateTotalTokenLength,
@@ -7538,10 +7538,14 @@ describe('ChatCompletionProcess', () => {
       const overdraftAllowance = (credits: number) => {
         const prev = mockedGetSettingsValue.getMockImplementation();
         mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
-          key === 'paidCompletionOverdraftCredits' ? credits : prev?.(key as never, settings)) as typeof getSettingsValue);
+          key === 'paidCompletionOverdraftCredits'
+            ? credits
+            : prev?.(key as never, settings)) as typeof getSettingsValue);
       };
       const onPaidPlan = () =>
-        vi.spyOn(service, 'resolveEntitlementKeys').mockResolvedValue({ keys: [PAID_PLAN_ENTITLEMENT_KEY], resolved: true });
+        vi
+          .spyOn(service, 'resolveEntitlementKeys')
+          .mockResolvedValue({ keys: [PAID_PLAN_ENTITLEMENT_KEY], resolved: true });
       const overshootingComplete = () =>
         vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
           await cb(['A long answer'], { inputTokens: 10, outputTokens: OVERSHOOT_OUTPUT_TOKENS });
@@ -7686,14 +7690,18 @@ describe('ChatCompletionProcess', () => {
           mockedGetAvailableModels.mockResolvedValue([
             {
               ...overshootModel,
-              pricing: { 200000: { input: inputUsdPerToken, output: 30 / 1_000_000, cache_write: inputUsdPerToken * 2 } },
+              pricing: {
+                200000: { input: inputUsdPerToken, output: 30 / 1_000_000, cache_write: inputUsdPerToken * 2 },
+              },
             },
           ]);
 
           await service.process({ body: personalBody(), logger: mockLogger });
 
           // 80 input tokens cost 20 credits plain and 40 as a cache write; the cap leaves room for the dearer.
-          expect(sentOptions(complete).outputTokenCeiling).toBe(Math.floor((BALANCE - 40) / perOutputTokenCredits + 1e-9));
+          expect(sentOptions(complete).outputTokenCeiling).toBe(
+            Math.floor((BALANCE - 40) / perOutputTokenCredits + 1e-9)
+          );
         });
 
         it('caps an account whose plan could not be read', async () => {
@@ -7716,13 +7724,19 @@ describe('ChatCompletionProcess', () => {
         const complete = vi.fn(async function (this: any, model: string, messages: any[], options: any, cb: any) {
           rounds.push(options);
           // A provider never answers past the ceiling it was sent.
-          const accum = (options._internal?.accumOutputTokens ?? 0) + Math.min(ROUND_OUTPUT, options.outputTokenCeiling);
+          const accum =
+            (options._internal?.accumOutputTokens ?? 0) + Math.min(ROUND_OUTPUT, options.outputTokenCeiling);
           await cb(['round text '], { toolsUsed: [] });
           if (rounds.length > 50) throw new Error('loop was never stopped');
-          return this.complete(model, [...messages, { role: 'user', content: 'tool result' }], {
-            ...options,
-            _internal: { ...options._internal, accumInputTokens: 10 * rounds.length, accumOutputTokens: accum },
-          }, cb);
+          return this.complete(
+            model,
+            [...messages, { role: 'user', content: 'tool result' }],
+            {
+              ...options,
+              _internal: { ...options._internal, accumInputTokens: 10 * rounds.length, accumOutputTokens: accum },
+            },
+            cb
+          );
         });
         setupPersonalTurn(incrementCredits, complete);
 
@@ -7739,7 +7753,7 @@ describe('ChatCompletionProcess', () => {
         // Each round after the first was sent with what was left.
         expect(rounds[1]).toEqual(expect.objectContaining({ outputTokenCeiling: expect.any(Number) }));
         expect(state.balance).toBeGreaterThanOrEqual(0);
-        expect(mockQuest.reply).toContain(OUT_OF_CREDITS_NOTICE);
+        expect(mockQuest.reply).toContain(outOfCreditsNotice());
       });
 
       it('keeps the partial answer and says why when the stream runs past the limit', async () => {
@@ -7760,7 +7774,7 @@ describe('ChatCompletionProcess', () => {
 
         expect(mockQuest.status).toBe('done');
         expect(mockQuest.reply).toMatch(/^x+/);
-        expect(mockQuest.reply).toContain(OUT_OF_CREDITS_NOTICE);
+        expect(mockQuest.reply).toContain(outOfCreditsNotice());
         expect(state.balance).toBeGreaterThanOrEqual(0);
       });
 

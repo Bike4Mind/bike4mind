@@ -22,9 +22,15 @@ import { MIN_AFFORDABLE_OUTPUT_TOKENS, affordableRoundBudget, type RoundBudget }
  * cliCompletions.ts with the helpers in completionCreditBudget.ts.
  */
 
-/** Shown under a reply that was cut short because the payer ran out of credits. */
-export const OUT_OF_CREDITS_NOTICE =
-  '_This answer was cut short because your credit balance ran out. Add credits to continue._';
+/**
+ * Shown under a reply that was cut short because the payer ran out of credits. An org member cannot
+ * buy org credits, so the org copy points at the administrator (as buildInsufficientCreditsMessage).
+ */
+export function outOfCreditsNotice(organizationName?: string): string {
+  return organizationName
+    ? `_This answer was cut short because your organization "${organizationName}" ran out of credits. Contact your organization administrator to add more credits._`
+    : '_This answer was cut short because your credit balance ran out. Add credits to continue._';
+}
 
 /**
  * How far past its balance one turn may run. Only a personal account on a paid plan gets the

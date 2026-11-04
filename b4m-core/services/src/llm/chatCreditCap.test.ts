@@ -9,6 +9,7 @@ import {
   completionOverdraftAllowance,
   conservativeRoundInputUsd,
   estimateAddedInputTokens,
+  outOfCreditsNotice,
   type SettledUsage,
 } from './chatCreditCap';
 
@@ -28,15 +29,15 @@ const worstCaseCredits = (inputUsd: number, outputTokens: number) =>
 
 describe('completionOverdraftAllowance', () => {
   it('gives an account without a paid plan no allowance', () => {
-    expect(completionOverdraftAllowance({ billedToOrganization: false, hasPaidPlan: false, allowanceCredits: 500 })).toBe(
-      0
-    );
+    expect(
+      completionOverdraftAllowance({ billedToOrganization: false, hasPaidPlan: false, allowanceCredits: 500 })
+    ).toBe(0);
   });
 
   it('gives a paid personal account the configured allowance', () => {
-    expect(completionOverdraftAllowance({ billedToOrganization: false, hasPaidPlan: true, allowanceCredits: 500 })).toBe(
-      500
-    );
+    expect(
+      completionOverdraftAllowance({ billedToOrganization: false, hasPaidPlan: true, allowanceCredits: 500 })
+    ).toBe(500);
   });
 
   it('keeps an organization at its balance', () => {
@@ -46,9 +47,22 @@ describe('completionOverdraftAllowance', () => {
   });
 
   it.each([Number.NaN, -10, Number.POSITIVE_INFINITY])('reads a malformed setting (%s) as no allowance', value => {
-    expect(completionOverdraftAllowance({ billedToOrganization: false, hasPaidPlan: true, allowanceCredits: value })).toBe(
-      0
-    );
+    expect(
+      completionOverdraftAllowance({ billedToOrganization: false, hasPaidPlan: true, allowanceCredits: value })
+    ).toBe(0);
+  });
+});
+
+describe('outOfCreditsNotice', () => {
+  it('tells a personal account to add credits', () => {
+    expect(outOfCreditsNotice()).toContain('Add credits');
+  });
+
+  it('points an organization member at the administrator instead', () => {
+    const notice = outOfCreditsNotice('Acme');
+    expect(notice).toContain('"Acme"');
+    expect(notice).toContain('organization administrator');
+    expect(notice).not.toContain('Add credits');
   });
 });
 
@@ -59,7 +73,9 @@ describe('conservativeRoundInputUsd', () => {
   });
 
   it('prices a 1-hour session at the 1-hour write rate', () => {
-    expect(conservativeRoundInputUsd(MODEL, 10_000, '1h')).toBeGreaterThan(conservativeRoundInputUsd(MODEL, 10_000, '5m'));
+    expect(conservativeRoundInputUsd(MODEL, 10_000, '1h')).toBeGreaterThan(
+      conservativeRoundInputUsd(MODEL, 10_000, '5m')
+    );
   });
 
   it('is zero for no input', () => {
@@ -72,7 +88,13 @@ describe('TurnCreditLimiter.beginRound', () => {
 
   it('caps output so input plus a full-length answer fits the limit, and one more token would not', () => {
     const limiter = new TurnCreditLimiter(1_427, 0);
-    const budget = limiter.beginRound({ modelInfo: MODEL, inputTokens: 10_000, inputUsd, spentUsd: 0, maxOutputTokens: 128_000 });
+    const budget = limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 10_000,
+      inputUsd,
+      spentUsd: 0,
+      maxOutputTokens: 128_000,
+    });
 
     if (!budget.affordable) throw new Error('expected an affordable round');
     expect(worstCaseCredits(inputUsd, budget.outputTokens)).toBeLessThanOrEqual(1_427);
@@ -96,7 +118,13 @@ describe('TurnCreditLimiter.beginRound', () => {
   it('refuses when the limit cannot buy the minimum answer', () => {
     const limit = worstCaseCredits(inputUsd, MIN_AFFORDABLE_OUTPUT_TOKENS) - 1;
     const limiter = new TurnCreditLimiter(limit, 0);
-    const budget = limiter.beginRound({ modelInfo: MODEL, inputTokens: 10_000, inputUsd, spentUsd: 0, maxOutputTokens: 128_000 });
+    const budget = limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 10_000,
+      inputUsd,
+      spentUsd: 0,
+      maxOutputTokens: 128_000,
+    });
 
     expect(budget.affordable).toBe(false);
     if (budget.affordable) return;
@@ -118,9 +146,21 @@ describe('TurnCreditLimiter.beginRound', () => {
 
   it('takes what earlier rounds spent off a later round', () => {
     const limiter = new TurnCreditLimiter(1_000, 0);
-    const first = limiter.beginRound({ modelInfo: MODEL, inputTokens: 1_000, inputUsd: 0, spentUsd: 0, maxOutputTokens: 1e6 });
+    const first = limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 1_000,
+      inputUsd: 0,
+      spentUsd: 0,
+      maxOutputTokens: 1e6,
+    });
     const spentUsd = 600 / CREDITS_PER_USD_COST;
-    const later = limiter.beginRound({ modelInfo: MODEL, inputTokens: 1_000, inputUsd: 0, spentUsd, maxOutputTokens: 1e6 });
+    const later = limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 1_000,
+      inputUsd: 0,
+      spentUsd,
+      maxOutputTokens: 1e6,
+    });
     if (!first.affordable || !later.affordable) throw new Error('expected both rounds to be affordable');
     expect(later.outputTokens).toBe(Math.floor(400 / perOutputTokenCredits + 1e-9));
     expect(later.outputTokens).toBeLessThan(first.outputTokens);
@@ -169,7 +209,13 @@ describe('TurnCreditLimiter.recordStreamed', () => {
 
   it('never stops a stream that stays within what the round was budgeted', () => {
     const limiter = new TurnCreditLimiter(1_000, 0);
-    const budget = limiter.beginRound({ modelInfo: MODEL, inputTokens: 1_000, inputUsd: 0, spentUsd: 0, maxOutputTokens: 1e6 });
+    const budget = limiter.beginRound({
+      modelInfo: MODEL,
+      inputTokens: 1_000,
+      inputUsd: 0,
+      spentUsd: 0,
+      maxOutputTokens: 1e6,
+    });
     if (!budget.affordable) throw new Error('expected an affordable round');
     // The stream estimate is a lower bound on tokens: even one character per budgeted token reads
     // as well under the budget, so the per-round cap, not this, is what ends a normal answer.
