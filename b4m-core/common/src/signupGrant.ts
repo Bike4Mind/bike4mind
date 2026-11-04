@@ -148,8 +148,9 @@ export interface SignupGrantLegacyToggles {
 
 export const isStoredToggleOn = (value: unknown) => value === true || value === 'true';
 
-/** The drip may still pay: the grant is mid-drip, or a drip completed it and a raised cap can reopen it. */
-export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlockedBy'>): boolean {
+/** The drip may still pay: the grant is mid-drip, or a drip completed it and a raised cap can reopen it. A forfeited grant never pays. */
+export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlockedBy' | 'unlockForfeited'>): boolean {
+  if (grant.unlockForfeited) return false;
   return grant.stage === 'signup' || (grant.stage === 'unlocked' && grant.unlockedBy === 'activity_drip');
 }
 

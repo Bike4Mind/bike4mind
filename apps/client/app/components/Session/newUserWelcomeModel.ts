@@ -79,11 +79,12 @@ export function advertisedDripCredits({
 }: {
   dailyCredits: number;
   dripCap: number;
-  grant: (Pick<SignupGrant, 'dripCredits'> & Partial<Pick<SignupGrant, 'stage' | 'unlockedBy'>>) | undefined;
+  grant:
+    | (Pick<SignupGrant, 'dripCredits'> & Partial<Pick<SignupGrant, 'stage' | 'unlockedBy' | 'unlockForfeited'>>)
+    | undefined;
 }): number {
   // A verification unlock closes the drip for good; pending_email still advertises what verifying will start.
-  if (grant?.stage === 'unlocked' && !signupGrantDripOpen({ stage: grant.stage, unlockedBy: grant.unlockedBy }))
-    return 0;
+  if (grant?.stage === 'unlocked' && !signupGrantDripOpen(grant)) return 0;
   return dailyCredits > 0 ? Math.min(dailyCredits, signupGrantDripRemaining(grant ?? {}, dripCap)) : 0;
 }
 
