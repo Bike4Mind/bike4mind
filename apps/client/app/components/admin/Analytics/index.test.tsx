@@ -344,8 +344,26 @@ describe('AnalyticsTab', () => {
       overview({
         activeUsers: {
           days: [
-            { day: '2026-06-14', dau: null, wau: null, mau: null, partial: false, previousMau: null },
-            { day: '2026-06-15', dau: 1, wau: 1, mau: 1, partial: true, previousMau: null },
+            {
+              day: '2026-06-14',
+              dau: null,
+              wau: null,
+              mau: null,
+              partial: false,
+              previousMau: null,
+              external: null,
+              internal: null,
+            },
+            {
+              day: '2026-06-15',
+              dau: 1,
+              wau: 1,
+              mau: 1,
+              partial: true,
+              previousMau: null,
+              external: { dau: 1, wau: 1, mau: 1 },
+              internal: { dau: 0, wau: 0, mau: 0 },
+            },
           ],
           bySource: [
             { day: '2026-06-14', partial: false, counts: null },

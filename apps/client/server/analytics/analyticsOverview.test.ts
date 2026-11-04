@@ -316,13 +316,25 @@ describe('buildOverview', () => {
     );
     const liveDay: LiveDay = { ...live, internal: { ...live.internal!, windowComplete: false } };
     const overview = build(query({ accounts: 'internal', compare: 'off' }), rows, liveDay);
-    expect(overview.internalMissingDays).toEqual(['2026-06-13']);
+    expect(overview.internalMissingDays).toEqual(['2026-06-13', '2026-06-15']);
     expect(overview.activeUsers.days.find(day => day.day === '2026-06-13')).toMatchObject({
       dau: null,
       internal: null,
     });
     expect(overview.activeUsers.days.at(-1)).toMatchObject({ partial: true, dau: null, internal: null });
     expect(overview.activeUsers.days.at(-1)?.external).toEqual({ dau: 3, wau: 25, mau: 45 });
+  });
+
+  it.each(['internal', 'all'] as const)('reports incomplete live history in a today-only %s range', accounts => {
+    const todayOnly = query({ accounts, range: 'custom', from: '2026-06-15', to: '2026-06-15' });
+    const liveDay: LiveDay = { ...live, internal: { ...live.internal!, windowComplete: false } };
+    const overview = build(todayOnly, [], liveDay);
+    expect(overview.missingDays).toEqual([]);
+    expect(overview.internalMissingDays).toEqual(['2026-06-15']);
+    expect(overview.activeUsers.days[0]).toMatchObject({ dau: null, internal: null, partial: true });
+    expect(build({ ...todayOnly, accounts: 'external' }, [], liveDay).internalMissingDays).toEqual([]);
+    expect(build(todayOnly, [], null).internalMissingDays).toEqual([]);
+    expect(build(todayOnly, [], live).internalMissingDays).toEqual([]);
   });
 
   it('keeps a day with no rollup row in missingDays only, whatever the selection', () => {

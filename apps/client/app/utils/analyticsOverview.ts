@@ -95,8 +95,8 @@ export type AnalyticsOverview = {
   /** Complete days in the range with no rollup row. */
   missingDays: string[];
   /**
-   * Internal or all only: complete days with a rollup row but no usable internal counts (rolled up before
-   * they were recorded, or within 28 days of such a row). Never overlaps missingDays.
+   * Internal or all only: days with rollup or live data but no usable internal counts (rolled up before
+   * they were recorded, or within 28 days of such a row). Includes today; never overlaps missingDays.
    */
   internalMissingDays: string[];
   stats: {

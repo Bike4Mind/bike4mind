@@ -290,7 +290,7 @@ export function buildOverview({
       (!lastUpdated || now.getTime() - lastUpdated.getTime() > ANALYTICS_STALE_AFTER_MS),
     missingDays: completeDays.filter(day => !byDay.has(day)),
     internalMissingDays:
-      accounts === 'external' ? [] : completeDays.filter(day => byDay.has(day) && !usableInternal(byDay.get(day))),
+      accounts === 'external' ? [] : rangeDays.filter(day => valuesFor(day) && !usableInternal(valuesFor(day))),
     stats: {
       mau,
       avgDau,
