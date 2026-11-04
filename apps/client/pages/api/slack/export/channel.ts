@@ -1,4 +1,5 @@
 import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -507,7 +508,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
   };
 
   // Helper to build and send export (supports partial exports)
-  const buildAndSendExport = () => {
+  const buildAndSendExport = async () => {
     stats.duration_ms = Date.now() - startTime;
 
     const exportData: ExportResult = {
@@ -562,6 +563,20 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
       warningCount: warnings.length,
       filename,
       durationMs: stats.duration_ms,
+    });
+
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_channel.exported',
+      target: { kind: 'settings', id: channelId, displayName: `Slack channel ${channelName ?? channelId}` },
+      summary: `exported Slack channel ${channelName ?? channelId} (${exportStatus})`,
+      details: {
+        workspaceId,
+        channelId,
+        format,
+        mode: 'download',
+        status: exportStatus,
+        messageCount: messages.length,
+      },
     });
 
     res.setHeader('Content-Type', contentType);
