@@ -11,6 +11,8 @@ import {
   withTransaction,
   apiKeyRepository,
   userRepository,
+  questRepository,
+  Connection,
 } from '@bike4mind/database';
 import { IAdminSettingsRepository } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
@@ -29,6 +31,9 @@ import { researchTaskJobs } from '@server/utils/researchTasks';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { isTerminalCreditRefusal, type IUserDocument } from '@bike4mind/common';
+import { ClientMessageSender } from '@bike4mind/utils';
+import { StatusManager } from '@bike4mind/services/llm/StatusManager';
+import { Resource } from 'sst';
 
 /**
  * The operations text model with every completion reserved and settled against the task owner's
@@ -49,33 +54,46 @@ async function meteredOperationsLlm(user: IUserDocument, logger: Logger) {
   );
 }
 
-const researchEngineQueuePayload = z.object({
-  action: z.enum(['process', 'processDiscoveredLinks', 'downloadRelevantLinks']),
-  payload: z.object({
-    id: z.string(),
-    userId: z.string(),
+const researchEngineQueuePayload = z.union([
+  z.object({
+    action: z.enum(['process', 'processDiscoveredLinks', 'downloadRelevantLinks']),
+    payload: z.object({
+      id: z.string(),
+      userId: z.string(),
+    }),
   }),
-});
+  z.object({
+    action: z.literal('deepResearchIntoQuest'),
+    payload: z.object({
+      questId: z.string(),
+      sessionId: z.string(),
+      userId: z.string(),
+      topic: z.string().min(1).max(2000),
+    }),
+  }),
+]);
 
 /**
  * This is the main queue handler for the research engine.
  * It dispatches the appropriate action based on the event.
  */
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
-  const body = event.Records[0].body;
-  const { action, payload } = researchEngineQueuePayload.parse(JSON.parse(body));
+  const body = researchEngineQueuePayload.parse(JSON.parse(event.Records[0].body));
 
-  logger.info('Dispatching action', { action, payload });
+  logger.info('Dispatching action', body);
 
-  switch (action) {
+  switch (body.action) {
     case 'process':
-      await process(payload, logger);
+      await process(body.payload, logger);
       break;
     case 'processDiscoveredLinks':
-      await processDiscoveredLinks(payload, logger);
+      await processDiscoveredLinks(body.payload, logger);
       break;
     case 'downloadRelevantLinks':
-      await downloadRelevantLinks(payload, logger);
+      await downloadRelevantLinks(body.payload, logger);
+      break;
+    case 'deepResearchIntoQuest':
+      await deepResearchIntoQuestJob(body.payload, logger);
       break;
   }
 });
@@ -298,4 +316,73 @@ const downloadRelevantLinks = async (parameters: { id: string; userId: string },
   logger.log('====================================');
   logger.log('Completed downloadRelevantLinks queue handler!');
   logger.log('====================================');
+};
+
+const deepResearchIntoQuestJob = async (
+  job: { questId: string; sessionId: string; userId: string; topic: string },
+  logger: Logger
+) => {
+  logger.updateMetadata({ handler: 'researchEngineQueue', action: 'deepResearchIntoQuest', questId: job.questId });
+  const user = await User.findById(job.userId);
+  if (!user) throw new Error('User not found');
+
+  const sender = new ClientMessageSender(
+    {
+      connections: {
+        findByUserId: (userId: string) => Connection.find({ userId }),
+        deleteByConnectionId: async (connectionId: string) => {
+          await Connection.deleteOne({ connectionId });
+        },
+      },
+    },
+    logger
+  );
+  const status = new StatusManager(sender, logger, Resource.websocket.managementEndpoint, job.userId);
+  const push = (quest: { id: string; sessionId: string } & Record<string, unknown>) =>
+    status.sendStatusUpdate(quest as never, null);
+
+  let llm;
+  try {
+    llm = await meteredOperationsLlm(user as IUserDocument, logger);
+  } catch (err) {
+    if (!isTerminalCreditRefusal(err)) throw err;
+    const reply = err instanceof Error ? err.message : 'Not enough credits';
+    const patch = { status: 'done' as const, type: 'error' as const, reply, replies: [reply] };
+    if (await questRepository.settleIfUnfinished(job.questId, patch)) {
+      await push({ id: job.questId, sessionId: job.sessionId, ...patch });
+    }
+    return;
+  }
+
+  const db = {
+    adminSettings: adminSettingsRepository,
+    scopedSettings: scopedSettingsRepository,
+    apiKeys: apiKeyRepository,
+    users: userRepository,
+    dataLakes: dataLakeRepository,
+    dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    organizations: organizationRepository,
+  };
+  const noStorage = { upload: async () => '', getSignedUrl: async () => '', getPublicUrl: () => '' };
+  await researchTaskService.deepResearchIntoQuest(
+    { questId: job.questId, topic: job.topic },
+    {
+      quests: questRepository as never,
+      push,
+      toolContext: {
+        userId: job.userId,
+        user: user as IUserDocument,
+        // Runs off the research queue, after the request that created the quest.
+        authOrigin: 'internal',
+        db: db as never,
+        storage: noStorage,
+        imageGenerateStorage: noStorage,
+        logger,
+        sessionId: job.sessionId,
+        questId: job.questId,
+      } as never,
+      llm: llm as never,
+      logger,
+    }
+  );
 };

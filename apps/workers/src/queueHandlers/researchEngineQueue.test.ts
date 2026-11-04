@@ -16,6 +16,10 @@ const h = vi.hoisted(() => ({
   meter: vi.fn(),
   afford: vi.fn(),
   complete: vi.fn(),
+  questFindById: vi.fn(),
+  questUpdateIfUnfinished: vi.fn(),
+  questSettle: vi.fn(),
+  deepResearchIntoQuest: vi.fn(),
   userRepository: { findById: vi.fn(), incrementCurrentStorage: vi.fn() },
   fabFileRepository: { commitContentRewrite: vi.fn(), findChargeState: vi.fn() },
 }));
@@ -36,6 +40,12 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: h.fabFileRepository,
   taskScheduleRepository: {},
   fileTagRepository: {},
+  questRepository: {
+    findById: h.questFindById,
+    updateIfUnfinished: h.questUpdateIfUnfinished,
+    settleIfUnfinished: h.questSettle,
+  },
+  Connection: { find: vi.fn(), deleteOne: vi.fn() },
 }));
 vi.mock('@bike4mind/services', async () => ({
   meterCompletionBackend: (await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services'))
@@ -44,6 +54,7 @@ vi.mock('@bike4mind/services', async () => ({
     process: h.process,
     processDiscoveredLinks: h.processDiscoveredLinks,
     downloadRelevantLinks: h.downloadRelevantLinks,
+    deepResearchIntoQuest: h.deepResearchIntoQuest,
   },
 }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
@@ -55,9 +66,21 @@ vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry',
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@server/jobs/researchTasks', () => ({ researchTaskJobs: {} }));
+vi.mock('@server/utils/researchTasks', () => ({ researchTaskJobs: {} }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsTextModel: h.getOperationsTextModel },
 }));
+
+vi.mock('@bike4mind/services/llm/StatusManager', () => ({
+  StatusManager: vi.fn(function () {
+    return { sendStatusUpdate: vi.fn() };
+  }),
+}));
+vi.mock('@bike4mind/utils', async () => ({
+  ...(await vi.importActual<typeof import('@bike4mind/utils')>('@bike4mind/utils')),
+  ClientMessageSender: vi.fn(),
+}));
+vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://x' } } }));
 
 import { dispatch } from './researchEngineQueue';
 import { commitContentRewrite } from '../../../../b4m-core/services/src/fabFileService/rewriteStorage';
@@ -187,5 +210,45 @@ describe('researchEngineQueue downloadRelevantLinks - storage adapters', () => {
 
     expect(h.downloadRelevantLinks).toHaveBeenCalledTimes(1);
     expect(h.userRepository.incrementCurrentStorage).toHaveBeenCalledWith('u1', 150);
+  });
+});
+
+const researchEvent = (payload: Record<string, unknown>) =>
+  ({ Records: [{ body: JSON.stringify({ action: 'deepResearchIntoQuest', payload }) }] }) as never;
+const job = { questId: 'q1', sessionId: 's1', userId: 'u1', topic: 'Rare earth magnet supply' };
+
+describe('deepResearchIntoQuest action', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('runs research for the quest on the metered operations model', async () => {
+    h.userFindById.mockResolvedValue({ id: 'u1' });
+    h.getOperationsTextModel.mockResolvedValue({ modelId: 'ops', llm: { complete: h.complete }, modelInfo: {} });
+    await dispatch(researchEvent(job), {} as never, logger as never);
+    expect(h.afford).toHaveBeenCalled();
+    expect(h.deepResearchIntoQuest).toHaveBeenCalledWith(
+      { questId: 'q1', topic: 'Rare earth magnet supply' },
+      expect.objectContaining({ quests: expect.any(Object), push: expect.any(Function) })
+    );
+  });
+
+  it('settles the quest with the refusal when the owner cannot pay', async () => {
+    h.userFindById.mockResolvedValue({ id: 'u1' });
+    h.questSettle.mockResolvedValue(true);
+    const refusal = Object.assign(new Error('Not enough credits'), {
+      additionalInfo: { errorCode: 'insufficient_credits' },
+    });
+    h.afford.mockRejectedValueOnce(refusal);
+    await dispatch(researchEvent(job), {} as never, logger as never);
+    expect(h.deepResearchIntoQuest).not.toHaveBeenCalled();
+    expect(h.questSettle).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      type: 'error',
+      reply: 'Not enough credits',
+      replies: ['Not enough credits'],
+    });
+  });
+
+  it('rejects a payload without a topic', async () => {
+    await expect(dispatch(researchEvent({ ...job, topic: '' }), {} as never, logger as never)).rejects.toThrow();
   });
 });
