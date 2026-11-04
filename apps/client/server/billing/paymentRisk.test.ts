@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Stripe from 'stripe';
+import { Resource } from 'sst';
 
 const mocks = vi.hoisted(() => ({
   settings: {} as Record<string, string>,
@@ -12,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   chargesRetrieve: vi.fn(),
   postMessageToSlack: vi.fn(),
   lockIfPaidWithBlockedCard: vi.fn(),
+  recordShadowDetection: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -23,6 +25,7 @@ vi.mock('@bike4mind/database', () => ({
     countAccountsForCard: mocks.countAccountsForCard,
     countRecentCards: mocks.countRecentCards,
   },
+  shadowDetectionRepository: { record: mocks.recordShadowDetection },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -49,6 +52,11 @@ import {
   screenPaymentOutcome,
   type PaymentRiskThresholds,
 } from './paymentRisk';
+
+// The global sst mock (vitest.setup.ts) is a plain object, so the stage can be set per test.
+const setStage = (stage: string) => {
+  (Resource.App as { stage: string }).stage = stage;
+};
 
 const thresholds: PaymentRiskThresholds = {
   enabled: true,
@@ -81,6 +89,7 @@ const charge = (overrides: Partial<Stripe.Charge> = {}): Stripe.Charge =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.settings = {};
+  setStage('production');
 });
 
 describe('readPaymentRiskThresholds', () => {
@@ -238,6 +247,70 @@ describe('screenPaymentOutcome', () => {
     expect(message).not.toContain('fp_1');
   });
 
+  it('records the alerted payment as a paymentRisk shadow detection with its Stripe ids', async () => {
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(1);
+    const [detection] = mocks.recordShadowDetection.mock.calls[0];
+    expect(detection).toMatchObject({
+      detector: 'paymentRisk',
+      policyVersion: 1,
+      wouldAction: 'restrict',
+      userIds: ['u1'],
+      network: { ip: null, hosting: false },
+      windowMinutes: 60,
+      group: null,
+      payment: {
+        paymentIntentId: 'pi_1',
+        chargeId: 'ch_1',
+        kind: 'credits',
+        outcome: 'succeeded',
+        amount: 10000,
+        currency: 'usd',
+        riskLevel: 'normal',
+        livemode: true,
+      },
+      detectedAt: now,
+    });
+    expect(detection.summary).toBe(
+      'credits payment succeeded (100.00 USD): account is 1 min old; card used on 2 accounts'
+    );
+    expect(detection.signals).toEqual([
+      { key: 'youngAccount', label: 'Account age at payment (minutes)', observed: 1, threshold: 60 },
+      { key: 'sharedCard', label: 'Accounts that used this card', observed: 2, threshold: 1 },
+    ]);
+    expect(JSON.stringify(detection)).not.toContain('fp_1');
+  });
+
+  it('marks a non-production detection as Stripe test mode', async () => {
+    setStage('dev-alice');
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordShadowDetection.mock.calls[0][0].payment.livemode).toBe(false);
+  });
+
+  it('still alerts when the shadow detection write fails', async () => {
+    mocks.recordShadowDetection.mockRejectedValueOnce(new Error('mongo down'));
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      '[PaymentRisk] shadow detection was not recorded',
+      expect.objectContaining({ paymentIntentId: 'pi_1', error: 'mongo down' })
+    );
+  });
+
+  it('alerts without recording when shadow detection recording is switched off', async () => {
+    mocks.settings = { shadowDetectionRecordingEnabled: 'false' };
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+  });
+
   it('records but does not alert when nothing fires', async () => {
     mocks.findById.mockResolvedValue({ id: 'u1', createdAt: minutesAgo(24 * 60) });
     mocks.countAccountsForCard.mockResolvedValue(1);
@@ -246,6 +319,7 @@ describe('screenPaymentOutcome', () => {
 
     expect(mocks.recordOutcome).toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
   it('does not alert again on a Stripe redelivery', async () => {

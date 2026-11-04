@@ -219,6 +219,7 @@ export function buildSignupNetworkShadowDetection(input: {
     })),
     windowMinutes,
     group: null,
+    payment: null,
     detectedAt,
   };
 }

@@ -65,6 +65,7 @@ const detection = (over: Partial<ShadowDetectionRow> = {}): ShadowDetectionRow =
   signals: [{ key: 'signups', label: 'Signups from one IP', observed: 3, threshold: 3 }],
   windowMinutes: 180,
   group: null,
+  payment: null,
   detectedAt: '2026-10-30T10:00:00.000Z',
   verdict: null,
   verdicts: [],
@@ -244,6 +245,37 @@ describe('ShadowDetectionsTab', () => {
       );
     }
     expect(within(actors).getByText('203.0.113.7 / Example Hosting / NL / Hosting')).toBeTruthy();
+  });
+
+  it('links a payment-risk detection to its Stripe payment in the verdict dialog', async () => {
+    const payment = {
+      paymentIntentId: 'pi_123',
+      chargeId: 'ch_123',
+      kind: 'credits' as const,
+      outcome: 'succeeded' as const,
+      amount: 10000,
+      currency: 'usd',
+      riskLevel: 'elevated',
+      livemode: false,
+    };
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [detection({ detector: 'paymentRisk', wouldAction: 'restrict', network: null, payment })],
+          summary: [summaryRow({ detector: 'paymentRisk' })],
+        })
+      )
+    );
+    renderTab();
+    expect(within(screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`)).getByText('Payment risk')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const evidence = await screen.findByTestId('shadow-detection-dialog-payment');
+    expect(within(evidence).getByText('credits payment succeeded, 100.00 USD, Radar risk elevated')).toBeTruthy();
+    expect(within(evidence).getByText('Stripe test mode')).toBeTruthy();
+    expect(within(evidence).getByTestId('shadow-detection-dialog-stripe-link').getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/test/payments/pi_123'
+    );
   });
 
   const [direct1, direct2, direct3, transitive] = ['b', 'c', 'd', 'e'].map(char => char.repeat(24));

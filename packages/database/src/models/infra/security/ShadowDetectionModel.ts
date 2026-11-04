@@ -11,6 +11,7 @@ import {
   type ShadowDetectionAction,
   type ShadowDetectionItem,
   type ShadowDetectionNetwork,
+  type ShadowDetectionPayment,
   type ShadowDetectionSignal,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
@@ -34,6 +35,7 @@ export interface IShadowDetectionDocument extends Document {
   signals: ShadowDetectionSignal[];
   windowMinutes: number | null;
   group: AccountCampaignGroup | null;
+  payment: ShadowDetectionPayment | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
   verdicts: ShadowDetectionVerdictEntry[];
@@ -65,6 +67,20 @@ const SignalSchema = new Schema<ShadowDetectionSignal>(
   { _id: false }
 );
 
+const PaymentSchema = new Schema<ShadowDetectionPayment>(
+  {
+    paymentIntentId: { type: String, required: true },
+    chargeId: { type: String, default: null },
+    kind: { type: String, enum: ['credits', 'subscription'], required: true },
+    outcome: { type: String, enum: ['succeeded', 'failed'], required: true },
+    amount: { type: Number, default: null },
+    currency: { type: String, default: null },
+    riskLevel: { type: String, default: null },
+    livemode: { type: Boolean, required: true },
+  },
+  { _id: false }
+);
+
 const VerdictEntrySchema = new Schema<ShadowDetectionVerdictEntry>(
   {
     verdict: { type: String, enum: SHADOW_DETECTION_VERDICTS, required: true },
@@ -88,6 +104,7 @@ export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
     // Validated against accountCampaignGroupSchema on write (recordCampaignGroup); Mixed because the
     // nested evidence lists are read whole and never queried field by field.
     group: { type: Schema.Types.Mixed, default: null },
+    payment: { type: PaymentSchema, default: null },
     detectedAt: { type: Date, required: true },
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
     verdicts: { type: [VerdictEntrySchema], default: [] },
@@ -205,6 +222,19 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
   })),
   windowMinutes: doc.windowMinutes ?? null,
   group: doc.group ?? null,
+  // Records written before payment evidence existed carry no field at all.
+  payment: doc.payment
+    ? {
+        paymentIntentId: doc.payment.paymentIntentId,
+        chargeId: doc.payment.chargeId ?? null,
+        kind: doc.payment.kind,
+        outcome: doc.payment.outcome,
+        amount: doc.payment.amount ?? null,
+        currency: doc.payment.currency ?? null,
+        riskLevel: doc.payment.riskLevel ?? null,
+        livemode: doc.payment.livemode,
+      }
+    : null,
   detectedAt: doc.detectedAt,
   verdict: doc.verdict ?? null,
   verdicts: (doc.verdicts ?? []).map(entry => ({

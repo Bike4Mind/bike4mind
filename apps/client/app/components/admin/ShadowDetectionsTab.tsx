@@ -10,6 +10,7 @@ import {
   type AccountCampaignRelationship,
   type ShadowDetectionAction,
   type ShadowDetectionNetwork,
+  type ShadowDetectionPayment,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
   type ShadowDetector,
@@ -49,6 +50,7 @@ export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   signupNetworkBurst: 'Signup network burst',
   accountCampaign: 'Account campaign',
   youngAccountSpend: 'Young-account spend',
+  paymentRisk: 'Payment risk',
 };
 
 const RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {
@@ -114,6 +116,44 @@ export const formatNetwork = (network: ShadowDetectionNetwork): string =>
   ]
     .filter((part): part is string => !!part)
     .join(' / ');
+
+/** The payment in the Stripe Dashboard it was taken in; test-mode payments live under /test. */
+export const stripePaymentUrl = (payment: Pick<ShadowDetectionPayment, 'paymentIntentId' | 'livemode'>): string =>
+  `https://dashboard.stripe.com${payment.livemode ? '' : '/test'}/payments/${encodeURIComponent(payment.paymentIntentId)}`;
+
+const formatPaymentAmount = (payment: ShadowDetectionPayment): string =>
+  payment.amount === null || !payment.currency
+    ? 'Unknown amount'
+    : `${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}`;
+
+const PaymentEvidence: React.FC<{ payment: ShadowDetectionPayment }> = ({ payment }) => (
+  <Stack gap={0.25} data-testid="shadow-detection-dialog-payment" sx={{ minWidth: 0 }}>
+    <Typography level="body-xs" sx={muted}>
+      Payment
+    </Typography>
+    <Typography level="body-sm">
+      {`${payment.kind} payment ${payment.outcome}, ${formatPaymentAmount(payment)}`}
+      {payment.riskLevel ? `, Radar risk ${payment.riskLevel}` : ''}
+    </Typography>
+    <Typography
+      component="a"
+      href={stripePaymentUrl(payment)}
+      target="_blank"
+      rel="noopener noreferrer"
+      level="body-xs"
+      fontFamily="code"
+      data-testid="shadow-detection-dialog-stripe-link"
+      sx={{ color: 'admin.link', textDecoration: 'none', overflowWrap: 'anywhere' }}
+    >
+      {payment.paymentIntentId}
+    </Typography>
+    {!payment.livemode && (
+      <Typography level="body-xs" sx={muted}>
+        Stripe test mode
+      </Typography>
+    )}
+  </Stack>
+);
 
 const UserLink: React.FC<{ userId: string; testId: string }> = ({ userId, testId }) => (
   <Link to="/admin/users/$userId" params={{ userId }} data-testid={testId} style={{ textDecoration: 'none' }}>
@@ -370,6 +410,7 @@ const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ row,
           {formatNetwork(row.network)}
         </Typography>
       )}
+      {row.payment && <PaymentEvidence payment={row.payment} />}
     </Stack>
   );
 

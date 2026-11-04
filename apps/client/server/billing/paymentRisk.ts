@@ -1,6 +1,11 @@
-import { adminSettingsRepository, paymentAttemptRepository, userRepository } from '@bike4mind/database';
-import type { PaymentAttempt, PaymentAttemptKind } from '@bike4mind/database';
-import { escapeSlackText, type INetworkMeta } from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  paymentAttemptRepository,
+  shadowDetectionRepository,
+  userRepository,
+} from '@bike4mind/database';
+import type { PaymentAttempt, PaymentAttemptKind, RecordShadowDetectionInput } from '@bike4mind/database';
+import { classifyStage, escapeSlackText, type INetworkMeta, type ShadowDetectionSignal } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
@@ -11,6 +16,7 @@ import { adminOwnerSlackRef } from '@server/integrations/slack/subscriptionLifec
 import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { lockIfPaidWithBlockedCard } from '@server/billing/linkedAccounts';
 import type Stripe from 'stripe';
+import { Resource } from 'sst';
 
 const MINUTE_MS = 60_000;
 
@@ -131,6 +137,108 @@ export function formatPaymentRiskAlert(
     `*Radar risk:* ${attempt.riskLevel ?? 'not reported'}`,
     `*Signals:* ${signals.map(signal => describeSignal(signal, thresholds)).join('; ')}`,
   ].join('\n');
+}
+
+/** Bump when the signals-to-wouldAction mapping changes, so detection precision is graded per policy. */
+export const PAYMENT_RISK_POLICY_VERSION = 1;
+
+function toDetectionSignal(signal: PaymentRiskSignal, thresholds: PaymentRiskThresholds): ShadowDetectionSignal {
+  switch (signal.type) {
+    case 'youngAccount':
+      return {
+        key: signal.type,
+        label: 'Account age at payment (minutes)',
+        observed: signal.accountAgeMinutes,
+        threshold: thresholds.youngAccountMinutes,
+      };
+    case 'sharedCard':
+      return {
+        key: signal.type,
+        label: 'Accounts that used this card',
+        observed: signal.accounts,
+        threshold: thresholds.maxAccountsPerCard,
+      };
+    case 'manyCardsPerAccount':
+      return {
+        key: signal.type,
+        label: `Cards tried by this account in ${thresholds.cardWindowMinutes} min`,
+        observed: signal.cards,
+        threshold: thresholds.maxCardsPerWindow,
+      };
+    case 'manyCardsPerNetwork':
+      return {
+        key: signal.type,
+        label: `Cards tried from this network in ${thresholds.cardWindowMinutes} min`,
+        observed: signal.cards,
+        threshold: thresholds.maxCardsPerWindow,
+      };
+    case 'hostingNetwork':
+      return { key: signal.type, label: 'Hosting/VPN network', observed: null, threshold: null };
+    case 'radarRisk':
+      return { key: signal.type, label: `Radar risk ${signal.riskLevel}`, observed: null, threshold: null };
+  }
+}
+
+/**
+ * The shadow detection one screened payment records, next to its LiveOps alert, so admins can grade
+ * the app-side signals on the Detections page. `restrict` is what the automatic response to a
+ * confirmed payment risk does (lockAccountForPaymentRisk, linkedAccounts.ts); this record does not.
+ */
+export function buildPaymentRiskShadowDetection(input: {
+  attempt: PaymentAttempt;
+  outcome: 'succeeded' | 'failed';
+  chargeId: string | null;
+  signals: [PaymentRiskSignal, ...PaymentRiskSignal[]];
+  thresholds: PaymentRiskThresholds;
+  livemode: boolean;
+  detectedAt: Date;
+}): RecordShadowDetectionInput {
+  const { attempt, outcome, chargeId, signals, thresholds, livemode, detectedAt } = input;
+  return {
+    detector: 'paymentRisk',
+    policyVersion: PAYMENT_RISK_POLICY_VERSION,
+    wouldAction: 'restrict',
+    summary: `${attempt.kind} payment ${outcome} (${formatAmount(attempt.amount, attempt.currency)}): ${signals
+      .map(signal => describeSignal(signal, thresholds))
+      .join('; ')}`,
+    userIds: [attempt.userId],
+    // PaymentAttempt keeps only a hashed IP, so the hosting flag is the one network fact on hand.
+    network:
+      attempt.hostingNetwork === null
+        ? null
+        : { ip: null, asn: null, asnOrg: null, country: null, hosting: attempt.hostingNetwork },
+    signals: signals.map(signal => toDetectionSignal(signal, thresholds)),
+    windowMinutes: thresholds.cardWindowMinutes,
+    group: null,
+    payment: {
+      paymentIntentId: attempt.paymentIntentId,
+      chargeId,
+      kind: attempt.kind,
+      outcome,
+      amount: attempt.amount,
+      currency: attempt.currency,
+      riskLevel: attempt.riskLevel,
+      livemode,
+    },
+    detectedAt,
+  };
+}
+
+/** Best-effort: a failed write is logged and never blocks the Slack alert or the webhook. */
+async function recordPaymentRiskDetection(
+  detection: RecordShadowDetectionInput,
+  settings: Record<string, string>,
+  logger: Logger
+): Promise<void> {
+  if (!getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) return;
+  try {
+    await shadowDetectionRepository.record(detection);
+  } catch (error) {
+    logger.error('[PaymentRisk] shadow detection was not recorded', {
+      paymentIntentId: detection.payment?.paymentIntentId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 const idOf = (ref: string | { id: string } | null | undefined): string | null =>
@@ -289,9 +397,23 @@ export async function screenPaymentOutcome(
       outcome: attempt.outcome,
       signals: signals.map(signal => signal.type),
     });
-    if (signals.length === 0) return;
+    const [firstSignal, ...otherSignals] = signals;
+    if (!firstSignal) return;
 
-    await postMessageToSlack(formatPaymentRiskAlert(attempt, signals, thresholds));
+    // Redeliveries returned above (`changed`), so each screened outcome records once.
+    const detection = buildPaymentRiskShadowDetection({
+      attempt,
+      outcome: input.outcome,
+      chargeId: risk?.chargeId ?? null,
+      signals: [firstSignal, ...otherSignals],
+      thresholds,
+      livemode: classifyStage(Resource.App.stage) === 'production',
+      detectedAt: now,
+    });
+    await Promise.all([
+      postMessageToSlack(formatPaymentRiskAlert(attempt, signals, thresholds)),
+      recordPaymentRiskDetection(detection, settings, logger),
+    ]);
   } catch (error) {
     logger.error('[PaymentRisk] screening failed', {
       paymentIntentId: input.paymentIntentId,
