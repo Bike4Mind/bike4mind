@@ -28,7 +28,7 @@ import { admitPendingUploads, PENDING_UPLOAD_LIMITED, PENDING_UPLOAD_WINDOW_MS }
 const req = { user: { id: 'u1', isAdmin: false, tags: [] } } as unknown as Parameters<typeof admitPendingUploads>[0];
 
 const group = (organizationId: string | null, mine: boolean, count: number, bytes: number, ageMs = 60_000) => ({
-  _id: { organizationId, mine },
+  _id: { organizationId, mine, pending: true },
   count,
   bytes,
   oldest: new Date(Date.now() - ageMs),
@@ -53,6 +53,27 @@ describe('admitPendingUploads - cap', () => {
     mocks.aggregate.mockResolvedValue([group(null, true, 4, 100)]);
 
     await expect(admitPendingUploads(req, 6, [undefined])).resolves.toMatchObject({ count: 4 });
+  });
+
+  it('judges concurrent requests against their snapshots without reserving the count', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ pendingUploadLimit: '1' });
+
+    const snapshots = await Promise.all([admitPendingUploads(req, 1, []), admitPendingUploads(req, 1, [])]);
+
+    expect(snapshots.map(snapshot => snapshot.count)).toEqual([0, 0]);
+    expect(mocks.aggregate).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses only pending rows for the cap and Retry-After', async () => {
+    const complete = group(null, true, 100, 500, 29 * 60_000);
+    complete._id.pending = false;
+    mocks.aggregate.mockResolvedValue([group(null, true, 10, 100, 5 * 60_000), complete]);
+
+    const error = await refusal(admitPendingUploads(req, 1, []));
+
+    expect(error.additionalInfo?.details).toMatchObject({ pending: 10 });
+    expect(error.additionalInfo?.retryAfter).toBeGreaterThan(24 * 60);
+    expect(error.additionalInfo?.retryAfter).toBeLessThanOrEqual(25 * 60);
   });
 
   it('refuses with a 429 carrying Retry-After until the oldest counted upload ages out', async () => {
@@ -134,6 +155,11 @@ describe('admitPendingUploads - cap', () => {
     await expect(admitPendingUploads(req, 100, [])).resolves.toMatchObject({ count: 10_000 });
   });
 
+  it('propagates a failed reservation read instead of admitting against an empty pool', async () => {
+    mocks.aggregate.mockRejectedValueOnce(new Error('pending uploads unavailable'));
+    await expect(admitPendingUploads(req, 1, [])).rejects.toThrow('pending uploads unavailable');
+  });
+
   it('refuses a request with no signed-in user without reading anything', async () => {
     await expect(admitPendingUploads({} as typeof req, 1, [])).rejects.toThrow('Sign in to upload files');
     expect(mocks.aggregate).not.toHaveBeenCalled();
@@ -141,6 +167,17 @@ describe('admitPendingUploads - cap', () => {
 });
 
 describe('admitPendingUploads - reserved bytes', () => {
+  it('keeps completed but uncharged bytes reserved without counting them toward the cap', async () => {
+    const complete = group(null, true, 100, 500);
+    complete._id.pending = false;
+    mocks.aggregate.mockResolvedValue([group(null, true, 1, 100), complete]);
+
+    const pending = await admitPendingUploads(req, 1, []);
+
+    expect(pending.count).toBe(1);
+    expect(pending.bytesFor(undefined)).toBe(600);
+  });
+
   it("splits bytes into the caller's personal pool and each org pool, whoever uploaded into the org", async () => {
     mocks.aggregate.mockResolvedValue([
       group(null, true, 1, 100),
@@ -175,7 +212,6 @@ describe('admitPendingUploads - reserved bytes', () => {
     expect(pipeline[0].$match?.$or[0]).toMatchObject({
       userId: 'u1',
       clientUpload: true,
-      status: 'pending',
       deletedAt: null,
     });
   });
@@ -188,7 +224,6 @@ describe('admitPendingUploads - reserved bytes', () => {
     expect(orgBranch).toMatchObject({
       organizationId: { $in: ['org-1', 'org-2'], $type: 'string' },
       clientUpload: true,
-      status: 'pending',
       deletedAt: null,
     });
     const since = (orgBranch.createdAt as { $gte: Date }).$gte.getTime();

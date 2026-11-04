@@ -10,7 +10,7 @@ import { resolveUserRateTier, type RateTierUser } from '@server/utils/userRateTi
  * Presigned client uploads whose bytes have not landed: FabFile rows with `clientUpload`, still
  * `pending`, not deleted, created within the window. The presign doors (createPresignedUpload,
  * generate-presigned-urls-batch, createFabFile without content) cap how many a user may hold and
- * count their bytes against the owner's storage quota, which only moves once bytes land.
+ * reserve recent client-upload bytes until storage accounting records their charge.
  */
 
 // ms. The presigned PUT lives 10 minutes; the rest is slack for a slow PUT or a late S3 event.
@@ -21,12 +21,12 @@ export const PENDING_UPLOAD_LIMITED = 'pending_upload_limit';
 export type PendingUploads = {
   /** The caller's own in-flight uploads, whichever pool they bill to. */
   count: number;
-  /** In-flight bytes billed to that pool: the caller's personal rows, or an org's rows from any uploader. */
+  /** Uncharged recent client-upload bytes: the caller's personal rows, or an org's rows from any uploader. */
   bytesFor: (organizationId: string | undefined) => number;
 };
 
 type PendingGroup = {
-  _id: { organizationId: string | null; mine: boolean };
+  _id: { organizationId: string | null; mine: boolean; pending: boolean };
   count: number;
   bytes: number;
   oldest: Date;
@@ -51,9 +51,8 @@ async function resolveLimit(user: RateTierUser, req: ActiveSubscriptionsRequest)
 
 /** One aggregate: the caller's rows (for the count and personal bytes) plus every row in the named org pools. */
 async function loadPendingGroups(userId: string, organizationIds: string[]): Promise<PendingGroup[]> {
-  const pending = {
+  const recentClientUpload = {
     clientUpload: true,
-    status: 'pending',
     deletedAt: null,
     createdAt: { $gte: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS) },
   };
@@ -61,19 +60,32 @@ async function loadPendingGroups(userId: string, organizationIds: string[]): Pro
     {
       $match: {
         $or: [
-          { userId, ...pending },
+          { userId, ...recentClientUpload },
           // Restates the partial index's filter so the planner can use it.
           ...(organizationIds.length > 0
-            ? [{ organizationId: { $in: organizationIds, $type: 'string' }, ...pending }]
+            ? [{ organizationId: { $in: organizationIds, $type: 'string' }, ...recentClientUpload }]
             : []),
         ],
       },
     },
     {
       $group: {
-        _id: { organizationId: { $ifNull: ['$organizationId', null] }, mine: { $eq: ['$userId', userId] } },
+        _id: {
+          organizationId: { $ifNull: ['$organizationId', null] },
+          mine: { $eq: ['$userId', userId] },
+          pending: { $eq: ['$status', 'pending'] },
+        },
         count: { $sum: 1 },
-        bytes: { $sum: { $ifNull: ['$fileSize', 0] } },
+        // Completion precedes the charge transaction, so status alone cannot release reserved bytes.
+        bytes: {
+          $sum: {
+            $cond: [
+              { $eq: [{ $ifNull: ['$storageChargedAt', null] }, null] },
+              { $max: [{ $ifNull: ['$fileSize', 0] }, 0] },
+              0,
+            ],
+          },
+        },
         oldest: { $min: '$createdAt' },
       },
     },
@@ -85,7 +97,7 @@ async function loadPendingGroups(userId: string, organizationIds: string[]): Pro
  * then returns the in-flight snapshot the quota check reserves against. Run it after the door's
  * admission gates and before consumeFileUploadBudget, so a refusal costs no hourly allowance.
  * `ownerOrganizationIds` are the org pools the new files bill to (undefined for personal files).
- * The count is read, not reserved, so concurrent requests are each judged on the same reading.
+ * Count and bytes are snapshots, not atomic reservations; concurrent requests can share a reading.
  */
 export async function admitPendingUploads(
   req: ActiveSubscriptionsRequest,
@@ -100,7 +112,8 @@ export async function admitPendingUploads(
   const [limit, groups] = await Promise.all([resolveLimit(user, req), loadPendingGroups(user.id, organizationIds)]);
 
   const mine = groups.filter(group => group._id.mine);
-  const count = mine.reduce((sum, group) => sum + group.count, 0);
+  const myPending = mine.filter(group => group._id.pending);
+  const count = myPending.reduce((sum, group) => sum + group.count, 0);
 
   if (count + requested > limit) {
     const details = { limit, pending: count, requested };
@@ -117,8 +130,8 @@ export async function admitPendingUploads(
         { code: PENDING_UPLOAD_LIMITED, details }
       );
     }
-    // Reaching here means count > 0, so `mine` is non-empty.
-    const oldest = Math.min(...mine.map(group => group.oldest.getTime()));
+    // Reaching here means count > 0, so `myPending` is non-empty.
+    const oldest = Math.min(...myPending.map(group => group.oldest.getTime()));
     const retryAfter = Math.max(1, Math.ceil((oldest + PENDING_UPLOAD_WINDOW_MS - Date.now()) / 1000));
     throw new TooManyRequestsError(
       `You have ${count} uploads in progress (limit ${limit}). Wait for them to finish, then try again.`,

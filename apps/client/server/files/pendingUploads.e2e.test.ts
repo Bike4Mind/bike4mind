@@ -23,8 +23,8 @@ let mongoServer: MongoMemoryServer;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
-  await mongoose.connect(mongoServer.getUri());
-  await FabFile.init();
+  await mongoose.connect(mongoServer.getUri(), { autoIndex: false });
+  await FabFile.createIndexes();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -56,8 +56,8 @@ describe('admitPendingUploads against a real database', () => {
       { createdAt: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS + 60_000) },
       // Abandoned: past the window.
       { createdAt: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS - 60_000) },
-      // Landed.
-      { status: 'complete' },
+      // Landed and charged.
+      { status: 'complete', storageChargedAt: new Date() },
       // Written server-side, not a client upload.
       { clientUpload: false },
       { clientUpload: undefined },
@@ -79,7 +79,7 @@ describe('admitPendingUploads against a real database', () => {
       { organizationId: 'org-1', fileSize: 10 },
       { organizationId: 'org-1', fileSize: 100, userId: OTHER },
       { organizationId: 'org-2', fileSize: 1_000, userId: OTHER },
-      { organizationId: 'org-1', fileSize: 10_000, userId: OTHER, status: 'complete' }
+      { organizationId: 'org-1', fileSize: 10_000, userId: OTHER, status: 'complete', storageChargedAt: new Date() }
     );
 
     const pending = await admitPendingUploads(req, 1, [undefined, 'org-1']);
@@ -100,10 +100,64 @@ describe('admitPendingUploads against a real database', () => {
     });
   });
 
-  it('serves the org-pool branch from the partial pending-upload index', async () => {
-    // An org with a large landed history: the org-wide index would walk all of it.
+  it('reserves completed client bytes until their charge commits, independently of the pending cap', async () => {
+    const { insertedIds } = await seed(
+      { fileSize: 11 },
+      // A stamp is already accounted for even if the upload status has not changed yet.
+      { fileSize: 13, storageChargedAt: new Date() },
+      { fileSize: 17, status: 'complete', moderationStatus: 'scanning' },
+      { fileSize: 19, organizationId: 'org-1', userId: OTHER, status: 'complete', moderationStatus: 'blocked' },
+      { fileSize: 23, status: 'complete', deletedAt: new Date(), uploadRejectedAt: new Date() },
+      { fileSize: 29, status: 'complete', createdAt: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS - 60_000) }
+    );
+
+    const beforeCharge = await admitPendingUploads(req, 1, [undefined, 'org-1']);
+
+    expect(beforeCharge.count).toBe(2);
+    expect(beforeCharge.bytesFor(undefined)).toBe(28);
+    expect(beforeCharge.bytesFor('org-1')).toBe(19);
+
+    await FabFile.collection.updateMany(
+      { _id: { $in: [insertedIds[2], insertedIds[3]] } },
+      { $set: { storageChargedAt: new Date() } }
+    );
+
+    const afterCharge = await admitPendingUploads(req, 1, [undefined, 'org-1']);
+
+    expect(afterCharge.count).toBe(2);
+    expect(afterCharge.bytesFor(undefined)).toBe(11);
+    expect(afterCharge.bytesFor('org-1')).toBe(0);
+  });
+
+  it('does not reserve count or bytes between concurrent admission snapshots', async () => {
+    await FabFile.collection.insertMany(Array.from({ length: 249 }, () => row()));
+
+    const snapshots = await Promise.all([admitPendingUploads(req, 1, []), admitPendingUploads(req, 1, [])]);
+
+    expect(snapshots.map(snapshot => snapshot.count)).toEqual([249, 249]);
+    expect(snapshots.map(snapshot => snapshot.bytesFor(undefined))).toEqual([24_900, 24_900]);
+    expect(await FabFile.collection.countDocuments({ userId: ME })).toBe(249);
+  });
+
+  it('keeps negative legacy declarations from reducing reserved bytes in either pool', async () => {
+    await seed(
+      { fileSize: 100 },
+      { fileSize: -1_000 },
+      { fileSize: 200, organizationId: 'org-1', userId: OTHER },
+      { fileSize: -2_000, organizationId: 'org-1', userId: OTHER, status: 'complete' }
+    );
+
+    const pending = await admitPendingUploads(req, 1, [undefined, 'org-1']);
+
+    expect(pending.count).toBe(2);
+    expect(pending.bytesFor(undefined)).toBe(100);
+    expect(pending.bytesFor('org-1')).toBe(200);
+  });
+
+  it('serves the org-pool branch from the partial client-upload index', async () => {
+    // An org with a large server-written history: the org-wide index would walk all of it.
     await FabFile.collection.insertMany(
-      Array.from({ length: 300 }, () => row({ organizationId: 'org-1', userId: OTHER, status: 'complete' }))
+      Array.from({ length: 300 }, () => row({ organizationId: 'org-1', userId: OTHER, clientUpload: false }))
     );
     await seed({ organizationId: 'org-1', userId: OTHER });
 
@@ -111,7 +165,6 @@ describe('admitPendingUploads against a real database', () => {
       .find({
         organizationId: { $in: ['org-1'], $type: 'string' },
         clientUpload: true,
-        status: 'pending',
         deletedAt: null,
         createdAt: { $gte: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS) },
       })
@@ -126,6 +179,8 @@ describe('admitPendingUploads against a real database', () => {
     };
     walk(plan.queryPlanner.winningPlan);
 
-    expect(stages.some(s => s.stage === 'IXSCAN' && s.indexName === 'organizationId_1_createdAt_1')).toBe(true);
+    expect(stages.some(s => s.stage === 'IXSCAN' && s.indexName === 'organizationId_1_createdAt_1_clientUpload')).toBe(
+      true
+    );
   });
 });

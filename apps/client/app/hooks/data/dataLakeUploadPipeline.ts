@@ -536,9 +536,8 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
   // `reconciled` tells the catch the outcome branch already handled cleanup, so the
   // catch only rolls back a setup-phase failure (e.g. creating the batch threw).
   let batchId: string | undefined;
-  // The first presign refusal, kept so a batch where NOTHING uploaded can report the
-  // server's actual reason instead of the generic transport message below.
-  let firstPresignError: unknown;
+  // Prefer the first HTTP refusal over transport errors so a mixed batch retains an actionable reason.
+  let presignError: unknown;
   let failedCount = 0;
   const failedNames: string[] = [];
   const failedFileIds: string[] = [];
@@ -619,7 +618,11 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
         });
         urlMap = urlsRes.data.files;
       } catch (err) {
-        if (firstPresignError === undefined) firstPresignError = err;
+        const recordedStatus = axios.isAxiosError(presignError) ? presignError.response?.status : undefined;
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+        if (presignError === undefined || (recordedStatus === undefined && status !== undefined)) {
+          presignError = err;
+        }
         for (const f of chunk) {
           failedCount++;
           failedNames.push(f.file.name);
@@ -706,8 +709,8 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       // blaming the network. Only when it carries a status: a timeout or abort has no response
       // and would fall through to its raw axios text ("timeout of 30000ms exceeded"), where the
       // generic transport message is both friendlier and true.
-      const refusalStatus = axios.isAxiosError(firstPresignError) ? firstPresignError.response?.status : undefined;
-      throw refusalStatus ? firstPresignError : new Error(UPLOAD_ALL_FAILED_MESSAGE);
+      const refusalStatus = axios.isAxiosError(presignError) ? presignError.response?.status : undefined;
+      throw refusalStatus ? presignError : new Error(UPLOAD_ALL_FAILED_MESSAGE);
     }
 
     // Partial or full success: the uploaded files proceed through the pipeline.
@@ -756,6 +759,17 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
           { duration: 10000 }
         );
       }
+    }
+
+    const refusalStatus = axios.isAxiosError(presignError) ? presignError.response?.status : undefined;
+    if (refusalStatus !== undefined && refusalStatus >= 400) {
+      toast.warning(
+        classifyUploadError(presignError, {
+          config: { name: config.name, tagPrefix: config.tagPrefix },
+          isAppend: !!targetLake,
+        }).message,
+        { duration: 10000 }
+      );
     }
 
     cb.updateUploadProgress({ status: 'complete' });

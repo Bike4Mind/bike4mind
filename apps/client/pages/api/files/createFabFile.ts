@@ -21,7 +21,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { getFileExtension } from '@bike4mind/utils';
+import { checkStorageLimitForOwner, getFileExtension } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -168,7 +168,16 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
       // like the presign doors, against the pool the service will bill (same owner rule, same lakes).
       let pending: PendingUploads | undefined;
       if (!('content' in params && params.content)) {
-        pending = await admitPendingUploads(req, 1, [fabFilesService.pickOwnerOrganizationId(targetLakes)]);
+        if (params.fileSize <= 0) throw new BadRequestError('File size must be positive');
+        const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
+        pending = await admitPendingUploads(req, 1, [ownerOrganizationId]);
+        const quotaUser = ownerOrganizationId ? user : await requesterScopedUsers(req, User).findById(user.id);
+        if (!quotaUser) throw new BadRequestError('User not found');
+        await checkStorageLimitForOwner(
+          { user: quotaUser, organizationId: ownerOrganizationId, pendingBytes: pending.bytesFor(ownerOrganizationId) },
+          params.fileSize,
+          id => organizationRepository.findById(id)
+        );
       }
 
       await consumeFileUploadBudget(req, 1);

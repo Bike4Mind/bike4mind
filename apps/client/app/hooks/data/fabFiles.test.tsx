@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
-import type { IFabFileDocument } from '@bike4mind/common';
+import { KnowledgeType, type IFabFileDocument } from '@bike4mind/common';
 import {
   useBulkDeleteFiles,
+  useCreateFabFile,
   useDeleteAllFiles,
   useGetFabFileContent,
   useGetFabFilesBySessionId,
@@ -35,7 +36,9 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 }));
 
 const updateFabFileOnServer = vi.fn();
+const createFabFileOnServerWithUpload = vi.fn();
 vi.mock('@client/app/utils/filesAPICalls', () => ({
+  createFabFileOnServerWithUpload: (...args: unknown[]) => createFabFileOnServerWithUpload(...args),
   updateFabFileOnServer: (...args: unknown[]) => updateFabFileOnServer(...args),
 }));
 
@@ -44,9 +47,13 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
 // runs for real against a real network failure instead of a hand-picked isError value the
 // production hook could never actually reach.
 const axiosGet = vi.fn();
-vi.mock('axios', () => ({
-  default: { get: (...args: unknown[]) => axiosGet(...args) },
-}));
+vi.mock('axios', async importOriginal => {
+  const actual = await importOriginal<typeof import('axios')>();
+  return {
+    ...actual,
+    default: { ...actual.default, get: (...args: unknown[]) => axiosGet(...args) },
+  };
+});
 
 const makeWrapper = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -309,5 +316,85 @@ describe('useGetFabFileContent', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBe('');
+  });
+});
+
+describe('useCreateFabFile', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createFabFileOnServerWithUpload.mockReset();
+  });
+
+  const uploadItems = () =>
+    Array.from({ length: 7 }, (_, index) => ({
+      file: new File(['text'], `${index}.txt`, { type: 'text/plain' }),
+      type: KnowledgeType.FILE,
+      fileName: `${index}.txt`,
+      mimeType: 'text/plain',
+      fileSize: 4,
+    }));
+
+  it('bounds concurrent uploads and preserves input order when they finish out of order', async () => {
+    const pending: Array<{ resolve: (value: IFabFileDocument) => void }> = [];
+    createFabFileOnServerWithUpload.mockImplementation(
+      () => new Promise<IFabFileDocument>(resolve => pending.push({ resolve }))
+    );
+    const { result } = renderHook(() => useCreateFabFile(), { wrapper: makeWrapper() });
+    const items = uploadItems();
+    let uploads: Promise<IFabFileDocument[]>;
+    act(() => {
+      uploads = result.current.mutateAsync(items);
+    });
+    await waitFor(() => expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(5));
+    await act(async () => {
+      for (const index of [4, 3, 2, 1, 0]) {
+        pending[index].resolve({ id: String(index) } as IFabFileDocument);
+      }
+    });
+    await waitFor(() => expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(7));
+    await act(async () => {
+      pending[6].resolve({ id: '6' } as IFabFileDocument);
+      pending[5].resolve({ id: '5' } as IFabFileDocument);
+      expect((await uploads!).map(file => file.id)).toEqual(['0', '1', '2', '3', '4', '5', '6']);
+    });
+    expect(toastSuccess).toHaveBeenCalledWith('Uploaded: 7 files');
+  });
+
+  it('waits for active uploads and starts no further group after a refusal', async () => {
+    const pending: Array<{
+      resolve: (value: IFabFileDocument) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    createFabFileOnServerWithUpload.mockImplementation(
+      () => new Promise<IFabFileDocument>((resolve, reject) => pending.push({ resolve, reject }))
+    );
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useCreateFabFile(), { wrapper });
+    let settled = false;
+    let failure: unknown;
+    act(() => {
+      void result.current.mutateAsync(uploadItems()).catch(error => {
+        settled = true;
+        failure = error;
+      });
+    });
+    await waitFor(() => expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(5));
+    const refusal = new Error('Upload limit reached');
+    await act(async () => {
+      pending[0].reject(refusal);
+    });
+    expect(settled).toBe(false);
+    await act(async () => {
+      for (const index of [1, 2, 3, 4]) pending[index].resolve({ id: String(index) } as IFabFileDocument);
+    });
+    await waitFor(() => expect(settled).toBe(true));
+    expect(failure).toBe(refusal);
+    expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(5);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['fabFiles'] });
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 });

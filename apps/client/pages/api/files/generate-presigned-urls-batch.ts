@@ -23,6 +23,7 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
   organizationRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
@@ -33,7 +34,7 @@ import {
   resolveSupportedMimeType,
 } from '@bike4mind/utils';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
-import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
@@ -231,9 +232,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
     );
   }
   const pending = await admitPendingUploads(req, data.files.length, bytesByOwnerOrganization.keys());
+  // Personal usage may have changed since auth while a landed upload was being charged.
+  const quotaUser = bytesByOwnerOrganization.has(undefined) ? await userRepository.findById(userId) : req.user;
+  if (!quotaUser) throw new UnauthorizedError('Sign in to upload files');
   for (const [organizationId, bytes] of bytesByOwnerOrganization) {
     await checkStorageLimitForOwner(
-      { user: req.user, organizationId, pendingBytes: pending.bytesFor(organizationId) },
+      { user: quotaUser, organizationId, pendingBytes: pending.bytesFor(organizationId) },
       bytes,
       id => organizationRepository.findById(id)
     );

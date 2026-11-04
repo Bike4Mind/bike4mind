@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ApiKeyScope, KnowledgeType, createModalVideoSchema } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB,
+  KnowledgeType,
+  createModalVideoSchema,
+} from '@bike4mind/common';
 import { deploymentMediaOrigins } from '@server/utils/deploymentMediaOrigins';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 
@@ -146,6 +151,13 @@ describe('POST /api/files/createFabFile - in-flight uploads', () => {
     h.signUrl.mockResolvedValue('https://s3.test/put');
   });
 
+  it.each([0, -1])('rejects declared size %i before admission or allowance consumption', async fileSize => {
+    await expect(run(body({ fileSize }), makeRes().res)).rejects.toThrow('File size must be positive');
+    expect(h.admitPendingUploads).not.toHaveBeenCalled();
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
   it('admits a create without content as one pending upload in the personal pool', async () => {
     await run(body(), makeRes().res);
 
@@ -175,6 +187,19 @@ describe('POST /api/files/createFabFile - in-flight uploads', () => {
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 
+  it('keeps an org quota refusal ahead of hourly allowance consumption', async () => {
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, organizationId: 'org-1', createdAt: new Date() });
+    const pendingBytes = DEFAULT_ORGANIZATION_STORAGE_LIMIT_MB * 1_000_000;
+    h.pendingBytes.set('org-1', pendingBytes);
+
+    await expect(run(body({ tags: [{ name: LAKE.datalakeTag, strength: 1 }] }), makeRes().res)).rejects.toMatchObject({
+      info: { errorCode: 'org_storage_limit_exceeded', used_bytes: pendingBytes },
+    });
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.signUrl).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
   it("counts the owner's in-flight bytes against the quota", async () => {
     // 1 MB personal quota, all but 5 bytes already promised to uploads in flight.
     h.pendingBytes.set(undefined, 999_995);
@@ -182,6 +207,8 @@ describe('POST /api/files/createFabFile - in-flight uploads', () => {
     await expect(run(body(), makeRes().res)).rejects.toMatchObject({
       info: { errorCode: 'storage_limit_exceeded', used_bytes: 999_995, requested_bytes: 10 },
     });
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.signUrl).not.toHaveBeenCalled();
     expect(h.fabFileCreate).not.toHaveBeenCalled();
   });
 });

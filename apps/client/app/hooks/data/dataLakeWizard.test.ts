@@ -690,6 +690,76 @@ describe('useBatchUpload rollback (#816)', () => {
     });
   });
 
+  it.each([
+    [429, 'You have 250 uploads in progress (limit 250). Wait for them to finish, then try again.'],
+    [503, 'The server ran into a problem. Please try again in a moment.'],
+  ])('surfaces a later-chunk HTTP %i refusal while retaining uploaded files', async (status, message) => {
+    const names = Array.from({ length: 101 }, (_, index) => `f${index}.txt`);
+    const route = apiPost.getMockImplementation()!;
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/files/generate-presigned-urls-batch' && body?.files?.[0]?.fileName === 'f100.txt') {
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status, data: { code: 'pending_upload_limit', error: message } },
+        });
+      }
+      return route(url, body);
+    });
+    seedWizard({ names });
+
+    const { result } = mountBatchUpload();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(toastMock.warning).toHaveBeenCalledWith(message, { duration: 10000 });
+    expect(uploadFileToUrlMock).toHaveBeenCalledTimes(100);
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(false);
+    expect(postCall('/api/data-lakes/batches/upload-complete')?.[1]).toMatchObject({
+      batchId: 'batch1',
+      failedFiles: 1,
+      failedFileNames: ['f100.txt'],
+    });
+    expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete');
+  });
+
+  it('keeps the HTTP refusal when an earlier chunk failed without a response', async () => {
+    const names = Array.from({ length: 201 }, (_, index) => `f${index}.txt`);
+    const message = 'You have 250 uploads in progress (limit 250). Wait for them to finish, then try again.';
+    const route = apiPost.getMockImplementation()!;
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const firstFileName = body?.files?.[0]?.fileName;
+        if (firstFileName === 'f0.txt') {
+          return Promise.reject({ isAxiosError: true, code: 'ERR_NETWORK', message: 'Network Error' });
+        }
+        if (firstFileName === 'f200.txt') {
+          return Promise.reject({
+            isAxiosError: true,
+            response: { status: 429, data: { code: 'pending_upload_limit', error: message } },
+          });
+        }
+      }
+      return route(url, body);
+    });
+    seedWizard({ names });
+
+    const { result } = mountBatchUpload();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(toastMock.warning).toHaveBeenCalledWith(message, { duration: 10000 });
+    expect(uploadFileToUrlMock).toHaveBeenCalledTimes(100);
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(false);
+    expect(postCall('/api/data-lakes/batches/upload-complete')?.[1]).toMatchObject({
+      batchId: 'batch1',
+      failedFiles: 101,
+      failedFileNames: [...names.slice(0, 100), 'f200.txt'],
+    });
+    expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete');
+  });
+
   it('batch-creation failure (create mode): setup-phase catch archives the new lake', async () => {
     // Exercises the outer !reconciled catch: the lake was created but creating the batch
     // throws before the outcome branch runs, so the catch (not the outcome branch) rolls
