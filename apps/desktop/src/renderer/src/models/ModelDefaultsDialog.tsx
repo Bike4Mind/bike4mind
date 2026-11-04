@@ -580,13 +580,10 @@ function LoadOptionRows({
     sent !== undefined &&
     sent !== loadedContext &&
     !sameContext(context, saved?.context ?? null);
-  const fixedSize = offered?.kind === 'ollama' && context?.mode === 'fixed' ? context.tokens : undefined;
   const tooLarge =
     offered?.kind === 'ollama' &&
-    (
-      offered.sizes.find(candidate => capOf(candidate) === fixedSize) ??
-      offered.sizes.find(candidate => candidate.size === fixedSize)
-    )?.loads === false;
+    context?.mode === 'fixed' &&
+    offered.sizes.find(candidate => candidate.tokens === sent)?.loads === false;
   return (
     <>
       <Divider sx={{ my: 1 }} />

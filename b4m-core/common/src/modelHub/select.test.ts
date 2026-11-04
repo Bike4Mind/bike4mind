@@ -6,6 +6,7 @@ import { computeBufferBytes, type HardwareProfile } from './fit';
 import {
   OLLAMA_DRAFT_LAYER_DEFAULT,
   ollamaBuildBytes,
+  ollamaBuildDraftMax,
   pickForMachine,
   SLOW_DECODE_TOKENS_PER_SEC,
   TIER_C_TOOL_REGRESSION_TOLERANCE,
@@ -675,7 +676,7 @@ describe('pickForMachine runtimes', () => {
     expect(recurrent(library(null, 3))).toBe(150 * 1024 ** 2);
   });
 
-  it('plans an hf-pull build by its served draft_num_predict, then its Modelfile override', () => {
+  it('plans an hf-pull build by its served draft_num_predict and ignores a Modelfile count', () => {
     const pulled = (layerPredict?: number, modelfilePredict?: number) =>
       withManifest(m => {
         const iq3 = m.entries.find(e => e.id === 'hybrid-27b')!.builds[2];
@@ -698,7 +699,7 @@ describe('pickForMachine runtimes', () => {
       pick('nv-24+64', 'code', { manifest, runtimes: ollamaOnly }).alternates[0].fit.memory.recurrentBytes;
     expect(recurrent(pulled(2))).toBe(150 * 1024 ** 2 * 3);
     expect(recurrent(pulled(2, 5))).toBe(150 * 1024 ** 2 * 3);
-    expect(recurrent(pulled(undefined, 3))).toBe(150 * 1024 ** 2 * 4);
+    expect(recurrent(pulled(undefined, 3))).toBe(150 * 1024 ** 2 * (1 + OLLAMA_DRAFT_LAYER_DEFAULT));
     expect(recurrent(pulled(0))).toBe(150 * 1024 ** 2);
   });
 
@@ -754,5 +755,52 @@ describe('ollamaBuildBytes', () => {
       ollama: { kind: 'hf-pull', modelfile: { dropStops: [] }, layers: layers(0.93e9) },
     } as Partial<HubBuild>);
     expect(ollamaBuildBytes(pinned)).toEqual({ weightsBytes: 8.4e9, mmprojBytes: 0.93e9 });
+  });
+});
+
+describe('ollamaBuildDraftMax', () => {
+  const layers = (over: Record<string, unknown> = {}) => ({
+    template: null,
+    params: null,
+    license: null,
+    numCtx: null,
+    projector: null,
+    draft: null,
+    ...over,
+  });
+  const entry = (mtpLayers = 0) => ({ arch: { mtpLayers } }) as Parameters<typeof ollamaBuildDraftMax>[0];
+  const build = (over: Partial<HubBuild>) => ({ weights: [], ...over }) as HubBuild;
+  const pulled = (
+    kind: 'library' | 'hf-pull',
+    over: Record<string, unknown>,
+    modelfile: Record<string, unknown> = {}
+  ) =>
+    kind === 'library'
+      ? { kind, ref: 'm:1b', sizeBytes: 1e9, digest: sha(2), layers: layers(over) }
+      : { kind, modelfile: { dropStops: [], ...modelfile }, layers: layers(over) };
+  const sidecar = { kind: 'mtp-sidecar', file: { path: 'd.gguf', sizeBytes: 1e8, sha256: sha(3) } };
+
+  it('plans 4 for a DRAFT layer and its pinned count over that', () => {
+    const withLayer = (kind: 'library' | 'hf-pull', over: Record<string, unknown> = {}) =>
+      build({ ollama: pulled(kind, { draft: sha(5), ...over }) } as Partial<HubBuild>);
+    expect(ollamaBuildDraftMax(entry(), withLayer('library'))).toBe(OLLAMA_DRAFT_LAYER_DEFAULT);
+    expect(ollamaBuildDraftMax(entry(), withLayer('hf-pull'))).toBe(OLLAMA_DRAFT_LAYER_DEFAULT);
+    expect(ollamaBuildDraftMax(entry(), withLayer('hf-pull', { draftNumPredict: 6 }))).toBe(6);
+  });
+
+  it('plans 0 for a Hugging Face pull whose sidecar draft file Ollama never installs', () => {
+    const b = build({ draft: sidecar, ollama: pulled('hf-pull', {}) } as Partial<HubBuild>);
+    expect(ollamaBuildDraftMax(entry(), b)).toBe(0);
+  });
+
+  it('plans 0 for a Hugging Face pull whose Modelfile count Ollama never applies', () => {
+    const b = build({ ollama: pulled('hf-pull', {}, { draftNumPredict: 5 }) } as Partial<HubBuild>);
+    expect(ollamaBuildDraftMax(entry(1), b)).toBe(0);
+  });
+
+  it('plans the pinned count for an embedded MTP head', () => {
+    const b = build({ ollama: pulled('library', { draftNumPredict: 3 }) } as Partial<HubBuild>);
+    expect(ollamaBuildDraftMax(entry(1), b)).toBe(3);
+    expect(ollamaBuildDraftMax(entry(0), b)).toBe(0);
   });
 });

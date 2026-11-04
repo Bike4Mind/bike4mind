@@ -500,6 +500,25 @@ describe('ModelDefaultsDialog load options', () => {
     expect(byTestId('model-defaults-context-select')?.textContent).toBe('Auto');
   });
 
+  it('warns when a stored size no option lists runs at a listed size that may not load', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 32768,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+          { size: 32768, tokens: 32768, autoTokens: 32768, loads: false },
+        ],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 131072 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe(
+      "Runs at 32K tokens. May not load in this computer's memory."
+    );
+  });
+
   it('warns about memory for a stored unlisted size that runs at a size that may not load', async () => {
     offer = {
       context: {

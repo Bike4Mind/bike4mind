@@ -131,11 +131,14 @@ export function ollamaBuildDraftMax(entry: Pick<HubEntry, 'arch'>, build: HubBui
   const source = build.ollama;
   const layers = source && source.kind !== 'create' ? source.layers : undefined;
   const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0 || !!layers?.draft;
-  const draftLayer = (build.draft !== undefined && build.draft.kind !== 'mtp-embedded') || !!layers?.draft;
-  const draftNumPredict =
-    source?.kind === 'library'
-      ? layers?.draftNumPredict
-      : (layers?.draftNumPredict ?? source?.modelfile.draftNumPredict);
+  // Ollama installs only what the pull carries: a sidecar draft file or a Modelfile count the pull never applies is ignored.
+  const pulled = source?.kind === 'library' || source?.kind === 'hf-pull';
+  const draftLayer = pulled
+    ? !!layers?.draft
+    : (build.draft !== undefined && build.draft.kind !== 'mtp-embedded') || !!layers?.draft;
+  const draftNumPredict = pulled
+    ? layers?.draftNumPredict
+    : (layers?.draftNumPredict ?? source?.modelfile.draftNumPredict);
   return hasDraft ? (draftNumPredict ?? (draftLayer ? OLLAMA_DRAFT_LAYER_DEFAULT : 0)) : 0;
 }
 
