@@ -2,7 +2,9 @@ import { Logger } from '@bike4mind/observability';
 import { PUZZLE_TIERS } from './bedrocknewsPuzzleReward';
 import { TICKET_STATUSES, type ClaimResult, type TicketPreview } from './bedrocknewsTickets';
 
-type CommonState = { state: 'verify-email' | 'expired' | 'not-found' | 'in-progress' | 'unavailable' };
+type CommonState = {
+  state: 'verify-email' | 'expired' | 'not-found' | 'in-progress' | 'claimed-elsewhere' | 'unavailable';
+};
 
 export type PreviewState =
   | CommonState
@@ -24,6 +26,7 @@ const REDEEM_FAILURES: Record<string, RedeemState> = {
   B4M_NOT_ELIGIBLE: { state: 'verify-email' },
   CLAIM_IN_PROGRESS: { state: 'in-progress' },
   B4M_BUDGET_SPENT: { state: 'budget-spent' },
+  TICKET_CLAIMED_ELSEWHERE: { state: 'claimed-elsewhere' },
 };
 
 const FAILURES: { [R in Route]: Record<string, RouteState[R]> } = { preview: TICKET_FAILURES, redeem: REDEEM_FAILURES };
@@ -57,4 +60,5 @@ export const isTicketPreview = (value: unknown): value is TicketPreview =>
   includes(TICKET_STATUSES, value.status) &&
   Array.isArray(value.rungs) &&
   value.rungs.every(rung => isRecord(rung) && includes(PUZZLE_TIERS, rung.length) && typeof rung.hard === 'boolean') &&
-  (value.result === undefined || isClaimResult(value.result));
+  (value.result === undefined || isClaimResult(value.result)) &&
+  (value.b4mUserId === undefined || typeof value.b4mUserId === 'string');

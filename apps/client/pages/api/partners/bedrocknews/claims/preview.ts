@@ -22,12 +22,15 @@ export default baseApi({ auth: 'jwtOnly' })
       if (!preview.ok) return failureState('preview', preview.code);
       if (!isTicketPreview(preview.preview)) return malformedState('preview');
 
-      const { status, rungs, result } = preview.preview;
+      const { status, rungs, result, b4mUserId } = preview.preview;
       if (status === 'expired') return { state: 'expired' };
       // Another redeem holds the ticket; offering it as ready would invite a second confirm.
       if (status === 'redeeming') return { state: 'in-progress' };
       if (status === 'redeemed') {
-        return result ? { state: 'redeemed', result: await withOwnBalance(result, user.id) } : { state: 'unavailable' };
+        if (!result) return { state: 'unavailable' };
+        // Another account's payout would read as this user's own.
+        if (b4mUserId !== user.id) return { state: 'claimed-elsewhere' };
+        return { state: 'redeemed', result: await withOwnBalance(result, user.id) };
       }
 
       // Everything was paid through another ticket; show it as claimed rather than "Add 0 credits".

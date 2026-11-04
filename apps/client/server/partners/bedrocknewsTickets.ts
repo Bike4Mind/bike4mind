@@ -24,6 +24,8 @@ export type TicketPreview = {
   expiresAt: string;
   rungs: { date: string; length: 5 | 6 | 7; hard: boolean }[];
   result?: ClaimResult;
+  /** The account a redeemed ticket paid. */
+  b4mUserId?: string;
 };
 
 type Failure = { ok: false; code: string; status: number };
@@ -37,8 +39,25 @@ async function partnerConfig(): Promise<{ baseUrl: string; partnerKey: string } 
     getSettingsValue(key, settings, settingsMap[key].defaultValue ?? '');
   const baseUrl = setting('BedrockNewsApiUrl').trim().replace(/\/+$/, '');
   const partnerKey = setting('BedrockNewsPartnerKey').trim();
-  return baseUrl && partnerKey ? { baseUrl, partnerKey } : null;
+  if (!baseUrl || !partnerKey) return null;
+  if (!isSafeApiUrl(baseUrl)) {
+    Logger.warn('[partners] BedrockNewsApiUrl must be https; claiming is off until it is');
+    return null;
+  }
+  return { baseUrl, partnerKey };
 }
+
+// The partner key must not cross the network in cleartext; plain http only reaches this machine.
+function isSafeApiUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname));
+  } catch {
+    return false;
+  }
+}
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 const FAILURE_REASONS: Record<string, string> = { TimeoutError: 'timeout', AbortError: 'aborted' };
 
@@ -66,6 +85,8 @@ async function call<T>(
         ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      // A redirect would carry X-Partner-Key to wherever it points; fetch strips only standard credentials.
+      redirect: 'error',
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const body = await response.json().catch(() => null);

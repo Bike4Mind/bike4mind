@@ -44,7 +44,10 @@ interface ClaimResult {
 type ClaimState =
   | { state: 'ready'; credits: number; payable?: number; rungs: Rung[]; account: string }
   | { state: 'done' | 'redeemed'; result: ClaimResult }
-  | { state: 'verify-email' | 'expired' | 'not-found' | 'in-progress' | 'budget-spent' | 'unavailable' };
+  | {
+      state:
+        'verify-email' | 'expired' | 'not-found' | 'in-progress' | 'claimed-elsewhere' | 'budget-spent' | 'unavailable';
+    };
 
 type MessageState = Exclude<ClaimState['state'], 'ready' | 'done' | 'redeemed'> | 'already' | 'capped';
 
@@ -74,8 +77,27 @@ async function postClaim(url: string, ticket: string): Promise<ClaimState> {
 
 const headwordUrl = (appUrl: unknown, ticket: string | undefined) => {
   if (typeof appUrl !== 'string' || !/^https?:\/\//.test(appUrl)) return undefined;
-  return `${appUrl.replace(/\/$/, '')}/games/headword${ticket ? `?claim=${encodeURIComponent(ticket)}` : ''}`;
+  return `${appUrl.replace(/\/$/, '')}/games/headword${ticket ? `#claim=${encodeURIComponent(ticket)}` : ''}`;
 };
+
+const TICKET_KEY = 'bedrocknews-claim-ticket';
+
+// The ticket arrives as #ticket= (or ?ticket=) and moves into this tab's storage at once, so no
+// address that logs, analytics, Referer or a login redirect see ever carries it.
+function takeTicket(searchTicket: string | undefined): string | undefined {
+  const fromUrl = new URLSearchParams(window.location.hash.slice(1)).get('ticket') ?? searchTicket;
+  try {
+    if (fromUrl) sessionStorage.setItem(TICKET_KEY, fromUrl);
+    else return sessionStorage.getItem(TICKET_KEY) ?? undefined;
+  } catch {
+    // Storage blocked: the ticket lives only in this page's memory.
+  }
+  const query = new URLSearchParams(window.location.search);
+  query.delete('ticket');
+  const search = query.toString();
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}${search ? `?${search}` : ''}`);
+  return fromUrl;
+}
 
 const CAPPED_NOTE =
   'Bike4Mind\u2019s daily limit is reached for that day, so those credits can\u2019t be paid. They stay waiting in Headword.';
@@ -109,6 +131,12 @@ const MESSAGES: Record<
     title: 'Already in progress',
     body: 'This claim is already being processed. Try again in a minute.',
     action: 'retry',
+  },
+  'claimed-elsewhere': {
+    tone: 'warning',
+    icon: <HighlightOffRounded />,
+    title: 'Claimed by another account',
+    body: 'These credits were already added to a different Bike4Mind account.',
   },
   'budget-spent': {
     tone: 'warning',
@@ -445,7 +473,8 @@ const ReadyView = ({
 const BedrockNewsClaimPage = () => {
   useDocumentTitle('Claim Headword credits \u00b7 Bike4Mind');
   const navigate = useNavigate();
-  const { ticket } = useSearch({ strict: false }) as { ticket?: string };
+  const { ticket: searchTicket } = useSearch({ strict: false }) as { ticket?: string };
+  const [ticket] = useState(() => takeTicket(searchTicket));
   const { accessToken } = useAccessToken();
   const logoUrl = useGetLogo();
   const logout = useUserLogout();
@@ -472,7 +501,7 @@ const BedrockNewsClaimPage = () => {
     if (!accessToken) {
       // Mid sign-out the URL carries redirectTo and the teardown goes to /login itself; redirecting here nests it.
       if (new URLSearchParams(window.location.search).has('redirectTo')) return;
-      navigate({ to: '/login', search: { redirectTo: window.location.pathname + window.location.search } });
+      navigate({ to: '/login', search: { redirectTo: window.location.pathname } });
       return;
     }
     if (didPreview.current) return;
@@ -493,7 +522,7 @@ const BedrockNewsClaimPage = () => {
 
   // The logout teardown reads redirectTo from the current URL and sends the user to /login with it.
   const useAnotherAccount = () => {
-    const original = window.location.pathname + window.location.search;
+    const original = window.location.pathname;
     window.history.replaceState(null, '', `${window.location.pathname}?redirectTo=${encodeURIComponent(original)}`);
     logout.mutate(undefined, {
       onError: () => {

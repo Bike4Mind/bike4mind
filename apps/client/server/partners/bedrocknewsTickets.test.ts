@@ -38,6 +38,22 @@ describe('previewTicket', () => {
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe(`${BASE}/api/headword/partner/tickets/${TICKET}`);
     expect(init.headers['X-Partner-Key']).toBe('secret-key');
+    expect(init.redirect).toBe('error');
+  });
+
+  it.each([['http://api.example.com'], ['ftp://api.example.com'], ['api.example.com']])(
+    'refuses to send the partner key to %s',
+    async url => {
+      mockGetSettingsMap.mockResolvedValue({ BedrockNewsApiUrl: url, BedrockNewsPartnerKey: 'secret-key' });
+      expect(await previewTicket(TICKET)).toEqual({ ok: false, code: 'NOT_CONFIGURED', status: 503 });
+      expect(mockFetch).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows plain http to this machine for local development', async () => {
+    mockGetSettingsMap.mockResolvedValue({ BedrockNewsApiUrl: 'http://localhost:3001', BedrockNewsPartnerKey: 'k' });
+    mockFetch.mockResolvedValue(json(200, { status: 'open', expiresAt: 'x', rungs: [] }));
+    expect((await previewTicket(TICKET)).ok).toBe(true);
   });
 
   it.each([

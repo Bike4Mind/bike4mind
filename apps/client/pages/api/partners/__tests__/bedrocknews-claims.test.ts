@@ -182,9 +182,26 @@ describe('BedrockNews claim routes', () => {
     it('is redeemed with the stored result and the session user own balance', async () => {
       mockPreview.mockResolvedValue({
         ok: true,
-        preview: { status: 'redeemed', expiresAt: 'x', rungs: RUNGS, result: FOREIGN_RESULT },
+        preview: {
+          status: 'redeemed',
+          expiresAt: 'x',
+          rungs: RUNGS,
+          result: FOREIGN_RESULT,
+          b4mUserId: SESSION_USER.id,
+        },
       });
       expect((await preview())._getJSONData()).toEqual({ state: 'redeemed', result: RESULT });
+    });
+
+    it.each([
+      ['another account', 'ffffffffffffffffffffffff'],
+      ['an unnamed account', undefined],
+    ])('is claimed-elsewhere for a ticket that paid %s', async (_label, b4mUserId) => {
+      mockPreview.mockResolvedValue({
+        ok: true,
+        preview: { status: 'redeemed', expiresAt: 'x', rungs: RUNGS, result: FOREIGN_RESULT, b4mUserId },
+      });
+      expect((await preview())._getJSONData()).toEqual({ state: 'claimed-elsewhere' });
     });
 
     it('is expired for an expired status', async () => {
@@ -261,6 +278,7 @@ describe('BedrockNews claim routes', () => {
       ['expired', fail('TICKET_EXPIRED', 410)],
       ['in-progress', fail('CLAIM_IN_PROGRESS', 409)],
       ['budget-spent', fail('B4M_BUDGET_SPENT', 503)],
+      ['claimed-elsewhere', fail('TICKET_CLAIMED_ELSEWHERE', 409)],
       ['verify-email', fail('B4M_NOT_ELIGIBLE', 403)],
       ['not-found', fail('TICKET_NOT_FOUND', 404)],
       ['unavailable', fail('BEDROCKNEWS_UNAVAILABLE', 502)],

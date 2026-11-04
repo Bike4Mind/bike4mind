@@ -65,6 +65,8 @@ const CAPPED_COPY =
 describe('BedrockNewsClaimPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
+    window.history.replaceState(null, '', '/partners/bedrocknews/claim');
     searchParams = { ticket: TICKET };
     mockAccessToken = 'tok';
     mockAppUrl = 'https://news.example';
@@ -96,7 +98,7 @@ describe('BedrockNewsClaimPage', () => {
     expect(screen.getByRole('button', { name: 'Add 150 credits' })).toBeEnabled();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',
-      `https://news.example/games/headword?claim=${TICKET}`
+      `https://news.example/games/headword#claim=${TICKET}`
     );
   });
 
@@ -151,7 +153,7 @@ describe('BedrockNewsClaimPage', () => {
     expect(screen.queryByText(/daily limit/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',
-      `https://news.example/games/headword?claim=${TICKET}`
+      `https://news.example/games/headword#claim=${TICKET}`
     );
     expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
   });
@@ -209,7 +211,7 @@ describe('BedrockNewsClaimPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Use another account' }));
     expect(mockLogout).toHaveBeenCalledTimes(1);
     const params = new URLSearchParams(window.location.search);
-    expect(params.get('redirectTo')).toBe(`/partners/bedrocknews/claim?ticket=${TICKET}`);
+    expect(params.get('redirectTo')).toBe('/partners/bedrocknews/claim');
   });
 
   it('leaves the login redirect to the sign-out when the token clears mid-logout', async () => {
@@ -229,7 +231,7 @@ describe('BedrockNewsClaimPage', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Use another account' }));
     expect(await screen.findByText(UNAVAILABLE_COPY)).toBeInTheDocument();
-    expect(window.location.pathname + window.location.search).toBe(`/partners/bedrocknews/claim?ticket=${TICKET}`);
+    expect(window.location.pathname + window.location.search).toBe('/partners/bedrocknews/claim');
   });
 
   it('sends a signed-out visitor to login with this page as redirectTo', async () => {
@@ -239,7 +241,7 @@ describe('BedrockNewsClaimPage', () => {
     await waitFor(() =>
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/login',
-        search: { redirectTo: `/partners/bedrocknews/claim?ticket=${TICKET}` },
+        search: { redirectTo: '/partners/bedrocknews/claim' },
       })
     );
     expect(mockPost).not.toHaveBeenCalled();
@@ -258,6 +260,11 @@ describe('BedrockNewsClaimPage', () => {
       'Today\u2019s credits are paid out',
       'Bike4Mind has paid out all of today\u2019s Headword credits. Yours are safe; try again later.',
     ],
+    [
+      'claimed-elsewhere',
+      'Claimed by another account',
+      'These credits were already added to a different Bike4Mind account.',
+    ],
     ['unavailable', 'We couldn\u2019t finish this', UNAVAILABLE_COPY],
     ['verify-email', 'Verify your email', 'Verify your email to claim credits.'],
   ];
@@ -270,7 +277,7 @@ describe('BedrockNewsClaimPage', () => {
     expect(within(alert).getByText(copy)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Headword' })).toHaveAttribute(
       'href',
-      `https://news.example/games/headword?claim=${TICKET}`
+      `https://news.example/games/headword#claim=${TICKET}`
     );
   });
 
@@ -380,6 +387,33 @@ describe('BedrockNewsClaimPage', () => {
     mockPost.mockRejectedValue(new Error('boom'));
     renderPage();
     expect(await screen.findByText(UNAVAILABLE_COPY)).toBeInTheDocument();
+  });
+
+  it('reads the ticket from the fragment and clears it from the address', async () => {
+    searchParams = {};
+    mockPost.mockReturnValue(new Promise(() => {}));
+    window.history.replaceState(null, '', `/partners/bedrocknews/claim?x=1#ticket=${TICKET}`);
+    renderPage();
+    expect(mockPost).toHaveBeenCalledWith('/api/partners/bedrocknews/claims/preview', { ticket: TICKET });
+    expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+      '/partners/bedrocknews/claim?x=1'
+    );
+  });
+
+  it('clears a query ticket from the address too', async () => {
+    mockPost.mockReturnValue(new Promise(() => {}));
+    window.history.replaceState(null, '', `/partners/bedrocknews/claim?ticket=${TICKET}`);
+    renderPage();
+    expect(window.location.search).toBe('');
+  });
+
+  it('keeps the ticket through a reload or a sign-in in the same tab', async () => {
+    mockPost.mockReturnValue(new Promise(() => {}));
+    renderPage().unmount();
+    searchParams = {};
+    mockPost.mockClear();
+    renderPage();
+    expect(mockPost).toHaveBeenCalledWith('/api/partners/bedrocknews/claims/preview', { ticket: TICKET });
   });
 
   it('shows the invalid-link state without calling the API when there is no ticket', async () => {
