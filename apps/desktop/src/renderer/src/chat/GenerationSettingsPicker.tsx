@@ -11,21 +11,12 @@ import type { ChatModelOption } from '@shared/chat';
 import {
   effectiveControls,
   GENERATION_FIELDS,
+  GENERATION_LABELS,
   requestGeneration,
   type GenerationField,
   type GenerationSettings,
   type NumericControl,
 } from '@shared/generation';
-
-const LABELS: Record<GenerationField, string> = {
-  temperature: 'Temperature',
-  topP: 'Top P',
-  topK: 'Top K',
-  minP: 'Min P',
-  repeatPenalty: 'Repeat penalty',
-  maxOutputTokens: 'Max output tokens',
-  thinkingBudgetTokens: 'Thinking budget',
-};
 
 const WIDTH = 360;
 const numberFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 });
@@ -123,7 +114,7 @@ function FieldRow({
       data-testid={`generation-settings-${field}-row`}
     >
       <Stack sx={{ minWidth: 0 }}>
-        <Typography level="body-sm">{LABELS[field]}</Typography>
+        <Typography level="body-sm">{GENERATION_LABELS[field]}</Typography>
         <Typography level="body-xs" textColor="text.tertiary" sx={{ maxWidth: 200 }}>
           <span id={noteId} data-testid={`generation-settings-${field}-default`}>
             {noteFor(control, stored, sent)}
@@ -134,7 +125,7 @@ function FieldRow({
               level="body-xs"
               disabled={disabled}
               onClick={() => onCommit(undefined)}
-              aria-label={`Reset ${LABELS[field]}`}
+              aria-label={`Reset ${GENERATION_LABELS[field]}`}
               sx={{ ml: 1 }}
               data-testid={`generation-settings-${field}-reset-btn`}
             >
@@ -173,7 +164,7 @@ function FieldRow({
             min: control.min,
             max: control.max,
             step: control.step,
-            'aria-label': LABELS[field],
+            'aria-label': GENERATION_LABELS[field],
             'aria-describedby': noteId,
             'data-testid': `generation-settings-${field}-input`,
           },
