@@ -1,5 +1,5 @@
 import { writeFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ModelBuildReport } from '@shared/model3d';
@@ -92,7 +92,8 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     const window = windowOf(event);
     const options: Electron.SaveDialogOptions = {
       title: `Export ${format.toUpperCase()}`,
-      defaultPath: `${stem}.${format}`,
+      // Beside the model, where a game project keeps its assets, not wherever the last dialog was.
+      defaultPath: current ? join(dirname(current), `${stem}.${format}`) : `${stem}.${format}`,
       filters: [{ name: format.toUpperCase(), extensions: [format] }],
     };
     const picked = await (window ? dialog.showSaveDialog(window, options) : dialog.showSaveDialog(options));
