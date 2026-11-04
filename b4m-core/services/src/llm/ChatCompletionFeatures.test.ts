@@ -360,7 +360,11 @@ describe('MementoFeature - Mementos V2 injection', () => {
 
     await feature.getContextMessages(
       makeQuest(),
-      { getDefaultEmbeddingModel } as unknown as Parameters<typeof feature.getContextMessages>[1],
+      {
+        get defaultModel() {
+          return getDefaultEmbeddingModel();
+        },
+      } as unknown as Parameters<typeof feature.getContextMessages>[1],
       'what do i like',
       undefined as unknown as Parameters<typeof feature.getContextMessages>[3],
       1000
@@ -531,9 +535,9 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     };
   };
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
     // The model this factory holds a credential for; unlabeled files vote for it.
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const runRetrieval = async (
@@ -784,9 +788,9 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
     };
   };
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
     // The model this factory holds a credential for; unlabeled files vote for it.
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    defaultModel: 'text-embedding-ada-002',
   };
 
   it('drops a marked file from forced retrieval content + citables, and forwards the DB pre-filter', async () => {
@@ -1114,9 +1118,9 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
 
 describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
     // The model this factory holds a credential for; unlabeled files vote for it.
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    defaultModel: 'text-embedding-ada-002',
   };
 
   /** Defaults to full coverage (no more pages), so tests opt in to partiality via `hasMore`. */
@@ -2287,8 +2291,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   describe('which vector space a keyless stage queries in', () => {
     const TITAN = 'amazon.titan-embed-text-v2:0';
     const embedWith = async (ctx: ReturnType<typeof makeCtx>) => {
-      const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
-      const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => TITAN };
+      const createEmbeddingService = vi.fn().mockResolvedValue({ vectors: [[1, 0]] });
+      const factory = { get: () => ({ embed: createEmbeddingService }), defaultModel: TITAN };
       const feature = new KnowledgeRetrievalFeature(
         ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
       );
@@ -2316,7 +2320,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       // The stage holds no key, so ingestion also fell back: the corpus really is in Titan space and
       // the ada-002 setting is simply stale. `missing: null` is what says the fallback actually fired.
       const createEmbeddingService = await embedWith(keylessCtx({ model: TITAN, missing: null }));
-      expect(createEmbeddingService).toHaveBeenCalledWith(TITAN);
+      expect(createEmbeddingService).toHaveBeenCalledWith(expect.objectContaining({ model: TITAN }));
     });
 
     it('does NOT override for an expired CALLER key on a keyed stage', async () => {
@@ -2329,7 +2333,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       const createEmbeddingService = await embedWith(
         keylessCtx({ model: 'text-embedding-ada-002', missing: 'openai' })
       );
-      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+      expect(createEmbeddingService).toHaveBeenCalledWith(expect.objectContaining({ model: 'text-embedding-ada-002' }));
     });
 
     it('does NOT override on self-host / local dev / CI, which have no role to reach Bedrock with', async () => {
@@ -2340,7 +2344,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       const createEmbeddingService = await embedWith(
         keylessCtx({ model: 'text-embedding-ada-002', missing: 'ollama' })
       );
-      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+      expect(createEmbeddingService).toHaveBeenCalledWith(expect.objectContaining({ model: 'text-embedding-ada-002' }));
     });
 
     it('does NOT override when a Bedrock model was ASKED for rather than substituted', async () => {
@@ -2350,15 +2354,15 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       // `model !== requested` test that case overrides the configured model with the wrong vector
       // space - the same silent zero-result, arrived at from the opposite direction.
       const createEmbeddingService = await embedWith(keylessCtx({ requested: TITAN, model: TITAN, missing: null }));
-      expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-ada-002');
+      expect(createEmbeddingService).toHaveBeenCalledWith(expect.objectContaining({ model: 'text-embedding-ada-002' }));
     });
   });
 
   it("falls back to the admin's configured default, not the embedding factory's credential-derived default", async () => {
     // A single unlabeled-but-vectorized file votes for the fallback. If the factory default won,
     // this would embed the query as ada-002 instead of the admin's configured voyage-3.
-    const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
-    const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => 'text-embedding-ada-002' };
+    const createEmbeddingService = vi.fn().mockResolvedValue({ vectors: [[1, 0]] });
+    const factory = { get: () => ({ embed: createEmbeddingService }), defaultModel: 'text-embedding-ada-002' };
     const ctx = makeCtx({
       files: [{ id: 'f1', fileName: 'F1.pdf', vectorizedChunkCount: 3 }],
       rows: () => [{ id: 'c1', fabFileId: 'f1', text: 'content', vector: [1, 0] }],
@@ -2372,12 +2376,12 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       factory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'q'
     );
-    expect(createEmbeddingService).toHaveBeenCalledWith('voyage-3');
+    expect(createEmbeddingService).toHaveBeenCalledWith(expect.objectContaining({ model: 'voyage-3' }));
   });
 
   it('falls back to the embedding factory default when the admin setting is unset', async () => {
-    const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
-    const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => 'voyage-3' };
+    const createEmbeddingService = vi.fn().mockResolvedValue({ vectors: [[1, 0]] });
+    const factory = { get: () => ({ embed: createEmbeddingService }), defaultModel: 'voyage-3' };
     const ctx = makeCtx({
       files: [{ id: 'f1', fileName: 'F1.pdf', vectorizedChunkCount: 3 }],
       rows: () => [{ id: 'c1', fabFileId: 'f1', text: 'content', vector: [1, 0] }],
@@ -2390,12 +2394,12 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       factory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'q'
     );
-    expect(createEmbeddingService).toHaveBeenCalledWith('voyage-3');
+    expect(createEmbeddingService).toHaveBeenCalledWith(expect.objectContaining({ model: 'voyage-3' }));
   });
 
   it('excludes never-vectorized files from the majority vote, so a label majority cannot outvote the corpus that actually has vectors', async () => {
-    const createEmbeddingService = vi.fn().mockReturnValue({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) });
-    const factory = { createEmbeddingService, getDefaultEmbeddingModel: () => 'text-embedding-ada-002' };
+    const createEmbeddingService = vi.fn().mockResolvedValue({ vectors: [[1, 0]] });
+    const factory = { get: () => ({ embed: createEmbeddingService }), defaultModel: 'text-embedding-ada-002' };
     const ctx = makeCtx({
       files: [
         // The only file with vectors: unlabeled, so it votes for the fallback.
@@ -2417,7 +2421,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       factory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'q'
     );
-    expect(createEmbeddingService).toHaveBeenCalledWith('text-embedding-3-small');
+    expect(createEmbeddingService).toHaveBeenCalledWith(expect.objectContaining({ model: 'text-embedding-3-small' }));
   });
 
   it('withholds foreign-model files before the chunk load, and reports even when every candidate is excluded', async () => {
@@ -2464,8 +2468,8 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
  */
 describe('KnowledgeRetrievalFeature abstention when nothing is retrieved', () => {
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const makeCtx = (overrides: { search?: unknown } = {}) => ({
@@ -2557,8 +2561,8 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
   const SMALL_3 = 'text-embedding-3-small';
 
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => ADA,
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: ADA,
   };
 
   const makeCtx = (
@@ -2675,8 +2679,8 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     status: 'active',
   };
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const gen = (id: string, over: Record<string, unknown> = {}) => ({
@@ -2874,7 +2878,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
 describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () => {
   const OWNER = 'u1';
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
   };
 
   const makeLake = (overrides: Record<string, unknown> = {}) => ({
@@ -3407,8 +3411,8 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
     };
   };
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const run = async (text = HOSTILE, fileName = 'Leave Policy.pdf', citationStyle?: 'named' | 'indexed') => {
@@ -3499,8 +3503,8 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
 describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
   const END = '[Untrusted Retrieved Content - END]';
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   /** Stored admin rows for `names`, omitting the unset ones so the coded default wins for those. */
@@ -3705,8 +3709,8 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
 
 describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   /**
@@ -4313,8 +4317,8 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
 
 describe('KnowledgeRetrievalFeature access-event audit', () => {
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const LAKE = {
@@ -4508,8 +4512,8 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     status: 'active',
   };
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -4806,7 +4810,7 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
     );
     const messages = await feature.getContextMessages(
       { id: 'q1' } as never,
-      { getDefaultEmbeddingModel: () => 'text-embedding-ada-002' } as never,
+      { defaultModel: 'text-embedding-ada-002' } as never,
       'what do my notes say'
     );
     return { ctx, messages };
@@ -4839,8 +4843,8 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
  */
 describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () => {
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   // Not the caller below ("viewer-1") - the membership arm must anchor to THIS creator.
@@ -5384,8 +5388,8 @@ describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
  */
 describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const LAKE = {
@@ -6049,8 +6053,8 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
 
 describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   it('reports a stalled cursor as partial coverage instead of abandoning the batch silently', async () => {
@@ -6142,8 +6146,8 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     };
   };
   const embeddingFactory = {
-    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
-    getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+    get: () => ({ embed: vi.fn().mockResolvedValue({ vectors: [[1, 0]] }) }),
+    defaultModel: 'text-embedding-ada-002',
   };
 
   const runWithQuest = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
@@ -6369,8 +6373,12 @@ describe('KnowledgeRetrievalFeature follow-up questions', () => {
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
     const embeddingFactory = {
-      createEmbeddingService: () => ({ generateEmbedding }),
-      getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
+      get: () => ({
+        embed: async ({ inputs }: { inputs: string[] }) => ({
+          vectors: await Promise.all(inputs.map(text => generateEmbedding(text))),
+        }),
+      }),
+      defaultModel: 'text-embedding-ada-002',
     };
     const messages = await feature.getContextMessages(
       makeQuest(),

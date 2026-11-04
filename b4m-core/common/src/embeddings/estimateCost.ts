@@ -1,10 +1,10 @@
-import type { SupportedEmbeddingModel } from '../schemas/embedding';
+import type { EmbeddingModelId } from '../schemas/embedding';
 import { EMBEDDING_MODEL_CATALOG } from './catalog';
 
 const usdPerTokenOf = (model: string): number | undefined => {
   // hasOwn: an id like 'constructor' must not resolve to an Object.prototype member.
   if (!Object.hasOwn(EMBEDDING_MODEL_CATALOG, model)) return undefined;
-  const { pricing } = EMBEDDING_MODEL_CATALOG[model as SupportedEmbeddingModel];
+  const { pricing } = EMBEDDING_MODEL_CATALOG[model as EmbeddingModelId];
   return pricing ? pricing.usdPerMillionTokens / 1_000_000 : undefined;
 };
 

@@ -1,12 +1,13 @@
 import {
   BedrockEmbeddingModel,
   countCodePoints,
+  getEmbeddingModelCapabilities,
+  isSupportedEmbeddingModel,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   DocumentDateSource,
   IFabFile,
   MIN_CHUNK_CHARS_FLOOR,
   MIN_PASSAGE_TOKEN_TARGET,
-  OllamaEmbeddingModel,
   isMediaOnlyMimeType,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
@@ -30,12 +31,6 @@ import type { Tiktoken } from 'tiktoken';
 import type { WorkBook, WorkSheet } from 'xlsx';
 import { getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
-import {
-  BEDROCK_EMBEDDING_MODEL_MAP,
-  OLLAMA_EMBEDDING_MODEL_MAP,
-  OPENAI_EMBEDDING_MODEL_MAP,
-  VOYAGEAI_EMBEDDING_MODEL_MAP,
-} from './embeddings';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from './storage';
 
@@ -268,11 +263,8 @@ const isEmbeddingModel = <T extends SupportedEmbeddingModel>(
  * without constructing a chunker. Throws on an unsupported model, exactly as the chunker does.
  */
 export function embeddingModelContextWindow(model: string): number {
-  if (isEmbeddingModel(model, OpenAIEmbeddingModel)) return OPENAI_EMBEDDING_MODEL_MAP[model].contextWindow;
-  if (isEmbeddingModel(model, VoyageAIEmbeddingModel)) return VOYAGEAI_EMBEDDING_MODEL_MAP[model].contextWindow;
-  if (isEmbeddingModel(model, BedrockEmbeddingModel)) return BEDROCK_EMBEDDING_MODEL_MAP[model].contextWindow;
-  if (isEmbeddingModel(model, OllamaEmbeddingModel)) return OLLAMA_EMBEDDING_MODEL_MAP[model].contextWindow;
-  throw new Error(`Unsupported embedding model: ${model}`);
+  if (!isSupportedEmbeddingModel(model)) throw new Error(`Unsupported embedding model: ${model}`);
+  return getEmbeddingModelCapabilities(model).maxInputTokens;
 }
 
 /**

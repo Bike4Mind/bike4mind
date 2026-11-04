@@ -443,6 +443,7 @@ export const web = new sst.aws.Nextjs(
       IMPERSONATION_TTL_MINUTES: process.env.IMPERSONATION_TTL_MINUTES || '60',
       ...TEST_GENERATION_PROVIDER_ENVIRONMENT,
       ...TEST_DECISION_PROVIDER_ENVIRONMENT,
+      BEDROCK_COHERE_EMBED_MODEL_ID: process.env.BEDROCK_COHERE_EMBED_MODEL_ID?.trim() || '',
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
       // Optional https URL of another deployment's GET /api/v1/whats-new, served ahead of local notes.
       WHATS_NEW_FEED_URL: process.env.WHATS_NEW_FEED_URL || '',

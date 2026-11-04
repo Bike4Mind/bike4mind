@@ -1,3 +1,8 @@
+import {
+  type EmbeddingKeyTable,
+  buildEmbeddingRegistry,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
 /**
  * Agent Executor Lambda Handler
  *
@@ -59,7 +64,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
-import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
+
 import {
   applyWorkspaceSessionSettings,
   workspaceAnswersTurns,
@@ -882,7 +887,7 @@ export async function materializeAttachmentsForRun(args: {
           `is unavailable for this run and attachments fall through to raw content`
       );
     }
-    const embeddingFactory = new EmbeddingFactory(embeddingConfig);
+    const embeddingFactory = buildEmbeddingRegistry(embeddingConfig);
 
     // Reserve against the budget the turn will actually send, not the model's raw cap - a
     // derived cap on a reasoning model resolves to a much larger value (see

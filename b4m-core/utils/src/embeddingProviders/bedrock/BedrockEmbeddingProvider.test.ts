@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getEmbeddingModelCapabilities, BedrockEmbeddingModel } from '@bike4mind/common';
+import { getEmbeddingModelCapabilities, BedrockEmbeddingModel, ApiBedrockEmbeddingModel } from '@bike4mind/common';
 import { describeEmbeddingProviderConformance, fakeEmbedding, LATE_FAILURE_INPUT } from '../conformance';
 
 const clientConfigs: Record<string, unknown>[] = [];
@@ -142,4 +142,64 @@ describe('BedrockEmbeddingProvider', () => {
       });
     });
   });
+});
+
+describe('Cohere on Bedrock', () => {
+  const model = ApiBedrockEmbeddingModel.COHERE_EMBED_V4;
+  const cohereProvider = () =>
+    new BedrockEmbeddingProvider({ client: client as never, cohereModelId: 'us.cohere.embed-v4:0' });
+
+  it('requires deployment opt-in', async () => {
+    expect(provider().models).not.toContain(model);
+    await expect(provider().embed({ model, inputs: ['hello'] })).rejects.toThrow('does not serve');
+    expect(sent).toHaveLength(0);
+  });
+
+  it.each([256, 512, 1024, 1536])('forwards width %s and query hint to the configured profile', async dimensions => {
+    respond = command => {
+      const body = JSON.parse(command.input.body) as { texts: string[]; output_dimension: number };
+      return Promise.resolve({
+        body: encode({
+          embeddings: { float: body.texts.map(text => fakeEmbedding(text, body.output_dimension)) },
+          meta: { billed_units: { input_tokens: 3 } },
+        }),
+      });
+    };
+    const result = await cohereProvider().embed({ model, inputs: ['hello'], dimensions, inputType: 'query' });
+    expect(sent[0].input.modelId).toBe('us.cohere.embed-v4:0');
+    expect(JSON.parse(sent[0].input.body)).toMatchObject({
+      texts: ['hello'],
+      output_dimension: dimensions,
+      input_type: 'search_query',
+      truncate: 'NONE',
+    });
+    expect(result.vectors[0]).toHaveLength(dimensions);
+    expect(result.inputTokens).toBe(3);
+  });
+});
+
+const cohereSuccess = (command: SentCommand) => {
+  if (command.input.modelId === BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2) return succeeds(command);
+  const body = JSON.parse(command.input.body) as { texts: string[]; output_dimension: number };
+  return Promise.resolve({
+    body: encode({ embeddings: body.texts.map(text => fakeEmbedding(text, body.output_dimension)) }),
+  });
+};
+
+describeEmbeddingProviderConformance('Bedrock with Cohere', {
+  provider: () => new BedrockEmbeddingProvider({ client: client as never, cohereModelId: 'cohere.embed-v4:0' }),
+  requestCount: () => sent.length,
+  scenarios: {
+    succeeds: () => {
+      respond = cohereSuccess;
+    },
+    failsOnLateInput: () => {
+      respond = command => {
+        const body = JSON.parse(command.input.body) as { inputText?: string; texts?: string[] };
+        return body.inputText === LATE_FAILURE_INPUT || body.texts?.includes(LATE_FAILURE_INPUT)
+          ? Promise.reject(new Error('bad input'))
+          : cohereSuccess(command);
+      };
+    },
+  },
 });

@@ -17,25 +17,11 @@ export {
   isPrivateIP,
   isPrivateOrInternalHostname,
   // embeddings
-  EmbeddingFactory,
-  type EmbeddingConfig,
-  EmbeddingService,
   EmbeddingModelProvider,
   type EmbeddingModelInfo,
-  getProviderFromModel,
-  resolveEmbeddingConfig,
-  resolveEmbeddingWithKeylessFallback,
-  type EmbeddingKeyTable,
-  type EmbeddingCredential,
-  type ResolvedEmbeddingConfig,
-  BedrockEmbeddingService,
-  type BedrockCredentials,
   BEDROCK_EMBEDDING_MODEL_MAP,
-  OpenAIEmbeddingService,
   OPENAI_EMBEDDING_MODEL_MAP,
-  VoyageAIEmbeddingProvider,
   VOYAGEAI_EMBEDDING_MODEL_MAP,
-  OllamaEmbeddingService,
   OLLAMA_EMBEDDING_MODEL_MAP,
   // storage
   BaseStorage,
@@ -122,3 +108,5 @@ export * from './lambdaErrorHandler';
 // `@bike4mind/utils/security` subpath, so importing it never drags the utils barrel
 // (artifactParser et al.) into a caller's graph or its test mocks. Same pattern as
 // artifactElision above.
+
+export * from './embeddingProviders/runtime';

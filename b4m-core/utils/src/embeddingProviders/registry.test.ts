@@ -5,16 +5,18 @@ import { OllamaEmbeddingProvider } from './ollama/OllamaEmbeddingProvider';
 import { OpenAIEmbeddingProvider } from './openai/OpenAIEmbeddingProvider';
 import { createEmbeddingProviderRegistry } from './registry';
 import { VoyageEmbeddingProvider } from './voyage/VoyageEmbeddingProvider';
+import { GeminiEmbeddingProvider } from './gemini/GeminiEmbeddingProvider';
 
 const openai = () => new OpenAIEmbeddingProvider({ apiKey: 'sk-realLooking1234567890abcdef' });
 
 describe('createEmbeddingProviderRegistry', () => {
-  it('registers all four providers against the catalog', () => {
+  it('registers all providers against the catalog', () => {
     const registry = createEmbeddingProviderRegistry([
       openai(),
       new VoyageEmbeddingProvider({ apiKey: 'pa-realLooking1234567890abcdef' }),
       new BedrockEmbeddingProvider({ client: { send: async () => ({ $metadata: {} }) as never } }),
       new OllamaEmbeddingProvider({ baseUrl: 'http://localhost:11434' }),
+      new GeminiEmbeddingProvider({ apiKey: 'gemini-test-key' }),
     ]);
 
     expect([...registry.ids()].sort()).toEqual([...EMBEDDING_PROVIDER_IDS].sort());

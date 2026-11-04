@@ -1,8 +1,16 @@
+import {
+  type BoundEmbeddingModel,
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/utils/embeddingProviders';
 import { withEventContext } from '@workers/utils/eventContext';
 import { LLMEvents } from '@server/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+
 import {
   ChatModels,
   MEMENTO_EMBEDDING_ID,
@@ -18,8 +26,6 @@ import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/m
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 
 const { findMostSimilarMemento } = mementoService;
-
-type EmbeddingService = ReturnType<EmbeddingFactory['createEmbeddingService']>;
 
 export const handler = withEventContext(async (event, logger) => {
   // The crypto-shred fence for the V2 write, captured HERE rather than at the write. Everything
@@ -123,16 +129,16 @@ export const handler = withEventContext(async (event, logger) => {
   // independent of the admin `defaultEmbeddingModel` that governs V1/FAB. A missing key degrades to a
   // vector-less ledger write (the fact stays lexically recallable and the re-embed backfill vectorizes
   // it later) rather than dropping the fact.
-  let v2EmbeddingService: EmbeddingService | null = null;
+  let v2BoundEmbeddingModel: BoundEmbeddingModel | null = null;
   if (writeV2) {
-    const v2Provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-    const { config: v2Config, missing: v2KeyMissing } = resolveEmbeddingConfig(v2Provider, apiKeyTable);
+    const v2Provider = embeddingBackendForModel(MEMENTO_EMBEDDING_MODEL);
+    const { config: v2Config, missing: v2KeyMissing } = resolveEmbeddingCredentials(v2Provider, apiKeyTable);
     if (v2KeyMissing) {
       logger.warn(
         `No ${v2Provider} API key for the V2 ledger embedding (${MEMENTO_EMBEDDING_MODEL}); writing facts WITHOUT a vector. They stay lexically recallable, and the re-embed backfill will vectorize them once a key is present.`
       );
     } else {
-      v2EmbeddingService = new EmbeddingFactory(v2Config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
+      v2BoundEmbeddingModel = bindEmbeddingModel(buildEmbeddingRegistry(v2Config), MEMENTO_EMBEDDING_MODEL);
     }
   }
 
@@ -157,8 +163,8 @@ export const handler = withEventContext(async (event, logger) => {
     // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
     // against its own ledger, in the 3-small space. It does not wait on, or read, anything V1 does below.
     if (writeV2) {
-      const v2Embedding = v2EmbeddingService
-        ? toMementoVector(await v2EmbeddingService.generateEmbedding(evaluation.summary))
+      const v2Embedding = v2BoundEmbeddingModel
+        ? toMementoVector(await embedOne(v2BoundEmbeddingModel, evaluation.summary))
         : undefined;
       await writeToLedger(evaluation.summary, v2Embedding);
     }

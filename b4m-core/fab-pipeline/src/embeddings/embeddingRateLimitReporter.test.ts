@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { EmbeddingModelProvider } from './EmbeddingService';
+import { EmbeddingModelProvider } from './embeddingModelInfo';
 import {
   __resetEmbeddingRateLimitReporterForTests,
   getLastObservedEmbeddingRateLimit,

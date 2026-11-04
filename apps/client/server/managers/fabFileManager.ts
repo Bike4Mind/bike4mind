@@ -4,7 +4,7 @@ import { Ability } from '@server/auth/ability';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { mongoose, FabFile } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { EmbeddingService } from '@bike4mind/fab-pipeline';
+import { embedOne, type BoundEmbeddingModel } from '@bike4mind/services/llm/embeddingProviders';
 
 // Emergency token limits for embedding generation (same as in utils.ts)
 const EMBEDDING_TOKEN_LIMITS = {
@@ -16,16 +16,15 @@ const EMBEDDING_TOKEN_LIMITS = {
  * Safely generate embeddings for text that might exceed token limits
  * This is a simplified version for FAB file processing
  */
-async function generateSafeEmbedding(embeddingService: EmbeddingService, text: string): Promise<number[]> {
-  const modelInfo = embeddingService.getModelInfo();
-  const maxTokens = Math.min(modelInfo.contextWindow - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
+async function generateSafeEmbedding(embeddingService: BoundEmbeddingModel, text: string): Promise<number[]> {
+  const maxTokens = Math.min(embeddingService.maxInputTokens - 100, EMBEDDING_TOKEN_LIMITS.MAX_EMBEDDING_TOKENS);
 
   // Estimate token count (rough estimation: 1 token ≈ 3.5 characters)
   const estimatedTokens = Math.ceil(text.length / 3.5);
 
   // If text is within limits, generate embedding directly
   if (estimatedTokens <= maxTokens) {
-    return await embeddingService.generateEmbedding(text);
+    return await embedOne(embeddingService, text);
   }
 
   // Text is too large - truncate it (for FAB chunks, this shouldn't happen normally)
@@ -34,7 +33,7 @@ async function generateSafeEmbedding(embeddingService: EmbeddingService, text: s
   const maxChunkLength = Math.floor(maxTokens * 3.5);
   const truncatedText = text.slice(0, maxChunkLength);
 
-  return await embeddingService.generateEmbedding(truncatedText);
+  return await embedOne(embeddingService, truncatedText);
 }
 
 export const generateNewFabFile = (data: IFabFile): IFabFile => {
@@ -69,7 +68,7 @@ export const getFabFileById = async (
   return FabFile.findOne({ _id: fabFileId, ...accessibleBy(ability, action).ofType(FabFile) });
 };
 
-export const getVector = async (embeddingProvider: EmbeddingService, text: string): Promise<number[]> => {
+export const getVector = async (embeddingProvider: BoundEmbeddingModel, text: string): Promise<number[]> => {
   // Use safe embedding generation to avoid exceeding the model's token limit
   const response = await generateSafeEmbedding(embeddingProvider, text);
   return response;

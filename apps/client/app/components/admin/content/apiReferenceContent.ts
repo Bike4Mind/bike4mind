@@ -136,7 +136,7 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/music-*\`, \`/api/v1/voice/*\`, \`/api/ai/tts\`, \`/api/ai/sound-effects\`,
   \`/api/ai/music\` (deprecated, sunset 2027-01-15; use \`/api/v1/music-generations\`)
 - Transcription: \`/api/v1/transcriptions/uploads\`, \`/api/v1/transcriptions\`
-- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`,
+- Completions, embeddings, text refinement and tools: \`/api/ai/v1/*\`, \`/api/v1/embeddings\`, \`/api/v1/embedding-models\`,
   \`/api/v1/text-refinements\`
 - Decisions (typed questions answered with probabilities): \`/api/v1/decisions\`, \`/api/v1/decision-models\`
 - Account and models: \`/api/v1/me\`, \`/api/v1/credits\`, \`/api/v1/models\`

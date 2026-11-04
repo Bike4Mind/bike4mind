@@ -16,18 +16,6 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 // The embedding PROVIDER is the only stub - it is the one input that needs a network credential.
 // Real cosine, real repositories, real Mongo. Every vector is [1,0] so every chunk scores 1.0 and
 // nothing is dropped by relevance: what survives is decided by the partitions under test alone.
-vi.mock('@bike4mind/utils', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return {
-    ...actual,
-    getProviderFromModel: () => 'openai',
-    EmbeddingFactory: class {
-      createEmbeddingService() {
-        return { generateEmbedding: async () => [1, 0] };
-      }
-    },
-  };
-});
 
 import { FabFile, FabFileChunk, User, fabFileRepository, fabFileChunkRepository } from '@bike4mind/database';
 import { KnowledgeType } from '@bike4mind/common';
@@ -332,3 +320,13 @@ describe('supersession collapse against real Mongo', () => {
     expect(on.supersession.sample[0]).toMatchObject({ fileId: older, tier: 'fileName' });
   });
 });
+
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({ defaultModel: 'text-embedding-ada-002' })),
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 8192,
+    embed: async (inputs: readonly string[]) => ({ vectors: inputs.map(() => [1, 0]) }),
+  }),
+}));

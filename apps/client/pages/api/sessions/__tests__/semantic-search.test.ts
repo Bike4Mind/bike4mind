@@ -24,16 +24,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-// getProviderFromModel is stubbed so a test can choose the provider; resolveEmbeddingConfig is
-// the real one, because which credential a provider needs is the behaviour under test.
-vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline')>()),
-  getProviderFromModel: mockGetProviderFromModel,
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { generateEmbedding: mockGenerateEmbedding };
-    }
-  },
+// Keep credential resolution real while controlling provider calls.
+vi.mock('@bike4mind/services/llm/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm/embeddingProviders')>()),
+  embeddingBackendForModel: mockGetProviderFromModel,
+  buildEmbeddingRegistry: () => ({}),
+  bindEmbeddingModel: () => ({}),
+  embedOne: (_model: unknown, text: string) => mockGenerateEmbedding(text),
 }));
 vi.mock('@bike4mind/utils', () => ({
   computeCosineSimilarity: () => 0.9,

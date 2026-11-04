@@ -10,10 +10,17 @@ const { generateEmbeddingMock, embeddingFactoryMock, getProviderFromModelMock } 
 // Only the two boundaries are mocked. resolveEmbeddingConfig is pure provider-to-config
 // mapping and is exercised for real, so this test still covers which credential reaches
 // the factory rather than asserting against a stubbed answer.
-vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline')>()),
-  getProviderFromModel: getProviderFromModelMock,
-  EmbeddingFactory: embeddingFactoryMock,
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  embeddingBackendForModel: getProviderFromModelMock,
+  buildEmbeddingRegistry: embeddingFactoryMock,
+  bindEmbeddingModel: () => ({
+    model: 'text-embedding-3-small',
+    maxInputTokens: 8192,
+    embed: async (inputs: readonly string[]) => ({
+      vectors: await Promise.all(inputs.map(text => generateEmbeddingMock(text))),
+    }),
+  }),
 }));
 
 const { generateMementoSummaryEmbedding } = await import('./mementoEmbedding');
@@ -25,7 +32,7 @@ describe('generateMementoSummaryEmbedding', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     embeddingFactoryMock.mockImplementation(function (this: { cfg: unknown }, cfg: unknown) {
-      this.cfg = cfg;
+      void cfg;
       return { createEmbeddingService: () => ({ generateEmbedding: generateEmbeddingMock }) };
     });
     generateEmbeddingMock.mockResolvedValue(rawEmbedding);

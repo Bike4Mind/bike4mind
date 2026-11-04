@@ -1,11 +1,18 @@
+import { getVector } from '@server/managers/fabFileManager';
+import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embeddingBackendForModel,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
 import {
   FabFileSourceType,
+  ModelBackend,
   isTerminalCreditRefusal,
   SupportedEmbeddingModelSchema,
   usdToCredits,
   usdToCreditsStochastic,
 } from '@bike4mind/common';
-import { getVector } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -27,8 +34,6 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { z } from 'zod';
 import {
   ChunkSchema,
-  EmbeddingFactory,
-  resolveEmbeddingWithKeylessFallback,
   EmbeddingAuthError,
   isEmbeddingAuthError,
   EmbeddingSpaceConflictError,
@@ -63,7 +68,7 @@ import {
 import { isConvergenceHalted } from '@bike4mind/server-utils/dataLakes/convergenceKillSwitch';
 import { makeDataLakeSpendNotifier } from '@workers/utils/dataLakeSpendNotifier';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getProviderFromModel } from '@bike4mind/fab-pipeline';
+
 import { Resource } from 'sst';
 
 const VectorizePayload = z.object({
@@ -226,7 +231,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // stage: a substitute would land this file where searches over the rest cannot reach it.
       if (await fabFileRepository.hasVectorizedFileInEmbeddingSpace(requestedEmbeddingModel)) {
         throw new EmbeddingAuthError(
-          getProviderFromModel(requestedEmbeddingModel),
+          embeddingBackendForModel(requestedEmbeddingModel),
           `No credential for ${requestedEmbeddingModel}, which files on this deployment are already ` +
             `embedded with; refusing to embed with the keyless ${embeddingModel}, which searches could not ` +
             `match against them. Restore the credential and re-index the file.`
@@ -263,16 +268,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       throw new EmbeddingSpaceConflictError(embeddingModel, existingEmbeddingSpaces);
     }
 
-    const requiredProvider = getProviderFromModel(embeddingModel);
+    const requiredProvider = embeddingBackendForModel(embeddingModel);
 
-    const embeddingService = new EmbeddingFactory(embeddingConfig);
+    const embeddingService = buildEmbeddingRegistry(embeddingConfig);
 
-    const embeddingProvider = embeddingService.createEmbeddingService(embeddingModel);
+    const embeddingProvider = bindEmbeddingModel(embeddingService, embeddingModel);
 
     // Pre-flight: filter out chunks that exceed the model's context window.
     // These cannot be embedded and would cause the entire batch to fail.
     // Chunks stored before chunking fixes may have this issue.
-    const { contextWindow } = embeddingProvider.getModelInfo();
+    const contextWindow = embeddingProvider.maxInputTokens;
     const embeddableChunks = validChunks.filter(chunk => {
       if (chunk.tokenCount > contextWindow) {
         logger.warn(
@@ -392,28 +397,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
       let newVectors: number[][];
       try {
-        if (missTexts.length === 1) {
-          // Single chunk: use single embedding method
-          const vector = await getVector(embeddingProvider, missTexts[0]);
-          newVectors = [vector];
-        } else {
-          // Multiple chunks: use batch method
-          if (
-            'generateEmbeddingBatch' in embeddingProvider &&
-            typeof embeddingProvider.generateEmbeddingBatch === 'function'
-          ) {
-            newVectors = await (
-              embeddingProvider.generateEmbeddingBatch as (
-                texts: string[],
-                tokenCounts?: number[]
-              ) => Promise<number[][]>
-            )(missTexts, missTokenCounts);
-          } else {
-            // Fallback for providers without batch support
-            logger.log('Provider does not support batch embedding, falling back to individual calls');
-            newVectors = await Promise.all(missTexts.map(text => getVector(embeddingProvider, text)));
-          }
-        }
+        const usesSafeSingleEmbedding =
+          missTexts.length === 1 || embeddingBackendForModel(embeddingModel) !== ModelBackend.OpenAI;
+        newVectors = usesSafeSingleEmbedding
+          ? await Promise.all(missTexts.map(text => getVector(embeddingProvider, text)))
+          : (await embeddingProvider.embed(missTexts)).vectors;
       } catch (providerErr) {
         await creditReservation?.refund();
         // The provider call failed, so the reserved money was never spent: return it to the

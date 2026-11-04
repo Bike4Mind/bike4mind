@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { bindEmbeddingModel, buildEmbeddingRegistry, embedOne } from '@bike4mind/utils/embeddingProviders';
 /**
  * Vectorize Help Content Script
  *
@@ -24,7 +25,7 @@ import { fileURLToPath } from 'url';
 import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 import matter from 'gray-matter';
 import { glob } from 'glob';
-import { EmbeddingFactory } from '@bike4mind/fab-pipeline';
+
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 import type { HelpEmbeddingChunk, HelpEmbeddingsIndex, HelpIndex, HelpAccessLevel } from './types.js';
 import {
@@ -271,8 +272,8 @@ export async function buildChunks(opts: BuildChunksOptions = {}): Promise<ChunkD
  * floats are rounded to FLOAT_PRECISION decimal places for JSON size savings.
  */
 async function generateEmbeddings(chunks: ChunkData[], apiKey: string): Promise<HelpEmbeddingChunk[]> {
-  const factory = new EmbeddingFactory({ openaiApiKey: apiKey });
-  const service = factory.createEmbeddingService(EMBEDDING_MODEL);
+  const factory = buildEmbeddingRegistry({ openaiApiKey: apiKey });
+  const service = bindEmbeddingModel(factory, EMBEDDING_MODEL);
 
   const results: HelpEmbeddingChunk[] = [];
   const totalBatches = Math.ceil(chunks.length / BATCH_SIZE);
@@ -283,7 +284,7 @@ async function generateEmbeddings(chunks: ChunkData[], apiKey: string): Promise<
 
     console.log(`Processing batch ${batchIdx + 1}/${totalBatches} (${batch.length} chunks)`);
 
-    const embeddings = await Promise.all(batch.map(chunk => service.generateEmbedding(chunk.content)));
+    const embeddings = await Promise.all(batch.map(chunk => embedOne(service, chunk.content)));
 
     for (let i = 0; i < batch.length; i++) {
       // Dimension reduction + L2 normalization (no-op at native 1536)

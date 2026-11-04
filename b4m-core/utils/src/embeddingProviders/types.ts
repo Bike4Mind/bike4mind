@@ -1,10 +1,11 @@
-import type { EmbeddingProviderId, SupportedEmbeddingModel } from '@bike4mind/common';
+import type { EmbeddingProviderId, EmbeddingModelId } from '@bike4mind/common';
 
 export type EmbeddingRequest = {
-  model: SupportedEmbeddingModel;
+  model: EmbeddingModelId;
   inputs: readonly string[];
   /** Output width; omitted means the model's native width. */
   dimensions?: number;
+  inputType?: 'query' | 'document';
 };
 
 export type EmbeddingResult = {
@@ -25,6 +26,6 @@ export type EmbeddingContext = { signal?: AbortSignal };
  */
 export type EmbeddingProvider = {
   readonly id: EmbeddingProviderId;
-  readonly models: readonly SupportedEmbeddingModel[];
+  readonly models: readonly EmbeddingModelId[];
   embed(request: EmbeddingRequest, context?: EmbeddingContext): Promise<EmbeddingResult>;
 };

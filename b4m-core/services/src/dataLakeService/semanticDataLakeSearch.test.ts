@@ -1,3 +1,17 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  bindEmbeddingModel: (_registry: unknown, model: string) => {
+    mockCreateEmbeddingService(model);
+    return {
+      model,
+      maxInputTokens: 8192,
+      embed: async (inputs: readonly string[]) => ({
+        vectors: await Promise.all(inputs.map(async () => mockGenerateEmbedding(model))),
+      }),
+    };
+  },
+}));
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Cosine is a hoisted mock so individual tests can vary scores; the default keeps every chunk
@@ -24,14 +38,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
-    getProviderFromModel: (m: string) => (m.startsWith('voyage-') ? 'voyageai' : 'openai'),
     computeCosineSimilarity: mockCosine,
-    EmbeddingFactory: class {
-      createEmbeddingService(model: string) {
-        mockCreateEmbeddingService(model);
-        return { generateEmbedding: async () => mockGenerateEmbedding(model) };
-      }
-    },
   };
 });
 

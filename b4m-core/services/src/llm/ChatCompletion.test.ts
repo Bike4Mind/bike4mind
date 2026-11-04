@@ -182,12 +182,6 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
       close: vi.fn(),
     };
   }),
-  EmbeddingFactory: vi.fn().mockImplementation(function () {
-    return {
-      embed: vi.fn(),
-    };
-  }),
-  getProviderFromModel: vi.fn().mockReturnValue('openai'),
   TiktokenTokenizer: vi.fn().mockImplementation(function () {
     return {
       countTokens: vi.fn().mockResolvedValue(100),

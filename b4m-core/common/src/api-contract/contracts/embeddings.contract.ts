@@ -3,6 +3,7 @@ import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
 import {
   EmbeddingsErrorSchema,
+  ListEmbeddingModelsResponseSchema,
   EmbeddingsRequestSchema,
   EmbeddingsResponseSchema,
   MAX_EMBEDDING_INPUTS,
@@ -31,7 +32,7 @@ export const createEmbeddingsContract = defineEndpoint({
   description:
     'Returns one embedding vector per input string. The request and success bodies follow the OpenAI ' +
     'embeddings API shape; error bodies use the standard B4M error envelope. `model` is any embedding ' +
-    'model this deployment supports (OpenAI, Voyage AI, Amazon Bedrock, or a self-hosted Ollama model); ' +
+    'model returned by GET /api/v1/embedding-models; ' +
     `\`input\` is a string or up to ${MAX_EMBEDDING_INPUTS} strings, at most ${MAX_EMBEDDING_REQUEST_TOKENS} ` +
     'tokens in total and each within the model context window. The input count is further capped so ' +
     `inputs x output width stays within ${MAX_EMBEDDING_RESPONSE_VALUES} values (128 inputs at 1536 ` +
@@ -39,6 +40,7 @@ export const createEmbeddingsContract = defineEndpoint({
     "accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be " +
     'set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models ' +
     'that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). ' +
+    'Optional `input_type` is `query` or `document`; providers without task hints ignore it. ' +
     'Billed in credits per input token from the per-model embedding rate, reserved before the provider ' +
     'call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, ' +
     'or a JWT.',
@@ -100,4 +102,25 @@ export const createEmbeddingsContract = defineEndpoint({
     streaming: false,
     body: EXAMPLE_REQUEST,
   },
+});
+
+export const listEmbeddingModelsContract = defineEndpoint({
+  method: 'get',
+  path: '/api/v1/embedding-models',
+  operationId: 'listEmbeddingModels',
+  summary: 'List embedding models',
+  description:
+    'Returns models whose provider is registered for this deployment and your resolved credentials, ' +
+    'with output dimensions, per-input token limits, task-hint support and USD token prices. ' +
+    'A null price means the model has no published rate and cannot be used on the embeddings endpoint.',
+  tags: ['AI'],
+  auth: 'apiKeyOrJwt',
+  scopes: [ApiKeyScope.AI_GENERATE],
+  responses: {
+    200: { description: 'Embedding models available to this caller.', schema: ListEmbeddingModelsResponseSchema },
+    403: { description: 'The API key lacks ai:generate.', schema: ApiErrorSchema },
+    429: { description: 'Per-key rate limit exceeded.', schema: ApiErrorSchema },
+  },
+  emitsRateLimitHeaders: true,
+  codeSample: { authToken: 'b4m_live_<key>', streaming: false, body: {} },
 });

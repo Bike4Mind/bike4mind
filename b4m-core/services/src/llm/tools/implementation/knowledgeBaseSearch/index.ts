@@ -1,3 +1,4 @@
+import { embeddingBackendForModel, resolveEmbeddingWithKeylessFallback } from '@bike4mind/utils/embeddingProviders';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { resolveToolBillingOrganization } from '../../base/resolveToolBillingOrganization';
 import { INDEXED_TOOL_CITATION_RULE, citationNumbersById } from '../../citationNumbering';
@@ -11,13 +12,7 @@ import {
   isSupportedEmbeddingModel,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import {
-  createTokenizer,
-  getProviderFromModel,
-  getSettingsByNames,
-  resolveEmbeddingWithKeylessFallback,
-  type ITokenizer,
-} from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
@@ -330,7 +325,7 @@ async function resolveEmbeddingContext(context: ToolContext): Promise<{
   // resolves to Bedrock here rather than losing semantic search entirely. The RESOLVED model is
   // what goes downstream, so the query is embedded in the same space the corpus was written in.
   const { missing, model: resolvedEmbeddingModel } = resolveEmbeddingWithKeylessFallback(embeddingModel, apiKeyTable);
-  const provider = getProviderFromModel(resolvedEmbeddingModel);
+  const provider = embeddingBackendForModel(resolvedEmbeddingModel);
   if (missing) {
     context.logger.warn(`📚 [semantic] falling back to keyword search: no credential for provider "${provider}"`);
     return null;
@@ -433,7 +428,7 @@ async function recordAllEmbeddingUsage(
     // model, so this filter should never actually drop anything.
     ...alternateModelsEmbedded
       .filter(isSupportedEmbeddingModel)
-      .map(model => ({ model, provider: getProviderFromModel(model) })),
+      .map(model => ({ model, provider: embeddingBackendForModel(model) })),
   ];
   await Promise.all(
     models.map(({ model, provider }) => recordEmbeddingUsage(context, organization, query, model, provider))

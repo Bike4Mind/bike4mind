@@ -249,6 +249,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/decision-models',
   },
+  listEmbeddingModels: {
+    method: 'GET',
+    path: '/api/v1/embedding-models',
+  },
   listFiles: {
     method: 'GET',
     path: '/api/v1/files',

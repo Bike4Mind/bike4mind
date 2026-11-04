@@ -439,6 +439,16 @@
         "types": "./dist/utils/crypto.d.cts",
         "default": "./dist/utils/crypto.cjs"
       }
+    },
+    "./llm/embeddingProviders": {
+      "import": {
+        "types": "./dist/llm/embeddingProviders.d.mts",
+        "default": "./dist/llm/embeddingProviders.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/embeddingProviders.d.cts",
+        "default": "./dist/llm/embeddingProviders.cjs"
+      }
     }
   },
   "files": [

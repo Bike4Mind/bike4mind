@@ -1,4 +1,4 @@
-export const EMBEDDING_PROVIDER_IDS = ['openai', 'voyage', 'bedrock', 'ollama'] as const;
+export const EMBEDDING_PROVIDER_IDS = ['openai', 'voyage', 'bedrock', 'ollama', 'gemini'] as const;
 export type EmbeddingProviderId = (typeof EMBEDDING_PROVIDER_IDS)[number];
 
 /**
@@ -17,6 +17,7 @@ export type EmbeddingDimensions =
 export type EmbeddingModelCapabilities = {
   provider: EmbeddingProviderId;
   displayName: string;
+  inputType: boolean;
   dimensions: EmbeddingDimensions;
   /** Per-input token ceiling; also sizes chunks (SmartChunker), so it can sit below the vendor's limit. */
   maxInputTokens: number;

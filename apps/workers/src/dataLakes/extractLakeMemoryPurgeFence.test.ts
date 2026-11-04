@@ -63,11 +63,7 @@ vi.mock('@bike4mind/services/llm', () => ({
     evaluate = (...a: unknown[]) => evaluateMock(...a);
   },
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: { create: vi.fn() },
-  getProviderFromModel: () => 'openai',
-  resolveEmbeddingConfig: () => ({ config: undefined, missing: true }),
-}));
+
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
   createLedgerAppendSession: async (...a: unknown[]) => {
@@ -361,3 +357,7 @@ describe('extractLakeMemoryForBatch purge fence', () => {
     expect(sourceShredMock).toHaveBeenCalledWith('lake', 'datalake:test', 'owner-1', 'doc-000');
   });
 });
+
+vi.mock('@bike4mind/server-utils/memory/mementoEmbedder', () => ({
+  createMementoEmbedder: () => async () => undefined,
+}));

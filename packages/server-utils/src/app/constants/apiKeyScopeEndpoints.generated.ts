@@ -87,6 +87,7 @@ export const DERIVED_API_KEY_SCOPE_ENDPOINTS: Readonly<Partial<Record<ApiKeyScop
     'GET /api/v1/credits',
     'GET /api/v1/decision-models',
     'POST /api/v1/decisions',
+    'GET /api/v1/embedding-models',
     'POST /api/v1/embeddings',
     'POST /api/v1/image-edits',
     'POST /api/v1/image-generations',

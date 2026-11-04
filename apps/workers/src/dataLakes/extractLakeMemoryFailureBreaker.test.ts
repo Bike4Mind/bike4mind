@@ -63,11 +63,7 @@ vi.mock('@bike4mind/services/llm', () => ({
     evaluate = (...a: unknown[]) => evaluateMock(...a);
   },
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: { create: vi.fn() },
-  getProviderFromModel: () => 'openai',
-  resolveEmbeddingConfig: () => ({ config: undefined, missing: true }),
-}));
+
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
   createLedgerAppendSession: async () => ({ append: (...a: unknown[]) => appendMock(...a) }),
@@ -294,3 +290,7 @@ describe('extractLakeMemoryForBatch consecutive-failure breaker', () => {
     expect(result.hasMore).toBe(false);
   });
 });
+
+vi.mock('@bike4mind/server-utils/memory/mementoEmbedder', () => ({
+  createMementoEmbedder: () => async () => undefined,
+}));

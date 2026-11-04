@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { envKey } from '@bike4mind/auth/apiKeyService';
 import { adminSettingsRepository } from '@bike4mind/database';
-import { getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
+import { embeddingBackendForModel, resolveEmbeddingCredentials } from '@bike4mind/services/llm/embeddingProviders';
 import {
   ApiKeyScope,
   ModelBackend,
@@ -97,7 +97,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
 
     const logger = req.logger;
     const model = await resolveDefaultEmbeddingModel(logger, 'embedding-limits');
-    const provider = getProviderFromModel(model);
+    const provider = embeddingBackendForModel(model);
 
     // Deliberately NOT getEffectiveLLMApiKeys(req.user.id). That resolver prefers the CALLER's
     // personal key over the platform one, and data-lake ingest resolves per FILE OWNER - so an
@@ -105,7 +105,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     // while the lever they are about to set governs work that runs on the platform key. Measuring
     // the platform credential is the only reading that describes what this lever actually bounds.
     const apiKeyTable = await resolvePlatformEmbeddingKeys();
-    const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+    const { config, missing } = resolveEmbeddingCredentials(provider, apiKeyTable);
 
     if (missing) {
       return res.json({
@@ -138,7 +138,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
 
     // The dispatch below is a binary, so without this arm a fifth backend would be probed at
     // VoyageAI's endpoint with VoyageAI's key and the answer reported as its own ceiling.
-    // resolveEmbeddingConfig switches exhaustively, so a new backend fails the build there; this
+    // resolveEmbeddingCredentials switches exhaustively, so a new backend fails the build there; this
     // covers the runtime path that a non-exhaustive ternary leaves open.
     if (provider !== ModelBackend.OpenAI && provider !== ModelBackend.VoyageAI) {
       return res.json({

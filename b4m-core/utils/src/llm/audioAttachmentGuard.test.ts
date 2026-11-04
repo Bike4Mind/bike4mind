@@ -16,11 +16,11 @@ type ServerDeps = Parameters<typeof processFabFilesServer>[6];
 describe('processFabFilesServer — audio is never attached to an LLM', () => {
   const embeddingService = {
     getModelInfo: () => ({ contextWindow: 8192, model: 'text-embedding-3-small' }),
-    generateEmbedding: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+    embed: vi.fn().mockResolvedValue({ vectors: [[0.1, 0.2, 0.3]] }),
   };
   const embeddingFactory = {
-    getDefaultEmbeddingModel: () => 'text-embedding-3-small',
-    createEmbeddingService: () => embeddingService,
+    defaultModel: 'text-embedding-3-small',
+    get: () => embeddingService,
   } as any;
 
   const audioFile = {

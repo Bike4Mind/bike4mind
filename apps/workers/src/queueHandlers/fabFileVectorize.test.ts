@@ -1,3 +1,16 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  embeddingBackendForModel: vi.fn(() => 'openai'),
+  resolveEmbeddingCredentials: vi.fn(() => ({ config: {}, missing: null })),
+  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
+
+  bindEmbeddingModel: (_registry: unknown, model: string) => ({
+    model,
+    maxInputTokens: 1000,
+    embed: async (inputs: readonly string[]) => ({ vectors: await Promise.all(inputs.map(text => h.getVector(text))) }),
+  }),
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
@@ -173,13 +186,6 @@ vi.mock('@bike4mind/common', async () => {
 });
 vi.mock('@bike4mind/fab-pipeline', () => ({
   ChunkSchema: z.object({}).passthrough(),
-  EmbeddingFactory: class {
-    createEmbeddingService() {
-      return { getModelInfo: () => ({ contextWindow: 1000 }) };
-    }
-  },
-  getProviderFromModel: vi.fn(() => 'openai'),
-  resolveEmbeddingWithKeylessFallback: h.resolveEmbeddingWithKeylessFallback,
   EmbeddingAuthError: class extends Error {
     constructor(
       readonly provider: string,
@@ -346,6 +352,21 @@ describe('fabFileVectorize handler - stored error copy on vectorization failure'
     });
     h.getEmbedding.mockResolvedValue(null);
     h.markFailedIfNotAlready.mockResolvedValue(true);
+  });
+
+  it('keeps single cache misses on the safe embedding path', async () => {
+    const text = 'hello '.repeat(9000);
+    h.findAccessibleById.mockResolvedValue(unvectorizedFile(undefined));
+    (fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      id: 'c1',
+      text,
+      tokenCount: 5,
+    });
+    h.getVector.mockResolvedValue([0.1, 0.2, 0.3]);
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.getVector).toHaveBeenCalledWith(expect.objectContaining({ model: expect.any(String) }), text);
   });
 
   it('persists user-safe copy for a turn-attached file on an embedding-auth failure', async () => {

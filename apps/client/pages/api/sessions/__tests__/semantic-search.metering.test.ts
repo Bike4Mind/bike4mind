@@ -53,11 +53,11 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/database/content', () => ({
   Quest: { find: () => ({ lean: async () => [{ sessionId: 's1', prompt: 'bike trip plans', reply: 'Go to Paris' }] }) },
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({
-  EmbeddingFactory: class {
-    createEmbeddingService = () => ({ generateEmbedding: m.embed });
-  },
-  getProviderFromModel: () => 'openai',
+vi.mock('@bike4mind/services/llm/embeddingProviders', () => ({
+  buildEmbeddingRegistry: () => ({}),
+  bindEmbeddingModel: () => ({}),
+  embedOne: (_model: unknown, text: string) => m.embed(text),
+  embeddingBackendForModel: () => 'openai',
   resolveEmbeddingWithKeylessFallback: (model: string) => ({ config: {}, missing: undefined, model }),
 }));
 vi.mock('@bike4mind/services', async () => ({

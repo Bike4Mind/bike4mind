@@ -82,7 +82,7 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
     const vectors: number[][] = [];
     const reportedTokens: (number | undefined)[] = [];
     for (const batch of createBatches(request.inputs)) {
-      const outcome = await this.embedBatch(request.model, batch, outputDimension, context);
+      const outcome = await this.embedBatch(request.model, batch, outputDimension, request.inputType, context);
       vectors.push(...outcome.vectors);
       reportedTokens.push(outcome.inputTokens);
     }
@@ -95,11 +95,13 @@ export class VoyageEmbeddingProvider implements EmbeddingProvider {
     model: string,
     inputs: readonly string[],
     outputDimension: number | undefined,
+    inputType: EmbeddingRequest['inputType'],
     context: EmbeddingContext
   ): Promise<{ vectors: number[][]; inputTokens?: number }> {
     const body = JSON.stringify({
       input: inputs,
       model,
+      ...(inputType !== undefined && { input_type: inputType }),
       ...(outputDimension !== undefined && { output_dimension: outputDimension }),
     });
     const response = await this.postWithRetry(body, context);

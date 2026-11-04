@@ -31,10 +31,9 @@ const modelInfo = { id: 'm', supportsVision: false, backend: 'openai' } as unkno
 
 // Query vector is [1, 0]; a chunk's vector width decides whether it is comparable at all.
 const embeddingFactory = {
-  getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
-  createEmbeddingService: () => ({
-    getModelInfo: () => ({ model: 'text-embedding-ada-002', contextWindow: 8192 }),
-    generateEmbedding: async () => [1, 0],
+  defaultModel: 'text-embedding-ada-002',
+  get: () => ({
+    embed: async () => ({ vectors: [[1, 0]] }),
   }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal factory shape for this unit test
 } as any;

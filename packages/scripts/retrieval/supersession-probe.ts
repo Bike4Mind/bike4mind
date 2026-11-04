@@ -1,4 +1,10 @@
 #!/usr/bin/env tsx
+import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+} from '@bike4mind/utils/embeddingProviders';
 /**
  * Supersession-collapse probe: proves on a live DB that `EnableRetrievalSupersessionCollapse`
  * changes which GENERATION of a re-uploaded document semantic search serves.
@@ -72,7 +78,7 @@ import {
 import { getSettingsByNames, invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { apiKeyService, dataLakeService, userService } from '@bike4mind/services';
-import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
+
 import {
   KnowledgeType,
   countCodePoints,
@@ -443,7 +449,7 @@ async function resolveEmbeddingHandle(userId: string): Promise<EmbeddingHandle> 
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
   });
-  const provider = getProviderFromModel(embeddingModel);
+  const provider = embeddingBackendForModel(embeddingModel);
   const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
     {};
   if (provider === 'openai') {
@@ -458,10 +464,10 @@ async function resolveEmbeddingHandle(userId: string): Promise<EmbeddingHandle> 
   }
   // Other providers (e.g. Bedrock) are keyless/IAM-based and need no credential here - same
   // guard as ingest-help-datalake.ts.
-  const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(embeddingModel);
+  const embeddingService = bindEmbeddingModel(buildEmbeddingRegistry(embeddingConfig), embeddingModel);
   return {
     embeddingModel,
-    generateEmbedding: (text: string) => embeddingService.generateEmbedding(text),
+    generateEmbedding: (text: string) => embedOne(embeddingService, text),
   };
 }
 

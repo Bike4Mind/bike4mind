@@ -27,10 +27,9 @@ const imageFile = (id: string): IFabFileDocument =>
 const modelInfo = { id: 'm', supportsVision: false, backend: 'openai' } as unknown as ModelInfo;
 
 const embeddingFactory = {
-  getDefaultEmbeddingModel: () => 'text-embedding-3-small',
-  createEmbeddingService: () => ({
-    getModelInfo: () => ({ model: 'text-embedding-3-small', contextWindow: 8191 }),
-    generateEmbedding: async () => [0.1, 0.2],
+  defaultModel: 'text-embedding-3-small',
+  get: () => ({
+    embed: async () => ({ vectors: [[0.1, 0.2]] }),
   }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal factory shape for this unit test
 } as any;
@@ -38,10 +37,9 @@ const embeddingFactory = {
 // Models an embedding outage: the provider rejects every embed call (e.g. a 401 on a revoked or
 // endpoint-scoped key). The query embedding must degrade to raw content, not abort the whole turn.
 const throwingEmbeddingFactory = {
-  getDefaultEmbeddingModel: () => 'text-embedding-3-small',
-  createEmbeddingService: () => ({
-    getModelInfo: () => ({ model: 'text-embedding-3-small', contextWindow: 8191 }),
-    generateEmbedding: async () => {
+  defaultModel: 'text-embedding-3-small',
+  get: () => ({
+    embed: async () => {
       throw new Error('OpenAI rejected the embedding request (401 Unauthorized)');
     },
   }),

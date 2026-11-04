@@ -7,7 +7,7 @@ const {
   getEffectiveLLMApiKeys,
   countTokens,
   generateEmbeddingBatch,
-  generateEmbedding,
+  embedProvider,
   getSettingsValue,
   getSettingsMap,
   recordUsage,
@@ -19,7 +19,7 @@ const {
   getEffectiveLLMApiKeys: vi.fn(),
   countTokens: vi.fn(),
   generateEmbeddingBatch: vi.fn(),
-  generateEmbedding: vi.fn(),
+  embedProvider: vi.fn(),
   getSettingsValue: vi.fn(),
   getSettingsMap: vi.fn(async () => ({})),
   recordUsage: vi.fn(),
@@ -78,27 +78,20 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: (...a: unknown[]) => getEffectiveLLMApiKeys(...a) },
 }));
-// The real resolver, provider mapping and auth-error guard, so the credential gate is the one
-// production runs; only the network-facing factory and the tokenizer are stubbed.
-vi.mock('@bike4mind/fab-pipeline', async importActual => {
-  const modelDimensions: Record<string, number[]> = {
-    'text-embedding-3-small': [1536],
-    'voyage-3-large': [1024, 256, 512, 2048],
-    'nomic-embed-text': [768],
-  };
+vi.mock('@bike4mind/services/llm/embeddingProviders', async importActual => {
+  const actual = await importActual<typeof import('@bike4mind/services/llm/embeddingProviders')>();
   return {
-    ...(await importActual<typeof import('@bike4mind/fab-pipeline')>()),
-    EmbeddingFactory: class {
-      createEmbeddingService(model: string) {
-        const service = {
-          generateEmbedding: (...a: unknown[]) => generateEmbedding(...a),
-          getModelInfo: () => ({ provider: 'x', model, contextWindow: 8192, dimensions: modelDimensions[model] }),
-        };
-        // Voyage has no batch API in production either.
-        return model.startsWith('voyage')
-          ? service
-          : { ...service, generateEmbeddingBatch: (...a: unknown[]) => generateEmbeddingBatch(...a) };
-      }
+    ...actual,
+    resolveEmbeddingProvider: (...args: Parameters<typeof actual.resolveEmbeddingProvider>) => {
+      const result = actual.resolveEmbeddingProvider(...args);
+      if (!result.provider) return result;
+      return {
+        ...result,
+        provider: {
+          ...result.provider,
+          embed: embedProvider,
+        },
+      };
     },
   };
 });
@@ -136,6 +129,12 @@ describe('POST /api/v1/embeddings', () => {
     getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-real', voyageai: 'pa-real' });
     countTokens.mockResolvedValue(5);
     generateEmbeddingBatch.mockImplementation(async (texts: string[]) => texts.map(() => vectorOf(1536)));
+    embedProvider.mockImplementation(async (request: { inputs: string[]; dimensions?: number }) => {
+      const vectors = await generateEmbeddingBatch(request.inputs);
+      return {
+        vectors: request.dimensions ? vectors.map((vector: number[]) => vector.slice(0, request.dimensions)) : vectors,
+      };
+    });
     getSettingsValue.mockReturnValue(true);
     recordUsage.mockResolvedValue(undefined);
     settle.mockImplementation(async (credits: number) => credits);
@@ -179,7 +178,7 @@ describe('POST /api/v1/embeddings', () => {
       ['embedding', 1],
     ]);
     expect(body.data[0].embedding).toHaveLength(1536);
-    expect(generateEmbeddingBatch).toHaveBeenCalledWith(['a', 'b'], [5, 5]);
+    expect(generateEmbeddingBatch).toHaveBeenCalledWith(['a', 'b']);
   });
 
   it('reserves the priced cost up front and settles the text-generation ledger type', async () => {
@@ -221,12 +220,81 @@ describe('POST /api/v1/embeddings', () => {
   });
 
   it('forwards a Voyage published width to the provider instead of truncating', async () => {
-    generateEmbedding.mockResolvedValue(vectorOf(512));
+    generateEmbeddingBatch.mockResolvedValue([vectorOf(512)]);
 
     const { status } = await run({ model: 'voyage-3-large', input: 'a', dimensions: 512 });
 
     expect(status).toBe(200);
-    expect(generateEmbedding).toHaveBeenCalledWith('a', { outputDimension: 512 });
+    expect(embedProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'voyage-3-large', inputs: ['a'], dimensions: 512 })
+    );
+  });
+
+  it('forwards a task hint without changing the requested model', async () => {
+    await run({ model: 'voyage-3-large', input: 'a', input_type: 'query' });
+    expect(embedProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'voyage-3-large', inputType: 'query' })
+    );
+  });
+
+  it('settles and reports provider-reported usage', async () => {
+    countTokens.mockResolvedValue(5000);
+    settlementDraw.mockReturnValue(0.25);
+    embedProvider.mockResolvedValueOnce({ vectors: [vectorOf(1536)], inputTokens: 7000 });
+    const { body, status } = await run({ model: 'text-embedding-3-small', input: 'a' });
+    expect(status).toBe(200);
+    expect(body.usage).toEqual({ prompt_tokens: 7000, total_tokens: 7000 });
+    expect(settle).toHaveBeenCalledWith(1, expect.objectContaining({ inputTokens: 7000 }));
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputTokens: 7000,
+        settledBasis: 'provider',
+        provider: 'openai',
+        costUsd: expect.closeTo(0.00014, 10),
+      })
+    );
+  });
+
+  it('rejects a Cohere model unavailable on this deployment before reserving credits', async () => {
+    vi.stubEnv('BEDROCK_COHERE_EMBED_MODEL_ID', '');
+    try {
+      const { status, body } = await run({ model: 'cohere.embed-v4:0', input: 'a' });
+      expect(status).toBe(503);
+      expect(body.errorCode).toBe('provider_not_configured');
+      expect(reserve).not.toHaveBeenCalled();
+      expect(embedProvider).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('serves configured Cohere models with a document hint', async () => {
+    vi.stubEnv('BEDROCK_COHERE_EMBED_MODEL_ID', 'us.cohere.embed-v4:0');
+    try {
+      embedProvider.mockResolvedValueOnce({ vectors: [vectorOf(256)], inputTokens: 5 });
+      const { status } = await run({ model: 'cohere.embed-v4:0', input: 'a', dimensions: 256, input_type: 'document' });
+      expect(status).toBe(200);
+      expect(embedProvider).toHaveBeenCalledWith({
+        model: 'cohere.embed-v4:0',
+        inputs: ['a'],
+        dimensions: 256,
+        inputType: 'document',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('reserves a margin for Gemini local token estimates', async () => {
+    getEffectiveLLMApiKeys.mockResolvedValue({ gemini: 'gemini-real' });
+    countTokens.mockResolvedValue(1500);
+    embedProvider.mockResolvedValueOnce({ vectors: [vectorOf(128), vectorOf(128)], inputTokens: 2000 });
+
+    const { status } = await run({ model: 'gemini-embedding-001', input: ['a', 'b'], dimensions: 128 });
+
+    expect(status).toBe(200);
+    expect(reserve).toHaveBeenCalledWith(expect.objectContaining({ requiredCredits: 2 }));
+    expect(settle).toHaveBeenCalledWith(0, expect.objectContaining({ inputTokens: 2000 }));
   });
 
   it('rejects a width the model cannot produce, before any spend', async () => {

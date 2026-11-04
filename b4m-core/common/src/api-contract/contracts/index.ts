@@ -27,7 +27,7 @@ import {
   getFilesByIdsContract,
   bulkDeleteFilesContract,
 } from './files.contract';
-import { createEmbeddingsContract } from './embeddings.contract';
+import { createEmbeddingsContract, listEmbeddingModelsContract } from './embeddings.contract';
 import { postSlackMessageContract } from './slackMessages.contract';
 import { createTextRefinementContract } from './textRefinement.contract';
 import { createDecisionContract, listDecisionModelsContract } from './decisions.contract';
@@ -141,6 +141,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   getFilesByIdsContract,
   bulkDeleteFilesContract,
   createEmbeddingsContract,
+  listEmbeddingModelsContract,
   createTextRefinementContract,
   createDecisionContract,
   listDecisionModelsContract,

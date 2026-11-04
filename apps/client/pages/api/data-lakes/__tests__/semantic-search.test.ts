@@ -62,10 +62,7 @@ vi.mock('@server/entitlements/activeSubscriptions', () => ({
 }));
 // getProviderFromModel is stubbed so a test can choose the provider, but resolveEmbeddingConfig
 // is the real one: which credential a provider needs is the behaviour under test here.
-vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
-  ...(await importOriginal<typeof import('@bike4mind/fab-pipeline')>()),
-  getProviderFromModel: mockGetProviderFromModel,
-}));
+
 vi.mock('@bike4mind/utils', () => ({
   createTokenizer: () => ({ countTokens: mockCountTokens }),
   getSettingsByNames: vi.fn(),
@@ -1473,3 +1470,8 @@ describe('POST /api/data-lakes/semantic-search budget scope (#2709)', () => {
     });
   });
 });
+
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  embeddingBackendForModel: mockGetProviderFromModel,
+}));

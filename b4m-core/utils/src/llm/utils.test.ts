@@ -2711,10 +2711,9 @@ describe('processFabFilesServer chunk retrieval', () => {
 
   const runRetrieval = async (chunks: ReturnType<typeof makeChunks>, maxTokens: number) => {
     const embeddingFactory = {
-      getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
-      createEmbeddingService: () => ({
-        getModelInfo: () => ({ model: 'text-embedding-ada-002', contextWindow: 8192 }),
-        generateEmbedding: async () => [1, 0],
+      defaultModel: 'text-embedding-ada-002',
+      get: () => ({
+        embed: async () => ({ vectors: [[1, 0]] }),
       }),
     };
 

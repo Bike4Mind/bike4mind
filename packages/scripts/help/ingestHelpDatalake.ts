@@ -1,3 +1,10 @@
+import {
+  type EmbeddingKeyTable,
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  resolveEmbeddingWithKeylessFallback,
+} from '@bike4mind/utils/embeddingProviders';
 /**
  * Mirror the public help corpus into the `system-help` data lake.
  *
@@ -43,7 +50,7 @@ import {
   type IFabFileRepository,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from '@bike4mind/fab-pipeline';
+
 import { chunkByHeadings, stripFrontmatter } from './utils.js';
 import type { HelpIndex, HelpIndexEntry } from './types.js';
 
@@ -83,8 +90,8 @@ export function createHelpEmbedder(
   if (missing) {
     throw new Error(`No ${missing} credential resolved for embedding model ${embeddingModel}; cannot embed chunks.`);
   }
-  const service = new EmbeddingFactory(config).createEmbeddingService(model);
-  return { embed: text => service.generateEmbedding(text), model };
+  const service = bindEmbeddingModel(buildEmbeddingRegistry(config), model);
+  return { embed: text => embedOne(service, text), model };
 }
 
 export interface HelpDatalakeLogger {

@@ -1,4 +1,11 @@
 import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embedOne,
+  embeddingBackendForModel,
+  resolveEmbeddingCredentials,
+} from '@bike4mind/utils/embeddingProviders';
+import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
@@ -12,12 +19,7 @@ import {
   type DataLakeMembershipScope,
   type LakeSupersession,
 } from '@bike4mind/common';
-import {
-  computeCosineSimilarity,
-  EmbeddingFactory,
-  getProviderFromModel,
-  resolveEmbeddingConfig,
-} from '@bike4mind/utils';
+import { computeCosineSimilarity } from '@bike4mind/utils';
 import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
 import { selfHostOpenSearchEnabled, selfHostOpenSearchResidencyRequired } from '@bike4mind/db-core';
@@ -64,7 +66,7 @@ import { slowestAnnQueryMs, type AnnVectorSearchResult } from './annVectorSearch
  * implementation in-process. (The RLM tools reach the same code, but over an HTTP loopback
  * to the endpoint rather than in-process.) Modeled on the dependency-injected
  * getRelevantMementos pattern: pure, adapter-injected, never imports @bike4mind/database.
- * Reuses EmbeddingFactory (query embed) + computeCosineSimilarity (ranking) + the chunk
+ * Reuses EmbeddingRuntime (query embed) + computeCosineSimilarity (ranking) + the chunk
  * vectors the fabFileVectorize pipeline already populates.
  *
  * Ranking is a BOUNDED STREAMING scan, not a bulk load: chunk vectors are walked in keyset pages,
@@ -985,9 +987,9 @@ async function rankChunksForFiles(args: {
   const perFileCap = budgets.maxChunksPerFile;
   const candidatePoolK = perFileCap > 0 && perFileCap < topK ? topK * DIVERSITY_CANDIDATE_POOL_FACTOR : topK;
 
-  // --- Embed the query (reuse EmbeddingFactory; pick the provider the model needs) ---
-  const provider = getProviderFromModel(embeddingModel);
-  const { config: embeddingConfig, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
+  // --- Embed the query (reuse EmbeddingRuntime; pick the provider the model needs) ---
+  const provider = embeddingBackendForModel(embeddingModel);
+  const { config: embeddingConfig, missing } = resolveEmbeddingCredentials(provider, apiKeyTable);
   if (missing) {
     throw new Error(
       missing === 'ollama'
@@ -995,8 +997,8 @@ async function rankChunksForFiles(args: {
         : `${missing === 'openai' ? 'OpenAI' : 'VoyageAI'} API key required for semantic search but not found.`
     );
   }
-  const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(embeddingModel);
-  const queryEmbedding = await embeddingService.generateEmbedding(query);
+  const embeddingService = bindEmbeddingModel(buildEmbeddingRegistry(embeddingConfig), embeddingModel);
+  const queryEmbedding = await embedOne(embeddingService, query);
 
   const chunkPageSize =
     budgets.chunkPageSize ??

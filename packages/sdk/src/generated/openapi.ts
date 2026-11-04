@@ -485,9 +485,29 @@ export interface paths {
     put?: never;
     /**
      * Create embeddings
-     * @description Returns one embedding vector per input string. The request and success bodies follow the OpenAI embeddings API shape; error bodies use the standard B4M error envelope. `model` is any embedding model this deployment supports (OpenAI, Voyage AI, Amazon Bedrock, or a self-hosted Ollama model); `input` is a string or up to 2048 strings, at most 300000 tokens in total and each within the model context window. The input count is further capped so inputs x output width stays within 196608 values (128 inputs at 1536 dimensions) - page larger jobs across requests. Pre-tokenized input (arrays of token ids) is not accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). Billed in credits per input token from the per-model embedding rate, reserved before the provider call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
+     * @description Returns one embedding vector per input string. The request and success bodies follow the OpenAI embeddings API shape; error bodies use the standard B4M error envelope. `model` is any embedding model returned by GET /api/v1/embedding-models; `input` is a string or up to 2048 strings, at most 300000 tokens in total and each within the model context window. The input count is further capped so inputs x output width stays within 196608 values (128 inputs at 1536 dimensions) - page larger jobs across requests. Pre-tokenized input (arrays of token ids) is not accepted; clients that send it by default, such as LangChain's Python `OpenAIEmbeddings`, must be set to send strings (`check_embedding_ctx_length=False`). `dimensions` shortens the vector on models that support it (OpenAI `text-embedding-3-*`, and Voyage models with several published widths). Optional `input_type` is `query` or `document`; providers without task hints ignore it. Billed in credits per input token from the per-model embedding rate, reserved before the provider call and refunded if it fails. Authenticate with an API key (`b4m_live_`) carrying `ai:generate`, or a JWT.
      */
     post: operations['createEmbeddings'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/v1/embedding-models': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List embedding models
+     * @description Returns models whose provider is registered for this deployment and your resolved credentials, with output dimensions, per-input token limits, task-hint support and USD token prices. A null price means the model has no published rate and cannot be used on the embeddings endpoint.
+     */
+    get: operations['listEmbeddingModels'];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -3705,14 +3725,65 @@ export interface components {
             | 'mxbai-embed-large'
             | 'bge-m3'
             | 'snowflake-arctic-embed'
-          );
+          )
+        | 'gemini-embedding-001'
+        | 'cohere.embed-v4:0';
       input: string | string[];
       dimensions?: number;
+      /** @enum {string} */
+      input_type?: 'query' | 'document';
       /**
        * @default float
        * @enum {string}
        */
       encoding_format?: 'float' | 'base64';
+    };
+    listEmbeddingModelsResponse200: {
+      models: {
+        id:
+          | ('text-embedding-3-small' | 'text-embedding-3-large' | 'text-embedding-ada-002')
+          | ('voyage-3-large' | 'voyage-3' | 'voyage-3-lite' | 'voyage-code-3' | 'voyage-finance-3' | 'voyage-law-3')
+          | 'amazon.titan-embed-text-v2:0'
+          | (
+              | 'qwen3-embedding:0.6b'
+              | 'qwen3-embedding:4b'
+              | 'qwen3-embedding:8b'
+              | 'nomic-embed-text'
+              | 'mxbai-embed-large'
+              | 'bge-m3'
+              | 'snowflake-arctic-embed'
+            )
+          | 'gemini-embedding-001'
+          | 'cohere.embed-v4:0';
+        /** @enum {string} */
+        object: 'embedding_model';
+        display_name: string;
+        /** @enum {string} */
+        provider: 'openai' | 'voyage' | 'bedrock' | 'ollama' | 'gemini';
+        dimensions:
+          | {
+              /** @enum {string} */
+              kind: 'fixed';
+              native: number;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'range';
+              native: number;
+              min: number;
+            }
+          | {
+              /** @enum {string} */
+              kind: 'discrete';
+              native: number;
+              values: number[];
+            };
+        max_input_tokens: number;
+        supports_input_type: boolean;
+        pricing: {
+          usd_per_million_input_tokens: number;
+        } | null;
+      }[];
     };
     /**
      * @example {
@@ -11684,6 +11755,110 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['createEmbeddingsResponse503'];
+        };
+      };
+    };
+  };
+  listEmbeddingModels: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Embedding models available to this caller. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['listEmbeddingModelsResponse200'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks ai:generate. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Per-key rate limit exceeded. */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
     };

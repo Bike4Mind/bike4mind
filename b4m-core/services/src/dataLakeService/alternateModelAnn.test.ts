@@ -1,22 +1,23 @@
+vi.mock('@bike4mind/utils/embeddingProviders', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils/embeddingProviders')>()),
+  buildEmbeddingRegistry: vi.fn(() => ({})),
+  bindEmbeddingModel: (_registry: unknown, model: string) => {
+    mockCreateEmbeddingService(model);
+    return {
+      model,
+      maxInputTokens: 8192,
+      embed: async (inputs: readonly string[]) => ({
+        vectors: await Promise.all(inputs.map(async () => mockGenerateEmbedding())),
+      }),
+    };
+  },
+}));
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const { mockGenerateEmbedding, mockCreateEmbeddingService } = vi.hoisted(() => ({
   mockGenerateEmbedding: vi.fn(async () => [1, 0]),
   mockCreateEmbeddingService: vi.fn(() => ({ generateEmbedding: mockGenerateEmbedding })),
 }));
-
-vi.mock('@bike4mind/utils', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
-  return {
-    ...actual,
-    getProviderFromModel: (m: string) => (m.startsWith('voyage-') ? 'voyageai' : 'openai'),
-    EmbeddingFactory: class {
-      createEmbeddingService(model: string) {
-        return mockCreateEmbeddingService(model);
-      }
-    },
-  };
-});
 
 import {
   MAX_ALTERNATE_ANN_MODELS,
