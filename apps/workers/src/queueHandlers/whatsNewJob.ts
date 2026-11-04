@@ -1,10 +1,4 @@
-/**
- * What's New queue handler (merged release notes + highlights).
- *
- * Single consumer for whatsNewGenerationQueue. Messages carry a `kind` discriminator;
- * this handler validates with WhatsNewQueueMessageSchema and routes to the release-notes
- * or highlights job. Both share a consumer profile and retry policy, so they share a queue.
- */
+/** One consumer for both kinds: they share a consumer profile and retry policy. Routes on `kind`. */
 
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';

@@ -39,7 +39,10 @@ describe('whatsNewJob dispatch', () => {
   it('routes release-notes only to the release-notes job', async () => {
     await run(JSON.stringify(releaseNotes));
     expect(h.runReleaseNotesJob).toHaveBeenCalledTimes(1);
-    expect(h.runReleaseNotesJob.mock.calls[0][0]).toMatchObject({ releaseTag: 'v1.2.3.4' });
+    expect(h.runReleaseNotesJob).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'release-notes', releaseTag: 'v1.2.3.4' }),
+      logger
+    );
     expect(h.runHighlightsJob).not.toHaveBeenCalled();
     expect(logger.updateMetadata).toHaveBeenCalledWith({ kind: 'release-notes' });
   });
@@ -47,7 +50,10 @@ describe('whatsNewJob dispatch', () => {
   it('routes highlights only to the highlights job', async () => {
     await run(JSON.stringify(highlights));
     expect(h.runHighlightsJob).toHaveBeenCalledTimes(1);
-    expect(h.runHighlightsJob.mock.calls[0][0]).toMatchObject({ correlationId: 'c1' });
+    expect(h.runHighlightsJob).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'highlights', correlationId: 'c1' }),
+      logger
+    );
     expect(h.runReleaseNotesJob).not.toHaveBeenCalled();
     expect(logger.updateMetadata).toHaveBeenCalledWith({ kind: 'highlights' });
   });
