@@ -9,6 +9,7 @@ import type {
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import type { AdminSubscriptionStripe } from '@client/app/utils/adminSubscriptionStripe';
 import type {
   AdminCompChange,
   AdminCompChangeResponse,
@@ -39,6 +40,7 @@ export const adminSubscriptionDetailKey = (id: string) => ['admin', 'subscriptio
 export const adminSubscriptionAdminLogKey = (id: string) => [...adminSubscriptionDetailKey(id), 'admin-log'] as const;
 export const adminSubscriptionTimelineKey = (id: string, kind: SubscriptionTimelineKind | undefined) =>
   [...adminSubscriptionDetailKey(id), 'timeline', kind ?? 'all'] as const;
+const adminSubscriptionStripeKey = (id: string) => [...adminSubscriptionDetailKey(id), 'stripe'] as const;
 const adminSubscriptionByStripeIdKey = (stripeSubscriptionId: string) =>
   ['admin', 'subscriptions', 'by-stripe', stripeSubscriptionId] as const;
 
@@ -52,6 +54,52 @@ export const useAdminSubscriptionDetail = (id: string) =>
     enabled: isSubscriptionObjectId(id),
     retry: retryUnlessNotFound,
   });
+
+const STRIPE_STALE_MS = 60_000;
+
+// A missing record will not appear on retry, and a Stripe outage already has a Try again button.
+const retryStripeRead = (failureCount: number, error: unknown) =>
+  !isNotFoundError(error) && !(isAxiosError(error) && error.response?.status === 502) && failureCount < MAX_RETRIES;
+
+/** What the Stripe sections of the detail page need from the live read. */
+export type AdminSubscriptionStripeState = {
+  data: AdminSubscriptionStripe | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  isFetching: boolean;
+  /** Try again: skips the server's 60 s cache. */
+  refetchFresh: () => void;
+};
+
+/** The live Stripe read for one subscription; failing here never affects the detail query. */
+export const useAdminSubscriptionStripe = (
+  id: string,
+  { enabled }: { enabled: boolean }
+): AdminSubscriptionStripeState => {
+  const queryClient = useQueryClient();
+  const queryKey = adminSubscriptionStripeKey(id);
+  const read = async (fresh: boolean): Promise<AdminSubscriptionStripe> =>
+    (
+      await api.get<AdminSubscriptionStripe>(`${subscriptionPath(id)}/stripe`, {
+        params: fresh ? { fresh: 1 } : undefined,
+      })
+    ).data;
+  const query = useQuery({
+    queryKey,
+    queryFn: () => read(false),
+    enabled: enabled && isSubscriptionObjectId(id),
+    staleTime: STRIPE_STALE_MS,
+    retry: retryStripeRead,
+  });
+  return {
+    data: query.data,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    isFetching: query.isFetching,
+    refetchFresh: () =>
+      void queryClient.fetchQuery({ queryKey, queryFn: () => read(true), staleTime: 0 }).catch(() => {}),
+  };
+};
 
 /** Resolves a Stripe subscription id (`sub_...`) to the Mongo id the detail page is keyed on. */
 export const useAdminSubscriptionIdByStripeId = (stripeSubscriptionId: string) =>

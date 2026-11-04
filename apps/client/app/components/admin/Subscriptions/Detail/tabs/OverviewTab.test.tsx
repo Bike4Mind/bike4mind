@@ -2,13 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { OverviewTab } from './OverviewTab';
-import { OWNER_ID, STRIPE_ROW, SubscriptionTestWrapper, buildDetail, buildRow } from '../subscriptionDetailTestUtils';
+import {
+  OWNER_ID,
+  STRIPE_ROW,
+  SubscriptionTestWrapper,
+  buildDetail,
+  buildRow,
+  buildStripeData,
+  buildStripeState,
+} from '../subscriptionDetailTestUtils';
+import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
 
 const MINUS = '\u2212';
 
-const setup = (detail: AdminSubscriptionDetail) => {
+const setup = (detail: AdminSubscriptionDetail, stripe: AdminSubscriptionStripeState = buildStripeState()) => {
   const handlers = { onOpenOwner: vi.fn(), onOpenSubscription: vi.fn(), onOpenLedger: vi.fn() };
-  render(<OverviewTab detail={detail} {...handlers} />, { wrapper: SubscriptionTestWrapper });
+  render(<OverviewTab detail={detail} stripe={stripe} {...handlers} />, { wrapper: SubscriptionTestWrapper });
   return handlers;
 };
 
@@ -21,7 +30,7 @@ describe('OverviewTab', () => {
     expect(screen.queryByTestId('subscription-detail-seats-card')).not.toBeInTheDocument();
   });
 
-  it('shows the Payment placeholder and an Unknown price chip on a Stripe row', () => {
+  it('shows an Unknown price chip on a Stripe row', () => {
     setup(buildDetail({ subscription: { ...STRIPE_ROW, plan: { priceId: 'price_x', name: null, interval: null } } }));
     expect(screen.getByTestId('subscription-detail-payment-card')).toBeInTheDocument();
     expect(screen.getByTestId('subscription-detail-unknown-price-chip')).toHaveTextContent('Unknown price');
@@ -68,5 +77,90 @@ describe('OverviewTab', () => {
       })
     );
     expect(screen.getByTestId('subscription-detail-seat-mismatch-chip')).toBeInTheDocument();
+  });
+});
+
+describe('OverviewTab Payment card', () => {
+  const stripeDetail = () => buildDetail({ subscription: STRIPE_ROW });
+
+  it('shows the card, latest invoice and next invoice', () => {
+    setup(
+      stripeDetail(),
+      buildStripeState({
+        data: buildStripeData({
+          invoices: [
+            {
+              id: 'in_1',
+              number: 'N-1',
+              createdAt: '2026-10-01T00:00:00.000Z',
+              amountDue: 2000,
+              amountPaid: 2000,
+              currency: 'usd',
+              status: 'paid',
+              paidAt: null,
+              attempts: 1,
+              hostedInvoiceUrl: null,
+              creditsGranted: null,
+            },
+          ],
+          upcoming: { amount: 2500, currency: 'usd', at: '2026-12-01T00:00:00.000Z' },
+        }),
+      })
+    );
+    expect(screen.getByTestId('subscription-detail-payment-card-number')).toHaveTextContent('Visa ending 4242');
+    expect(screen.getByTestId('subscription-detail-payment-expiry')).toHaveTextContent('12/2099');
+    expect(screen.queryByTestId('subscription-detail-card-expiring-chip')).not.toBeInTheDocument();
+    expect(screen.getByTestId('subscription-detail-latest-invoice')).toHaveTextContent('Paid');
+    expect(screen.getByTestId('subscription-detail-next-invoice')).toHaveTextContent('$25.00 on 1 Dec 2026');
+  });
+
+  it('warns when the card expires within 30 days', () => {
+    const now = new Date();
+    setup(
+      stripeDetail(),
+      buildStripeState({
+        data: buildStripeData({
+          paymentMethod: {
+            type: 'card',
+            brand: 'visa',
+            last4: '4242',
+            expMonth: now.getUTCMonth() + 1,
+            expYear: now.getUTCFullYear(),
+          },
+        }),
+      })
+    );
+    expect(screen.getByTestId('subscription-detail-card-expiring-chip')).toHaveTextContent('Expires soon');
+  });
+
+  it('keeps every Mongo card when Stripe is down, and offers Try again', () => {
+    const refetchFresh = vi.fn();
+    setup(stripeDetail(), buildStripeState({ data: undefined, isError: true, refetchFresh }));
+    expect(screen.getByTestId('subscription-detail-payment-error')).toHaveTextContent("Couldn't reach Stripe");
+    expect(screen.getByTestId('subscription-detail-plan-card')).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-detail-credits-card')).toBeInTheDocument();
+    expect(screen.getByTestId('subscription-detail-owner-card')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-error-retry-btn'));
+    expect(refetchFresh).toHaveBeenCalled();
+  });
+
+  it('shows a skeleton while loading and the docs link when Stripe is not configured', () => {
+    const { unmount } = render(
+      <OverviewTab
+        detail={stripeDetail()}
+        stripe={buildStripeState({ data: undefined, isLoading: true })}
+        onOpenOwner={vi.fn()}
+        onOpenSubscription={vi.fn()}
+        onOpenLedger={vi.fn()}
+      />,
+      { wrapper: SubscriptionTestWrapper }
+    );
+    expect(screen.getByTestId('subscription-detail-payment-loading')).toBeInTheDocument();
+    unmount();
+    setup(stripeDetail(), buildStripeState({ data: { stripeConfigured: false } }));
+    expect(screen.getByTestId('subscription-detail-payment-self-host-docs-link')).toHaveAttribute(
+      'href',
+      expect.stringContaining('docs.bike4mind.com')
+    );
   });
 });

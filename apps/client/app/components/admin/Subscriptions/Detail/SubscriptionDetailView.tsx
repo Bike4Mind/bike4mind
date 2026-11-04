@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Link, Stack, Typography } from '@mui/joy';
-import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
+import { useAdminSubscriptionStripe } from '@client/app/hooks/data/adminSubscriptionDetail';
+import { isCompSubscription, type AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { subscriptionActionAvailability } from './subscriptionDetailModel';
 import { SubscriptionDetailHeader } from './SubscriptionDetailHeader';
 import { SubscriptionDetailStats } from './SubscriptionDetailStats';
@@ -8,6 +9,7 @@ import { SubscriptionDetailTabs, subscriptionDetailPanelId, subscriptionDetailTa
 import { OverviewTab } from './tabs/OverviewTab';
 import { SubscriptionAdminLogTab } from './tabs/SubscriptionAdminLogTab';
 import { SubscriptionTimelineTab } from './tabs/SubscriptionTimelineTab';
+import { SubscriptionInvoicesTab } from './tabs/SubscriptionInvoicesTab';
 import { ExtendCompDialog } from './actions/ExtendCompDialog';
 import { EndCompDialog } from './actions/EndCompDialog';
 import { EditCreditsPerCycleDialog } from './actions/EditCreditsPerCycleDialog';
@@ -62,6 +64,10 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
 }) => {
   const [action, setAction] = useState<SubscriptionAction | null>(null);
   const closeAction = () => setAction(null);
+  // Read once here so the stat tile, the Payment card and the Invoices tab share one request; a comp has none.
+  const stripe = useAdminSubscriptionStripe(detail.subscription.id, {
+    enabled: !isCompSubscription(detail.subscription),
+  });
   const openAdminLog = () => onTabChange('admin');
 
   // A refetch (after a 409, or another admin's write) can make the open Stripe action moot; close it rather than
@@ -105,10 +111,13 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
             onOpenOwner={link => void navigation.openOwner(link)}
             onOpenSubscription={id => void navigation.openSubscription(id)}
             onOpenLedger={userId => void navigation.openUserLedger(userId)}
+            stripe={stripe}
           />
         );
       case 'timeline':
         return <SubscriptionTimelineTab subscriptionId={detail.subscription.id} />;
+      case 'invoices':
+        return <SubscriptionInvoicesTab detail={detail} stripe={stripe} />;
       case 'admin':
         return <SubscriptionAdminLogTab subscriptionId={detail.subscription.id} />;
     }
@@ -122,7 +131,7 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
         onAction={setAction}
         onOpenOwner={link => void navigation.openOwner(link)}
       />
-      <SubscriptionDetailStats detail={detail} />
+      <SubscriptionDetailStats detail={detail} stripe={stripe} />
       <Box>
         <SubscriptionDetailTabs value={tab} onChange={onTabChange} />
         <Box

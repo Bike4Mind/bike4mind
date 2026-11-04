@@ -2,7 +2,7 @@ import type Stripe from 'stripe';
 import { CreditTransaction, mongoose } from '@bike4mind/database';
 import { getStripe, isStripeConfigured } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
-import { isCompSubscription } from '@client/app/utils/adminSubscriptionDetail';
+import { isCompSubscription, type AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionDetail';
 import {
   invoicePaymentKey,
   type AdminStripeInvoice,
@@ -30,7 +30,13 @@ const remember = (id: string, value: CachedStripe) => {
 /** Test hook: the cache is per process. */
 export const clearAdminSubscriptionStripeCache = () => cache.clear();
 
-type OwnedSubscription = { ownerType: 'User' | 'Organization'; ownerId: string; subscriptionId: string };
+type OwnedSubscription = {
+  ownerType: 'User' | 'Organization';
+  ownerId: string;
+  subscriptionId: string;
+  // Absent on rows from before the field existed; the list maps those to 'stripe' too.
+  source?: AdminSubscriptionRow['source'];
+};
 
 const isResourceMissing = (error: unknown): boolean =>
   typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'resource_missing';
@@ -48,7 +54,8 @@ const toCard = (method: Stripe.PaymentMethod | string | null | undefined): Admin
 
 // The subscription's own default wins; else the customer's invoice default.
 const paymentMethodOf = (subscription: Stripe.Subscription): AdminStripePaymentMethod | null => {
-  const customer = typeof subscription.customer === 'string' || subscription.customer.deleted ? null : subscription.customer;
+  const customer =
+    typeof subscription.customer === 'string' || subscription.customer.deleted ? null : subscription.customer;
   return toCard(subscription.default_payment_method) ?? toCard(customer?.invoice_settings?.default_payment_method);
 };
 
@@ -106,7 +113,8 @@ const creditsByKey = async (doc: OwnedSubscription, keys: string[]): Promise<Map
 const lifetimePaidOf = (invoices: Stripe.Invoice[]): CachedStripe['lifetimePaid'] => {
   const totals = new Map<string, number>();
   for (const invoice of invoices) {
-    if (invoice.status === 'paid') totals.set(invoice.currency, (totals.get(invoice.currency) ?? 0) + invoice.amount_paid);
+    if (invoice.status === 'paid')
+      totals.set(invoice.currency, (totals.get(invoice.currency) ?? 0) + invoice.amount_paid);
   }
   return [...totals].map(([currency, amount]) => ({ amount, currency }));
 };
@@ -123,7 +131,8 @@ export async function getAdminSubscriptionStripe(
   if (!mongoose.Types.ObjectId.isValid(id)) return null;
   const doc = await Subscription.findById(id).maxTimeMS(READ_MAX_TIME_MS).lean<OwnedSubscription>();
   if (!doc) return null;
-  if (isCompSubscription(doc)) return { stripeConfigured: true, kind: 'comp' };
+  if (isCompSubscription({ source: doc.source ?? 'stripe', subscriptionId: doc.subscriptionId }))
+    return { stripeConfigured: true, kind: 'comp' };
   if (!isStripeConfigured()) return { stripeConfigured: false };
 
   const cached = cache.get(id);

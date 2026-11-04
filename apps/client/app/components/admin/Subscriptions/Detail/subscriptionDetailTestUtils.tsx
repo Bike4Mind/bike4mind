@@ -1,7 +1,10 @@
 import { useState, type ReactNode } from 'react';
+import { vi } from 'vitest';
+import type { StripeData } from './stripeSections';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
 import type { AdminSubscriptionDetail, AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionDetail';
 import { UndoToastProvider } from '../../shared';
 
@@ -97,3 +100,27 @@ export const buildOrgDetail = (): AdminSubscriptionDetail =>
 
 /** A live Stripe-billed row. */
 export const STRIPE_ROW: Partial<AdminSubscriptionRow> = { source: 'stripe', subscriptionId: 'sub_123' };
+
+/** A Stripe read that has loaded a healthy subscription; override what a test asserts on. */
+export const buildStripeData = (overrides: Partial<StripeData> = {}): StripeData => ({
+  stripeConfigured: true,
+  kind: 'stripe',
+  fetchedAt: '2026-11-01T00:00:00.000Z',
+  paymentMethod: { type: 'card', brand: 'visa', last4: '4242', expMonth: 12, expYear: 2099 },
+  invoices: [],
+  invoicesTruncated: false,
+  lifetimePaid: [],
+  upcoming: null,
+  ...overrides,
+});
+
+export const buildStripeState = (
+  overrides: Partial<AdminSubscriptionStripeState> = {}
+): AdminSubscriptionStripeState => ({
+  data: buildStripeData(),
+  isLoading: false,
+  isError: false,
+  isFetching: false,
+  refetchFresh: vi.fn(),
+  ...overrides,
+});

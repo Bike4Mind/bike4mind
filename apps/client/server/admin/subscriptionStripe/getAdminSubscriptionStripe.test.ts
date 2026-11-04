@@ -118,9 +118,7 @@ describe('getAdminSubscriptionStripe', () => {
   });
 
   it('joins credits by payment intent or invoice id, scoped to the owner, and leaves a gap as null', async () => {
-    mocks.list.mockReturnValue(
-      pages([invoice('in_1'), invoice('in_2', { payments: { data: [] } }), invoice('in_3')])
-    );
+    mocks.list.mockReturnValue(pages([invoice('in_1'), invoice('in_2', { payments: { data: [] } }), invoice('in_3')]));
     mocks.ledger.mockResolvedValue([
       { credits: 500, stripePaymentIntentId: 'pi_in_1' },
       { credits: 700, stripePaymentIntentId: 'in_2' },
