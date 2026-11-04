@@ -9,7 +9,7 @@ import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:adjust' } })
   .use(csrfProtection())
   .post(async (req, res) => {
-    const { userIds, reason, dryRun } = await readBulkSignupGrantAction(
+    const { userIds, reason, dryRun, targets } = await readBulkSignupGrantAction(
       req,
       'user.credits.grant_blocked',
       'block signup credit grants for'
@@ -28,7 +28,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'credits:a
         auditFor: userId => async () => {
           await recordAdminActionFromRequest(req, {
             action: 'user.credits.grant_blocked',
-            target: signupGrantAuditTarget(userId),
+            target: targets.get(userId) ?? signupGrantAuditTarget(userId),
             summary: 'blocked signup grants and rewards',
             reason,
             details: { bulk: true },
