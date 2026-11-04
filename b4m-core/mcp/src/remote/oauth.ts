@@ -357,16 +357,38 @@ const DEFINITIVE_REFUSALS = new Set([
   'access_denied',
 ]);
 
+/** Wraps `fetchFn` to remember the last HTTP status: the SDK's error classes drop it when the body is JSON. */
+function withStatus(fetchFn: FetchLike): { fetchFn: FetchLike; status: () => number | undefined } {
+  let status: number | undefined;
+  return {
+    fetchFn: async (url, init) => {
+      const response = await fetchFn(url, init);
+      status = response.status;
+      return response;
+    },
+    status: () => status,
+  };
+}
+
 /**
- * Maps an SDK token-endpoint failure to a typed error; the server's own text is not carried over.
- * Only a definitive refusal is `token_failed`; a 5xx, `temporarily_unavailable`, a network error or a
- * timeout is `token_unavailable`, so a brief outage never reads as a lost grant.
+ * Maps an SDK token-endpoint failure to a typed error; the server's own text is not carried over. Classified by
+ * HTTP status, not SDK class (a non-JSON error body is a `ServerError` whatever the status). A 4xx or a blocked
+ * request is `token_failed`; a 5xx, 429, `temporarily_unavailable`, a network error or a timeout is
+ * `token_unavailable`, so a brief outage never reads as a lost grant and a dead one never reads as an outage.
  */
-function tokenFailure(error: unknown): never {
+function tokenFailure(error: unknown, status: number | undefined): never {
   if (error instanceof RemoteMcpOAuthError) throw error;
   const errorCode = (error as { errorCode?: string } | undefined)?.errorCode;
   if (errorCode === 'invalid_grant') throw new RemoteMcpInvalidGrantError({ cause: error });
-  if (errorCode && DEFINITIVE_REFUSALS.has(errorCode)) {
+  const pinned = error instanceof Error && error.name === 'PinnedFetchError' ? (error as { code?: string }) : undefined;
+  const refused = pinned
+    ? pinned.code !== 'timeout'
+    : errorCode === 'temporarily_unavailable'
+      ? false
+      : status !== undefined
+        ? status >= 400 && status < 500 && status !== 429 && status !== 408
+        : errorCode !== undefined && DEFINITIVE_REFUSALS.has(errorCode);
+  if (refused) {
     throw new RemoteMcpOAuthError('token_failed', 'The authorization server refused the token request', {
       cause: error,
     });
@@ -380,6 +402,7 @@ export async function exchangeRemoteMcpCode(
   endpoints: RemoteMcpOAuthEndpoints & { resource: string },
   options: { client: RemoteMcpOAuthClient; code: string; codeVerifier: string; redirectUri: string; fetchFn: FetchLike }
 ): Promise<RemoteMcpOAuthTokens> {
+  const seen = withStatus(options.fetchFn);
   try {
     return normalizeTokens(
       await exchangeAuthorization(endpoints.authorizationServerUrl, {
@@ -389,11 +412,11 @@ export async function exchangeRemoteMcpCode(
         codeVerifier: options.codeVerifier,
         redirectUri: options.redirectUri,
         resource: endpoints.resource,
-        fetchFn: options.fetchFn,
+        fetchFn: seen.fetchFn,
       })
     );
   } catch (error) {
-    return tokenFailure(error);
+    return tokenFailure(error, seen.status());
   }
 }
 
@@ -402,6 +425,7 @@ export async function refreshRemoteMcpTokens(
   endpoints: RemoteMcpOAuthEndpoints & { resource: string },
   options: { client: RemoteMcpOAuthClient; refreshToken: string; fetchFn: FetchLike }
 ): Promise<RemoteMcpOAuthTokens> {
+  const seen = withStatus(options.fetchFn);
   try {
     return normalizeTokens(
       await refreshAuthorization(endpoints.authorizationServerUrl, {
@@ -409,11 +433,11 @@ export async function refreshRemoteMcpTokens(
         clientInformation: clientInformation(options.client),
         refreshToken: options.refreshToken,
         resource: endpoints.resource,
-        fetchFn: options.fetchFn,
+        fetchFn: seen.fetchFn,
       })
     );
   } catch (error) {
-    return tokenFailure(error);
+    return tokenFailure(error, seen.status());
   }
 }
 

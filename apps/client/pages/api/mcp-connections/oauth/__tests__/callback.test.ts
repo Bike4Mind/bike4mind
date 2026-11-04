@@ -4,19 +4,26 @@ const refs = vi.hoisted(() => ({
   complete: vi.fn(),
   baseApiOptions: undefined as unknown,
   rateLimitOptions: undefined as unknown,
+  mounted: [] as unknown[],
+  limiter: () => undefined,
 }));
 
 // `auth: 'jwtOnly'` is what binds the single-use state to the session, so the options are captured, not dropped.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
     refs.baseApiOptions = options;
-    return { post: (...fns: Array<(req: unknown, res: unknown) => unknown>) => fns[fns.length - 1] };
+    return {
+      post: (...fns: Array<(req: unknown, res: unknown) => unknown>) => {
+        refs.mounted = fns.slice(0, -1);
+        return fns[fns.length - 1];
+      },
+    };
   },
 }));
 vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
   rateLimit: (options: unknown) => {
     refs.rateLimitOptions = options;
-    return undefined;
+    return refs.limiter;
   },
 }));
 vi.mock('@server/mcpConnections/customMcpAccess', () => ({
@@ -46,6 +53,7 @@ describe('POST /api/mcp-connections/oauth/callback', () => {
   it('accepts only a session JWT, and is rate limited in its own bucket', () => {
     expect(refs.baseApiOptions).toEqual({ auth: 'jwtOnly' });
     expect(refs.rateLimitOptions).toMatchObject({ bucket: 'POST /api/mcp-connections/oauth/callback', limit: 20 });
+    expect(refs.mounted).toEqual([refs.limiter]);
   });
 
   it('hands the code, state and iss to the service and returns its view', async () => {

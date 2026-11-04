@@ -225,6 +225,10 @@ describe('startUserConnectionOAuth', () => {
       h.loadClient.mockResolvedValue(previous);
       await startUserConnectionOAuth(actor, context, 'c1');
       expect(h.revoke).toHaveBeenCalledTimes(1);
+      expect(h.revoke.mock.calls[0]?.[0]).toMatchObject({
+        id: 'c1',
+        auth: { oauth: { accessTokenEnc: 'enc:at', refreshTokenEnc: 'enc:rt' } },
+      });
       expect(h.repo.clearOAuthTokens).toHaveBeenCalledTimes(1);
       expect(h.repo.clearOAuthTokens.mock.invocationCallOrder[0]).toBeLessThan(
         h.repo.setOAuthConfig.mock.invocationCallOrder[0] ?? 0

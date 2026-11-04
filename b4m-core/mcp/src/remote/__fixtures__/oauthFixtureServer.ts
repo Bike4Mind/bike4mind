@@ -60,12 +60,17 @@ export interface OAuthFixtureServer {
   isValidAccessToken(token: string): boolean;
   /** Make the next refresh fail with `invalid_grant`. */
   failNextRefresh(): void;
-  /** `unavailable`: token requests get an HTML 503 (nothing is consumed) until set back to `ok`. */
-  setTokenMode(mode: 'ok' | 'unavailable'): void;
+  /**
+   * Token requests get a failure (nothing is consumed) until set back to `ok`: `unavailable` an HTML 503,
+   * `forbidden` an HTML 403, `invalid_token` a JSON 400 with an error code outside RFC 6749.
+   */
+  setTokenMode(mode: TokenMode): void;
   /** Mark every issued access token expired (the next use must refresh). */
   expireAccessTokens(): void;
   close(): Promise<void>;
 }
+
+type TokenMode = 'ok' | 'unavailable' | 'forbidden' | 'invalid_token';
 
 const sha256b64url = (value: string) => createHash('sha256').update(value).digest('base64url');
 const json = (res: ServerResponse, status: number, body: unknown) => {
@@ -95,7 +100,7 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
     tokenResources: [] as (string | null)[],
   };
   let failRefresh = false;
-  let tokenMode: 'ok' | 'unavailable' = 'ok';
+  let tokenMode: TokenMode = 'ok';
   let issued = 0;
   let origin = '';
 
@@ -211,6 +216,11 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
         res.writeHead(503, { 'content-type': 'text/html' });
         return res.end('<html>Service Unavailable</html>');
       }
+      if (tokenMode === 'forbidden') {
+        res.writeHead(403, { 'content-type': 'text/html' });
+        return res.end('<html>Forbidden</html>');
+      }
+      if (tokenMode === 'invalid_token') return json(res, 400, { error: 'invalid_token' });
       if (!clientAuthenticated(req, form)) return json(res, 401, { error: 'invalid_client' });
       if (options.tokenDelayMs) await new Promise(resolve => setTimeout(resolve, options.tokenDelayMs));
       fixture.tokenResources.push(form.get('resource'));

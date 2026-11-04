@@ -8,6 +8,7 @@ import {
   RemoteMcpInvalidGrantError,
   RemoteMcpOAuthError,
   RemoteMcpTimeoutError,
+  OAUTH_REQUEST_TIMEOUT_MS,
   refreshRemoteMcpTokens,
 } from '@bike4mind/mcp/remote';
 import { decryptToken, encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
@@ -19,7 +20,8 @@ import { withOAuthFetch } from './oauthFetch';
 /** A token that expires within this window is refreshed before use. */
 export const OAUTH_EXPIRY_SKEW_MS = 60_000;
 const HELD_POLL_MS = 250;
-const HELD_POLL_MAX_MS = 5_000;
+/** Must stay ordered: OAUTH_REQUEST_TIMEOUT_MS < HELD_POLL_MAX_MS < MCP_REFRESH_LEASE_TTL_MS (database package). */
+const HELD_POLL_MAX_MS = OAUTH_REQUEST_TIMEOUT_MS + 2_000;
 
 /**
  * The grant is gone and the user must sign in again. The connection is already stored as
@@ -29,6 +31,17 @@ export class OAuthReconnectRequiredError extends RemoteMcpAuthRequiredError {
   constructor() {
     super({});
     this.name = 'OAuthReconnectRequiredError';
+  }
+}
+
+/**
+ * The grant was disconnected or replaced while a refresh was in flight, and nothing usable is stored.
+ * The new state is already recorded by whoever changed it, so no status is written for this.
+ */
+export class OAuthGrantSupersededError extends RemoteMcpAuthRequiredError {
+  constructor() {
+    super({});
+    this.name = 'OAuthGrantSupersededError';
   }
 }
 
@@ -187,5 +200,5 @@ async function tokenAfterLostLease(id: string, owner: Owner, options: AccessToke
   if (latest?.auth.oauth && isUnexpired(latest.auth.oauth, (options.now ?? Date.now)())) {
     return decryptToken(latest.auth.oauth.accessTokenEnc) ?? undefined;
   }
-  throw new RemoteMcpAuthRequiredError({});
+  throw new OAuthGrantSupersededError();
 }

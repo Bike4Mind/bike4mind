@@ -34,6 +34,7 @@ vi.mock('./oauthFetch', () => ({
 
 import {
   OAUTH_EXPIRY_SKEW_MS,
+  OAuthGrantSupersededError,
   OAuthReconnectRequiredError,
   OAuthRefreshUnavailableError,
   getOAuthAccessToken,
@@ -165,7 +166,7 @@ describe('getOAuthAccessToken', () => {
       acquired(connection());
       h.repo.completeRefresh.mockResolvedValue(null);
       h.repo.findByIdWithCredentials.mockResolvedValue(connection());
-      await expect(getOAuthAccessToken(connection(), options())).rejects.toBeInstanceOf(RemoteMcpAuthRequiredError);
+      await expect(getOAuthAccessToken(connection(), options())).rejects.toBeInstanceOf(OAuthGrantSupersededError);
     });
   });
 
@@ -239,8 +240,20 @@ describe('getOAuthAccessToken', () => {
       held();
       h.repo.findByIdWithCredentials.mockResolvedValue(connection());
       await expect(getOAuthAccessToken(connection(), options())).rejects.toBeInstanceOf(OAuthRefreshUnavailableError);
-      expect(clock - NOW).toBeGreaterThanOrEqual(5_000);
+      expect(clock - NOW).toBeGreaterThanOrEqual(12_000);
       expect(h.repo.setNeedsReconnectIfHolder).not.toHaveBeenCalled();
+    });
+
+    it('does not return the rejected token while the holder is still refreshing, but takes its replacement', async () => {
+      held();
+      const stale = { accessTokenEnc: 'enc:old-access', expiresAt: new Date(NOW + 3_600_000) };
+      h.repo.findByIdWithCredentials
+        .mockResolvedValueOnce(connection(stale))
+        .mockResolvedValueOnce(connection(stale))
+        .mockResolvedValueOnce(connection({ accessTokenEnc: 'enc:new', expiresAt: new Date(NOW + 3_600_000) }));
+      const token = await getOAuthAccessToken(connection(stale), options({ force: true }));
+      expect(token).toBe('new');
+      expect(sleep).toHaveBeenCalledTimes(3);
     });
 
     it('surfaces a reconnect the holder recorded', async () => {

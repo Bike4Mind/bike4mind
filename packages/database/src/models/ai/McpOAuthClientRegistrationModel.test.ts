@@ -185,5 +185,31 @@ describe('McpOAuthClientRegistrationModel', () => {
       );
       expect(await mcpOAuthClientRegistrationRepository.findByIdWithCredentials('nope')).toBeNull();
     });
+
+    it('reads an expired registration as missing, and one with no expiry as live', async () => {
+      const expired = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: ISSUER,
+        redirectUri: REDIRECT,
+        clientId: 'expired',
+        clientSecretEnc: 'enc:s',
+        clientSecretExpiresAt: new Date(Date.now() + 60_000),
+        tokenEndpointAuthMethod: 'client_secret_basic',
+      });
+      await McpOAuthClientRegistration.updateOne(
+        { _id: expired?.id },
+        { $set: { clientSecretExpiresAt: new Date(1) } }
+      );
+      expect(await mcpOAuthClientRegistrationRepository.findByIdWithCredentials(expired?.id ?? '')).toBeNull();
+
+      const open = await mcpOAuthClientRegistrationRepository.registerIfAbsent({
+        issuer: 'https://other.example',
+        redirectUri: REDIRECT,
+        clientId: 'open',
+        tokenEndpointAuthMethod: 'none',
+      });
+      expect((await mcpOAuthClientRegistrationRepository.findByIdWithCredentials(open?.id ?? ''))?.clientId).toBe(
+        'open'
+      );
+    });
   });
 });

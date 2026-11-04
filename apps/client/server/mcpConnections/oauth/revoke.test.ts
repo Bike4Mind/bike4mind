@@ -75,11 +75,10 @@ describe('revokeConnectionGrant', () => {
     vi.useFakeTimers();
     h.revokeToken.mockReturnValue(new Promise(() => undefined));
     const done = vi.fn();
-    const pending = revokeConnectionGrant(connection(), {} as never, undefined, 3_000).then(done);
+    void revokeConnectionGrant(connection(), {} as never, undefined, 3_000).then(done);
     await vi.advanceTimersByTimeAsync(2_999);
     expect(done).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2);
-    await pending;
     expect(done).toHaveBeenCalled();
   });
 });

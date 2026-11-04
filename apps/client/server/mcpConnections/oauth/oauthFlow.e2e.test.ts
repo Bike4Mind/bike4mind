@@ -340,8 +340,12 @@ describe('lifecycle edges', () => {
     await invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: user.id }, run());
     expect(fixture.counts.refresh).toBe(1);
 
+    const current = (await mcpConnectionRepository.findByIdWithCredentials(id, owner))?.auth.oauth;
     await disconnectUserConnectionOAuth(user, context, id);
-    expect(fixture.revoked).toHaveLength(2);
+    expect(fixture.revoked).toEqual([
+      current?.refreshTokenEnc?.replace(/^enc:/, ''),
+      current?.accessTokenEnc?.replace(/^enc:/, ''),
+    ]);
   });
 
   describe('starting again', () => {
@@ -359,7 +363,7 @@ describe('lifecycle edges', () => {
 
       await expect(
         invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: user.id }, run())
-      ).rejects.toBeDefined();
+      ).rejects.toMatchObject({ code: 'auth_required' });
       expect(fixture.counts.refresh).toBe(0);
     });
 

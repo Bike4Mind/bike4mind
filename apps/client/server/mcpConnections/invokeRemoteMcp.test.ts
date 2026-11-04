@@ -97,11 +97,13 @@ const tokenManager = vi.hoisted(() => ({
   getOAuthAccessToken: vi.fn(),
   OAuthReconnectRequiredError: class extends Error {} as unknown as new () => Error,
   OAuthRefreshUnavailableError: class extends Error {} as unknown as new (message: string) => Error,
+  OAuthGrantSupersededError: class extends Error {} as unknown as new () => Error,
 }));
 vi.mock('./oauth/tokenManager', async importOriginal => {
   const actual = await importOriginal<typeof import('./oauth/tokenManager')>();
   tokenManager.OAuthReconnectRequiredError = actual.OAuthReconnectRequiredError;
   tokenManager.OAuthRefreshUnavailableError = actual.OAuthRefreshUnavailableError;
+  tokenManager.OAuthGrantSupersededError = actual.OAuthGrantSupersededError;
   return { ...actual, getOAuthAccessToken: tokenManager.getOAuthAccessToken };
 });
 vi.mock('./customMcpAccess', async importOriginal => ({
@@ -498,6 +500,26 @@ describe('invokeRemoteMcp - round trips against the fixture', () => {
           'timeout'
         );
       }
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(repo.setPendingAuth).not.toHaveBeenCalled();
+    });
+
+    it('a refresh superseded by a disconnect or restart records no status', async () => {
+      const id = seed('/mcp', { auth: oauthAuth(true) });
+      tokenManager.getOAuthAccessToken.mockImplementation(async (_c: unknown, opts: { force?: boolean }) => {
+        if (opts.force) throw new tokenManager.OAuthGrantSupersededError();
+        return 'stale';
+      });
+      const rejecting = vi.fn(async () => {
+        throw new RemoteMcpAuthRequiredError({});
+      });
+      await expectRemoteCode(
+        invokeRemoteMcp(
+          { action: 'listTools', connectionId: id, userId: 'user-1' },
+          { runner: rejecting, context: context() }
+        ),
+        'auth_required'
+      );
       expect(repo.setStatus).not.toHaveBeenCalled();
       expect(repo.setPendingAuth).not.toHaveBeenCalled();
     });

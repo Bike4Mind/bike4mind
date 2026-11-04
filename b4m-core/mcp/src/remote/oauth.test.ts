@@ -58,6 +58,23 @@ describe('discoverRemoteMcpOAuth', () => {
     });
   });
 
+  it('ignores a raw metadata document whose issuer differs from the validated one', async () => {
+    const f = await start({ metadataStyle: 'oidc' });
+    const decoyPath = '/.well-known/oauth-authorization-server';
+    let hits = 0;
+    const fetchFn = ((input: string | URL, init?: RequestInit) => {
+      if (new URL(String(input)).pathname === decoyPath && (hits += 1) > 1) {
+        return Promise.resolve(
+          Response.json({ issuer: 'https://other.example', revocation_endpoint: 'https://decoy.example/revoke' })
+        );
+      }
+      return f.fetch(input, init);
+    }) as typeof fetch;
+    const found = await discoverRemoteMcpOAuth(f.resourceUrl, { fetchFn, network });
+    expect(hits).toBeGreaterThan(1);
+    expect(found.revocationEndpoint).toBe(`${f.origin}/revoke`);
+  });
+
   it('reads OIDC metadata when RFC 8414 metadata is absent', async () => {
     const f = await start({ metadataStyle: 'oidc', cimd: true });
     expect(await discover(f)).toMatchObject({ tokenEndpoint: `${f.origin}/token`, cimdSupported: true });
@@ -262,6 +279,37 @@ describe('token endpoint failures', () => {
     await expect(
       exchangeRemoteMcpCode(discovery, { client, code, codeVerifier, redirectUri, fetchFn: f.fetch })
     ).rejects.toMatchObject({ code: 'token_unavailable' });
+  });
+
+  it.each([
+    ['an HTML 403', 'forbidden'],
+    ['a JSON invalid_token 400', 'invalid_token'],
+  ] as const)('reports %s on refresh as a refused request, not an outage', async (_name, mode) => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    f.setTokenMode(mode);
+    await expect(
+      refreshRemoteMcpTokens(discovery, { client, refreshToken: tokens.refreshToken ?? '', fetchFn: f.fetch })
+    ).rejects.toMatchObject({ code: 'token_failed' });
+  });
+
+  it('classifies a pinned-fetch timeout as unavailable and any other blocked request as refused', async () => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    const pinned = (code: string) => Object.assign(new Error(code), { name: 'PinnedFetchError', code });
+    for (const [code, expected] of [
+      ['timeout', 'token_unavailable'],
+      ['ssrf_blocked', 'token_failed'],
+      ['size_cap', 'token_failed'],
+    ] as const) {
+      await expect(
+        refreshRemoteMcpTokens(discovery, {
+          client,
+          refreshToken: tokens.refreshToken ?? '',
+          fetchFn: (() => Promise.reject(pinned(code))) as unknown as typeof fetch,
+        })
+      ).rejects.toMatchObject({ code: expected });
+    }
   });
 
   it('reports a network error and a timeout as unavailable', async () => {

@@ -23,6 +23,11 @@ export function getMcpOAuthCallbackBootSearch(): string | null {
   return bootSearch;
 }
 
+/** Forget the snapshot once its single-use code has been spent. */
+export function clearMcpOAuthCallbackBootSearch(): void {
+  bootSearch = null;
+}
+
 /**
  * beforeLoad for the callback route, which sits outside layoutRoute and so lacks its session guard. The
  * return is a cold load, so the page's single-use POST would otherwise race the session bootstrap and go

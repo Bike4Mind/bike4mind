@@ -44,9 +44,6 @@ export async function completeUserConnectionOAuth(
   const auditEntry = audit(actor, 'oauth_completed', connection);
 
   // RFC 9207: an `iss` that is present must match, and one the server promised must be present.
-  // Known residual risk: with a server that sends no `iss`, nothing ties the response to the server the state
-  // was issued for, because every server shares one redirect URI. A per-issuer redirect URI would close it but
-  // also changes the client metadata document and the registrations keyed by redirect, so it is left out.
   if ((params.iss !== undefined && params.iss !== oauth.issuer) || (oauth.issParameterSupported && !params.iss)) {
     auditEntry.failure('issuer_mismatch');
     throw invalidState();

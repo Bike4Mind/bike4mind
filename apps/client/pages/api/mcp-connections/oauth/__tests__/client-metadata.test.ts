@@ -1,13 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const refs = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ get: (fn: (req: unknown, res: unknown) => unknown) => fn }),
+  baseApi: (options: unknown) => {
+    refs.baseApiOptions = options;
+    return { get: (fn: (req: unknown, res: unknown) => unknown) => fn };
+  },
 }));
 
 import handler from '../client-metadata';
 
 describe('GET /api/mcp-connections/oauth/client-metadata', () => {
   afterEach(() => vi.unstubAllEnvs());
+
+  it('is public: the authorization server fetches it without credentials', () => {
+    expect(refs.baseApiOptions).toEqual({ auth: false });
+  });
 
   it('serves a public-client metadata document whose client_id is its own URL', () => {
     vi.stubEnv('APP_URL', 'https://app.example.com');
