@@ -40,6 +40,7 @@ vi.mock('@bike4mind/database', async orig => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
 }));
 
+let jwtUserOverrides: Record<string, unknown> = {};
 const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', isBanned: false, disputePending: false };
 vi.mock('@server/auth/auth', async orig => {
   const actual = await orig<Record<string, unknown>>();
@@ -49,7 +50,7 @@ vi.mock('@server/auth/auth', async orig => {
     auth: (req: any, res: any, next: any) => {
       // Mirror the real verifier: no bearer means no session, so the route 401s.
       if (!req.headers?.authorization) return res.status(401).json({ error: 'Unauthorized' });
-      if (!req.user) req.user = JWT_USER;
+      if (!req.user) req.user = { ...JWT_USER, ...jwtUserOverrides };
       next();
     },
   };
@@ -78,6 +79,7 @@ function fire({ apiKey, bearer }: { apiKey?: string; bearer?: string } = {}) {
 describe('GET /api/ai/elevenlabs-voices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    jwtUserOverrides = {};
     mockKey.mockResolvedValue('el-key');
     mockFetchVoices.mockResolvedValue(VOICES);
   });
@@ -109,6 +111,19 @@ describe('GET /api/ai/elevenlabs-voices', () => {
 
     expect(res._getStatusCode()).toBe(502);
     expect(JSON.stringify(res._getJSONData())).not.toContain('secret detail');
+  });
+
+  it.each([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+  ])('answers 403 for a %s user without looking a key up', async (_label, flags) => {
+    jwtUserOverrides = flags;
+    const { req, res } = fire({ bearer: 'live-jwt' });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockKey).not.toHaveBeenCalled();
+    expect(mockFetchVoices).not.toHaveBeenCalled();
   });
 
   it('rejects an api-key caller without looking a key up', async () => {

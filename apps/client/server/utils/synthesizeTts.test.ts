@@ -14,7 +14,7 @@ const { mocks, TtsProviderNotConfiguredError } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/common', () => ({
   supportedVoiceGenerationVendor: { options: ['openai', 'elevenlabs'] },
-  TTS_MAX_INPUT_CHARS: { openai: 4096, elevenlabs: 10000 },
+  TTS_MAX_INPUT_CHARS: { openai: 2000, elevenlabs: 10000 },
   VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },
 }));
 
@@ -161,7 +161,7 @@ describe('synthesizeTts', () => {
     mocks.synthesize.mockRejectedValue(axiosRejection(401));
 
     await expect(run({ provider: 'elevenlabs', text })).rejects.toMatchObject({ response: { status: 401 } });
-    // openai caps at 4096, so it was never a real alternate for this text.
+    // openai caps at 2000, so it was never a real alternate for this text.
     expect(mocks.synthesize).toHaveBeenCalledTimes(1);
   });
 

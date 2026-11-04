@@ -13,8 +13,10 @@ import { fetchElevenLabsVoices } from '@bike4mind/voice';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadGatewayError } from '@bike4mind/server-utils/utils/errors';
 import { getTtsProviderKey } from '@server/utils/resolveTtsProvider';
+import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 
 const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
+  assertAiAccessAllowed(req.user);
   const apiKey = await getTtsProviderKey('elevenlabs', req.user!.id);
   if (!apiKey) return res.json({ voices: [] });
 

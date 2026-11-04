@@ -41,7 +41,7 @@ const migration: MigrationFile = {
     for (const row of rows) {
       const next = withNewTtsDefault(row.settingValue);
       if (next === null) continue;
-      await AdminSettings.updateOne({ _id: row._id }, { $set: { settingValue: next } });
+      await AdminSettings.updateOne({ _id: row._id, settingValue: row.settingValue }, { $set: { settingValue: next } });
       console.log(`${LOG} added ${NEW_DEFAULT} to ${SETTING_NAME}`);
     }
   },

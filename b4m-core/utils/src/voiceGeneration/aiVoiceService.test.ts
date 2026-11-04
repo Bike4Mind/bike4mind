@@ -55,9 +55,9 @@ describe('OpenAIVoiceService', () => {
     expect(result.characters).toBe('hello'.length);
   });
 
-  it('rejects input longer than the OpenAI 4096-char limit before calling the API', async () => {
-    await expect(aiVoiceService('openai', 'key', logger).synthesize('a'.repeat(4097))).rejects.toThrow(
-      /exceeds 4096 characters/
+  it('rejects input longer than the OpenAI 2000-char limit before calling the API', async () => {
+    await expect(aiVoiceService('openai', 'key', logger).synthesize('a'.repeat(2001))).rejects.toThrow(
+      /exceeds 2000 characters/
     );
     expect(speechCreate).not.toHaveBeenCalled();
   });
