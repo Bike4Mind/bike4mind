@@ -453,6 +453,27 @@ describe('updateByStripeSubscriptionIdReturningBefore', () => {
     expect([first?.priceId, second?.priceId]).toEqual(['price_basic', 'price_pro']);
   });
 
+  it('writes only while the row still carries expectedUpdatedAt', async () => {
+    const created = await Subscription.create(row({ subscriptionId: 'sub_guard', priceId: 'price_basic' }));
+    const current = (await Subscription.findById(created.id).lean<{ updatedAt: Date }>())!.updatedAt;
+
+    const stale = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+      'sub_guard',
+      { priceId: 'price_pro' },
+      new Date(current.getTime() - 1000)
+    );
+    expect(stale).toBeNull();
+    expect((await Subscription.findById(created.id).lean<{ priceId: string }>())?.priceId).toBe('price_basic');
+
+    const fresh = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+      'sub_guard',
+      { priceId: 'price_pro' },
+      current
+    );
+    expect(fresh).toMatchObject({ priceId: 'price_basic' });
+    expect((await Subscription.findById(created.id).lean<{ priceId: string }>())?.priceId).toBe('price_pro');
+  });
+
   it('returns null, and writes nothing, when this stage has no row or the id is missing', async () => {
     expect(
       await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore('sub_missing', { priceId: 'p' })

@@ -159,6 +159,10 @@ export async function runSubscriptionReconciliation(
     if (withinGrace(row ?? null, sub, now)) continue;
     covered.add(sub.id);
     if (row) {
+      // Same rules as the stale phase below: only Stripe-sourced rows are compared, and a row that is
+      // finished while Stripe's subscription is too (canceled row, incomplete_expired sub) agrees.
+      if (resolveSubscriptionSource(row) !== SubscriptionSource.Stripe) continue;
+      if (TERMINAL_STATUSES.has(row.status) && TERMINAL_STATUSES.has(sub.status)) continue;
       const finding = await driftFinding(row, sub);
       if (finding) findings.push(finding);
     } else if (ORPHAN_STATUSES.has(sub.status)) {
@@ -236,7 +240,6 @@ export async function runSubscriptionReconciliation(
       checked++;
       const sub = await retrieveOrMissing(subscriptionId);
       if (sub === 'error') continue;
-      if (sub !== 'missing' && !isStageSubscription(sub, stage)) continue;
       covered.add(subscriptionId);
       // Gone from Stripe, or finished there too: both sides agree the subscription is over.
       if (sub === 'missing' || TERMINAL_STATUSES.has(sub.status)) continue;

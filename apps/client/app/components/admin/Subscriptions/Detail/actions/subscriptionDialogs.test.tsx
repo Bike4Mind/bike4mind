@@ -296,6 +296,7 @@ describe('SyncFromStripeDialog', () => {
     pickReason('sync-subscription-dialog');
     expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Reading from Stripe');
     expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+    confirm('sync-subscription-dialog');
     expect(mocks.sync).not.toHaveBeenCalled();
   });
 
@@ -306,6 +307,7 @@ describe('SyncFromStripeDialog', () => {
     pickReason('sync-subscription-dialog');
     expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Could not read the subscription');
     expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+    confirm('sync-subscription-dialog');
     expect(mocks.sync).not.toHaveBeenCalled();
   });
 

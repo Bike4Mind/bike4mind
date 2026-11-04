@@ -522,7 +522,9 @@ describe('subscription summary failures', () => {
 
 describe('subscription CSV export', () => {
   it('downloads the filtered export and warns about both server truncation markers', async () => {
-    const blob = new NodeBlob(['id\nsub_1\n# Truncated at 10000 rows\n# Search matched more than 500 accounts\n']);
+    const blob = new NodeBlob([
+      'id\nsub_1\n# Truncated at 10000 rows\n# Search matched more than 500 accounts\n# Mismatched view covers the first 500 subscriptions\n',
+    ]);
     apiGet.mockImplementation(async (url: string) => {
       if (url.endsWith('/export'))
         return { data: blob, headers: { 'content-disposition': 'attachment; filename="filtered.csv"' } };
@@ -536,7 +538,10 @@ describe('subscription CSV export', () => {
       params: { status: ['active', 'past_due'], source: 'stripe' },
       responseType: 'blob',
     });
-    expect(notifications.warning).toHaveBeenCalledTimes(2);
+    expect(notifications.warning).toHaveBeenCalledTimes(3);
+    expect(notifications.warning).toHaveBeenCalledWith(
+      'The Mismatched view is capped, so the export is missing some subscriptions.'
+    );
   });
 
   it('reports an export failure and leaves the button available for retry', async () => {

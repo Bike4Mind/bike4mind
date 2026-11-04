@@ -175,7 +175,21 @@ describe('runSubscriptionReconciliation', () => {
 
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ kind: 'drift', subscriptionRowId: 'row_sub_wrong', stripeStatus: 'active' });
-    expect(findings[0].fields).toContainEqual({ field: 'status', mongo: 'canceled', stripe: 'active' });
+    expect(findings[0].fields).toEqual([{ field: 'status', mongo: 'canceled', stripe: 'active' }]);
+  });
+
+  it('skips a canceled row against a terminal listed sub, and a row that is not Stripe-sourced', async () => {
+    mocks.list.mockReturnValue(
+      listing([stripeSub('sub_done', { status: 'incomplete_expired' }), stripeSub('sub_granted')])
+    );
+    mocks.findBySubIds.mockResolvedValue([
+      row('sub_done', { status: 'canceled' }),
+      row('sub_granted', { source: 'admin_grant', status: 'canceled' }),
+    ]);
+
+    const { findings } = await runSubscriptionReconciliation(undefined, NOW);
+
+    expect(findings).toEqual([]);
   });
 
   describe('open findings whose row turned terminal', () => {
@@ -199,6 +213,14 @@ describe('runSubscriptionReconciliation', () => {
 
     it('covers the id when Stripe no longer has the subscription', async () => {
       mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
+
+      await runSubscriptionReconciliation(undefined, NOW);
+
+      expect(mocks.resolveMissing).toHaveBeenCalledWith(expect.objectContaining({ coveredIds: ['sub_late'] }));
+    });
+
+    it('covers an unstamped sub on a non-production stage, like the phase that opened the finding', async () => {
+      mocks.retrieve.mockResolvedValue(stripeSub('sub_late', { status: 'canceled', canceled_at: OLD, metadata: {} }));
 
       await runSubscriptionReconciliation(undefined, NOW);
 

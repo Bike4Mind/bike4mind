@@ -299,6 +299,18 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
     expect(mocks.audit.mock.calls[0][1].changes).toEqual([]);
+    expect(mocks.audit.mock.calls[0][1].summary).toContain('already finished');
+  });
+
+  it('leaves an incomplete_expired row untouched when Stripe has no such subscription', async () => {
+    mocks.rowFindById.mockResolvedValue(row({ status: 'incomplete_expired' }));
+    mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
+    const { res, run } = call('POST');
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
+    expect(mocks.audit.mock.calls[0][1].changes).toEqual([]);
   });
 
   it('is a 409, with no seat write or audit, when the row changed after the precheck', async () => {

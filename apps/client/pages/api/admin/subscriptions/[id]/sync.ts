@@ -4,6 +4,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import {
   SubscriptionSource,
+  TERMINAL_SUBSCRIPTION_STATUSES,
   resolveSubscriptionSource,
   type ISubscription,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
@@ -64,8 +65,11 @@ const readRow = async (id: string) => {
   return row;
 };
 
+// A finished row (canceled, incomplete_expired) has nothing left to cancel when Stripe has no subscription.
+const isFinished = (row: ISubscription) => TERMINAL_SUBSCRIPTION_STATUSES.has(row.status);
+
 const canceledChanges = (row: ISubscription, now: Date): AdminSubscriptionSyncChange[] =>
-  row.status === 'canceled'
+  isFinished(row)
     ? []
     : [
         { field: 'status', before: row.status, after: 'canceled' },
@@ -156,15 +160,14 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           diff = stripeSyncChanges(applied);
         } else {
           // Stripe has no such subscription: the same write as customer.subscription.deleted. A row that is
-          // already canceled keeps its canceledAt, so nothing is written.
-          before =
-            row.status === 'canceled'
-              ? row
-              : await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
-                  subscriptionId,
-                  { status: 'canceled', canceledAt: now },
-                  row.updatedAt
-                );
+          // already finished keeps its status and canceledAt, so nothing is written.
+          before = isFinished(row)
+            ? row
+            : await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+                subscriptionId,
+                { status: 'canceled', canceledAt: now },
+                row.updatedAt
+              );
           diff = before ? canceledChanges(before, now) : [];
         }
         if (!before) throw new ConflictError('This subscription changed; reload and try again.');
@@ -172,9 +175,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           action: 'billing.subscription.synced',
           target: owner.target,
           organizationId: owner.organizationId,
-          summary: stripeSub
-            ? 'synced subscription from Stripe'
-            : 'synced subscription from Stripe (gone from Stripe, marked canceled)',
+          summary: !stripeSub
+            ? diff.length > 0
+              ? 'synced subscription from Stripe (gone from Stripe, marked canceled)'
+              : 'synced subscription from Stripe (gone from Stripe, already finished)'
+            : 'synced subscription from Stripe',
           reason,
           changes: diff.map(({ field, before, after }) => ({ field, before, after })),
           details: { subscriptionId, subscriptionRecordId: id, stripeMissing: stripeSub === null },

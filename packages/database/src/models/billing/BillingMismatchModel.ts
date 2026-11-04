@@ -130,12 +130,11 @@ export class BillingMismatchRepository extends BaseRepository<IBillingMismatchDo
   /** Subscription ids of open `drift` and `orphan_mongo` findings, minus `exclude`: the ones a run still has to re-check. */
   async listOpenRowFindingIds(exclude: string[]): Promise<string[]> {
     const found = await this.mismatchModel
-      .find(
-        { status: 'open', kind: { $ne: 'orphan_stripe' }, stripeSubscriptionId: { $nin: exclude } },
-        { stripeSubscriptionId: 1 }
-      )
+      .find({ status: 'open', kind: { $ne: 'orphan_stripe' } }, { stripeSubscriptionId: 1 })
       .lean<Pick<IBillingMismatchDocument, 'stripeSubscriptionId'>[]>();
-    return found.map(f => f.stripeSubscriptionId);
+    // Filtered here, not with $nin: the open set is small, `exclude` is every subscription the run visited.
+    const skip = new Set(exclude);
+    return found.map(f => f.stripeSubscriptionId).filter(id => !skip.has(id));
   }
 
   async resolveForSubscription(subscriptionRowId: string, by: BillingMismatchResolvedBy, now = new Date()) {
