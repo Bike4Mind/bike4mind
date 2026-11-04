@@ -144,6 +144,7 @@ function view(extra: Partial<HubModelView> = {}): HubModelView {
         ollamaRef: `hf.co/${REPO}:Q4_K_M`,
         installedNames: [`hf.co/${REPO}:q4_k_m`.toLowerCase(), `huggingface.co/${REPO}:q4_k_m`.toLowerCase()],
         blockedReason: null,
+        importParts: null,
         fit: null,
       },
     ],
@@ -265,6 +266,7 @@ function libraryPull(fit: ModelFit = FITS): CuratedPullResult {
     ollamaRef: E4B_REF,
     installedNames: [E4B_REF.toLowerCase()],
     blockedReason: null,
+    importParts: null,
     fit,
   };
   return {
@@ -1572,6 +1574,25 @@ describe('ModelsScreen explore', () => {
       acceptLicense: false,
       confirmAccess: false,
     });
+  });
+
+  it('asks no Ollama key steps for a split build Desktop adds itself, and says it comes in parts', async () => {
+    const split = {
+      ...view().builds[0],
+      id: 'qwen-q8_0',
+      label: 'Q8_0',
+      ollamaRef: `hf.co/${REPO}:Q8_0`,
+      importParts: 3,
+    };
+    bridge.detail = { ok: true, model: view({ builds: [split], needsAccess: true, gated: 'manual' }) };
+    await mount();
+    await openExplore();
+    await click(q('models-explore-result-row'));
+    await click(q('models-build-pull-btn'));
+    expect(q('models-pull-dialog-size')?.textContent).toContain('491 MB download in 3 parts.');
+    expect(q('models-pull-dialog-size')?.textContent).toContain('Desktop downloads the parts one at a time');
+    expect(q('models-pull-dialog-access-checkbox')).toBeNull();
+    expect(q('models-pull-dialog-confirm-btn')?.hasAttribute('disabled')).toBe(false);
   });
 
   it('names each build by its label when two share a quant', async () => {

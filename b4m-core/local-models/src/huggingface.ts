@@ -431,6 +431,13 @@ function ollamaAcceptsRepo(repo: string): boolean {
   return !owner.includes('.') && owner.length <= OLLAMA_NAME_PART_MAX && name.length <= OLLAMA_NAME_PART_MAX;
 }
 
+/** `hf.co/<repo>:<tag>`, or null when the repo id or the tag breaks Ollama's name rules. */
+export function ollamaHubName(repo: string, tag: string): string | null {
+  return isHubRepoId(repo) && ollamaAcceptsRepo(repo) && OLLAMA_TAG_RE.test(tag)
+    ? `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`
+    : null;
+}
+
 export function isHubRepoId(repo: string): boolean {
   return REPO_ID_RE.test(repo) && !repo.includes('..');
 }
@@ -999,6 +1006,19 @@ export class HuggingFaceHub {
     try {
       const { data } = await this.#getJson(`/v2/${repo}/manifests/${tag}`, registryManifestSchema, context);
       return registryLayers(data);
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) return null;
+      throw error;
+    }
+  }
+
+  /** A JSON layer (params) of a manifest `ollamaLayers` read, by its sha256; null when the registry lacks it. */
+  async ollamaRegistryJson(repo: string, sha256: string, options: { signal?: AbortSignal } = {}): Promise<unknown> {
+    assertRepoId(repo);
+    if (!SHA256_RE.test(sha256)) throw new LocalRuntimeError('Invalid blob digest', this.id);
+    const context = { signal: options.signal, repo, manifest: true };
+    try {
+      return (await this.#getJson(`/v2/${repo}/blobs/sha256:${sha256}`, z.unknown(), context)).data;
     } catch (error) {
       if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) return null;
       throw error;

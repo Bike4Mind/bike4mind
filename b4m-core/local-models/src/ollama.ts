@@ -1,3 +1,5 @@
+import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { archFromModelInfo, positiveInt, tensorStatsFromTensors } from './arch';
 import {
@@ -31,6 +33,8 @@ import type {
   ModelCapabilities,
   ModelInspection,
   ModelContents,
+  ModelImportRuntime,
+  OllamaCreateRequest,
   PullOptions,
   RuntimeHealth,
 } from './types';
@@ -223,12 +227,19 @@ class ProgressCallbackError {
   constructor(readonly error: unknown) {}
 }
 
+const BLOB_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
+function blobPath(digest: string, runtimeId: string): string {
+  if (!BLOB_DIGEST_RE.test(digest)) throw new LocalRuntimeError('Invalid blob digest', runtimeId);
+  return `/api/blobs/${digest}`;
+}
+
 /** Ollama stores an untagged name as `<name>:latest`. */
 function withDefaultTag(model: string): string {
   return /:[^/]+$/.test(model) ? model : `${model}:latest`;
 }
 
-export class OllamaRuntime implements LocalRuntime {
+export class OllamaRuntime implements LocalRuntime, ModelImportRuntime {
   readonly kind = 'ollama' as const;
   readonly id: string;
   readonly baseUrl: string;
@@ -379,6 +390,65 @@ export class OllamaRuntime implements LocalRuntime {
       throw connectionError(this.client, '/api/pull', error, { signal: opts.signal });
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  async hasBlob(digest: string, options: { signal?: AbortSignal } = {}): Promise<boolean> {
+    const path = blobPath(digest, this.id);
+    try {
+      await send(this.client, path, { method: 'HEAD', signal: options.signal, timeoutMs: this.requestTimeoutMs });
+      return true;
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.status === 404) return false;
+      throw error;
+    }
+  }
+
+  async uploadBlob(
+    digest: string,
+    path: string,
+    options: { signal?: AbortSignal; onProgress?: (sentBytes: number) => void } = {}
+  ): Promise<void> {
+    const route = blobPath(digest, this.id);
+    let sent = 0;
+    const counted = (Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>).pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform: (chunk, controller) => {
+          sent += chunk.byteLength;
+          options.onProgress?.(sent);
+          controller.enqueue(chunk);
+        },
+      })
+    );
+    const response = await send(this.client, route, { method: 'POST', stream: counted, signal: options.signal });
+    await response.body?.cancel().catch(() => undefined);
+  }
+
+  /** Streams `/api/create`; resolves on its `success` line. */
+  async create(request: OllamaCreateRequest, options: { signal?: AbortSignal } = {}): Promise<void> {
+    try {
+      const response = await send(this.client, '/api/create', {
+        method: 'POST',
+        body: { ...request, stream: true },
+        signal: options.signal,
+      });
+      if (!response.body) throw new RuntimeProtocolError(`${this.id} /api/create returned no body`, this.id);
+      let succeeded = false;
+      for await (const line of readLines(response.body)) {
+        const frame = parseJson(this.client, '/api/create', this.redact(line, response), pullFrameSchema);
+        if (frame.error)
+          throw new LocalRuntimeError(`${this.id} could not create ${request.model}: ${frame.error}`, this.id);
+        if (frame.status === 'success') succeeded = true;
+      }
+      options.signal?.throwIfAborted();
+      if (!succeeded)
+        throw new RuntimeProtocolError(`${this.id} create of ${request.model} ended before it finished`, this.id);
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && error.detail)
+        throw new LocalRuntimeError(`${this.id} could not create ${request.model}: ${error.detail}`, this.id, {
+          cause: error,
+        });
+      throw connectionError(this.client, '/api/create', error, { signal: options.signal });
     }
   }
 

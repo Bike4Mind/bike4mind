@@ -60,6 +60,17 @@ async function freeBytes(path: string): Promise<number> {
   }
 }
 
+/** The device of the disk holding `path`, read upward like `freeBytes`. */
+async function deviceOf(path: string): Promise<number> {
+  for (let current = path; ; current = dirname(current)) {
+    try {
+      return (await stat(current)).dev;
+    } catch (error) {
+      if (!isMissing(error) || dirname(current) === current) throw error;
+    }
+  }
+}
+
 // Fails typecheck when the renderer's mirrored types in shared/models.ts drift from local-models in either direction.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 export const curatedTypesMatch: [Same<CuratedSourceView, SourceView>, Same<CuratedListSettings, SourceListSettings>] = [
@@ -143,6 +154,8 @@ export function registerModels(
     pathExists: async path => (await stat(path)).isDirectory(),
     wslHost: process.platform === 'win32' || (process.platform === 'linux' && runsInWsl(process.env, procVersion())),
     integratedGpu: () => probeIntegratedGpu(),
+    importDir: () => join(app.getPath('userData'), 'model-imports'),
+    sameDisk: async (a, b) => (await deviceOf(a)) === (await deviceOf(b)),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
     onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
     keepAwake: on => {

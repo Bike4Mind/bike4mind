@@ -8,7 +8,9 @@ export type {
   ModelArch,
   ModelCapabilities,
   ModelContents,
+  ModelImportRuntime,
   ModelInspection,
+  OllamaCreateRequest,
   OllamaRegistryLayers,
   OpenAICompatibleProduct,
   PullOptions,
@@ -176,6 +178,29 @@ export {
   type OllamaRuntimeOptions,
 } from './ollama';
 export { DEFAULT_OLLAMA_REGISTRY, ollamaLibraryLayers, type OllamaLibraryLayersOptions } from './ollamaRegistry';
+export {
+  SPLIT_IMPORT_MIN_OLLAMA,
+  importParameters,
+  importProjector,
+  planSplitImport,
+  runSplitImport,
+  siblingLayers,
+  splitImportBlock,
+  splitImportCreateRequest,
+  splitImportName,
+  splitImportRunDir,
+  splitImportSpace,
+  sweepSplitImports,
+  type ImportDisks,
+  type ImportSpace,
+  type SiblingHub,
+  type SiblingLayers,
+  type SplitImportBlock,
+  type SplitImportDeps,
+  type SplitImportPart,
+  type SplitImportPlan,
+  type SplitImportProgress,
+} from './splitImport';
 export { OpenAICompatibleRuntime, type OpenAICompatibleRuntimeOptions } from './openaiCompatible';
 export {
   DEFAULT_HUGGING_FACE_ENDPOINT,
@@ -183,6 +208,7 @@ export {
   MAX_HUB_SEARCH_LIMIT,
   OLLAMA_HUGGING_FACE_HOST,
   OLLAMA_SIGNED_HUGGING_FACE_HOST,
+  ollamaHubName,
   ollamaModelKey,
   ollamaPullRef,
   ollamaRefAliases,

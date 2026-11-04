@@ -116,7 +116,9 @@ export function PullDialog({
   const [overrideFit, setOverrideFit] = useState(false);
   const restricted = model.licenseKind === 'restricted';
   const tooLarge = build.fit?.level === 'too-large';
-  const ready = (!restricted || acceptLicense) && (!model.needsAccess || confirmAccess) && (!tooLarge || overrideFit);
+  // Desktop downloads a split build's parts with the Hugging Face token, so Ollama's key is not involved.
+  const needsKey = model.needsAccess && build.importParts === null;
+  const ready = (!restricted || acceptLicense) && (!needsKey || confirmAccess) && (!tooLarge || overrideFit);
   const names = model.licenseNames;
   const several = names.length > 1;
   const acceptLabel =
@@ -136,10 +138,14 @@ export function PullDialog({
             </Typography>
             <Typography level="body-sm" data-testid="models-pull-dialog-size">
               {formatBytes(build.sizeBytes)} download
+              {build.importParts !== null ? ` in ${build.importParts} parts` : ''}
               {model.projectorBytes ? `, plus a vision projector of up to ${formatBytes(model.projectorBytes)}` : ''}.
-              {server
-                ? ` ${server} downloads it straight from Hugging Face; you can remove it from Installed at any time.`
-                : ' Ollama downloads it; you can remove it from Installed at any time.'}
+              {build.importParts !== null
+                ? ' Desktop downloads the parts one at a time and adds each to Ollama; you can remove it from Installed' +
+                  ' at any time.'
+                : server
+                  ? ` ${server} downloads it straight from Hugging Face; you can remove it from Installed at any time.`
+                  : ' Ollama downloads it; you can remove it from Installed at any time.'}
             </Typography>
             <StoreLine location={location} server={server} needed={build.sizeBytes + (model.projectorBytes ?? 0)} />
             {server && (
@@ -179,7 +185,7 @@ export function PullDialog({
                 slotProps={{ input: { 'data-testid': 'models-pull-dialog-license-checkbox' } }}
               />
             )}
-            {model.needsAccess && (
+            {needsKey && (
               <>
                 <AccessSteps model={model} server={server} />
                 <Checkbox

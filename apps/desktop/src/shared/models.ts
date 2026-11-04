@@ -168,6 +168,8 @@ export interface HubBuildView {
   installedNames: string[];
   /** Why the build cannot be pulled; null when it can be offered (the registry check still runs first). */
   blockedReason: string | null;
+  /** For a split build Desktop downloads itself and adds to Ollama on this computer: how many files it has. */
+  importParts: number | null;
   fit: ModelFit | null;
 }
 
