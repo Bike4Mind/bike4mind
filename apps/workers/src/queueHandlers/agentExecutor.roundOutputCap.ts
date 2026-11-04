@@ -39,8 +39,9 @@ export function outOfCreditsOutcome(error: unknown): { kind: 'out-of-credits'; e
 }
 
 /**
- * Same payer rule as chat: only a personal account without a paid plan is held to its balance. An
- * organization's balance is a hard stop at settlement already, and a paid plan may run past it.
+ * Only a personal account without a paid plan is held to its balance. An organization's balance is a
+ * hard stop at settlement already. Unlike chat, which caps a paid personal account at its balance plus
+ * paidCompletionOverdraftCredits, a paid plan's agent rounds are left uncapped.
  */
 export async function capsRoundOutput(payer: {
   enforceCredits: boolean;
