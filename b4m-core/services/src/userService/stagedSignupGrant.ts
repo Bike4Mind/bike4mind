@@ -28,6 +28,7 @@ import {
 } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
+import { payInviteBonus } from './inviteBonus';
 import {
   queueHeadBlocks,
   reserveSignupGrantBudget,
@@ -350,6 +351,12 @@ async function releaseStage(
       } catch {
         console.warn('[signup-risk] Band telemetry failed after grant commit');
       }
+    }
+    // A later paying release retries a bonus an exhausted pool or a failure left unpaid.
+    if (expected === 'pending_email' || grantResult.creditsGranted > 0) {
+      await payInviteBonus(userId, adapters).catch(() => {
+        console.warn('[signup-grant] Invite bonus payout failed; a later release retries it');
+      });
     }
     return grantResult;
   } catch (error) {

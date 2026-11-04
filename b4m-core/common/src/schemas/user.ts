@@ -249,6 +249,7 @@ export const selfUserResponseSchema = z.object({
       unlockedBy: z.enum(SIGNUP_GRANT_UNLOCK_REASONS).optional(),
       unlockedOrgId: z.string().optional(),
       dripCredits: z.number().int().nonnegative().optional(),
+      inviteBonusPaid: z.number().int().nonnegative().optional(),
       lastDripPeriod: z
         .string()
         .regex(/^preview:\d{1,4}:\d+$/)

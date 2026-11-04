@@ -1261,6 +1261,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           dripCredits: { type: Number, min: 0 },
           lastDripDay: { type: String },
           lastDripPeriod: { type: String },
+          inviteBonusPaid: { type: Number, min: 0 },
           activity: {
             type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
             default: undefined,

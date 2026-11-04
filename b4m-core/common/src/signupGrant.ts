@@ -58,6 +58,11 @@ export interface SignupGrant {
   heldUnlock?: { reason: PaymentUnlockReason; heldAt: Date; releaseAt: Date };
   /** A disputed, refunded or fraud-warned payment: only an admin can release more of the grant. */
   unlockForfeited?: { cause: SignupUnlockForfeitCause; at: Date };
+  /**
+   * Invite bonus paid on top of the grant (payInviteBonus). Never counted in creditsReleased, so the
+   * unlock remainder and the drip cap are computed as if no bonus were paid.
+   */
+  inviteBonusPaid?: number;
 }
 
 export function hasPaidSignupDrip(
