@@ -13,21 +13,15 @@ import {
 import {
   adminSettingsRepository,
   agentExecutionRepository,
-  apiKeyRepository,
   connectDB,
   loopDirectiveRepository,
   loopEventRepository,
   loopRepository,
-  organizationRepository,
-  userRepository,
   workItemRepository,
   type IAgentExecution,
   type IPendingGate,
 } from '@bike4mind/database';
-import { getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { apiKeyService, creditService } from '@bike4mind/services';
-import { getSettingsByNames } from '@bike4mind/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
@@ -42,18 +36,21 @@ import {
   UNSURE_PREFIX,
 } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
-import { userLoopsDailyCap } from '@server/utils/loopBudget';
-import { buildLoopQuery, parseLoopMemory } from './loopMemory';
+import {
+  canPayAgain,
+  iterationPrice,
+  MIN_ITERATION_CREDITS,
+  pacedAllowance,
+  pacedReadyAt,
+  runCreditCap,
+  userLoopsDailyCap,
+} from '@server/utils/loopBudget';
+import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from '@server/utils/loopMemory';
 import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
-import { nextIterationCredits } from '../queueHandlers/agentExecutor.billing';
 
 /** Claim lease; covers one dispatch, after which `activeExecutionId` keeps the loop from overlapping. */
 export const LOOP_LEASE_MS = 5 * 60 * 1000;
 export const MAX_DISPATCH_PER_TICK = 25;
-/** Open directives shown to a run, oldest first; the rest wait for a later run. */
-export const LOOP_PROMPT_DIRECTIVES = 10;
-/** Owner answers to a ticket's earlier questions shown to its next run. */
-export const LOOP_PROMPT_ANSWERS = 3;
 /** Non-credit failures in a row before a loop stops at `error`. */
 export const MAX_CONSECUTIVE_FAILURES = 3;
 /** Resumed unsure runs folded per tick; the rest wait for the next one. */
@@ -68,35 +65,14 @@ export const MAX_CLAIMS_PER_TICK = 100;
 /** Ceiling on the idle back-off, as a multiple of the loop's interval (and never past a day). */
 export const MAX_BACKOFF_FACTOR = 8;
 
-/** Floor on an iteration's price in budget checks, so an unpriceable model still needs some allowance left. */
-const MIN_ITERATION_CREDITS = 0.01;
-
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 export const BUDGET_PAUSE_REASON = 'Daily budget reached; resumes 00:00 UTC';
 export { USER_BUDGET_PAUSE_REASON };
 export { TICKET_RUNS_PER_STAGE, ticketRunLimit } from '@server/utils/loopTickets';
-
-/** What a daily budget allows spent by `now`: 1/24 in the first UTC hour, all of it in the last. Unspent allowance carries forward. */
-export function pacedAllowance(budget: number, now: Date): number {
-  const hours = (now.getTime() - startOfUtcDay(now).getTime()) / HOUR_MS;
-  return budget * Math.min(1, (hours + 1) / 24);
-}
-
-/** When the paced allowance first covers `spent + price`, rounded up to the minute; null when the whole budget does not. */
-export function pacedReadyAt(budget: number, spent: number, price: number, now: Date): Date | null {
-  const need = spent + price;
-  if (need > budget) return null;
-  const at = startOfUtcDay(now).getTime() + Math.max(0, (24 * need) / budget - 1) * HOUR_MS;
-  return new Date(Math.ceil(at / MINUTE_MS) * MINUTE_MS);
-}
-
-/** The lowest of the limits that are set; undefined (no cap) when none is. */
-export function runCreditCap(limits: Array<number | undefined>): number | undefined {
-  const set = limits.filter((limit): limit is number => limit !== undefined);
-  return set.length > 0 ? Math.max(0, Math.min(...set)) : undefined;
-}
+export { pacedAllowance, pacedReadyAt, runCreditCap } from '@server/utils/loopBudget';
+export { LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES } from '@server/utils/loopMemory';
 
 /** Minutes until the next run after `idleStreak` idle runs in a row: doubling, capped at 8x and at a day. */
 export function backoffMinutes(intervalMinutes: number, idleStreak: number): number {
@@ -418,32 +394,6 @@ async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
     reason: kind === 'budget' ? 'Daily budget reset' : 'Credits available again',
     requestedAt: now,
   });
-}
-
-/**
- * Whether the account the executor bills can pay for the loop's first iteration, by the executor's own
- * admission rule (agentExecutor.ts pre-flight credit check): a positive balance that covers
- * `nextIterationCredits` when `enforceCredits` is on, and for an org, the member under its cap.
- */
-async function canPayAgain(loop: ILoop, price: () => Promise<number> = () => iterationPrice(loop)): Promise<boolean> {
-  const org = loop.organizationId ? await organizationRepository.findById(loop.organizationId) : null;
-  const payer = loop.organizationId ? org : await userRepository.findById(loop.userId);
-  const balance = payer?.currentCredits ?? 0;
-  if (balance <= 0 || (org && creditService.isMemberAtOrOverCap(org, loop.userId))) return false;
-  if ((await adminSettingsRepository.getSettingsValue('enforceCredits')) !== true) return true;
-  return balance >= (await price());
-}
-
-/** What the loop's first iteration costs on `model`, whether or not credits are enforced; 0 when unpriceable. */
-async function iterationPrice(loop: ILoop, model = loop.model): Promise<number> {
-  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(loop.userId, {
-    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-    getSettingsByNames,
-  });
-  const models = await getAvailableModels(apiKeyTable as ApiKeyTable);
-  const modelId = resolveDeprecatedModelId(model, 'loopScheduler');
-  const modelInfo = models.find((m: { id: string }) => m.id === modelId);
-  return modelInfo ? nextIterationCredits(modelInfo, 0) : 0;
 }
 
 /** Pauses a claimed loop until its owner (or the scheduler, by `autoResume`) sets it live again. */

@@ -1,5 +1,10 @@
 import { visibleReplyText, type ILoop, type ILoopDirective, type ILoopMemory, type IWorkItem } from '@bike4mind/common';
 
+/** Open directives shown to a run, oldest first; the rest wait for a later run. */
+export const LOOP_PROMPT_DIRECTIVES = 10;
+/** Owner answers to a ticket's earlier questions shown to its next run. */
+export const LOOP_PROMPT_ANSWERS = 3;
+
 /** Ticket description cap (chars) in the run's prompt. */
 export const LOOP_TICKET_PROMPT_CHARS = 4000;
 

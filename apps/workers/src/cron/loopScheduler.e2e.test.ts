@@ -37,7 +37,10 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
   getAvailableModels: h.getAvailableModels,
 }));
-vi.mock('../queueHandlers/agentExecutor.billing', () => ({ nextIterationCredits: h.nextIterationCredits }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  nextIterationCredits: h.nextIterationCredits,
+}));
 
 import {
   BUDGET_PAUSE_REASON,
@@ -48,7 +51,7 @@ import {
 } from './loopScheduler';
 import { STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { makeDueIfReady } from '@server/utils/loopTickets';
-import { buildLoopQuery } from './loopMemory';
+import { buildLoopQuery } from '@server/utils/loopMemory';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

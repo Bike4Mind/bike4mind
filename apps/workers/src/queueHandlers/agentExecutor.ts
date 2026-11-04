@@ -241,6 +241,7 @@ import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { createInflightStepPersister } from './agentExecutor.inflightSteps';
 import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { isGoneError } from '@bike4mind/server-utils/websocket/goneError';
 import { createModelAdmission } from '@server/billing/meterPlatformCompletion';
 import { admitAgentDefinitions } from './agentExecutor.modelAdmission';
 import {
@@ -359,11 +360,6 @@ const sqsClient = new SQSClient({});
  * (steps, status changes) re-reads the list so a new viewer never misses one. */
 const VIEWER_CACHE_MS = 2_000;
 const VIEWER_CACHED_ACTIONS = new Set(['agent_text_delta', 'subagent_text_delta', 'progress', 'subagent_progress']);
-
-function isGoneError(err: unknown): boolean {
-  const e = err as { name?: string; $metadata?: { httpStatusCode?: number } } | undefined;
-  return e?.name === 'GoneException' || e?.$metadata?.httpStatusCode === 410;
-}
 
 /**
  * Exported for `agentExecutor.headless.test.ts` and `agentExecutor.viewers.test.ts`: the
