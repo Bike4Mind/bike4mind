@@ -106,6 +106,18 @@ export async function assertBlockedOnSatisfiable(
   }
 }
 
+/**
+ * A cloud loop run (its `loop_ticket_*` tools) never changes a ticket in a desktop stage: only the desktop
+ * runner (`loopRunner.ts` claim/complete) and the owner (work-items routes) do. Moving a ticket into one is fine.
+ */
+export function assertCloudRunMayChange(loop: Pick<ILoop, 'stageConfig'>, ticket: Pick<IWorkItem, 'stage'>): void {
+  if (ticket.stage && desktopStagesOf(loop).includes(ticket.stage)) {
+    throw new BadRequestError(
+      `this ticket is in the "${ticket.stage}" stage, which the owner's desktop app works; do not work, edit or move it`
+    );
+  }
+}
+
 /** A completed run moves its ticket one stage on; reaching the last stage closes it. */
 export function advancePatch(loop: Pick<ILoop, 'stages'>, ticket: Pick<IWorkItem, 'stage'>): WorkItemPatch {
   const index = Math.max(loop.stages.indexOf(ticket.stage ?? ''), 0);
