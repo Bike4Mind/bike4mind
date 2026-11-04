@@ -31,6 +31,13 @@ export interface InviterRecentReward {
   expiresAt: string;
 }
 
+interface RecentRewardRow {
+  _id: { toString(): string };
+  credits: number;
+  createdAt: Date;
+  metadata?: { invoiceId?: string };
+}
+
 export interface InviterSummary {
   /** False while all three reward amounts are 0: the screen and the notices stay hidden. */
   enabled: boolean;
@@ -51,10 +58,10 @@ const EMPTY_SUMMARY: InviterSummary = {
 };
 
 /**
- * What an inviter sees about the friends they invited. A reward only shows up once it is usable: a held
- * subscription reward has no ledger row yet, and it is not in the totals either. Everything is read from
- * the ledger (credits earned = rewards granted minus rewards taken back), so first-answer and subscription
- * rewards are treated alike. Returns the empty, disabled summary while all three reward amounts are 0.
+ * What an inviter sees about the friends they invited. Credits earned come from the ledger (rewards granted
+ * minus rewards taken back), so a held subscription reward, which has no ledger row until released, is not
+ * counted; `subscribed` counts friends whose reward is held or released. Returns the empty, disabled
+ * summary while all three reward amounts are 0.
  */
 export async function getInviterSummary(inviterId: string, now = new Date()): Promise<InviterSummary> {
   const settings = await getSettingsMap(
@@ -74,7 +81,9 @@ export async function getInviterSummary(inviterId: string, now = new Date()): Pr
     type: { $in: [...CREDIT_BALANCE_EVENT_TYPES] },
   };
 
-  const [invited, active, subscribed, totals, recent] = await Promise.all([
+  const windowStart = new Date(now.getTime() - NOTICE_WINDOW_DAYS * DAY_MS);
+
+  const [invited, active, subscribed, totals, recent, recentTakebacks] = await Promise.all([
     User.countDocuments(friends),
     User.countDocuments({ ...friends, emailVerified: true, firstValueAt: { $ne: null } }),
     referralSubscriptionRewardRepository.countSubscribedFriends(inviterId),
@@ -85,13 +94,34 @@ export async function getInviterSummary(inviterId: string, now = new Date()): Pr
     CreditTransaction.find({
       ...ownLedger,
       reason: REFERRAL_REWARD_REASON,
-      createdAt: { $gte: new Date(now.getTime() - NOTICE_WINDOW_DAYS * DAY_MS) },
+      createdAt: { $gte: windowStart },
     })
       .sort({ createdAt: -1 })
       .limit(MAX_RECENT_REWARDS)
-      .select('credits createdAt')
-      .lean<Array<{ _id: { toString(): string }; credits: number; createdAt: Date }>>(),
+      .select('credits createdAt metadata.invoiceId')
+      .lean<RecentRewardRow[]>(),
+    CreditTransaction.find({
+      ...ownLedger,
+      reason: 'referral_reward_takeback',
+      createdAt: { $gte: windowStart },
+    })
+      .select('credits metadata.invoiceId')
+      .lean<Array<{ credits: number; metadata?: { invoiceId?: string } }>>(),
   ]);
+
+  // A subscription reward released and then taken back inside the window must not toast its full amount.
+  const takenBackByInvoice = new Map<string, number>();
+  for (const row of recentTakebacks) {
+    const invoiceId = row.metadata?.invoiceId;
+    if (invoiceId) takenBackByInvoice.set(invoiceId, (takenBackByInvoice.get(invoiceId) ?? 0) + Math.abs(row.credits));
+  }
+  const recentNet = recent
+    .map(row => {
+      const invoiceId = row.metadata?.invoiceId;
+      const credits = Math.abs(row.credits) - (invoiceId ? (takenBackByInvoice.get(invoiceId) ?? 0) : 0);
+      return { row, credits };
+    })
+    .filter(({ credits }) => credits > 0);
 
   const granted = totals.find(row => row._id === REFERRAL_REWARD_REASON)?.total ?? 0;
   const takenBack = totals.find(row => row._id === 'referral_reward_takeback')?.total ?? 0;
@@ -102,9 +132,9 @@ export async function getInviterSummary(inviterId: string, now = new Date()): Pr
     active,
     subscribed,
     creditsEarned: Math.max(0, granted - takenBack),
-    recentRewards: recent.map(row => ({
+    recentRewards: recentNet.map(({ row, credits }) => ({
       id: row._id.toString(),
-      credits: Math.abs(row.credits),
+      credits,
       grantedAt: row.createdAt.toISOString(),
       expiresAt: new Date(row.createdAt.getTime() + REWARD_LOT_DAYS * DAY_MS).toISOString(),
     })),

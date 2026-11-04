@@ -1345,6 +1345,13 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
     });
     mockClearPending.mockResolvedValue({ tags: [] });
     mockFindUserById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 3000 });
+    mockRegisterViaOTC.mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+      currentCredits: 0,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: 3000,
+    });
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
     req.body.inviteCode = 'INVITE123';
 
@@ -1356,6 +1363,11 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
       expect.objectContaining({ deferFreeCreditRelease: true })
     );
     expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    expect(mockReleasePending.mock.calls[0][0]).toEqual({
+      id: 'user-1',
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: 3000,
+    });
     expect(releasedAfterCommit).toBe(true);
   });
 

@@ -11,7 +11,14 @@ const m = vi.hoisted(() => ({
 vi.mock('@bike4mind/common', () => ({ CreditHolderType: { User: 'User' } }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
-  CREDIT_BALANCE_EVENT_TYPES: ['purchase', 'subscription', 'generic_add', 'generic_deduct'],
+  CREDIT_BALANCE_EVENT_TYPES: [
+    'purchase',
+    'subscription',
+    'generic_add',
+    'generic_deduct',
+    'transfer_credit',
+    'received_credit',
+  ],
   User: { countDocuments: m.countUsers },
   CreditTransaction: { aggregate: m.aggregate, find: m.find },
   referralSubscriptionRewardRepository: { countSubscribedFriends: m.countSubscribed },
@@ -22,6 +29,7 @@ vi.mock('@bike4mind/utils', () => ({
 }));
 vi.mock('./firstAnswerReward', () => ({ REFERRAL_REWARD_REASON: 'referral_reward' }));
 
+import { CREDIT_BALANCE_EVENT_TYPES } from '@bike4mind/database';
 import { getInviterSummary } from './inviterSummary';
 
 const NOW = new Date('2026-11-10T00:00:00.000Z');
@@ -101,10 +109,39 @@ describe('getInviterSummary', () => {
     const scope = {
       ownerId: 'inviter1',
       ownerType: 'User',
-      type: { $in: ['purchase', 'subscription', 'generic_add', 'generic_deduct'] },
+      type: { $in: [...CREDIT_BALANCE_EVENT_TYPES] },
     };
     expect(m.aggregate.mock.calls[0][0][0].$match).toMatchObject(scope);
     expect(m.find.mock.calls[0][0]).toMatchObject({ ...scope, reason: 'referral_reward' });
+    expect(m.find.mock.calls[1][0]).toMatchObject({ ...scope, reason: 'referral_reward_takeback' });
+  });
+
+  describe('recent rewards net of take-backs', () => {
+    const granted = new Date(NOW.getTime() - 2 * DAY_MS);
+    const reward = (id: string, credits: number, invoiceId?: string) => ({
+      _id: { toString: () => id },
+      credits,
+      createdAt: granted,
+      ...(invoiceId ? { metadata: { invoiceId } } : {}),
+    });
+    const takeback = (credits: number, invoiceId: string) => ({ credits: -credits, metadata: { invoiceId } });
+    const setup = (rewards: unknown[], takebacks: unknown[]) =>
+      m.find.mockReturnValueOnce(findChain(rewards)).mockReturnValueOnce(findChain(takebacks));
+
+    it('reduces a reward by a partial take-back on the same invoice', async () => {
+      setup([reward('tx1', 6000, 'in_1')], [takeback(2000, 'in_1')]);
+      expect((await getInviterSummary('inviter1', NOW)).recentRewards.map(r => r.credits)).toEqual([4000]);
+    });
+
+    it('drops a reward that was taken back in full', async () => {
+      setup([reward('tx1', 6000, 'in_1'), reward('tx2', 3000, 'in_2')], [takeback(6000, 'in_1')]);
+      expect((await getInviterSummary('inviter1', NOW)).recentRewards.map(r => r.id)).toEqual(['tx2']);
+    });
+
+    it('leaves a first-answer reward with no invoice untouched', async () => {
+      setup([reward('tx1', 1000)], [takeback(1000, 'in_1')]);
+      expect((await getInviterSummary('inviter1', NOW)).recentRewards.map(r => r.credits)).toEqual([1000]);
+    });
   });
 
   it('lists recent usable rewards with a 90 day expiry and only looks back 14 days', async () => {
