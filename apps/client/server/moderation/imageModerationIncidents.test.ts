@@ -17,7 +17,7 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsMap: mocks.getSettingsMap }));
 vi.mock('@bike4mind/observability', () => ({ Logger: { globalInstance: mocks.logger } }));
 vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: mocks.sendEmail } }));
 
-import { imageModerationIncidents, resolveAdminAppUrl } from './imageModerationIncidents';
+import { createReviewerAlertDelivery, imageModerationIncidents, resolveAdminAppUrl } from './imageModerationIncidents';
 
 describe('resolveAdminAppUrl', () => {
   it('prefers APP_URL', () => {
@@ -96,5 +96,13 @@ describe('imageModerationIncidents', () => {
     expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('no reviewer is configured'), {
       incidentId: 'incident-1',
     });
+  });
+
+  it('reads the reviewer list past the settings cache only when the scheduled sweep asks', async () => {
+    mocks.getSettingsMap.mockResolvedValue({ ImageModerationReviewerEmails: ['reviewer@example.com'] });
+
+    await createReviewerAlertDelivery({ skipSettingsCache: true }).getRecipients();
+
+    expect(mocks.getSettingsMap).toHaveBeenCalledWith({ adminSettings: expect.anything() }, { skipCache: true });
   });
 });

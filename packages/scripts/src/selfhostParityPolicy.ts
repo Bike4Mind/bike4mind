@@ -154,6 +154,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('event:infra/eventBus.ts:telemetry-alert', 'da2a32170866774933b17511f32fa3be3347981ebc58cde3f749a7bed484afe7', [
     'bedrock:*',
   ]),
+  gap(
+    'schedule:infra/imageModerationReviewSweep.ts:imageModerationReviewSweep',
+    'efe33b9933a43713e7431275d8ad017b36a52e0055494e11877cbf3d48a2d708',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
+    'queue:infra/imageModerationReviewSweepDeadLetter.ts:imageModerationReviewSweepDlq',
+    'b037ad8cb00f13fbfcf4e7f6b014898d1b338a2227839f59f3fe8811d5fb8e75'
+  ),
   wired(
     'event:infra/llm.ts:create-memento',
     '5b17c92749a15d48ede31049684581cea9f72aaa98f0c3e0892a67b281c0e84a',

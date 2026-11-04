@@ -86,6 +86,7 @@ import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
@@ -602,6 +603,15 @@ if (isMonitoredStage) {
       displayName: 'API Probe Detector',
       application: 'Security',
       queue: apiProbeDetectorDeadLetter.queue,
+    });
+  }
+
+  if (imageModerationReviewSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'image-moderation-review-sweep',
+      displayName: 'Image Moderation Review Sweep',
+      application: 'Moderation',
+      queue: imageModerationReviewSweepDeadLetter.queue,
     });
   }
 
