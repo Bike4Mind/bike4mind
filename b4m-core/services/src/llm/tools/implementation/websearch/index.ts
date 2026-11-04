@@ -1,3 +1,4 @@
+import { ExpectedToolError, isExpectedToolError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { ICompletionOptionTools, ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
@@ -265,10 +266,13 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
 
 function logHedgedProviderFailure(provider: WebSearchProvider, error: unknown): void {
   if (error instanceof EmptySearchAnswer) return;
-  Logger.globalInstance.error('WebSearch Tool: provider failed while the other answered empty', {
-    provider: provider.name,
-    error: errorMessage(error),
-  });
+  Logger.globalInstance[isExpectedToolError(error) ? 'warn' : 'error'](
+    'WebSearch Tool: provider failed while the other answered empty',
+    {
+      provider: provider.name,
+      error: errorMessage(error),
+    }
+  );
 }
 
 /**
@@ -346,7 +350,8 @@ export async function searchWithHedge(
       logHedgedProviderFailure(lead, leadError);
       return { results: [], servedBy: backup, providerFailed: backup.name === 'searxng' };
     }
-    throw new Error(
+    const FailureError = isExpectedToolError(leadError) && isExpectedToolError(backupError) ? ExpectedToolError : Error;
+    throw new FailureError(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
         `${backup.name}: ${errorMessage(backupError)}`
     );
@@ -496,7 +501,8 @@ export async function performWebSearch(
 
     return { formattedResults: formattedOutput, citables, servedBy: cached ? undefined : servedBy.name };
   } catch (error) {
-    Logger.globalInstance.error('❌ WebSearch Tool: Error during search:', error);
+    if (error instanceof Error && error.name === 'AbortError') throw new ExpectedToolError(error.message);
+    if (!isExpectedToolError(error)) Logger.globalInstance.error('WebSearch Tool: Error during search:', error);
     throw error;
   }
 }

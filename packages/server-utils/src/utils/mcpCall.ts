@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { MCPClient, McpServerConfigError } from '@bike4mind/mcp';
 import { Resource } from 'sst';
 import { resolveMcpTenantKey } from './mcpTenantKey';
@@ -112,7 +113,7 @@ export const handler = async (params: any) => {
       }
 
       return payload;
-    } catch (error: any) {
+    } catch (error: unknown) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
       const isConnectionError =
@@ -135,9 +136,17 @@ export const handler = async (params: any) => {
       }
 
       const errorMessage = lastError.message;
-      const enhancedError = new Error(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
-      console.error(
-        `❌ MCP Handler Error for ${name}:`,
+      const isExpectedConnectionError = /Connection closed|\bEPIPE\b|\bECONNRESET\b/.test(errorMessage);
+      const FailureError = isExpectedConnectionError ? ExpectedToolError : Error;
+      const enhancedError = new FailureError(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
+      // Adapters own the warning for tool calls; discovery has no adapter to report it.
+      const logFailure = isExpectedConnectionError
+        ? action === 'callTool'
+          ? console.debug
+          : console.warn
+        : console.error;
+      logFailure(
+        `MCP Handler Error for ${name}:`,
         enhancedError,
         ...(stderrTail.length ? ['\nchild stderr:', stderrTail.join('\n')] : [])
       );

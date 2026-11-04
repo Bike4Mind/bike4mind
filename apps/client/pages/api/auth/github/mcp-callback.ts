@@ -82,7 +82,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       userId = decoded.userId;
       stateNonceHash = decoded.nh;
     } catch (error) {
-      req.logger.error('Invalid state token', error);
+      if (!(error instanceof jwt.JsonWebTokenError)) throw error;
+      req.logger.warn('Invalid state token', error);
       auditLogger.failure('invalid_state');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=invalid_state#github-integration');
     }
@@ -94,12 +95,12 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     // another browser. Fails closed - no cookie, or a mismatch, is rejected.
     const presentedNonceHash = readStateNonceHash(req);
     if (!presentedNonceHash) {
-      req.logger.error('Missing browser-binding nonce cookie - session expired or different browser', { userId });
+      req.logger.warn('Missing browser-binding nonce cookie - session expired or different browser', { userId });
       auditLogger.failure('session_missing');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=session_expired#github-integration');
     }
     if (!stateNonceHash || presentedNonceHash !== stateNonceHash) {
-      req.logger.error('Session mismatch - nonce cookie does not match state token', { userId });
+      req.logger.warn('Session mismatch - nonce cookie does not match state token', { userId });
       auditLogger.failure('session_mismatch');
       return res.redirect('/profile?tab=integrations&github_oauth=error&error=session_mismatch#github-integration');
     }
@@ -172,7 +173,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     } catch (fetchError) {
       clearTimeout(tokenTimeoutId);
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        req.logger.error('GitHub token exchange timed out after 30s');
+        req.logger.warn('GitHub token exchange timed out after 30s');
         return res.redirect('/profile?tab=integrations&github_oauth=error&error=timeout#github-integration');
       }
       throw fetchError;
@@ -181,18 +182,18 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     const tokenData = await tokenResponse.json();
 
     if (tokenData.error) {
-      req.logger.error('[OAuth Callback] GitHub OAuth error', {
-        userId,
-        error: tokenData.error,
-        errorDescription: tokenData.error_description,
-      });
-
       // Handle common duplicate request case with user-friendly error
       if (tokenData.error === 'bad_verification_code') {
         req.logger.warn('[OAuth Callback] Duplicate code detected', { userId });
         auditLogger.failure('auth_code_reused');
         return res.redirect('/profile?tab=integrations&github_oauth=error&error=auth_code_reused#github-integration');
       }
+
+      req.logger.error('[OAuth Callback] GitHub OAuth error', {
+        userId,
+        error: tokenData.error,
+        errorDescription: tokenData.error_description,
+      });
 
       auditLogger.failure(tokenData.error);
       return res.redirect(
@@ -225,7 +226,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     } catch (fetchError) {
       clearTimeout(userTimeoutId);
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        req.logger.error('GitHub user info fetch timed out after 15s');
+        req.logger.warn('GitHub user info fetch timed out after 15s');
         return res.redirect('/profile?tab=integrations&github_oauth=error&error=timeout#github-integration');
       }
       throw fetchError;

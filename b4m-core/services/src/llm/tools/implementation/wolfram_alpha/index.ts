@@ -73,7 +73,7 @@ export async function wolframAlphaQuery(
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger?.error('Wolfram Alpha: API error', {
+      logger?.[response.status === 501 ? 'warn' : 'error']('Wolfram Alpha: API error', {
         status: response.status,
         statusText: response.statusText,
         errorText,

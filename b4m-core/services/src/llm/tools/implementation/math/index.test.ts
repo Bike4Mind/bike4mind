@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { describe, it, expect } from 'vitest';
 import { mathTool } from './index';
 
@@ -180,3 +181,10 @@ describe('math_evaluate', () => {
     });
   });
 });
+
+it.each(['m = [1,2,3]; m(1:3)', 'sin([1,2])', '[1,2;3]', '1 m + 2'])(
+  'returns a recoverable tool failure for invalid mathjs input: %s',
+  async expression => {
+    await expect(evaluate({ expression })).rejects.toBeInstanceOf(ExpectedToolError);
+  }
+);

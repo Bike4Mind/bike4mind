@@ -1,3 +1,4 @@
+import { ExpectedToolError, isExpectedToolError } from '@bike4mind/common';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import writeXlsxFile from 'write-excel-file/node';
 import type { CellObject, Sheet, SheetData } from 'write-excel-file/node';
@@ -163,7 +164,7 @@ function validateFormula(formula: string): string {
   // Check for dangerous patterns
   for (const pattern of DANGEROUS_PATTERNS) {
     if (pattern.test(cleanFormula)) {
-      throw new Error(`Formula contains disallowed pattern: ${formula}`);
+      throw new ExpectedToolError(`Formula contains disallowed pattern: ${formula}`);
     }
   }
 
@@ -173,7 +174,7 @@ function validateFormula(formula: string): string {
   // Verify all functions are in the whitelist
   for (const func of functionMatches) {
     if (!ALLOWED_FORMULA_FUNCTIONS.has(func.toUpperCase())) {
-      throw new Error(`Formula contains disallowed function '${func}': ${formula}`);
+      throw new ExpectedToolError(`Formula contains disallowed function '${func}': ${formula}`);
     }
   }
 
@@ -520,7 +521,7 @@ export const excelGenerationTool: ToolDefinition = {
       const parseResult = ExcelGenerationParamsSchema.safeParse(value);
       if (!parseResult.success) {
         const errors = parseResult.error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
-        throw new Error(`Invalid parameters: ${errors}`);
+        throw new ExpectedToolError(`Invalid parameters: ${errors}`);
       }
 
       const params = parseResult.data;
@@ -558,6 +559,7 @@ export const excelGenerationTool: ToolDefinition = {
 
         return `Successfully generated Excel file: ${sanitizedName}.xlsx`;
       } catch (error) {
+        if (isExpectedToolError(error)) throw error;
         context.logger.error('Excel generation failed:', error);
         throw new Error(`Failed to generate Excel file: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }

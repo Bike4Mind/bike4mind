@@ -1,3 +1,4 @@
+import { isExpectedToolError } from '@bike4mind/common';
 import {
   BadRequestError,
   ChatModels,
@@ -1436,6 +1437,7 @@ export class OpenAIBackend implements ICompletionBackend {
             for (const outcome of outcomes) {
               if (!outcome.ok) {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+                if (isExpectedToolError(outcome.error)) this.logger.warn('Tool request refused', outcome.error);
                 const errorMsg = stripToolArtifactMarkup(
                   `Error processing ${outcome.name} tool: ${
                     outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
@@ -1911,6 +1913,7 @@ export class OpenAIBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+            if (isExpectedToolError(outcome.error)) this.logger.warn('Tool request refused', outcome.error);
             const errorMsg = stripToolArtifactMarkup(
               `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`,
               ARTIFACT_REMOVED_PLACEHOLDER
@@ -2491,6 +2494,7 @@ export class OpenAIBackend implements ICompletionBackend {
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
+        if (isExpectedToolError(outcome.error)) this.logger.warn('Tool request refused', outcome.error);
         const errorMsg = stripToolArtifactMarkup(
           `Error processing ${r.name} tool: ${
             outcome.error instanceof Error ? outcome.error.message : 'Unknown error'

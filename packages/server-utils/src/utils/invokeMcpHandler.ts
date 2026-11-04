@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { Buffer } from 'node:buffer';
 import { assertMcpServerStartable, type McpEnvVariable } from '@bike4mind/mcp';
@@ -186,26 +187,27 @@ export async function invokeMcpHandler<T = unknown>(payload: InvokeMcpHandlerPay
 
 /**
  * Render a Lambda FunctionError as display text. The payload is authored by the MCP handler and,
- * through it, by the MCP server itself - it is a string to show a user, never a signal that
- * steers control flow here.
+ * through it, by the MCP server itself. Its type only preserves tool log severity; it never
+ * selects a runtime or enables local execution.
  */
-function describeFunctionError(functionError: string, raw: string): string {
+function describeFunctionError(functionError: string, raw: string): { message: string; expected: boolean } {
   if (!raw) {
-    return functionError;
+    return { message: functionError, expected: false };
   }
 
   try {
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed === 'object' && parsed !== null) {
-      const { errorMessage, message } = parsed as Record<string, unknown>;
-      if (typeof errorMessage === 'string' && errorMessage) return errorMessage;
-      if (typeof message === 'string' && message) return message;
+      const { errorMessage, message, errorType } = parsed as Record<string, unknown>;
+      const expected = errorType === 'ExpectedToolError';
+      if (typeof errorMessage === 'string' && errorMessage) return { message: errorMessage, expected };
+      if (typeof message === 'string' && message) return { message, expected };
     }
   } catch {
     // Not JSON - fall through and show the raw body alongside the error type.
   }
 
-  return `${functionError}: ${raw}`;
+  return { message: `${functionError}: ${raw}`, expected: false };
 }
 
 // Safe: only called when mcpName is truthy (the Resource.mcpHandler lookup above ensures it is accessible)
@@ -221,7 +223,9 @@ async function invokeLambda<T>(payload: InvokeMcpHandlerPayload, tenantKey: stri
   const raw = decodePayload(response.Payload);
 
   if (response.FunctionError) {
-    throw new Error(`MCP handler invocation failed: ${describeFunctionError(response.FunctionError, raw)}`);
+    const failure = describeFunctionError(response.FunctionError, raw);
+    const FailureError = failure.expected ? ExpectedToolError : Error;
+    throw new FailureError(`MCP handler invocation failed: ${failure.message}`);
   }
 
   if (!raw) {

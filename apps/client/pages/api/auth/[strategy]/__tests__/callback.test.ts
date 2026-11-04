@@ -298,6 +298,21 @@ describe('[strategy]/callback - err branch log level', () => {
   });
 
   it.each([
+    tokenError('bad_verification_code'),
+    Object.assign(new Error('Invalid Credentials'), { name: 'UserInfoError' }),
+    'account_link_email_mismatch',
+    'account_link_requires_verification',
+  ])('warns for an expected provider or account-link refusal: %s', async err => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await runCallback(err, undefined, undefined);
+    expect(warnSpy).toHaveBeenCalledWith('Passport Authenticate Error:', undefined, err);
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it.each([
     ['another TokenError code', tokenError('invalid_client')],
     ['a non-token error', new Error('boom')],
   ])('keeps %s at error', async (_label, err) => {

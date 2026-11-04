@@ -1,4 +1,4 @@
-import { PermissionDeniedError, getQuestErrorCode, visibleReplyText } from '@bike4mind/common';
+import { PermissionDeniedError, getQuestErrorCode, visibleReplyText, isExpectedToolError } from '@bike4mind/common';
 import type { ICompletionOptionTools } from './backend';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
@@ -33,7 +33,7 @@ export class ToolBlockedError extends Error {
  * (Bedrock, Anthropic, Gemini) pick the level through this.
  */
 export function toolFailureLogLevel(error: unknown): 'warn' | 'error' {
-  return error instanceof ToolBlockedError ? 'warn' : 'error';
+  return error instanceof ToolBlockedError || isExpectedToolError(error) ? 'warn' : 'error';
 }
 
 /** Whether the named tool is flagged `endsTurnAfterText` in the offered tool list. */

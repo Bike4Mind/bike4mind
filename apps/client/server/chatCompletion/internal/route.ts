@@ -1,3 +1,4 @@
+import { isExpectedCompletionError } from '@bike4mind/utils';
 import { timingSafeEqual } from 'crypto';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { Resource } from 'sst';
@@ -103,12 +104,10 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       const errorMessage = err instanceof Error ? err.message : String(err);
       // `error`/`errorCause` stay flat strings for alert sinks that print each field with `${value}`;
       // `err` carries the stack and the full cause chain into the structured log.
-      logger.error('Quest processing failed', { error: errorMessage, errorCause: describeErrorCause(err), err });
-
-      // Operator-facing signal only - the quest's own reply to the user is handled separately
-      // below. Without this, detection of a processing failure was "a user complains".
-      // emitProcessingFailed never rejects, so track() only registers it for the SIGTERM drain.
-      track(emitProcessingFailed('/process', err));
+      if (!isExpectedCompletionError(err)) {
+        logger.error('Quest processing failed', { error: errorMessage, errorCause: describeErrorCause(err), err });
+        track(emitProcessingFailed('/process', err));
+      }
 
       // Surface the failure to the client instead of leaving the quest 'running' forever - but only
       // when nothing terminal was written yet. ChatCompletionProcess persists the provider's own

@@ -1,3 +1,4 @@
+import { ExpectedToolError } from '@bike4mind/common';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => {
@@ -129,14 +130,26 @@ describe('mcpCall connect failures', () => {
       throw new Error('MCP error -32000: Connection closed');
     };
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await expect(handler({ name: 'github', action: 'getTools', envVariables: [] })).rejects.toThrow(
-      'Connection closed'
-    );
+    const failure = handler({ name: 'github', action: 'getTools', envVariables: [] });
+    await expect(failure).rejects.toBeInstanceOf(ExpectedToolError);
+    await expect(failure).rejects.toThrow('Connection closed');
 
-    const logged = error.mock.calls.flat().map(String).join(' ');
+    expect(error).not.toHaveBeenCalled();
+    const logged = warn.mock.calls.flat().map(String).join(' ');
     expect(logged).toContain('something the server could not survive');
     expect(logged).not.toContain('RATE_LIMIT_WARNING');
+  });
+  it('retains error severity for a generic JSON-RPC server error', async () => {
+    h.connect = async () => {
+      throw new Error('MCP error -32000: database write failed');
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(handler({ name: 'github', action: 'getTools', envVariables: [] })).rejects.toThrow(
+      'database write failed'
+    );
+    expect(error).toHaveBeenCalledTimes(1);
   });
 });

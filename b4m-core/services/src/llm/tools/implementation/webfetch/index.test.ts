@@ -1,3 +1,4 @@
+import { RefusedFetchTargetError } from './errors';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Controls what the mocked Firecrawl scrapeUrl returns for each test.
@@ -928,5 +929,19 @@ describe('validateWebFetchResult', () => {
     const { result } = await runTool();
 
     expect(validateWebFetchResult(result)).toBeUndefined();
+  });
+});
+
+describe('web_fetch expected upstream failures', () => {
+  it.each([
+    new FirecrawlError('Upstream scraper failure', 500),
+    new RefusedFetchTargetError('Refusing to fetch target'),
+  ])('returns a recoverable result without error logging: %s', async error => {
+    scrapeUrl.mockRejectedValueOnce(error);
+    const context = makeContext(vi.fn(async () => {}));
+    const result = await webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
+    expect(result).toContain('web_search');
+    expect(context.logger.warn).toHaveBeenCalledTimes(error instanceof RefusedFetchTargetError ? 0 : 1);
+    expect(context.logger.error).not.toHaveBeenCalled();
   });
 });

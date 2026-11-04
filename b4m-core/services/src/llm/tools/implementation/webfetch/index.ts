@@ -1,3 +1,4 @@
+import { RefusedFetchTargetError } from './errors';
 import { Logger } from '@bike4mind/observability';
 import type { ToolResultValidator } from '@bike4mind/llm-adapters';
 import { ToolDefinition, ToolContext } from '../../base/types';
@@ -568,6 +569,15 @@ export const webFetchTool: ToolDefinition = {
           });
           await context.statusUpdate({}, 'WebFetch: PDF too large');
           return WEB_FETCH_PDF_TOO_LARGE_MSG;
+        }
+
+        if (error instanceof RefusedFetchTargetError || firecrawlStatus === 500) {
+          // Refused targets are already logged by the SSRF guard.
+          if (!(error instanceof RefusedFetchTargetError)) {
+            context.logger.warn('WebFetch expected upstream failure', { url: params.url, error: errorMessage });
+          }
+          await context.statusUpdate({}, 'WebFetch: page unavailable');
+          return WEB_FETCH_UNREACHABLE_MSG;
         }
 
         // Network-level errors (no response, connection reset, blocked redirect, ...) - return a

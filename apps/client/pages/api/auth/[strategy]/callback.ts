@@ -35,15 +35,16 @@ import { stampOAuthSourceTag } from '@server/utils/auth/oauthSourceTag';
 import { APPLE_DISPLAY_NAME_MAX_LENGTH, APPLE_USER_FIELD_MAX_LENGTH } from '@bike4mind/server-utils/auth/appleConfig';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 
-/**
- * True for the provider's `invalid_grant` on the code exchange: the authorization code was already
- * redeemed or has expired (back button, double submit, slow return). An expected outcome, so it
- * logs at warn rather than at error, the level the alert channel pages on.
- */
-function isReplayedOrExpiredCode(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false;
-  const { name, code } = err as { name?: unknown; code?: unknown };
-  return name === 'TokenError' && code === 'invalid_grant';
+import { ACCOUNT_LINK_EMAIL_MISMATCH, ACCOUNT_LINK_VERIFICATION_REQUIRED } from '@server/utils/auth/oauthAccountLink';
+
+function isExpectedOAuthError(error: unknown): boolean {
+  if (error === ACCOUNT_LINK_EMAIL_MISMATCH || error === ACCOUNT_LINK_VERIFICATION_REQUIRED) return true;
+  if (typeof error !== 'object' || error === null) return false;
+  const { name, code, message } = error as { name?: unknown; code?: unknown; message?: unknown };
+  return (
+    (name === 'TokenError' && (code === 'invalid_grant' || code === 'bad_verification_code')) ||
+    (name === 'UserInfoError' && message === 'Invalid Credentials')
+  );
 }
 
 /** The form fields Apple's form_post response may carry; anything else is dropped. */
@@ -129,7 +130,7 @@ const handler = baseApi({ auth: false })
         const email = (info as any)?.email || undefined;
 
         if (err) {
-          const logError = isReplayedOrExpiredCode(err) ? console.warn : console.error;
+          const logError = isExpectedOAuthError(err) ? console.warn : console.error;
           logError('Passport Authenticate Error:', info, err);
           try {
             await authFailLogRepository.create({

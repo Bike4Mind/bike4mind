@@ -2,6 +2,18 @@ import { z, ZodError } from 'zod';
 import type { ApiErrorCode } from './apiErrorCodes';
 import type { IFabFileDocument } from './types/entities/FabFileTypes';
 
+/** A recoverable tool refusal returned to the model so it can correct its request. */
+export class ExpectedToolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExpectedToolError';
+  }
+}
+
+export function isExpectedToolError(error: unknown): error is ExpectedToolError {
+  return error instanceof ExpectedToolError || (error instanceof Error && error.name === 'ExpectedToolError');
+}
+
 // ---------- HTTP errors (canonical location) ----------
 
 export enum HttpStatus {

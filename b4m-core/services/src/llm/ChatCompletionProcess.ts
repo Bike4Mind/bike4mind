@@ -99,6 +99,7 @@ import {
   isProviderSpendLimitError,
   shouldTriggerFallback,
   isSafetyRefusalError,
+  isExpectedCompletionError,
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
@@ -6049,20 +6050,17 @@ export class ChatCompletionProcess {
               break;
             }
             lastError = attemptError as Error;
-            // Aborts (user cancel, client disconnect, or request/idle timeout) are
-            // benign, and output-budget exhaustion is deterministic and settled as terminal
-            // below (an error log would trip the alert) - log the raw error at warn so its stack stays out of the
-            // CloudWatch ERROR to LiveOps/Slack alerts. This bare dump was
-            // the last error-severity log on the abort path; the backends and the
-            // formatted summary below were already downgraded. Real failures still dump
-            // at error with the full stack.
+            // Expected provider outcomes are warned by the backend or the attempt summary below.
+            // Other recoverable interruptions keep their stack at warn; unexpected failures page.
             if (
+              isExpectedCompletionError(lastError) ||
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
               lastError instanceof ResponsesStreamTruncatedError ||
               isOutputBudgetExhaustedError(lastError)
             ) {
-              logger.warn(lastError);
+              // Avoid duplicating the backend or summary warning for handled provider outcomes.
+              if (!isExpectedCompletionError(lastError)) logger.warn(lastError);
             } else if (isProviderSpendLimitError(lastError)) {
               // Operator action needed (raise the provider limit): one error line per backend per
               // request, worded so the alert says so, instead of the raw dump plus a rethrow.
@@ -6107,15 +6105,14 @@ export class ChatCompletionProcess {
                 });
             }
 
-            logger.warn(
-              `❌ [${Date.now() - processStartTime}ms] LLM completion failed with ${
-                currentModel.id
-              } (attempt ${fallbackAttempt}):`,
-              {
-                error: lastError.message,
-                shouldRetry: isRetryableError,
-              }
-            );
+            const logAttempt =
+              isSafetyRefusalError(lastError) || isLlmTimeoutError(lastError)
+                ? logger.debug.bind(logger)
+                : logger.warn.bind(logger);
+            logAttempt(`LLM completion failed with ${currentModel.id} (attempt ${fallbackAttempt}):`, {
+              error: lastError.message,
+              shouldRetry: isRetryableError,
+            });
 
             // Tool pairing recovery: if this is a tool_use/tool_result pairing error,
             // strip all tool blocks from history and retry with the same model
@@ -7840,7 +7837,9 @@ export class ChatCompletionProcess {
         // already emitted trend metrics). Logging at error severity re-trips the
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
-        logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
+        // Typed timeouts were already warned by the backend; preserve legacy timeout warnings.
+        const logTimeout = isLlmTimeoutError(err) ? logger.debug.bind(logger) : logger.warn.bind(logger);
+        logTimeout(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply(SLOW_MODEL_ERROR_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');

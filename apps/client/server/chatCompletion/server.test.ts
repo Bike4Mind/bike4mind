@@ -279,6 +279,23 @@ describe('ChatCompletion /process', () => {
     ]);
   });
 
+  it.each([
+    new Error('Anthropic safety classifier refusal'),
+    Object.assign(new Error('Policy refused'), { code: 'cyber_policy' }),
+  ])('settles expected provider refusals without duplicate alerting', async refusal => {
+    mockProcessQuest.mockRejectedValueOnce(refusal);
+    const response = await post(VALID_BODY, { authorization: AUTH });
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const logger = mockProcessQuest.mock.calls[0][1] as { error: ReturnType<typeof vi.fn> };
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+    expect(mockQuestSettleIfUnfinished).toHaveBeenCalledWith(
+      'q1',
+      expect.objectContaining({ status: 'stopped', type: 'error' })
+    );
+  });
+
   it('still settles the quest and emits the metric when it is a non-Error throw', async () => {
     mockProcessQuest.mockRejectedValueOnce('a raw string failure');
     await post(VALID_BODY, { authorization: AUTH });
