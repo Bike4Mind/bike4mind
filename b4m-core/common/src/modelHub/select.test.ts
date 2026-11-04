@@ -814,7 +814,7 @@ describe('ollamaBuildDraftMax', () => {
       build({ ollama: pulled(kind, { draft: sha(5), ...over }) } as Partial<HubBuild>);
     expect(ollamaBuildDraftMax(entry(), withLayer('library'))).toBe(OLLAMA_DRAFT_LAYER_DEFAULT);
     expect(ollamaBuildDraftMax(entry(), withLayer('hf-pull'))).toBe(OLLAMA_DRAFT_LAYER_DEFAULT);
-    expect(ollamaBuildDraftMax(entry(), withLayer('hf-pull', { draftNumPredict: 6 }))).toBe(6);
+    expect(ollamaBuildDraftMax(entry(), withLayer('hf-pull', { params: sha(4), draftNumPredict: 6 }))).toBe(6);
   });
 
   it('plans 0 for a Hugging Face pull whose sidecar draft file Ollama never installs', () => {
@@ -828,7 +828,7 @@ describe('ollamaBuildDraftMax', () => {
   });
 
   it('plans the pinned count for an embedded MTP head', () => {
-    const b = build({ ollama: pulled('library', { draftNumPredict: 3 }) } as Partial<HubBuild>);
+    const b = build({ ollama: pulled('library', { params: sha(4), draftNumPredict: 3 }) } as Partial<HubBuild>);
     expect(ollamaBuildDraftMax(entry(1), b)).toBe(3);
     expect(ollamaBuildDraftMax(entry(0), b)).toBe(0);
   });
