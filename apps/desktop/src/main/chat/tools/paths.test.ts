@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PathAccessDenied, resolveWithinRoots, resolveWithinRootsPhysically } from './paths';
+import { PathAccessDenied, resolveWithinRoots, resolveWithinRootsPhysically, withRealPath } from './paths';
 
 describe('resolveWithinRoots', () => {
   let base: string;
@@ -191,5 +191,20 @@ describe('resolveWithinRootsPhysically', () => {
 
   it('denies everything when no folder has been granted', async () => {
     await expect(resolveWithinRootsPhysically('in.txt', [], granted)).rejects.toBeInstanceOf(PathAccessDenied);
+  });
+});
+
+describe('withRealPath', () => {
+  it('adds the real path when the given one runs through a symlink, and only then', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'config', 'App'), { recursive: true });
+    await symlink(join(base, 'config'), join(base, 'cfg-link'));
+
+    expect(withRealPath(join(base, 'cfg-link', 'App'))).toEqual([
+      join(base, 'cfg-link', 'App'),
+      join(base, 'config', 'App'),
+    ]);
+    expect(withRealPath(join(base, 'config', 'App'))).toEqual([join(base, 'config', 'App')]);
+    expect(withRealPath(join(base, 'missing'))).toEqual([join(base, 'missing')]);
   });
 });

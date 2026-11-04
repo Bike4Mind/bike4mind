@@ -120,6 +120,9 @@ describe('scanShell', () => {
       ['cat .env*', ['.env*']],
       ['cat .en?', ['.en?']],
       ['cat config/*.env', ['config/*.env']],
+      ['git show HEAD:.env', ['HEAD:.env']],
+      ['git show origin/main:.env.production', ['origin/main:.env.production']],
+      ['scp host:.env /tmp/x', ['host:.env']],
     ])('flags %s', async (command, envFiles) => {
       expect((await scan(command)).envFiles).toEqual(envFiles);
     });

@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { readlink, realpath, stat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 import {
@@ -262,6 +263,19 @@ export async function hostPhysicalTarget(target: string): Promise<string> {
   const real = await inDistro(wsl, wsl.linuxPath);
   if (real === null) throw new Error(`Cannot resolve ${target} in its WSL distro`);
   return real;
+}
+
+/**
+ * `path`, plus its real path when a symlink makes the two differ, so a guard built from it holds
+ * against targets the checks have resolved. Sync, for the protected list chat/index.ts builds at startup.
+ */
+export function withRealPath(path: string): string[] {
+  try {
+    const real = realpathSync.native(path);
+    return real === path ? [path] : [path, real];
+  } catch {
+    return [path];
+  }
 }
 
 async function realpathOrSelf(target: string): Promise<string> {
