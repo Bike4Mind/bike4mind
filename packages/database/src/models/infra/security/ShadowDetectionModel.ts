@@ -368,6 +368,21 @@ class ShadowDetectionRepository {
     return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
   }
 
+  async findById(id: string): Promise<ShadowDetectionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await ShadowDetectionModel.findById(id).lean<LeanShadowDetection>();
+    return doc ? toItem(doc) : null;
+  }
+
+  /** Ungraded detections recorded at or after `since`, newest first. */
+  async listUnreviewedSince(since: Date, limit: number): Promise<ShadowDetectionItem[]> {
+    const docs = await ShadowDetectionModel.find({ verdict: null, detectedAt: { $gte: since } })
+      .sort({ detectedAt: -1, _id: -1 })
+      .limit(limit)
+      .lean<LeanShadowDetection[]>();
+    return docs.map(toItem);
+  }
+
   /**
    * Appends a verdict when the record is still at `expectedRevision`, in one atomic update, so two
    * reviewers grading the same record cannot overwrite each other: the loser gets the current record
