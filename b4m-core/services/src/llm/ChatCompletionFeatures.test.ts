@@ -859,6 +859,46 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
       expect(ctx.logger.error).not.toHaveBeenCalled();
     });
 
+    it('retries a later page with the same keyset cursor', async () => {
+      const ctx = makeCtx();
+      // One more chunk than a page consumes, so the scan needs a second page.
+      const chunks = Array.from({ length: 1001 }, (_, n) => ({
+        id: `c${String(n).padStart(4, '0')}`,
+        fabFileId: 'fileA',
+        text: `chunk ${n}`,
+        vector: [1, 0],
+      }));
+      const pagedRead = vi.fn((_ids: string[], opts: { limit: number; afterChunkId?: string }) =>
+        Promise.resolve(
+          chunks.filter(c => opts.afterChunkId === undefined || c.id > opts.afterChunkId).slice(0, opts.limit)
+        )
+      );
+      ctx.db.fabfilechunks.findVectorsByFabFileIds = vi
+        .fn()
+        .mockImplementationOnce(pagedRead)
+        .mockRejectedValueOnce(networkTimeout())
+        .mockImplementation(pagedRead);
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+      );
+      const quest = makeQuest();
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'stage III NSCLC treatment'
+      );
+
+      const cursors = (
+        ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls as unknown as Array<
+          [string[], { afterChunkId?: string }]
+        >
+      ).map(call => call[1].afterChunkId);
+      // Page 1, then the failed read of page 2 and its retry - both from the last id of page 1.
+      expect(cursors.slice(0, 3)).toEqual([undefined, 'c0999', 'c0999']);
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('ok');
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+    });
+
     it('abstains after a second timeout, logging at warn with the error name only', async () => {
       const ctx = makeCtx();
       ctx.db.fabfilechunks.findVectorsByFabFileIds = vi.fn().mockImplementation(() => Promise.reject(networkTimeout()));
