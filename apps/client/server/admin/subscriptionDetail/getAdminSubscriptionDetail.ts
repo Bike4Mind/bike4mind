@@ -1,4 +1,10 @@
-import { Organization, User, creditTransactionRepository, mongoose } from '@bike4mind/database';
+import {
+  Organization,
+  User,
+  billingMismatchRepository,
+  creditTransactionRepository,
+  mongoose,
+} from '@bike4mind/database';
 import { CreditHolderType } from '@bike4mind/common';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import type {
@@ -69,7 +75,7 @@ export async function getAdminSubscriptionDetail(id: string): Promise<AdminSubsc
   if (!doc) return null;
 
   const isUserOwned = doc.ownerType === 'User';
-  const [owner, others, defaultPerCycle, recentGrants] = await Promise.all([
+  const [owner, others, defaultPerCycle, recentGrants, mismatch] = await Promise.all([
     findOwner(doc),
     Subscription.find({ ownerType: doc.ownerType, ownerId: doc.ownerId, _id: { $ne: doc._id } })
       .sort({ createdAt: -1, _id: -1 })
@@ -78,6 +84,7 @@ export async function getAdminSubscriptionDetail(id: string): Promise<AdminSubsc
       .lean<SubscriptionDoc[]>(),
     defaultCreditsPerCycle(doc),
     recentGrantsOf(doc),
+    billingMismatchRepository.findOpenBySubscriptionRowId(id),
   ]);
 
   const catalog = subscriptionPlanCatalog();
@@ -100,6 +107,14 @@ export async function getAdminSubscriptionDetail(id: string): Promise<AdminSubsc
     ownerCredits: owner ? (owner.currentCredits ?? 0) : null,
     otherSubscriptions,
     seats: isUserOwned ? null : await seatsOf(doc, owner),
+    mismatch: mismatch
+      ? {
+          kind: mismatch.kind,
+          fields: mismatch.fields.map(({ field, mongo, stripe }) => ({ field, mongo, stripe })),
+          firstSeenAt: mismatch.firstSeenAt.toISOString(),
+          lastSeenAt: mismatch.lastSeenAt.toISOString(),
+        }
+      : null,
     actingUserId: isUserOwned ? (owner ? doc.ownerId : null) : (owner?.userId ?? null),
   };
 }

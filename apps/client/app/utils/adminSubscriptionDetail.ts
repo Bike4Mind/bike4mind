@@ -102,6 +102,14 @@ export type AdminSubscriptionDetail = {
   otherSubscriptions: AdminSubscriptionRow[];
   /** Organization-owned rows only. */
   seats: AdminSubscriptionSeats | null;
+  /** The open reconciliation finding for this row, or null when Mongo and Stripe agree as of the last run. */
+  mismatch: {
+    kind: 'drift' | 'orphan_stripe' | 'orphan_mongo';
+    /** Display strings, dates as ISO; the Mongo value is null when the row has none. */
+    fields: { field: string; mongo: string | null; stripe: string | null }[];
+    firstSeenAt: string;
+    lastSeenAt: string;
+  } | null;
   /**
    * The user id the per-user subscription routes (credits, remove) take: the owner, or an org's billing owner.
    * `null` when no such user exists, which disables those actions.
