@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { readlink, realpath, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 import {
   parseWslPath,
   wslLocation,
@@ -267,14 +267,20 @@ export async function hostPhysicalTarget(target: string): Promise<string> {
 
 /**
  * `path`, plus its real path when a symlink makes the two differ, so a guard built from it holds
- * against targets the checks have resolved. Sync, for the protected list chat/index.ts builds at startup.
+ * against targets the checks have resolved. A path that does not exist yet is spelled under its
+ * nearest existing parent's real path. Sync, for the lists built at startup and the sandbox profile.
  */
 export function withRealPath(path: string): string[] {
+  const real = realpathSyncNearest(path);
+  return real === path ? [path] : [path, real];
+}
+
+function realpathSyncNearest(path: string): string {
   try {
-    const real = realpathSync.native(path);
-    return real === path ? [path] : [path, real];
+    return realpathSync.native(path);
   } catch {
-    return [path];
+    const parent = dirname(path);
+    return parent === path ? path : join(realpathSyncNearest(parent), basename(path));
   }
 }
 

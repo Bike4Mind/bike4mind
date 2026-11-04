@@ -142,7 +142,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { withRealPath } from './tools/paths';
+import { permissionProtectedRoots, toolProtectedPaths } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
@@ -456,7 +456,7 @@ export function registerChat(
     claudeCode,
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
-    protectedRoots: [userData, join(home, '.claude'), dirname(MANAGED_SETTINGS_PATH)],
+    protectedRoots: permissionProtectedRoots(userData, home, dirname(MANAGED_SETTINGS_PATH)),
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -710,7 +710,7 @@ export function registerChat(
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
-    protectedPaths: withRealPath(userData),
+    protectedPaths: toolProtectedPaths(userData),
     get deferredTools() {
       return deferredTools.current();
     },

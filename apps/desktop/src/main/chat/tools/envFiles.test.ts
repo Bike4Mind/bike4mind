@@ -19,6 +19,11 @@ describe('isEnvFile', () => {
     'C:\\p\\.env\\.',
     '.env/.',
     '/p/./.env',
+    'C:.env::$DATA',
+    'C:.env:s',
+    'HEAD:.env.local:s',
+    '.env/x/..',
+    'C:\\p\\.env\\x\\..',
   ])('%s is a .env file', path => expect(isEnvFile(path)).toBe(true));
 
   it.each(['HEAD:.env', 'origin/main:.env.production', 'host:.env', 'C:.env', 'ns/pod:.env', '/p/notes.txt:.env'])(
@@ -30,10 +35,15 @@ describe('isEnvFile', () => {
     expect(isEnvFile(path)).toBe(true)
   );
 
-  it.each(['/p/.env.example::$DATA', '/p/.env.example.', '/p/.ENV.EXAMPLE', 'HEAD:.env.example', '.environment'])(
-    '%s is not',
-    path => expect(isEnvFile(path)).toBe(false)
-  );
+  it.each([
+    '/p/.env.example::$DATA',
+    '/p/.env.example.',
+    '/p/.ENV.EXAMPLE',
+    'HEAD:.env.example',
+    '.environment',
+    'C:notes.txt:s',
+    'src/.env/../app.ts',
+  ])('%s is not', path => expect(isEnvFile(path)).toBe(false));
 
   it.each(['/p/.env', '/p/.env.local', '/p/.env.production', '/p/app.env', '/p/sub/.env.test.local'])(
     '%s is a .env file',

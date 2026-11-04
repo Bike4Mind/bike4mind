@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { permissionProtectedRoots } from '../protectedLocations';
 import { scanShell } from '../tools/shellScan';
 import { permissionSubject } from './subject';
 import {
@@ -334,6 +335,26 @@ describe('PermissionRuleSet', () => {
       }
     }
   );
+
+  it('does not allow a shell write into an app folder whose configured spelling runs through a symlink', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await mkdir(join(base, 'proj'));
+      await mkdir(join(base, 'home'));
+      await writeFile(join(base, 'proj', 'payload'), '{}');
+      await symlink(join(base, 'config'), join(base, 'cfg-link'));
+      const script = `cp payload ${join(base, 'config', 'App', 'tool-access.json')}`;
+      const scan = await scanShell(script, join(base, 'proj'), [base]);
+      if (!scan) throw new Error('Expected the command to parse');
+      const subject: PermissionSubject = { tool: 'bash_execute', shell: { script, ...scan } };
+      const roots = permissionProtectedRoots(join(base, 'cfg-link', 'App'), join(base, 'home'), join(base, 'managed'));
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, roots), subject)).toBeNull();
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, [join(base, 'cfg-link', 'App')]), subject)).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
 
   it('never allows an irreversible call, but still denies or asks', () => {
     expect(decide(set({ allow: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBeNull();

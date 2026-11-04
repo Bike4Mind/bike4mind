@@ -206,5 +206,9 @@ describe('withRealPath', () => {
     ]);
     expect(withRealPath(join(base, 'config', 'App'))).toEqual([join(base, 'config', 'App')]);
     expect(withRealPath(join(base, 'missing'))).toEqual([join(base, 'missing')]);
+    expect(withRealPath(join(base, 'cfg-link', 'new', 'file'))).toEqual([
+      join(base, 'cfg-link', 'new', 'file'),
+      join(base, 'config', 'new', 'file'),
+    ]);
   });
 });
