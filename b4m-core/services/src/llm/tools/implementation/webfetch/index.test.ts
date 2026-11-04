@@ -332,9 +332,22 @@ describe('firecrawlFetch unsupported file type', () => {
     expect(context.logger.warn).toHaveBeenCalledTimes(1);
     expect(context.logger.warn).toHaveBeenCalledWith(
       'WebFetch unsupported file type',
-      expect.objectContaining({ url: 'https://example.com/favicon.ico' })
+      expect.objectContaining({
+        url: 'https://example.com/favicon.ico',
+        cause: expect.stringContaining('image/vnd.microsoft.icon'),
+      })
     );
     expect(context.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still gives a Firecrawl 500 that mentions a PDF the PDF-too-large hint', async () => {
+    scrapeUrl.mockRejectedValueOnce(
+      new FirecrawlError('Failed to scrape URL. Status code: 500. Error: PDF page count timed out', 500)
+    );
+
+    const { result } = await runTool('https://example.com/big.pdf');
+
+    expect(result).toContain('This PDF is too large to process via URL');
   });
 });
 
