@@ -272,6 +272,8 @@ import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-sign
 import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
 import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureQuestSessionKeysetIndex from './20260921237700_ensure-quest-session-keyset-index';
 import BackfillUserLaneFlags from './20260921238100_backfill-user-lane-flags';
 import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
 import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes';
@@ -489,6 +491,7 @@ const coreMigrations: MigrationFile[] = [
   SeedSignupGrantSchedule,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
+  EnsureQuestSessionKeysetIndex,
   BackfillUserLaneFlags,
   EnsureAnalyticsHopIndexes,
   EnsureSpendAlertIndexes,

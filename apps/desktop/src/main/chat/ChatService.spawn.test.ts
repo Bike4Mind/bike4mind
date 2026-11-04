@@ -297,6 +297,19 @@ describe('ChatService spawn caps', () => {
     const child = (await store.list()).find(session => session.origin);
     expect(child?.project).toEqual(parentSession?.project);
     expect(child?.origin).toMatchObject({ parentSessionId: parent.id, depth: 1, seedPrompt: 'task grants-0' });
+    // The model wrote this prompt, so it is marked as such rather than as the user's words.
+    // The seed turn is sent in the background after startSpawnSuggestion resolves, so wait for it.
+    const seedMessage = await vi.waitUntil(
+      async () => {
+        const childSession = child ? await store.get(child.id) : undefined;
+        return childSession?.messages.find(message => message.role === 'user');
+      },
+      { timeout: 5000, interval: 5 }
+    );
+    expect(seedMessage).toMatchObject({
+      content: expect.stringContaining('task grants-0'),
+      seed: true,
+    });
 
     // The schema is the enforcement point for "cannot widen": there is no argument through
     // which a directory, a branch or a worktree could be asked for in the first place.

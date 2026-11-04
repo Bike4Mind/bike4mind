@@ -539,6 +539,79 @@ describe('the context ring slot', () => {
   });
 });
 
+describe('session mentions', () => {
+  const ID_DOCS = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ID_API = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const session = (id: string, title: string, extra: Record<string, unknown> = {}) =>
+    ({ id, title, mode: 'chat', messageCount: 1, updatedAt: '2026-10-01T00:00:00.000Z', ...extra }) as never;
+  const mentionSessions = [
+    session(ID_DOCS, 'Docs pass', { project: { directory: '/w/docs-site', name: 'docs-site', branch: 'main' } }),
+    session(ID_API, 'API rework'),
+    session('s1', 'Current'),
+    session('gone', 'Archived one', { archived: true }),
+  ];
+  const options = () => Array.from(host?.querySelectorAll('[data-testid="composer-mention-option"]') ?? []);
+
+  it('opens on an at sign, without the open or archived sessions, naming the project folder', () => {
+    mount({ mentionSessions });
+    type('hello @');
+    expect(options().map(option => option.textContent)).toEqual(['Docs passdocs-site', 'API reworkNo project']);
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).not.toBeNull();
+  });
+
+  it('filters by the text after the at sign and stays closed when nothing matches', () => {
+    mount({ mentionSessions });
+    type('@api');
+    expect(options()).toHaveLength(1);
+    type('@zzz');
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).toBeNull();
+  });
+
+  it('is off for a host that passes no sessions', () => {
+    mount();
+    type('@');
+    expect(options()).toHaveLength(0);
+  });
+
+  it('walks with the arrows, inserts the title on Enter, and sends the markup', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('ask @');
+    press('ArrowDown');
+    press('Enter');
+    expect(input().value).toBe('ask @API rework ');
+
+    type('ask @API rework about it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith(`ask @[API rework](session:${ID_API}) about it`);
+  });
+
+  it('drops a chosen mention whose label was deleted before sending', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('@');
+    press('Enter');
+    expect(input().value).toBe('@Docs pass ');
+
+    type('plain text');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('plain text');
+  });
+
+  it('closes on Escape and highlights a chosen title', () => {
+    mount({ mentionSessions });
+    type('@do');
+    press('Escape');
+    expect(options()).toHaveLength(0);
+
+    type('@');
+    press('Enter');
+    expect(Array.from(host?.querySelectorAll('[data-skill-token]') ?? []).map(mark => mark.textContent)).toEqual([
+      '@Docs pass',
+    ]);
+  });
+});
+
 describe('the "+" menu', () => {
   const plus = () => host?.querySelector<HTMLButtonElement>('[data-testid="composer-plus-btn"]') ?? null;
   const item = (testid: string) => document.body.querySelector<HTMLElement>(`[data-testid="${testid}"]`);
