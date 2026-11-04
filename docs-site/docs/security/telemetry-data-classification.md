@@ -145,7 +145,9 @@ checkout user's signup source is not the organization's acquisition source.
 Zero-amount invoices, refunds, disputes, and synthetic users send nothing. Each
 event carries the amount collected in the currency's major unit (dollars, or whole
 yen), the currency, whether it was a subscription or credits, and the invoice
-billing reason. It is
+billing reason. A subscription payment also carries `periodEnd`: the end of the
+period it paid for, in ISO 8601 UTC, taken from the invoice's subscription lines.
+It is left out when the invoice's lines show no subscription period. Each event is
 keyed on the Stripe invoice or payment intent, so a redelivered webhook does not
 count twice. Overwatch has no purchase stage in its funnel yet, so these events
 are stored as raw events only.
@@ -202,6 +204,32 @@ signup-funnel events (`signup_completed`, `email_verified`, `credits_granted`,
 they can be told apart from real accounts. Real users' events carry no lane. The
 billing and account events above, the cross-product `signup`, and the client-side GA4
 and ad-pixel conversions still send nothing for a synthetic account.
+
+Internal accounts (the team's own) are marked the same way, with
+`internal: true` in `metadata`, on every event above that names a user: the
+signup-funnel events, `first_value`, `active`, the billing and account events and
+the cross-product `signup`. An account is internal when `User.isInternal` is set or
+it is an admin. `isInternal` is set at signup for an email on a
+`NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS` domain (and for an admin an admin creates),
+by an admin from the user's internal toggle (`POST
+/api/admin/users/[userId]/internal`, audited), and for accounts that predate it
+by a one-off migration. A synthetic account carries only the synthetic lane, never
+both marks. Real users' events carry neither, and no event ever carries
+`internal: false`, so an absent mark means "not marked", not "verified customer".
+The flag is used for analytics only; nothing reads it to grant or deny access.
+
+For a marked account (synthetic or internal) the daily `active` event is sent once
+per visit rather than once per day, under that visit's id. The visit beacon
+(`POST /api/analytics/visit`) is unauthenticated and carries no user and no lane:
+the browser sends it without the session's bearer token, so the only inputs are a
+body and cookies the visitor controls, and a mark read from them would let anyone
+take a real visit out of the count. A visit is set apart downstream only when a
+marked event of its user arrives under the same visit id, which the per-visit
+`active` provides for every visit a marked account makes while signed in. A visit
+made signed out stays unmarked. The verified-hop events below (`hop_minted` and
+`hop`) name no user either, so they carry no internal mark: a source declares only
+the synthetic lane, for a test persona's run, and with consent a `hop` names the
+visit it was redeemed in, so it joins that visit as described above.
 
 Because the touches were recorded with consent at signup, a purchase is credited
 from them even if the visitor later withdraws cookie consent: the webhook has no

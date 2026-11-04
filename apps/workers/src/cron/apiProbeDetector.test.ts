@@ -83,7 +83,7 @@ describe('apiProbeDetector handler', () => {
     expect(result).toMatchObject({ status: 'ok', actors: 1, alerted: 1, suppressed: 0 });
     expect(mocks.runQuery).toHaveBeenCalledWith(
       expect.objectContaining({
-        logGroup: '/aws/lambda/server',
+        logGroups: ['/aws/lambda/server'],
         window: { start: new Date('2026-10-30T11:45:00Z'), end: new Date('2026-10-30T12:00:00Z') },
       })
     );

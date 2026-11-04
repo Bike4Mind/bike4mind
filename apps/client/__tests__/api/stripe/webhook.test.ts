@@ -149,6 +149,7 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
 // (server/billing/earlyFraudWarning.test.ts, linkedAccounts.test.ts); here only the wiring.
 const mockRespondToEarlyFraudWarning = vi.fn();
 const mockPropagateAccountRisk = vi.fn();
+vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
 vi.mock('@server/billing/earlyFraudWarning', () => ({
   respondToEarlyFraudWarning: (...args: unknown[]) => mockRespondToEarlyFraudWarning(...args),
 }));

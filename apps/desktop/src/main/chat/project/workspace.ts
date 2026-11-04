@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
 import type {
@@ -18,9 +18,12 @@ import {
   currentBranch,
   fetchRemoteFor,
   git,
+  gitPath,
   listWorktrees,
   resolveBaseRef,
 } from './git';
+import { gitArgumentPath } from '../../git/hostGitArgs';
+import { hostRealpath } from '../tools/paths';
 
 /**
  * A branch's folder name under the app's worktree root.
@@ -111,7 +114,7 @@ async function registeredAt(entries: readonly WorktreeEntry[], path: string): Pr
 
 async function canonical(path: string): Promise<string | null> {
   try {
-    return await realpath(path);
+    return await hostRealpath(path);
   } catch {
     return null;
   }
@@ -275,7 +278,12 @@ export class SpareWorktrees {
     return this.serial(container, async () => {
       if (!(await isOwnedSpare(spare.path)) || !(await cleanDetachedWorktree(spare.path))) return false;
       try {
-        await git(projectDirectory, ['worktree', 'move', spare.path, path]);
+        await git(projectDirectory, [
+          'worktree',
+          'move',
+          gitArgumentPath(projectDirectory, spare.path),
+          gitArgumentPath(projectDirectory, path),
+        ]);
       } catch {
         await removeWorktree(projectDirectory, spare.path);
         return false;
@@ -336,8 +344,15 @@ export class SpareWorktrees {
     }
     try {
       const head = (await git(projectDirectory, ['rev-parse', '--verify', `${from}^{commit}`])).trim();
-      await git(projectDirectory, ['worktree', 'add', '--quiet', '--detach', path, head]);
-      const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+      await git(projectDirectory, [
+        'worktree',
+        'add',
+        '--quiet',
+        '--detach',
+        gitArgumentPath(projectDirectory, path),
+        head,
+      ]);
+      const gitDirectory = gitPath(path, (await git(path, ['rev-parse', '--absolute-git-dir'])).trim());
       await writeFile(join(gitDirectory, 'b4m-spare'), `bike4mind-spare:${head}\n`, 'utf8');
     } catch {
       return;
@@ -376,7 +391,7 @@ export class SpareWorktrees {
 
 async function isOwnedSpare(path: string): Promise<boolean> {
   try {
-    const gitDirectory = (await git(path, ['rev-parse', '--absolute-git-dir'])).trim();
+    const gitDirectory = gitPath(path, (await git(path, ['rev-parse', '--absolute-git-dir'])).trim());
     const head = (await git(path, ['rev-parse', 'HEAD'])).trim();
     return (await readFile(join(gitDirectory, 'b4m-spare'), 'utf8')) === `bike4mind-spare:${head}\n`;
   } catch {
@@ -399,7 +414,7 @@ async function cleanDetachedWorktree(path: string): Promise<boolean> {
 async function removeWorktree(projectDirectory: string, path: string): Promise<void> {
   try {
     if (!(await isOwnedSpare(path)) || !(await cleanDetachedWorktree(path))) return;
-    await git(projectDirectory, ['worktree', 'remove', path]);
+    await git(projectDirectory, ['worktree', 'remove', gitArgumentPath(projectDirectory, path)]);
   } catch {
     // Already gone, or held open; see above.
   }
@@ -522,7 +537,7 @@ async function inspectCheckout(input: {
 async function canonicalWorktreeRoot(directory: string): Promise<{ container: string; root: string } | null> {
   const container = await containerDirectory(directory);
   const root = await canonical(appWorktreeRoot(container));
-  if (!root || root !== appWorktreeRoot(await realpath(container))) return null;
+  if (!root || root !== appWorktreeRoot(await hostRealpath(container))) return null;
   return { container, root };
 }
 
@@ -691,7 +706,7 @@ export async function removeSessionWorktree(
 
 /** Removes the checkout, then its branch with `-d` only, judged against the ref that proved it preserved. */
 async function removeWorktreeAt(directory: string, path: string, branch: string, preservedRef: string): Promise<void> {
-  await git(directory, ['worktree', 'remove', path]);
+  await git(directory, ['worktree', 'remove', gitArgumentPath(directory, path)]);
   try {
     const upstream = (await git(directory, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim();
     // Without an upstream, use the proven base rather than this checkout's possibly stale HEAD.
@@ -849,7 +864,7 @@ export async function resolveWorkspace(
 
   if (await branchExists(projectDirectory, branch)) {
     timer?.lap('checks');
-    await git(projectDirectory, ['worktree', 'add', path, branch]);
+    await git(projectDirectory, ['worktree', 'add', gitArgumentPath(projectDirectory, path), branch]);
     timer?.lap('worktreeAdd');
     return { workingDirectory: path, branch, outcome: 'created' };
   }
@@ -861,7 +876,17 @@ export async function resolveWorkspace(
   const fromSpare = (await spares?.take(projectDirectory, container, branch, path, from)) ?? false;
   // --no-track for the reason the shell helper gives: a feature branch should not track the
   // base it forked from, or a later `git push` would aim at the wrong ref.
-  if (!fromSpare) await git(projectDirectory, ['worktree', 'add', '--no-track', '-b', branch, path, from]);
+  if (!fromSpare) {
+    await git(projectDirectory, [
+      'worktree',
+      'add',
+      '--no-track',
+      '-b',
+      branch,
+      gitArgumentPath(projectDirectory, path),
+      from,
+    ]);
+  }
   timer?.lap(fromSpare ? 'spareSwitch' : 'worktreeAdd');
   spares?.refill(projectDirectory, container, from);
   return { workingDirectory: path, branch, outcome: 'created' };

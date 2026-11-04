@@ -776,6 +776,15 @@ export interface IUser extends ICreditHolder {
    */
   isSynthetic?: boolean;
 
+  /**
+   * An account of the team's own: set at signup for an email on a NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+   * domain (or an admin-created admin), by an admin through the user's internal toggle, and for
+   * existing accounts by a one-off backfill. Analytics only: the user's events are stamped
+   * `internal: true` (server-utils analytics/lane.ts) so they can be kept out of customer counts.
+   * Never an authorization source.
+   */
+  isInternal?: boolean;
+
   /** When the user first got a completed chat answer; set once, drives the first_value event. */
   firstValueAt?: Date | null;
 }

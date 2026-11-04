@@ -106,7 +106,19 @@ describe('analyticsMiddleware - synthetic lane', () => {
   it('does not mark a user without the flag', () => {
     const mw = analyticsMiddleware();
     mw(makeReq(), res, next);
-    expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ isSynthetic: false }));
+    expect(emitActiveEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ isSynthetic: false, isInternal: false, isAdmin: false })
+    );
+  });
+
+  it("passes an internal account's and an admin's flags to the emitter, which marks them", () => {
+    const mw = analyticsMiddleware();
+    const user = (id: string, flags: object) =>
+      ({ id, isSystem: false, level: 'DemoUser', subscribedUntil: null, ...flags }) as never;
+    mw(makeReq({ user: user('staff-1', { isInternal: true }) }), res, next);
+    mw(makeReq({ user: user('admin-1', { isAdmin: true }) }), res, next);
+    expect(emitActiveEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({ isInternal: true, isAdmin: false }));
+    expect(emitActiveEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({ isInternal: false, isAdmin: true }));
   });
 });
 
@@ -167,6 +179,63 @@ describe('analyticsMiddleware — UTM cookie', () => {
     mw(makeReq({ headers: { cookie: 'b4m_utm=not-valid-json' } }), res, next);
     expect(emitActiveEvent).toHaveBeenCalledOnce();
     expect(emitActiveEvent).toHaveBeenCalledWith(expect.objectContaining({ utm: undefined }));
+  });
+});
+
+describe('analyticsMiddleware - a marked user is reported once per visit', () => {
+  const marked = (flags: object) =>
+    makeReq({ user: { id: 'staff-1', isSystem: false, level: 'DemoUser', subscribedUntil: null, ...flags } as never });
+  const inVisit = (req: Request, visitId: string) =>
+    ({ ...req, headers: { cookie: `${VISIT_COOKIE}=${visitId}` } }) as Request;
+
+  it.each([
+    ['an internal account', { isInternal: true }],
+    ['an admin', { isAdmin: true }],
+    ['a synthetic user', { isSynthetic: true }],
+  ])('emits again for %s in a new visit, so each of their visits carries a marked event', (_name, flags) => {
+    const [first, second] = [mintVisitId(), mintVisitId()];
+    const mw = analyticsMiddleware();
+    mw(inVisit(marked(flags), first), res, next);
+    mw(inVisit(marked(flags), first), res, next);
+    mw(inVisit(marked(flags), second), res, next);
+    mw(marked(flags), res, next);
+
+    const sessions = (emitActiveEvent as unknown as { mock: { calls: Array<[{ sessionId: string }]> } }).mock.calls.map(
+      ([event]) => event.sessionId
+    );
+    expect(sessions).toEqual([first, second, OVERWATCH_UNKNOWN_SESSION_ID]);
+    expect(next).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not send a visit again when the user goes back to it the same day, but does the next day', () => {
+    const [web, other] = [mintVisitId(), mintVisitId()];
+    const mw = analyticsMiddleware();
+    const staff = () => marked({ isInternal: true });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-03T12:00:00Z'));
+      for (const visit of [web, other, web, other]) mw(inVisit(staff(), visit), res, next);
+      mw(staff(), res, next);
+      mw(inVisit(staff(), web), res, next);
+      mw(staff(), res, next);
+      vi.setSystemTime(new Date('2026-11-04T00:00:01Z'));
+      mw(inVisit(staff(), web), res, next);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const sessions = (emitActiveEvent as unknown as { mock: { calls: Array<[{ sessionId: string }]> } }).mock.calls.map(
+      ([event]) => event.sessionId
+    );
+    expect(sessions).toEqual([web, other, OVERWATCH_UNKNOWN_SESSION_ID, web]);
+  });
+
+  it("keeps a customer's emit to once a day, whatever the visit", () => {
+    const mw = analyticsMiddleware();
+    mw(inVisit(makeReq(), mintVisitId()), res, next);
+    mw(inVisit(makeReq(), mintVisitId()), res, next);
+    mw(makeReq(), res, next);
+    expect(emitActiveEvent).toHaveBeenCalledOnce();
   });
 });
 

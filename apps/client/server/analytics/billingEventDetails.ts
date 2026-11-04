@@ -1,3 +1,4 @@
+import type Stripe from 'stripe';
 import { paymentAttemptRepository, userRepository } from '@bike4mind/database';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
@@ -51,6 +52,23 @@ export function planChangeDirection(fromPriceId: string, toPriceId: string): Pla
   if (to > from) return 'upgrade';
   if (to < from) return 'downgrade';
   return 'same_tier';
+}
+
+/**
+ * The end of the period a paid subscription invoice bought: the latest `period.end` over its
+ * subscription lines, preferring full-period lines over prorations, since a credit proration runs to
+ * the end of the period it replaces. Not `invoice.period_end`, which for a subscription invoice is
+ * the START of the billed period. Reads only the first 10 lines a retrieved invoice carries, and
+ * Stripe lists pending items first, so a subscription line behind ten or more of them is not read.
+ */
+export function subscriptionPeriodEnd(invoice: Pick<Stripe.Invoice, 'lines'>): Date | undefined {
+  const lines = (invoice.lines?.data ?? []).filter(
+    line => line.parent?.type === 'subscription_item_details' && typeof line.period?.end === 'number'
+  );
+  const fullPeriods = lines.filter(line => !line.parent?.subscription_item_details?.proration);
+  const ends = (fullPeriods.length ? fullPeriods : lines).map(line => line.period.end);
+  // A line's period is in unix seconds.
+  return ends.length ? new Date(Math.max(...ends) * 1000) : undefined;
 }
 
 /** Whole days from `from` to `to`, or undefined when either is missing or unparseable. */

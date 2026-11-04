@@ -6,8 +6,8 @@ const REPO_ROOT = join(__dirname, '../../../..');
 const ROOTS = ['apps', 'b4m-core', 'packages', 'selfhost'];
 const SKIPPED_DIRS = new Set(['node_modules', 'dist', '.next', '.sst', '.turbo', 'build', 'coverage']);
 
-// The repository's own module, the alerting wrapper, and read-only admin routes (they list and
-// update incidents, never record one).
+// The repository's own module, the alerting wrapper, read-only admin routes (they list and
+// update incidents, never record one), and the review sweep (it re-alerts, never records).
 const ALLOWED = new Set([
   'packages/database/src/models/content/ImageModerationIncidentModel.ts',
   'apps/client/server/moderation/imageModerationIncidents.ts',
@@ -15,6 +15,7 @@ const ALLOWED = new Set([
   'apps/client/pages/api/admin/moderation-incidents/[id]/verdict.ts',
   'apps/client/pages/api/admin/moderation-incidents/[id]/view.ts',
   'apps/client/pages/api/admin/users/[userId]/compliance.ts',
+  'apps/workers/src/cron/imageModerationReviewSweep.ts',
 ]);
 
 // Signing an incident image hands out a link to a blocked upload; only the view route may do it,

@@ -14,7 +14,7 @@ const STOP_TIMEOUT_MS = 2_000;
 export type LogsClient = Pick<CloudWatchLogsClient, 'send'>;
 
 export interface LogsInsightsQuery {
-  logGroup: string;
+  logGroups: string[];
   window: { start: Date; end: Date };
   queryString: string;
   limit: number;
@@ -57,7 +57,7 @@ export async function runLogsInsightsQuery(
   try {
     const started = await client.send(
       new StartQueryCommand({
-        logGroupName: query.logGroup,
+        logGroupNames: query.logGroups,
         startTime: Math.floor(query.window.start.getTime() / 1000),
         endTime: Math.ceil(query.window.end.getTime() / 1000),
         queryString: query.queryString,
