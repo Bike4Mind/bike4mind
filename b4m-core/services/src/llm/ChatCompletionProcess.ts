@@ -2032,11 +2032,6 @@ export class ChatCompletionProcess {
   public systemPromptText: SystemPromptTextDisclosure | undefined;
 
   /**
-   * Refunds the credit reservation this run still holds, if any. The amount is claimed
-   * synchronously before the await, so a caller giving up on a stuck run and the run's own
-   * error rollback cannot both refund it. A run that later reconciles bills the full actual.
-   */
-  /**
    * computeHolderSettlement, except that a credit-capped turn may not leave the balance below
    * -allowance (TurnCreditLimiter.settlementFloorCredits); what would go further is written off.
    */
@@ -2051,6 +2046,11 @@ export class ChatCompletionProcess {
     return cappedSettlementDelta(reservedCredits, totalCreditsUsed, balanceAfterHold, limiter.settlementFloorCredits());
   }
 
+  /**
+   * Refunds the credit reservation this run still holds, if any. The amount is claimed
+   * synchronously before the await, so a caller giving up on a stuck run and the run's own
+   * error rollback cannot both refund it. A run that later reconciles bills the full actual.
+   */
   public async releaseReservedCredits(questId: string, logger: Logger): Promise<void> {
     const amount = this.reservedCredits;
     const ownerId = this.reservedCreditsOwnerId;
