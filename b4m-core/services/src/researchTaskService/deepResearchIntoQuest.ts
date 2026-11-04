@@ -1,9 +1,11 @@
+import { isTerminalCreditRefusal } from '@bike4mind/common';
 import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
 import type { ToolContext } from '../llm/tools/base/types';
 
 export const DEEP_RESEARCH_HEARTBEAT_MS = 30_000;
 export const DEEP_RESEARCH_PROGRESS_MIN_GAP_MS = 2_000;
 export const DEEP_RESEARCH_INTO_QUEST_MAX_DEPTH = 4;
+export const DEEP_RESEARCH_DEADLINE_MS = 11 * 60_000;
 export const DEEP_RESEARCH_FAILED_REPLY = 'Deep research could not finish. Try again in a minute.';
 
 export interface DeepResearchIntoQuestAdapters {
@@ -15,8 +17,6 @@ export interface DeepResearchIntoQuestAdapters {
       patch: { status: 'done'; type?: 'error'; reply: string; replies: string[] }
     ): Promise<boolean>;
   };
-  /** The chat path's WS status push; a running quest the client did not start still needs it. */
-  push(quest: { id: string; sessionId: string } & Record<string, unknown>): Promise<void>;
   toolContext: Omit<ToolContext, 'statusUpdate' | 'llm'>;
   llm: Pick<ToolContext['llm'], 'complete'> & { currentModel: string };
   logger: { info(...a: unknown[]): void; warn(...a: unknown[]): void; error(...a: unknown[]): void };
@@ -35,49 +35,53 @@ export async function deepResearchIntoQuest(
   adapters: DeepResearchIntoQuestAdapters
 ): Promise<void> {
   const { questId, topic } = params;
-  const { quests, push, logger } = adapters;
+  const { quests, logger } = adapters;
   const quest = await quests.findById(questId);
   if (!quest || quest.status !== 'running') {
     logger.info('deepResearchIntoQuest: quest not running, skipping', { questId, status: quest?.status });
     return;
   }
-  const { sessionId } = quest;
 
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), DEEP_RESEARCH_DEADLINE_MS);
+  // Set when the quest was settled elsewhere (stuck-quest sweep or a stop): stop spending, write nothing.
+  let settledElsewhere = false;
   const heartbeat = setInterval(() => {
-    void quests.updateIfUnfinished({ id: questId, updatedAt: new Date() }).catch(err => {
-      logger.warn('deepResearchIntoQuest: heartbeat failed', err);
-    });
+    quests.updateIfUnfinished({ id: questId, updatedAt: new Date() }).then(
+      updated => {
+        if (updated !== null) return;
+        settledElsewhere = true;
+        controller.abort();
+      },
+      err => logger.warn('deepResearchIntoQuest: heartbeat failed', err)
+    );
   }, DEEP_RESEARCH_HEARTBEAT_MS);
 
   let lastProgressAt = 0;
   let lastState = null as ResearchState | null;
   const writeProgress = async (next: ResearchState, force = false) => {
-    // Findings stay off the quest: fanout and the WS push carry the whole document.
+    // Findings stay off the quest: fanout carries the whole document.
     lastState = { ...next, findings: [] };
     const now = Date.now();
     if (!force && now - lastProgressAt < DEEP_RESEARCH_PROGRESS_MIN_GAP_MS) return;
     lastProgressAt = now;
-    const patch = { id: questId, deepResearchState: lastState, updatedAt: new Date() };
-    await quests.updateIfUnfinished(patch);
-    await push({ ...patch, sessionId, status: 'running' });
+    await quests.updateIfUnfinished({ id: questId, deepResearchState: lastState, updatedAt: new Date() });
   };
 
   const settle = async (patch: { status: 'done'; type?: 'error'; reply: string; replies: string[] }) => {
-    const settled = await quests.settleIfUnfinished(questId, patch);
-    if (!settled) return;
-    await push({ id: questId, sessionId, ...patch, deepResearchState: lastState ?? undefined }).catch(err =>
-      logger.warn('deepResearchIntoQuest: final push failed', err)
-    );
+    if (settledElsewhere) return;
+    await quests.settleIfUnfinished(questId, patch);
   };
 
-  const settleFailed = () =>
-    settle({ status: 'done', type: 'error', reply: DEEP_RESEARCH_FAILED_REPLY, replies: [DEEP_RESEARCH_FAILED_REPLY] });
+  const settleFailed = (reply = DEEP_RESEARCH_FAILED_REPLY) =>
+    settle({ status: 'done', type: 'error', reply, replies: [reply] });
 
   try {
     const research = adapters.research ?? performDeepResearch;
     const context = {
       ...adapters.toolContext,
       llm: adapters.llm,
+      getAbortSignal: () => controller.signal,
       statusUpdate: async (update: { deepResearchState?: ResearchState }) => {
         if (!update.deepResearchState) return;
         await writeProgress(update.deepResearchState).catch(err =>
@@ -91,7 +95,7 @@ export async function deepResearchIntoQuest(
       // No apiKeys: they would swap the metered backend for a raw provider client.
       { maxDepth: DEEP_RESEARCH_INTO_QUEST_MAX_DEPTH, model: adapters.llm.currentModel }
     );
-    if (!result.success) {
+    if (!result.success || controller.signal.aborted) {
       logger.warn('deepResearchIntoQuest: research failed', { questId, error: result.error });
       await settleFailed();
       return;
@@ -101,11 +105,16 @@ export async function deepResearchIntoQuest(
     await adapters.llm.complete(
       adapters.llm.currentModel,
       [{ role: 'user', content: result.data.finalAnalysisPrompt }],
-      { stream: false, temperature: 0.3 },
+      { stream: false, temperature: 0.3, abortSignal: controller.signal },
       async chunks => {
         report += chunks.filter(Boolean).join('');
       }
     );
+    if (!report.trim()) {
+      logger.warn('deepResearchIntoQuest: empty report', { questId });
+      await settleFailed();
+      return;
+    }
     if (lastState) {
       await writeProgress({ ...lastState, completed: true }, true).catch(err =>
         logger.warn('deepResearchIntoQuest: final progress write failed', err)
@@ -114,8 +123,9 @@ export async function deepResearchIntoQuest(
     await settle({ status: 'done', reply: report, replies: [report] });
   } catch (err) {
     logger.error('deepResearchIntoQuest: failed', { questId, err });
-    await settleFailed();
+    await settleFailed(isTerminalCreditRefusal(err) && err instanceof Error ? err.message : undefined);
   } finally {
     clearInterval(heartbeat);
+    clearTimeout(deadline);
   }
 }

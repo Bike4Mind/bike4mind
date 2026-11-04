@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { insufficientCreditsError } from '@bike4mind/common';
 import {
+  DEEP_RESEARCH_DEADLINE_MS,
   DEEP_RESEARCH_FAILED_REPLY,
   DEEP_RESEARCH_HEARTBEAT_MS,
   deepResearchIntoQuest,
@@ -28,7 +30,6 @@ function setup(over: Partial<DeepResearchIntoQuestAdapters> = {}) {
     updateIfUnfinished: vi.fn().mockResolvedValue({}),
     settleIfUnfinished: vi.fn().mockResolvedValue(true),
   };
-  const push = vi.fn().mockResolvedValue(undefined);
   const complete = vi.fn(async (_m, _msgs, _opts, cb) => {
     await cb(['# Report\n', 'body']);
   });
@@ -43,14 +44,13 @@ function setup(over: Partial<DeepResearchIntoQuestAdapters> = {}) {
   });
   const adapters: DeepResearchIntoQuestAdapters = {
     quests,
-    push,
     toolContext: {} as never,
     llm: { complete, currentModel: 'ops-model' } as never,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     research: research as never,
     ...over,
   };
-  return { adapters, quests, push, complete, research };
+  return { adapters, quests, complete, research };
 }
 
 const writes = (quests: { updateIfUnfinished: ReturnType<typeof vi.fn> }) =>
@@ -63,15 +63,12 @@ describe('deepResearchIntoQuest', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('writes progress without findings and pushes it', async () => {
-    const { adapters, quests, push } = setup();
+  it('writes progress without findings', async () => {
+    const { adapters, quests } = setup();
     await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
     const progress = writes(quests).filter(w => w.deepResearchState);
     expect(progress.length).toBeGreaterThan(0);
     for (const w of progress) expect(w.deepResearchState.findings).toEqual([]);
-    for (const [q] of push.mock.calls) {
-      if (q.deepResearchState) expect(q.deepResearchState.findings).toEqual([]);
-    }
   });
 
   it('heartbeats at least every 30s while research runs', async () => {
@@ -149,10 +146,11 @@ describe('deepResearchIntoQuest', () => {
     expect(beatsOf(quests).length).toBe(after);
   });
 
-  it('keeps the report when the final progress push fails', async () => {
-    const { adapters, quests, push } = setup();
-    push.mockImplementation(async (q: Record<string, unknown>) => {
-      if ((q.deepResearchState as { completed?: boolean } | undefined)?.completed) throw new Error('ws down');
+  it('keeps the report when the final progress write fails', async () => {
+    const { adapters, quests } = setup();
+    quests.updateIfUnfinished.mockImplementation(async (w: { deepResearchState?: { completed?: boolean } }) => {
+      if (w.deepResearchState?.completed) throw new Error('db blip');
+      return {};
     });
     await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
     expect(quests.settleIfUnfinished).toHaveBeenCalledTimes(1);
@@ -160,6 +158,79 @@ describe('deepResearchIntoQuest', () => {
       status: 'done',
       reply: '# Report\nbody',
       replies: ['# Report\nbody'],
+    });
+  });
+
+  it('passes one abort signal to research and the report, and aborts it at the deadline', async () => {
+    const { adapters, quests, complete } = setup({
+      research: vi.fn(async ctx => {
+        expect(ctx.getAbortSignal().aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(DEEP_RESEARCH_DEADLINE_MS + 1);
+        expect(ctx.getAbortSignal().aborted).toBe(true);
+        throw new Error('aborted');
+      }) as never,
+    });
+    await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
+    expect(complete).not.toHaveBeenCalled();
+    expect(quests.settleIfUnfinished).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      type: 'error',
+      reply: DEEP_RESEARCH_FAILED_REPLY,
+      replies: [DEEP_RESEARCH_FAILED_REPLY],
+    });
+  });
+
+  it('gives the report call the same abort signal', async () => {
+    const { adapters, complete } = setup();
+    let researchSignal: AbortSignal | undefined;
+    adapters.research = vi.fn(async ctx => {
+      researchSignal = ctx.getAbortSignal();
+      return { success: true, data: { findings: [], finalAnalysisPrompt: 'p', completedSteps: 1, totalSteps: 1 } };
+    }) as never;
+    await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
+    expect(complete.mock.calls[0][2].abortSignal).toBe(researchSignal);
+  });
+
+  it('aborts and writes no settle once the heartbeat finds the quest settled elsewhere', async () => {
+    const { adapters, quests, complete } = setup();
+    quests.updateIfUnfinished.mockResolvedValue(null);
+    let signal: AbortSignal | undefined;
+    adapters.research = vi.fn(async ctx => {
+      signal = ctx.getAbortSignal();
+      await vi.advanceTimersByTimeAsync(DEEP_RESEARCH_HEARTBEAT_MS + 1);
+      expect(signal!.aborted).toBe(true);
+      throw new Error('aborted');
+    }) as never;
+    await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
+    expect(signal!.aborted).toBe(true);
+    expect(complete).not.toHaveBeenCalled();
+    expect(quests.settleIfUnfinished).not.toHaveBeenCalled();
+  });
+
+  it('settles as an error when the report is empty', async () => {
+    const { adapters, quests, complete } = setup();
+    complete.mockImplementation(async (_m, _msgs, _opts, cb) => {
+      await cb(['  ', '\n']);
+    });
+    await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
+    expect(quests.settleIfUnfinished).toHaveBeenCalledTimes(1);
+    expect(quests.settleIfUnfinished).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      type: 'error',
+      reply: DEEP_RESEARCH_FAILED_REPLY,
+      replies: [DEEP_RESEARCH_FAILED_REPLY],
+    });
+  });
+
+  it('settles with the refusal message when the report call is refused for credits', async () => {
+    const { adapters, quests, complete } = setup();
+    complete.mockRejectedValue(insufficientCreditsError('Not enough credits'));
+    await deepResearchIntoQuest({ questId: 'q1', topic: 't' }, adapters);
+    expect(quests.settleIfUnfinished).toHaveBeenCalledWith('q1', {
+      status: 'done',
+      type: 'error',
+      reply: 'Not enough credits',
+      replies: ['Not enough credits'],
     });
   });
 });

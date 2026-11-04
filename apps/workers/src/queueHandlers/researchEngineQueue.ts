@@ -12,7 +12,6 @@ import {
   apiKeyRepository,
   userRepository,
   questRepository,
-  Connection,
 } from '@bike4mind/database';
 import { IAdminSettingsRepository } from '@bike4mind/common';
 import { User } from '@bike4mind/database';
@@ -31,9 +30,6 @@ import { researchTaskJobs } from '@server/utils/researchTasks';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertOwnerCanAfford, createCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { isTerminalCreditRefusal, type IUserDocument } from '@bike4mind/common';
-import { ClientMessageSender } from '@bike4mind/utils';
-import { StatusManager } from '@bike4mind/services/llm/StatusManager';
-import { Resource } from 'sst';
 
 /**
  * The operations text model with every completion reserved and settled against the task owner's
@@ -93,7 +89,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await downloadRelevantLinks(body.payload, logger);
       break;
     case 'deepResearchIntoQuest':
-      await deepResearchIntoQuestJob(body.payload, logger);
+      await deepResearchIntoQuestJob(
+        body.payload,
+        Number(event.Records[0].attributes?.ApproximateReceiveCount ?? 1),
+        logger
+      );
       break;
   }
 });
@@ -320,42 +320,29 @@ const downloadRelevantLinks = async (parameters: { id: string; userId: string },
 
 const deepResearchIntoQuestJob = async (
   job: { questId: string; sessionId: string; userId: string; topic: string },
+  receiveCount: number,
   logger: Logger
 ) => {
   logger.updateMetadata({ handler: 'researchEngineQueue', action: 'deepResearchIntoQuest', questId: job.questId });
+  const settleFailed = (reply: string) =>
+    questRepository.settleIfUnfinished(job.questId, { status: 'done', type: 'error', reply, replies: [reply] });
+
+  // A redelivery means the first run died mid-way (timeout or crash); rerunning would bill the research twice.
+  if (receiveCount > 1) {
+    logger.warn('deepResearchIntoQuest: redelivered, settling as failed', { receiveCount });
+    await settleFailed(researchTaskService.DEEP_RESEARCH_FAILED_REPLY);
+    return;
+  }
+
   const user = await User.findById(job.userId);
   if (!user) throw new Error('User not found');
-
-  const sender = new ClientMessageSender(
-    {
-      connections: {
-        findByUserId: (userId: string) => Connection.find({ userId }),
-        deleteByConnectionId: async (connectionId: string) => {
-          await Connection.deleteOne({ connectionId });
-        },
-      },
-    },
-    logger
-  );
-  const status = new StatusManager(sender, logger, Resource.websocket.managementEndpoint, job.userId);
-  // The status payload defaults absent fields (prompt, type), so partial pushes carry the stored turn text.
-  const stored = await questRepository.findById(job.questId);
-  const push = async (quest: { id: string; sessionId: string } & Record<string, unknown>) => {
-    if (!stored) return;
-    const { prompt, type, timestamp, promptMeta } = stored;
-    await status.sendStatusUpdate({ prompt, type, timestamp, promptMeta, ...quest } as never, null);
-  };
 
   let llm;
   try {
     llm = await meteredOperationsLlm(user as IUserDocument, logger);
   } catch (err) {
     if (!isTerminalCreditRefusal(err)) throw err;
-    const reply = err instanceof Error ? err.message : 'Not enough credits';
-    const patch = { status: 'done' as const, type: 'error' as const, reply, replies: [reply] };
-    if (await questRepository.settleIfUnfinished(job.questId, patch)) {
-      await push({ id: job.questId, sessionId: job.sessionId, ...patch });
-    }
+    await settleFailed(err instanceof Error ? err.message : 'Not enough credits');
     return;
   }
 
@@ -373,7 +360,6 @@ const deepResearchIntoQuestJob = async (
     { questId: job.questId, topic: job.topic },
     {
       quests: questRepository as never,
-      push,
       toolContext: {
         userId: job.userId,
         user: user as IUserDocument,
