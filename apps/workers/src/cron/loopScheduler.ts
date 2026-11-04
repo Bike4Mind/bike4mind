@@ -36,15 +36,7 @@ import {
   UNSURE_PREFIX,
 } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
-import {
-  canPayAgain,
-  iterationPrice,
-  MIN_ITERATION_CREDITS,
-  pacedAllowance,
-  pacedReadyAt,
-  runCreditCap,
-  userLoopsDailyCap,
-} from '@server/utils/loopBudget';
+import { canPayAgain, loopAdmission } from '@server/utils/loopBudget';
 import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from '@server/utils/loopMemory';
 import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
 
@@ -410,42 +402,26 @@ async function pauseClaimed(loop: ILoop, patch: Record<string, unknown>): Promis
 }
 
 /**
- * Admission before a run, in order: the payer can cover one iteration (else a credit pause, with no
- * execution created), the loop's daily budget and the owner's all-loops budget each have one iteration left
- * (else a budget pause until 00:00 UTC), and their paced allowances cover one (else the loop is deferred,
- * staying live, to when they do). Returns the run's credit cap (undefined: none), or null when it did not admit.
+ * Admission before a run (`loopAdmission`), acting on a refusal: an out-of-credits payer pauses the loop
+ * for credits (no execution created), a spent loop budget or all-loops budget pauses until 00:00 UTC, and
+ * a short paced allowance defers the loop, staying live, to when it covers one iteration. Returns the
+ * run's credit cap (undefined: none), or null when it did not admit.
  */
 async function admit(loop: ILoop, model: string, now: Date, logger: Logger): Promise<{ creditCap?: number } | null> {
-  let pricing: Promise<number> | undefined;
-  const price = () => (pricing ??= iterationPrice(loop, model));
-  const budgetPrice = async () => Math.max(await price(), MIN_ITERATION_CREDITS);
-  const today = startOfUtcDay(now);
-  const tomorrow = new Date(today.getTime() + DAY_MS);
-
-  if (!(await canPayAgain(loop, price))) {
-    await pauseClaimed(loop, { statusReason: 'Out of credits', autoResume: 'credits' });
-    logger.info(`[Loops] Loop ${loop.id} not started: its payer is out of credits`);
-    return null;
-  }
-
-  const budgets: Array<{ budget: number; spent: number }> = [];
-  if (loop.budgetCreditsPerDay) {
-    const spent = (await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], today))[loop.id] ?? 0;
-    const remaining = loop.budgetCreditsPerDay - spent;
-    if (remaining < (await budgetPrice())) {
+  const admission = await loopAdmission(loop, model, now);
+  if (admission.ok) return { creditCap: admission.creditCap };
+  const tomorrow = new Date(startOfUtcDay(now).getTime() + DAY_MS);
+  switch (admission.kind) {
+    case 'credits':
+      await pauseClaimed(loop, { statusReason: 'Out of credits', autoResume: 'credits' });
+      logger.info(`[Loops] Loop ${loop.id} not started: its payer is out of credits`);
+      break;
+    case 'loop_budget':
       if (await pauseClaimed(loop, { autoResume: 'budget', statusReason: BUDGET_PAUSE_REASON, nextRunAt: tomorrow })) {
         logger.info(`[Loops] Loop ${loop.id} reached its daily budget`);
       }
-      return null;
-    }
-    budgets.push({ budget: loop.budgetCreditsPerDay, spent });
-  }
-
-  const userCap = (await userLoopsDailyCap(loop.userId)).effective;
-  if (userCap) {
-    const spent = await agentExecutionRepository.sumLoopCreditsForUser(loop.userId, today, true);
-    const remaining = userCap - spent;
-    if (remaining < (await budgetPrice())) {
+      break;
+    case 'user_budget': {
       const paused = await loopRepository.pauseAllLiveForUser(loop.userId, {
         statusReason: USER_BUDGET_PAUSE_REASON,
         autoResume: 'budget',
@@ -453,32 +429,14 @@ async function admit(loop: ILoop, model: string, now: Date, logger: Logger): Pro
       });
       await loopRepository.releaseLease(loop.id);
       logger.info(`[Loops] User ${loop.userId} reached the all-loops daily budget; paused ${paused} loops`);
-      return null;
+      break;
     }
-    budgets.push({ budget: userCap, spent });
+    case 'paced':
+      await loopRepository.deferUntil(loop.id, admission.readyAt);
+      logger.info(`[Loops] Loop ${loop.id} deferred by pacing until ${admission.readyAt.toISOString()}`);
+      break;
   }
-
-  const iteration = budgets.length > 0 ? await budgetPrice() : 0;
-  const paced = budgets.map(({ budget, spent }) => ({
-    remaining: pacedAllowance(budget, now) - spent,
-    readyAt: pacedReadyAt(budget, spent, iteration, now) ?? tomorrow,
-  }));
-  const short = paced.filter(({ remaining }) => remaining < iteration);
-  if (short.length > 0) {
-    const readyAt = new Date(
-      Math.max(now.getTime() + loop.intervalMinutes * MINUTE_MS, ...short.map(({ readyAt }) => readyAt.getTime()))
-    );
-    await loopRepository.deferUntil(loop.id, readyAt);
-    logger.info(`[Loops] Loop ${loop.id} deferred by pacing until ${readyAt.toISOString()}`);
-    return null;
-  }
-
-  return {
-    creditCap: runCreditCap([
-      ...budgets.map(({ budget, spent }) => budget - spent),
-      ...paced.map(({ remaining }) => remaining),
-    ]),
-  };
+  return null;
 }
 
 /**
