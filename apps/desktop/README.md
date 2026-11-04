@@ -332,7 +332,7 @@ Local testing can build with `B4M_CURATED_DEV_KEYS=1` in the shell and use the r
 The override is ignored in packaged apps and builds without test keys. Test-key
 builds use a separate cache directory and are rejected by `curated:check-build`;
 never enable the dev flag for a release.
-The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release and feature-branch snapshot publish: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
+The same `B4M_CURATED_MANIFEST_URL` and `CURATED_PUBLIC_URL` variables also configure every npm CLI release: they bake the URL into the CLI, and the release gate checks `packages/cli/dist` the same way.
 A dev build that cached a list under the old signature format drops it on next start, and a republish at a lower sequence is refused until the `curated-test-keys/` directory is deleted.
 
 The validation job generates `latest-mac.yml`, `latest-linux.yml` and `latest.yml` (Windows) from the actual

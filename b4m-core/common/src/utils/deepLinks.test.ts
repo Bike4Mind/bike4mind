@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADMIN_FEEDBACK_TAB_SLUG,
+  ADMIN_MODERATION_INCIDENTS_TAB_SLUG,
   ADMIN_AUDIT_LOG_TAB_SLUG,
   ADMIN_TAB_PARAM,
   ADMIN_USERS_TAB_SLUG,
@@ -28,7 +29,7 @@ describe('deepLinks', () => {
   it('addresses a moderation incident by tab slug and id', () => {
     const url = new URL(adminModerationIncidentPath('inc-1'), 'https://app.example');
     expect(url.pathname).toBe('/admin');
-    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_USERS_TAB_SLUG);
+    expect(url.searchParams.get(ADMIN_TAB_PARAM)).toBe(ADMIN_MODERATION_INCIDENTS_TAB_SLUG);
     expect(url.searchParams.get(MODERATION_INCIDENT_ID_PARAM)).toBe('inc-1');
   });
 

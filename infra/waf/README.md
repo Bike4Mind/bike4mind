@@ -28,6 +28,26 @@ Firehose destinations fail deployment: the dashboard and production signup
 edge-signal alarm require CloudWatch Logs. The dashboard IAM policy and the
 signup filter follow the selected destination, including custom group names.
 
+The signup WAF fields (`signupMeta.wafAnonIp`, `signupMeta.wafBotSignal`) are
+filled only when the attached ACL inserts the label headers that the sample
+policy's label-forward rules insert, under the same header names. Every
+deployer-driven tier (preview, staging, production) attaches an external ACL,
+so these fields stay null there until its operator turns forwarding on. The
+stage-owned ACL, which always forwards, is only the local and ad hoc
+`sst deploy` case. The same headers feed checkout payment-risk signals too:
+`readNetworkMeta` runs on the payment and subscription routes, where
+`wafAnonIp` sets `PaymentAttempt.hostingNetwork` and its payment-risk alert,
+and both fields reach the risk-evidence `wafSignals` and the signup classifier.
+
+Set `WAF_LABEL_FORWARDING=true` in a tier's deploy environment only after its
+external ACL carries, in one change made in the ACL's own repository, the
+label-forward rules, an equivalent of the sample policy's forged-header block
+rule, and the `AWSManagedRulesAnonymousIpList` and Bot Control managed groups
+at a lower priority than the forward rules. Those groups emit the labels the
+forward rules match; without them every request reads as a false "clean". The app trusts these headers at face value once the flag is set, so the
+ACL must be the only thing able to set them. Until then leave the flag unset,
+so an unchecked signup records null rather than a false "clean".
+
 Before production adopts the external ACL:
 
 1. Deploy the retention change in PR #5805 to the existing production stack.
@@ -91,7 +111,7 @@ An ASN-keyed rule shares one counter across every client on a network, so size i
 
 `AWSManagedRulesAmazonIpReputationList` counts instead of blocking on the stage-owned ACL (dev, staging, previews), so these stages no longer enforce it. This keeps the reputation signal visible without blocking shared-egress clients while the rule is evaluated.
 
-`forward-anon-ip-label` (31) and `forward-bot-signal-label` (32) are Count rules that match the AnonymousIPList label and the Bot Control `bot:` label namespace and insert a request header. AWS WAF prefixes inserted headers with `x-amzn-waf-`, so the app reads `x-amzn-waf-x-waf-anon-ip` and `x-amzn-waf-x-waf-bot-signal` (`apps/client/server/auth/networkMeta.ts`). `infra/web.ts` sets `WAF_LABEL_FORWARDING` only when the stage owns the ACL; an externally managed ACL must add these two rules itself before that flag applies to it. `block-forged-waf-forwarding-headers` (28) blocks any viewer request that already carries either inserted header set to `1`: WAF inserts them only after inspection, so rule 28 never sees a genuine one.
+`forward-anon-ip-label` (31) and `forward-bot-signal-label` (32) are Count rules that match the AnonymousIPList label and the Bot Control `bot:` label namespace and insert a request header. AWS WAF prefixes inserted headers with `x-amzn-waf-`, so the app reads `x-amzn-waf-x-waf-anon-ip` and `x-amzn-waf-x-waf-bot-signal` (`apps/client/server/auth/networkMeta.ts`). `infra/web.ts` sets `WAF_LABEL_FORWARDING` on the server function when the stage owns the ACL, or when an externally managed ACL's deployer sets `WAF_LABEL_FORWARDING=true` after adding these two rules and rule 28 to it (`resolveWafLabelForwarding` in `infra/wafAssociation.ts`). `block-forged-waf-forwarding-headers` (28) blocks any viewer request that already carries either inserted header set to `1`: WAF inserts them only after inspection, so rule 28 never sees a genuine one.
 
 ## Bot Control telemetry
 

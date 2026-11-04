@@ -82,10 +82,6 @@ export const CacheKeys = {
     return `userInvites:${userId}:${limit}:${page}`;
   },
 
-  securityBehavioralSummary: (userId: string) => {
-    return `security-behavioral-summary-v2:${userId}`;
-  },
-
   modelList: (userId: string) => `model-list:${userId}`,
 
   refineText: (text: string, context?: string) => {

@@ -31,6 +31,8 @@ import { SkillMarketPanel } from './SkillMarketPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, spawnedSessions, writePanelFlag } from './backgroundTasks';
 import { BrowserPane } from './BrowserPane';
+import { SimulatorPane } from './SimulatorPane';
+import { useSimulatorView } from './useSimulatorView';
 import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
@@ -38,7 +40,7 @@ import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { useModelServers } from '../models/useModelHub';
-import { GlobeIcon, PanelRightIcon, SearchIcon, TerminalIcon } from './icons';
+import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { chatShellRootSx, columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
@@ -307,6 +309,8 @@ export function ChatShell({
   const [tasksOpen, setTasksOpen] = useState(() => readPanelFlag('open'));
   const [tasksWide, setTasksWide] = useState(() => readPanelFlag('wide'));
   const [browserOpen, setBrowserOpen] = useState(() => readBrowserPaneOpen());
+  const simulatorView = useSimulatorView();
+  const [simulatorOpen, setSimulatorOpen] = useState(false);
   // Per conversation rather than one flag: see terminalPanelState.ts.
   const [terminalSessions, setTerminalSessions] = useState(readTerminalOpenSessions);
   // Which conversation last asked for the keyboard to go to its terminal; see TerminalPanel.
@@ -356,6 +360,18 @@ export function ChatShell({
   const toggleTasksWide = useCallback(() => {
     setTasksWide(current => {
       writePanelFlag('wide', !current);
+      return !current;
+    });
+  }, []);
+  // The agent attaching a device (simulator_view) is the user asking to watch, so it opens the pane.
+  const simulatorAttached = simulatorView.status !== 'idle';
+  useEffect(() => {
+    if (simulatorAttached) setSimulatorOpen(true);
+  }, [simulatorAttached]);
+  // Closing stops the stream: nothing should keep capturing a screen nobody is looking at.
+  const toggleSimulator = useCallback(() => {
+    setSimulatorOpen(current => {
+      if (current) void window.b4m.simulator.detach();
       return !current;
     });
   }, []);
@@ -841,7 +857,7 @@ export function ChatShell({
       const option = catalog.models.find(
         model =>
           isLocalBackend(model) &&
-          !model.unavailable &&
+          (!model.unavailable || model.pending) &&
           (model.server?.id ?? LOCAL_SERVER_ID) === serverId &&
           model.name.toLowerCase() === wanted
       );
@@ -1270,6 +1286,26 @@ export function ChatShell({
                   </IconButton>
                 </Box>
               </Tooltip>
+              {simulatorView.available && (
+                <Tooltip
+                  size="sm"
+                  variant="soft"
+                  placement="bottom-end"
+                  title={simulatorOpen ? 'Hide the iOS Simulator' : 'Show the iOS Simulator'}
+                >
+                  <IconButton
+                    size="sm"
+                    variant={simulatorOpen ? 'soft' : 'plain'}
+                    color="neutral"
+                    aria-pressed={simulatorOpen}
+                    aria-label={simulatorOpen ? 'Hide the iOS Simulator' : 'Show the iOS Simulator'}
+                    onClick={toggleSimulator}
+                    data-testid="chat-toggle-simulator-btn"
+                  >
+                    <PhoneIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Box>
           </Box>
 
@@ -1589,6 +1625,11 @@ export function ChatShell({
           onStop={background.stop}
           onClearFinished={background.clearFinished}
         />
+      )}
+
+      {/* macOS only: `available` is false elsewhere, so the pane and its button never draw. */}
+      {simulatorOpen && simulatorView.available && screen === 'conversation' && (
+        <SimulatorPane state={simulatorView} onClose={toggleSimulator} />
       )}
 
       {/* Last in the row, so the web page is at the window's own right edge.

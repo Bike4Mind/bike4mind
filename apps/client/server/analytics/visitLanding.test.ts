@@ -21,6 +21,14 @@ describe('cleanLandingPath', () => {
     expect(cleanLandingPath('/')).toBe('/');
   });
 
+  it('never records a verified-hop token, in the query or pasted into the path', () => {
+    const token = `${'3f9a0c'.repeat(5)}d2.1793707200.Qx7Lm2Np9Rk4Tz8Vb1Hc6Jd3Wf5Yg0Sa2Ue7Io4Pq9Xr`;
+    expect(cleanLandingPath(`/new?utm_source=news&b4m_hop=${token}`)).toBe('/new');
+    expect(cleanLandingPath(`/new?b4m_hop=${token}#plans`)).toBe('/new');
+    expect(cleanLandingPath(`/new/${token}`)).toBe('/new/:token');
+    expect(readVisitLanding({ landingPath: `/pricing?b4m_hop=${token}` })).toEqual({ landingPath: '/pricing' });
+  });
+
   it('sends a secret-shaped segment as :token and keeps the rest of the path', () => {
     expect(cleanLandingPath('/share/0f8fad5b-d9cb-469f-a165-70867728950e')).toBe('/share/:token');
     expect(cleanLandingPath('/notebooks/65f1c0ffee0ddba11ad5eed1')).toBe('/notebooks/:token');

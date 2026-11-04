@@ -31,6 +31,7 @@ import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
+import { SIMULATOR_TOOLS } from './simulatorTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
 import { WEB_TOOLS } from './webTools';
@@ -147,6 +148,7 @@ const BY_NAME = new Map(
     questComplete,
     ...BROWSER_TOOLS,
     screenCapture,
+    ...SIMULATOR_TOOLS,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
@@ -215,6 +217,11 @@ export function toolsForRequest(options: {
    * the user's screen, which is gated per capture rather than by a grant.
    */
   screen?: boolean;
+  /**
+   * The iOS Simulator, on macOS only. Needs no folder or project to drive a device; building one
+   * resolves its project inside the granted roots and refuses without one.
+   */
+  simulator?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
@@ -263,6 +270,7 @@ export function toolsForRequest(options: {
     ...(options.host && options.delegates ? [questComplete] : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
+    ...(options.simulator ? SIMULATOR_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),

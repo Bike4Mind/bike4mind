@@ -21,6 +21,7 @@ import {
   adapterPriceLadders,
   adapterPriceTiers,
   resolveCatalogRecords,
+  resolveSuccessorChain,
   type ResolvedCatalogRecord,
 } from '@bike4mind/llm-adapters';
 import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
@@ -29,6 +30,7 @@ import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catal
 import {
   detectListingShrink,
   detectParserRowShifts,
+  knownSuccessorFrom,
   planLifecycle,
   planLifecycleSignals,
   type LifecyclePlan,
@@ -895,6 +897,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     ratesInForce: perTokenRatesInForce(priceRowsInForce),
     priorDiscoveryGroups,
     priorContributors,
+    knownSuccessor: knownSuccessorFrom(resolveSuccessorChain),
     autoRemap: ctx.autoRemap,
     operatorOwnedModelIds,
     staticModelIds,

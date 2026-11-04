@@ -262,10 +262,15 @@ import EnsurePaymentRiskLinkIndexes from './20260921236700_ensure-payment-risk-l
 import EnsureUserHeldUnlockIndex from './20260921236800_ensure-user-held-unlock-index';
 import EnsurePendingCreditHoldUserIndex from './20260921236900_ensure-pending-credit-hold-user-index';
 import EnsureFirstPartyNativeOAuthClient from './20260921236950_ensure-first-party-native-oauth-client';
+import EnsurePushTokenIndexes from './20260921236960_ensure-pushtoken-indexes';
 import EnsureReferralSubscriptionRewardIndexes from './20260921237000_ensure-referral-subscription-reward-indexes';
 import EnsureRevenueSnapshotIndex from './20260921237100_ensure-revenue-snapshot-index';
 import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-indexes';
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
+import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
+import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
+import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
+import EnsureAnalyticsHopIndexes from './20260921238200_ensure-analytics-hop-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -462,10 +467,15 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserHeldUnlockIndex,
   EnsurePendingCreditHoldUserIndex,
   EnsureFirstPartyNativeOAuthClient,
+  EnsurePushTokenIndexes,
   EnsureReferralSubscriptionRewardIndexes,
   EnsureRevenueSnapshotIndex,
   EnsureSpendRollupIndexes,
   QueueHeldSignupGrantsForRiskReview,
+  SeedSignupGrantSchedule,
+  SeedSignupGrantPools,
+  EnsureHeldCreditRewardIndexes,
+  EnsureAnalyticsHopIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

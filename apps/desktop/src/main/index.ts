@@ -136,10 +136,12 @@ void app.whenReady().then(async () => {
     background,
     mcp,
     browser,
+    simulatorView,
     pullRequests,
     claudeImport,
     spareWorktrees,
     modelServers,
+    stopModelServers,
     localContext,
     capabilityLedger,
   } = registerChat(auth, {
@@ -230,6 +232,7 @@ void app.whenReady().then(async () => {
     fleet.dispose();
     models.dispose();
     chat.dispose();
+    stopModelServers();
     claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
@@ -239,6 +242,7 @@ void app.whenReady().then(async () => {
     mcp.shutdownSync();
     terminals.shutdownSync();
     browser.closeAll();
+    simulatorView.dispose();
   });
 
   // Ctrl-C in a dev terminal, or a `kill` of the app. Our children are detached into their own

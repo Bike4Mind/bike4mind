@@ -20,6 +20,7 @@ const build = (roots: string[], host: boolean, orchestrate: boolean): string =>
       '',
       false,
       false,
+      false,
       orchestrate
     ).content
   );

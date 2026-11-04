@@ -28,8 +28,8 @@ const LEGACY_SEED = `
 76467e0ca19b 7754cd457960 777dd2c3b707 77d0050dc89d 792b8f3b724e 793331087f34 795061ea8886 7962d46a3446
 79b8cbfc6191 79ea94f9b88b 7a0b85223940 7a50ea2ea194 7ce094888133 7f05fda4b2fa
 7f7d74a5303c 80c347fac5c3 83165b5eba40 87151090a57a 887df910134d 888d16d5150f 8a6e6e9471e0 8ad42d260760
-8c0e1bee2b84 8c2e191d863d 8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
-91e15aa96b03 91e44cbba12e 924aaf9417c9 9254086e6ed4 94bbfbdc2d93 964d26f17aa0 96d197f8efc4
+8c0e1bee2b84 8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
+91e44cbba12e 924aaf9417c9 9254086e6ed4 94bbfbdc2d93 964d26f17aa0 96d197f8efc4
 9753176e5bb6 979461b1272f 983d9ce4696f 98fb4183f353 99069dcdd917 994a7f7c9794
 99fa0c084e36 9a026e700cfa 9a1ff7e1d12e 9a4341780250 9cfe2eb5678c 9e33e2f983fb 9e52b5b6346b 9edad7f1553a
 9f37736e6fd4 9f3c722a7f67 9f3d3f1ad7fd 9fe9a48f4854 a16323739af9 a18d2ff783bc a280c00afed4 a2a7c12f14d5
@@ -310,11 +310,9 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/research/data/files',
     '/api/roll',
     '/api/security/api-usage',
-    '/api/security/behavioral-summary',
     '/api/security/blocked-ips',
     '/api/security/blocked-ips/evaluate',
     '/api/security/user-recent',
-    '/api/security/user-summary',
     '/api/sessions',
     '/api/sessions/[id]/agents',
     '/api/sessions/[id]/agents/[agentId]/config',

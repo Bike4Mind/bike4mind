@@ -21,7 +21,6 @@ import ModalsAdminTab from './AdminModalTab';
 import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
 import AdminReleaseNotesTab from './ReleaseNotes/AdminReleaseNotesTab';
-import AnalyticsTab from './Analytics';
 import UsersTab from './Users';
 import dynamic from 'next/dynamic';
 import AdminSubscriptions from './Subscriptions';
@@ -66,6 +65,7 @@ const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: 
 const WaitlistTab = dynamic(() => import('./WaitlistTab'), { ssr: false });
 const SignupDomainHoldsTab = dynamic(() => import('./SignupDomainHoldsTab'), { ssr: false });
 const SignupRiskReviewTab = dynamic(() => import('./SignupRiskReviewTab'), { ssr: false });
+const ModerationIncidentsTab = dynamic(() => import('./ModerationIncidentsTab'), { ssr: false });
 const ShadowDetectionsTab = dynamic(() => import('./ShadowDetectionsTab'), { ssr: false });
 const HeldSignupGrantsTab = dynamic(() => import('./HeldSignupGrantsTab'), { ssr: false });
 const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
@@ -75,6 +75,7 @@ const AdminGrowthPricingTab = dynamic(() => import('./AdminGrowthPricingTab'), {
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const ModelLifecycleTab = dynamic(() => import('./ModelLifecycleTab'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
+const AnalyticsTab = dynamic(() => import('./Analytics'), { ssr: false });
 const SecurityDashboard = dynamic(() => import('./SecurityDashboard'), { ssr: false });
 const Team = lazy(() => import('./Team'));
 const SlackWorkspacesTab = dynamic(() => import('./SlackWorkspacesTab'), { ssr: false });
@@ -202,6 +203,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
           </TabPanel>
           <TabPanel value={AdminTab.SignupRiskReview} sx={{ padding: 0 }}>
             {activeTab === AdminTab.SignupRiskReview && <SignupRiskReviewTab />}
+          </TabPanel>
+          <TabPanel value={AdminTab.ModerationIncidents} sx={{ padding: 0 }}>
+            {activeTab === AdminTab.ModerationIncidents && <ModerationIncidentsTab />}
           </TabPanel>
           <TabPanel value={AdminTab.ShadowDetections} sx={{ padding: 0 }}>
             {activeTab === AdminTab.ShadowDetections && <ShadowDetectionsTab />}

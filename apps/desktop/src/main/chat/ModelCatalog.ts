@@ -1,6 +1,7 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { supportsOneHourPromptCache, type VideoModel } from '@bike4mind/common';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
+import type { ModelListOptions } from '../modelServers/ModelServerRegistry';
 import { parseVideoModels } from './media/videoModels';
 import { supportsReasoningEffort } from './reasoningEffort';
 import { currentLocalContext, OllamaLocal } from './OllamaLocal';
@@ -46,6 +47,7 @@ interface WireModel {
   supportsVision?: unknown;
   can_think?: unknown;
   pricing?: unknown;
+  disabled?: unknown;
 }
 
 export interface ModelCatalogLogger {
@@ -72,6 +74,12 @@ export class ModelCatalog {
   private cache: { environmentUrl: string; models: ChatModelOption[]; expiresAt: number } | null = null;
 
   private localCache: { models: ChatModelOption[]; expiresAt: number } | null = null;
+  /**
+   * Reads started, and the newest start number whose read may no longer be cached: a read never replaces one that
+   * started later, and one in flight at forgetLocal() is not cached.
+   */
+  private localReads = 0;
+  private localWritten = 0;
 
   /** Separate from `cache` because the two views are read on different paths; see listImageModels. */
   private imageCache: { environmentUrl: string; models: string[]; expiresAt: number } | null = null;
@@ -80,7 +88,7 @@ export class ModelCatalog {
 
   constructor(
     private readonly deps: ModelCatalogDeps,
-    private readonly local: Pick<OllamaLocal, 'models'> = new OllamaLocal()
+    private readonly local: { models(options?: ModelListOptions): Promise<ChatModelOption[]> } = new OllamaLocal()
   ) {}
 
   /** Cached models for the current environment, without a round trip. Null when nothing is cached. */
@@ -121,7 +129,7 @@ export class ModelCatalog {
           )
         : null,
     ]);
-    if (hostedHit) return { models: this.mergeLocal(hostedHit) };
+    if (hostedHit) return { models: this.mergeLocal(hostedHit, local) };
     if (!api || !hosted) return local.length ? { models: local } : { models: [], error: 'Sign in to see models.' };
 
     if (!hosted.ok) {
@@ -145,15 +153,21 @@ export class ModelCatalog {
       expiresAt: Date.now() + CACHE_TTL_MS,
     };
     this.deps.logger.debug(`CHAT: ${models.length} model(s) available`);
-    return { models: this.mergeLocal(models) };
+    return { models: this.mergeLocal(models, local) };
   }
 
   /** Device discovery never depends on the configured server or account. */
-  async listLocal(force = false): Promise<ChatModelOption[]> {
-    if (force || !this.localCache || Date.now() >= this.localCache.expiresAt) {
-      this.localCache = { models: await this.local.models(), expiresAt: Date.now() + 5_000 };
+  async listLocal(force = false, options?: ModelListOptions): Promise<ChatModelOption[]> {
+    if (!force && this.localCache && Date.now() < this.localCache.expiresAt) {
+      return withCurrentContexts(this.localCache.models);
     }
-    return withCurrentContexts(this.localCache.models);
+    const started = ++this.localReads;
+    const models = await this.local.models(options);
+    if (started > this.localWritten) {
+      this.localWritten = started;
+      this.localCache = { models, expiresAt: Date.now() + 5_000 };
+    }
+    return withCurrentContexts(models);
   }
 
   /** The last local list however old, without a round trip; null before the first list or after forgetLocal. */
@@ -164,14 +178,23 @@ export class ModelCatalog {
   /** After the local context setting changes or a model turns out removed, so the next list reads Ollama again. */
   forgetLocal(): void {
     this.localCache = null;
+    this.localWritten = this.localReads;
   }
 
-  private mergeLocal(hosted: ChatModelOption[]): ChatModelOption[] {
-    const local = this.localCache && Date.now() < this.localCache.expiresAt ? this.localCache.models : [];
-    return [
-      ...hosted.filter(model => !local.some(candidate => candidate.id === model.id)),
-      ...withCurrentContexts(local),
-    ];
+  /**
+   * After a server's health changed: the next list reads again while lastLocal keeps the rows, and a read in flight
+   * still caches its result, since a picker read can itself be what changed that health.
+   */
+  expireLocal(): void {
+    if (this.localCache) this.localCache = { ...this.localCache, expiresAt: 0 };
+  }
+
+  private mergeLocal(hosted: ChatModelOption[], local = this.freshLocal()): ChatModelOption[] {
+    return [...hosted.filter(model => !local.some(candidate => candidate.id === model.id)), ...local];
+  }
+
+  private freshLocal(): ChatModelOption[] {
+    return this.localCache && Date.now() < this.localCache.expiresAt ? withCurrentContexts(this.localCache.models) : [];
   }
 
   /**
@@ -286,6 +309,7 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
         : {}),
       supportsTools: true,
       ...(model.backend === 'ollama' && model.can_think === true ? { thinkingToggle: true } : {}),
+      ...(model.disabled === true ? { disabled: true } : {}),
       ...pricingOf(model.pricing),
     }));
 }

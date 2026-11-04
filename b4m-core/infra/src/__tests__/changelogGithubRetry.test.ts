@@ -7,9 +7,8 @@ import { fileURLToPath } from 'node:url';
  * Regression guard for the resilient Changesets changelog generator
  * (`.changeset/changelog-github-retry.cjs`).
  *
- * That file gates EVERY release and snapshot publish: both the `release` and
- * `snapshot-publish` workflows resolve their changelog generator from
- * `.changeset/config.json`, which points at the wrapper. If the wrapper's retry
+ * That file gates EVERY release: the `release` workflow resolves its changelog
+ * generator from `.changeset/config.json`, which points at the wrapper. If the wrapper's retry
  * or graceful-fallback behavior silently regresses - e.g. because a future
  * `@changesets/changelog-github` upgrade changes its export shape or its
  * `get-github-info` DataLoader semantics shift - releases would start aborting

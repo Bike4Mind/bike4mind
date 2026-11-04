@@ -14,7 +14,7 @@ const INPUT: ImageModerationIncident = {
 };
 
 const CREATED_AT = new Date('2026-10-19T12:34:56.000Z');
-const REVIEW_LINK = 'https://app.example/admin?tab=users&amp;incidentId=incident-123';
+const REVIEW_LINK = 'https://app.example/admin?tab=moderation-incidents&amp;incidentId=incident-123';
 
 function setup(overrides: Partial<IncidentReviewAlertDeps> = {}) {
   const recorded: RecordedIncident = { ...INPUT, id: 'incident-123', createdAt: CREATED_AT };
@@ -235,7 +235,7 @@ describe('withReviewerAlerts', () => {
 
     await incidents.record(INPUT);
 
-    expect(sentEmail(deps).html).toContain('/admin?tab=users&amp;incidentId=incident-123');
+    expect(sentEmail(deps).html).toContain('/admin?tab=moderation-incidents&amp;incidentId=incident-123');
   });
 
   it('renders an unknown surface and escapes the incident id', async () => {
