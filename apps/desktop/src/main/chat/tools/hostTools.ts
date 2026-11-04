@@ -413,7 +413,7 @@ export const sessionSend: ToolDefinition = {
       return [
         `Your message to ${outcome.sessionId} ("${outcome.title}") is waiting for that conversation's`,
         'user to let it in, because it could do things there that this conversation cannot. Nothing',
-        'runs until they do, and they may decline - you are told if they decline. Carry on without it.',
+        'runs until they do, and they may decline - you are usually told if they do. Carry on without it.',
       ].join('\n');
     }
     return [
