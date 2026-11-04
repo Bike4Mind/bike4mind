@@ -9,9 +9,9 @@ import {
   withTransaction,
   importHistoryJobRepository,
 } from '@bike4mind/database';
-import { withContext } from '@bike4mind/server-utils/s3/utils';
+import { withContext } from './utils';
 import { Resource } from 'sst';
-import { updateImportProgress, markImportComplete, markImportFailed } from '@server/utils/importHistoryProgress';
+import { updateImportProgress, markImportComplete, markImportFailed } from '../utils/importHistoryProgress';
 
 const importHistory = async (
   userId: string,
