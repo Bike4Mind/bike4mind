@@ -7030,12 +7030,14 @@ export class ChatCompletionProcess {
               )
             : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0 };
           if (writtenOffCredits > 0) {
-            logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
+            const floorCredits = this.turnCreditLimiter?.settlementFloorCredits() ?? 0;
+            logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at the settlement floor', {
               questId: quest.id,
               ownerId: this.reservedCreditsOwnerId,
               ownerType: this.reservedCreditsOwnerType,
               shortfall: totalCreditsUsed - reservedAtSettlement,
-              available: Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0),
+              floor: floorCredits,
+              available: Math.max(0, (this.reservedCreditHolder?.currentCredits ?? 0) - floorCredits),
               writtenOff: writtenOffCredits,
             });
           }
