@@ -1,7 +1,7 @@
-import { desktopStagesOf } from '@bike4mind/common';
+import { desktopStagesOf, RUNNER_PRESENCE_FRESH_MS } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import { loopRepository, workItemRepository } from '@bike4mind/database';
+import { loopRepository, loopRunnerPresenceRepository, workItemRepository } from '@bike4mind/database';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
 import { LOOP_TICKET_CLOSED_WINDOW, ticketRunLimit } from '@server/utils/loopTickets';
@@ -46,9 +46,21 @@ const handler = baseApi({ auth: 'jwtOnly' })
       });
     }
 
+    // The owner's desktop runner, for the waiting text on desktop-stage tickets; null without a desktop stage.
+    const presence = desktopStages.size > 0 ? await loopRunnerPresenceRepository.findByUserId(req.user!.id) : null;
+    const runner =
+      desktopStages.size === 0
+        ? null
+        : {
+            online: !!presence && Date.now() - new Date(presence.seenAt).getTime() < RUNNER_PRESENCE_FRESH_MS,
+            lanesFree: presence?.lanesFree ?? 0,
+            ...(presence?.waitingReason && { waitingReason: presence.waitingReason }),
+          };
+
     res.json({
       stages: Array.from(groups, ([stage, stageTickets]) => ({ stage, tickets: stageTickets })),
       runLimit: ticketRunLimit(loop.stages),
+      runner,
     });
   });
 

@@ -134,6 +134,40 @@ describe('validateLoopForm stageConfig', () => {
     expect(validateLoopForm(values(), 'edit').payload?.stageConfig).toBeNull();
   });
 
+  it('sends the desktop guards only for a desktop stage', () => {
+    const guards = {
+      repoHint: ' acme/app ',
+      mergePolicy: 'green-ci' as const,
+      deployWorkflow: 'deploy.yml',
+      smoke: 'https://app.example/health',
+      holdLabels: 'hold, , do-not-merge',
+    };
+    const { payload } = validateLoopForm(
+      values({
+        stages: ['todo', 'doing', 'review', 'done'],
+        stageConfig: {
+          todo: { model: 'm2', ...guards },
+          doing: { runner: 'desktop', ...guards },
+          review: { runner: 'desktop', smoke: 'pnpm smoke' },
+        },
+      }),
+      'create'
+    );
+    expect(payload?.stageConfig).toEqual([
+      { stage: 'todo', model: 'm2' },
+      {
+        stage: 'doing',
+        runner: 'desktop',
+        repoHint: 'acme/app',
+        mergePolicy: 'green-ci',
+        deployWorkflow: 'deploy.yml',
+        smoke: { url: 'https://app.example/health' },
+        holdLabels: ['hold', 'do-not-merge'],
+      },
+      { stage: 'review', runner: 'desktop', smoke: { command: 'pnpm smoke' } },
+    ]);
+  });
+
   it('caps instructions at 4000 characters and tools at 50 per stage', () => {
     expect(
       validateLoopForm(values({ stageConfig: { todo: { instructions: 'x'.repeat(4001) } } }), 'create').errors
@@ -390,6 +424,8 @@ describe('LoopFormModal stage settings', () => {
     fireEvent.click(screen.getByTestId('loop-form-stage-settings-toggle'));
     expect(screen.getByTestId('loop-form-stage-instructions-1')).toHaveValue('Review only');
     expect(within(screen.getByTestId('loop-form-stage-panel-1')).getByText('desktop')).toBeInTheDocument();
+    expect(screen.getByTestId('loop-form-stage-repo-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('loop-form-stage-repo-0')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('loop-form-stage-remove-1'));
     fireEvent.click(screen.getByTestId('loop-form-submit-btn'));

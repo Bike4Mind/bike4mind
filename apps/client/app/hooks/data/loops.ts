@@ -62,6 +62,8 @@ export const countNeedsYou = (events: ILoopEventRow[] = []) =>
 export interface ILoopTicketsResponse {
   stages: { stage: string; tickets: ILoopTicket[] }[];
   runLimit: number;
+  /** The owner's desktop runner, as last reported; null when the loop has no desktop stage. */
+  runner?: { online: boolean; lanesFree: number; waitingReason?: string } | null;
 }
 
 /** Every loops query shares the `['loops']` prefix, so one invalidation refreshes list, detail, tickets and events. */

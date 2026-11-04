@@ -65,6 +65,7 @@ const directives = vi.hoisted(() => ({
 const settings = vi.hoisted(() => ({ EnableLoops: true as unknown, LoopsDailyCreditsPerUser: 0 as unknown }));
 const executions = vi.hoisted(() => ({ sumCreditsByLoop: vi.fn(), sumLoopCreditsForUser: vi.fn() }));
 const users = vi.hoisted(() => ({ findById: vi.fn(), setLoopsDailyCredits: vi.fn() }));
+const presence = vi.hoisted(() => ({ findByUserId: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   loopRepository: repo,
   agentExecutionRepository: executions,
@@ -72,6 +73,7 @@ vi.mock('@bike4mind/database', () => ({
   loopEventRepository: loopEvents,
   loopDirectiveRepository: directives,
   userRepository: users,
+  loopRunnerPresenceRepository: presence,
   adminSettingsRepository: {
     getSettingsValue: async (key: string) => settings[key as keyof typeof settings],
     findAll: async () => [],
@@ -628,6 +630,32 @@ describe('GET /api/loops/:id/tickets', () => {
     expect(stages[1].tickets[0]).toMatchObject({ id: 'b', ready: false });
   });
 
+  it("reports the owner's desktop runner as online while its presence is fresh, null without a desktop stage", async () => {
+    const desktopLoop = loop({
+      stages: ['todo', 'review', 'done'],
+      stageConfig: [{ stage: 'review', runner: 'desktop' }],
+    });
+    tickets.listForLoop.mockResolvedValue([]);
+    tickets.findManyByIdsForUser.mockResolvedValue([]);
+    const runnerOf = async () => {
+      const { res, result } = call('tickets', 'get', { query: { id: OID } });
+      await result;
+      return res._getJSONData().runner;
+    };
+
+    repo.findByIdAndUserId.mockResolvedValue(desktopLoop);
+    presence.findByUserId.mockResolvedValue({ seenAt: new Date(), lanesFree: 2, waitingReason: 'Cloning' });
+    expect(await runnerOf()).toEqual({ online: true, lanesFree: 2, waitingReason: 'Cloning' });
+
+    presence.findByUserId.mockResolvedValue({ seenAt: new Date(Date.now() - 3 * 60_000), lanesFree: 2 });
+    expect(await runnerOf()).toEqual({ online: false, lanesFree: 2 });
+    presence.findByUserId.mockResolvedValue(null);
+    expect(await runnerOf()).toEqual({ online: false, lanesFree: 0 });
+
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages: ['todo', 'done'] }));
+    expect(await runnerOf()).toBeNull();
+  });
+
   it("is a 404 for another user's loop", async () => {
     repo.findByIdAndUserId.mockResolvedValue(null);
     await expect(call('tickets', 'get', { query: { id: OID } }).result).rejects.toMatchObject({ statusCode: 404 });
@@ -853,6 +881,48 @@ describe('stageConfig', () => {
     await expect(result).rejects.toMatchObject({ statusCode: 400 });
     await expect(result).rejects.toThrow(message);
     expect(repo.updateForUser).not.toHaveBeenCalled();
+  });
+
+  const desktop = (fields: Record<string, unknown>) => [{ stage: 'review', runner: 'desktop', ...fields }];
+
+  it.each([
+    [[{ stage: 'review', repoHint: 'acme/app' }], /only apply to desktop stages/],
+    [[{ stage: 'review', runner: 'cloud', mergePolicy: 'review' }], /only apply to desktop stages/],
+    [desktop({ repoHint: 'not a repo' }), /owner\/name/],
+    [desktop({ mergePolicy: 'yolo' }), /mergePolicy must be one of/],
+    [desktop({ smoke: { url: 'https://a.example', command: 'npm test' } }), /not both/],
+    [desktop({ smoke: { url: 'ftp://a.example' } }), /http\(s\) URL/],
+    [desktop({ holdLabels: Array.from({ length: 21 }, (_, i) => `l${i}`) }), /holdLabels/],
+    [desktop({ deployWorkflow: 'x'.repeat(201) }), /deployWorkflow/],
+  ])('rejects an invalid desktop guard with a 400 (%#)', async (stageConfig, message) => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const result = patch({ stageConfig });
+    await expect(result).rejects.toMatchObject({ statusCode: 400 });
+    await expect(result).rejects.toThrow(message);
+  });
+
+  it('stores and returns the desktop guards, blank ones dropped', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ stages }));
+    const guards = {
+      repoHint: 'acme/app',
+      mergePolicy: 'green-ci',
+      deployWorkflow: 'deploy.yml',
+      smoke: { url: 'https://app.example/health' },
+      holdLabels: ['hold', 'do-not-merge'],
+    };
+    const { res, result } = call('item', 'patch', {
+      query: { id: OID },
+      body: { stageConfig: desktop({ ...guards, smoke: { url: '', command: '' }, holdLabels: [] }) },
+    });
+    await result;
+    expect(res._getJSONData().stageConfig).toEqual(
+      desktop({ repoHint: 'acme/app', mergePolicy: 'green-ci', deployWorkflow: 'deploy.yml' })
+    );
+
+    await patch({ stageConfig: desktop(guards) });
+    expect(repo.updateForUser.mock.calls[1][2].stageConfig).toEqual(desktop(guards));
+    await patch({ stageConfig: desktop({ smoke: { command: 'pnpm smoke' } }) });
+    expect(repo.updateForUser.mock.calls[2][2].stageConfig).toEqual(desktop({ smoke: { command: 'pnpm smoke' } }));
   });
 
   it('stores and returns it on PATCH; null or nothing left clears it', async () => {

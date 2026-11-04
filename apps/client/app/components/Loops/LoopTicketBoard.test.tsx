@@ -120,7 +120,7 @@ describe('LoopTicketBoard', () => {
     expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', stage: 'doing' });
   });
 
-  it('marks a desktop stage and its open tickets as waiting for a desktop runner', () => {
+  const renderDesktopBoard = (runner?: ILoopTicketsResponse['runner']) =>
     render(
       <CssVarsProvider theme={appTheme}>
         <LoopTicketBoard
@@ -143,11 +143,16 @@ describe('LoopTicketBoard', () => {
               },
               { stage: 'done', tickets: [] },
             ],
+            runLimit: 6,
+            runner,
           }}
           onViewRun={onViewRun}
         />
       </CssVarsProvider>
     );
+
+  it('marks a desktop stage and its open tickets as waiting for a desktop runner', () => {
+    renderDesktopBoard({ online: false, lanesFree: 0 });
     expect(screen.getByTestId('loop-board-stage-desktop-doing')).toBeInTheDocument();
     expect(screen.queryByTestId('loop-board-stage-desktop-todo')).not.toBeInTheDocument();
     expect(
@@ -155,6 +160,17 @@ describe('LoopTicketBoard', () => {
     ).toBeInTheDocument();
     expect(within(screen.getByTestId('loop-ticket-busy')).queryByTestId('loop-ticket-waiting-desktop')).toBeNull();
     expect(within(screen.getByTestId('loop-ticket-cloud')).queryByTestId('loop-ticket-waiting-desktop')).toBeNull();
+  });
+
+  it('says whether the desktop runner is offline or has the ticket queued', () => {
+    const { unmount } = renderDesktopBoard({ online: false, lanesFree: 0 });
+    expect(screen.getByTestId('loop-ticket-waiting-desktop')).toHaveTextContent('Waiting on: desktop offline');
+    unmount();
+
+    renderDesktopBoard({ online: true, lanesFree: 0, waitingReason: 'All lanes busy' });
+    const chip = screen.getByTestId('loop-ticket-waiting-desktop');
+    expect(chip).toHaveTextContent('Queued for desktop');
+    expect(chip).toHaveAttribute('title', 'All lanes busy');
   });
 
   it('labels a ticket left in a removed stage instead of showing an empty select', () => {

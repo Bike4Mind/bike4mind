@@ -50,6 +50,7 @@ function TicketCard({
   ticket,
   stages,
   desktop,
+  runner,
   runLimit,
   onViewRun,
 }: {
@@ -57,6 +58,7 @@ function TicketCard({
   stages: string[];
   /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
   desktop: boolean;
+  runner?: ILoopTicketsResponse['runner'];
   runLimit?: number;
   onViewRun: (executionId: string) => void;
 }) {
@@ -69,8 +71,14 @@ function TicketCard({
           {STATUS_LABEL[ticket.status]}
         </Chip>
         {desktop && ticket.status === 'open' && (
-          <Chip size="sm" variant="outlined" color="neutral" data-testid="loop-ticket-waiting-desktop">
-            Waiting for a desktop runner
+          <Chip
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            title={runner?.online ? runner.waitingReason : undefined}
+            data-testid="loop-ticket-waiting-desktop"
+          >
+            {runner?.online ? 'Queued for desktop' : 'Waiting on: desktop offline'}
           </Chip>
         )}
         {ticket.dependencies.length > 0 && (
@@ -270,6 +278,7 @@ export default function LoopTicketBoard({
                 ticket={ticket}
                 stages={loop.stages}
                 desktop={!!ticket.stage && desktopStages.has(ticket.stage)}
+                runner={data?.runner}
                 runLimit={data?.runLimit}
                 onViewRun={onViewRun}
               />

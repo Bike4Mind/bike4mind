@@ -5,7 +5,14 @@
 
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { adminSettingsRepository, loopRepository } from '@bike4mind/database';
-import { LOOP_STAGE_RUNNERS, type ILoop, type ILoopStageConfig, type LoopStatus } from '@bike4mind/common';
+import {
+  LOOP_MERGE_POLICIES,
+  LOOP_STAGE_RUNNERS,
+  type ILoop,
+  type ILoopStageConfig,
+  type LoopMergePolicy,
+  type LoopStatus,
+} from '@bike4mind/common';
 
 export const LOOP_RATE_LIMIT = 60;
 export const LOOP_RATE_WINDOW_MS = 60 * 1000;
@@ -19,6 +26,11 @@ const STAGES_MAX = 20;
 const STAGE_NAME_MAX = 60;
 const OVERSEES_MAX = 5;
 const STAGE_INSTRUCTIONS_MAX = 4000;
+const REPO_HINT = /^[\w.-]+\/[\w.-]+$/;
+const SMOKE_URL_MAX = 2000;
+const SMOKE_COMMAND_MAX = 1000;
+const HOLD_LABELS_MAX = 20;
+const HOLD_LABEL_MAX = 100;
 const INTERVAL_MIN = 5;
 /** One week. */
 const INTERVAL_MAX = 10_080;
@@ -107,9 +119,65 @@ export function validateLoopStageConfig(value: unknown, stages: readonly string[
       }
       config.runner = entry.runner as ILoopStageConfig['runner'];
     }
+    const guards = validateStageGuards(entry, text);
+    if (Object.keys(guards).length > 0) {
+      if (config.runner !== 'desktop') {
+        throw new BadRequestError(
+          'stageConfig repoHint, mergePolicy, deployWorkflow, smoke and holdLabels only apply to desktop stages'
+        );
+      }
+      Object.assign(config, guards);
+    }
     if (entry.stage !== stages[stages.length - 1] && Object.keys(config).length > 1) result.push(config);
   }
   return result;
+}
+
+/** A desktop stage's guard fields; empty values count as unset. */
+function validateStageGuards(
+  entry: Record<string, unknown>,
+  text: (field: string, max: number) => string | undefined
+): Pick<ILoopStageConfig, 'repoHint' | 'mergePolicy' | 'deployWorkflow' | 'smoke' | 'holdLabels'> {
+  const guards: ReturnType<typeof validateStageGuards> = {};
+  const repoHint = text('repoHint', ID_MAX);
+  if (repoHint) {
+    if (!REPO_HINT.test(repoHint)) throw new BadRequestError('stageConfig repoHint must look like owner/name');
+    guards.repoHint = repoHint;
+  }
+  if (entry.mergePolicy !== undefined && entry.mergePolicy !== null && entry.mergePolicy !== '') {
+    if (!LOOP_MERGE_POLICIES.includes(entry.mergePolicy as LoopMergePolicy)) {
+      throw new BadRequestError(`stageConfig mergePolicy must be one of: ${LOOP_MERGE_POLICIES.join(', ')}`);
+    }
+    guards.mergePolicy = entry.mergePolicy as LoopMergePolicy;
+  }
+  const deployWorkflow = text('deployWorkflow', ID_MAX);
+  if (deployWorkflow) guards.deployWorkflow = deployWorkflow;
+  if (entry.smoke !== undefined && entry.smoke !== null) {
+    if (typeof entry.smoke !== 'object' || Array.isArray(entry.smoke)) {
+      throw new BadRequestError('stageConfig smoke must be an object with a url or a command');
+    }
+    const smoke = entry.smoke as Record<string, unknown>;
+    const field = (name: string, max: number) =>
+      smoke[name] === undefined || smoke[name] === null || smoke[name] === ''
+        ? undefined
+        : validateString(`smoke ${name}`, smoke[name], max);
+    const url = field('url', SMOKE_URL_MAX);
+    const command = field('command', SMOKE_COMMAND_MAX);
+    if (url && command) throw new BadRequestError('stageConfig smoke takes a url or a command, not both');
+    if (url) {
+      if (!/^https?:\/\//i.test(url) || !URL.canParse(url)) {
+        throw new BadRequestError('stageConfig smoke url must be an http(s) URL');
+      }
+      guards.smoke = { url };
+    } else if (command) {
+      guards.smoke = { command };
+    }
+  }
+  if (entry.holdLabels !== undefined && entry.holdLabels !== null) {
+    const labels = validateStringList('holdLabels', entry.holdLabels, HOLD_LABELS_MAX, HOLD_LABEL_MAX);
+    if (labels.length) guards.holdLabels = labels;
+  }
+  return guards;
 }
 
 /** Drops config for stages no longer in `stages` or now the last one, so a stage edit leaves no orphans. */

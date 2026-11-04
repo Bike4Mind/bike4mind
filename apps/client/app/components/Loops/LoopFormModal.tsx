@@ -20,7 +20,7 @@ import {
   Textarea,
   Typography,
 } from '@mui/joy';
-import { DEFAULT_LOOP_STAGES, type ILoop, type ILoopStageConfig } from '@bike4mind/common';
+import { DEFAULT_LOOP_STAGES, type ILoop, type ILoopStageConfig, type LoopMergePolicy } from '@bike4mind/common';
 import { PICKABLE_TOOLS } from '@client/app/components/Agent/OrchestrationSection';
 import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
@@ -63,7 +63,26 @@ export interface LoopFormValues {
   stageConfig: Record<string, StageSettings>;
 }
 
-type StageSettings = Omit<ILoopStageConfig, 'stage'>;
+/** A stage's settings as the form edits them: the smoke check and hold labels as the text typed. */
+type StageSettings = Omit<ILoopStageConfig, 'stage' | 'smoke' | 'holdLabels'> & { smoke?: string; holdLabels?: string };
+
+/** A desktop stage's guards from the form; a smoke check starting with http(s):// is a URL, else a command. */
+function desktopGuards(settings: StageSettings): Partial<ILoopStageConfig> {
+  const repoHint = settings.repoHint?.trim();
+  const deployWorkflow = settings.deployWorkflow?.trim();
+  const smoke = settings.smoke?.trim();
+  const holdLabels = (settings.holdLabels ?? '')
+    .split(',')
+    .map(label => label.trim())
+    .filter(Boolean);
+  return {
+    ...(repoHint && { repoHint }),
+    ...(settings.mergePolicy && { mergePolicy: settings.mergePolicy }),
+    ...(deployWorkflow && { deployWorkflow }),
+    ...(smoke && { smoke: /^https?:\/\//i.test(smoke) ? { url: smoke } : { command: smoke } }),
+    ...(holdLabels.length > 0 && { holdLabels }),
+  };
+}
 
 export type LoopFormErrors = Partial<
   Record<'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees' | 'budget' | 'stageConfig', string>
@@ -119,6 +138,7 @@ export function validateLoopForm(
       ...(settings.model && { model: settings.model }),
       ...(settings.tools?.length && { tools: settings.tools }),
       ...(settings.runner && { runner: settings.runner }),
+      ...(settings.runner === 'desktop' && desktopGuards(settings)),
     };
     if (Object.keys(entry).length === 1) continue;
     if ((instructions?.length ?? 0) > STAGE_INSTRUCTIONS_MAX) {
@@ -177,7 +197,16 @@ function initialValues(loop?: ILoop): LoopFormValues {
     agentId: loop.agentId ?? '',
     oversees: loop.oversees ?? [],
     budget: String(loop.budgetCreditsPerDay ?? ''),
-    stageConfig: Object.fromEntries((loop.stageConfig ?? []).map(({ stage, ...settings }) => [stage, settings])),
+    stageConfig: Object.fromEntries(
+      (loop.stageConfig ?? []).map(({ stage, smoke, holdLabels, ...settings }) => [
+        stage,
+        {
+          ...settings,
+          ...(smoke && { smoke: 'url' in smoke ? smoke.url : smoke.command }),
+          ...(holdLabels?.length && { holdLabels: holdLabels.join(', ') }),
+        },
+      ])
+    ),
   };
 }
 
@@ -416,6 +445,60 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
                           </FormHelperText>
                         )}
                       </FormControl>
+                      {settings.runner === 'desktop' && (
+                        <>
+                          <FormControl>
+                            <FormLabel>Repo</FormLabel>
+                            <Input
+                              placeholder="owner/name"
+                              value={settings.repoHint ?? ''}
+                              onChange={e => setStage(stage, { repoHint: e.target.value })}
+                              slotProps={{ input: { 'data-testid': `loop-form-stage-repo-${i}` } }}
+                            />
+                          </FormControl>
+                          <FormControl>
+                            <FormLabel>Merge policy</FormLabel>
+                            <Select
+                              value={settings.mergePolicy ?? 'review'}
+                              onChange={(_, mergePolicy) =>
+                                setStage(stage, { mergePolicy: (mergePolicy as LoopMergePolicy | null) ?? undefined })
+                              }
+                              data-testid={`loop-form-stage-merge-${i}`}
+                            >
+                              <Option value="review">Review required</Option>
+                              <Option value="green-ci">Green CI</Option>
+                              <Option value="never">Never merge</Option>
+                            </Select>
+                          </FormControl>
+                          <FormControl>
+                            <FormLabel>Deploy workflow</FormLabel>
+                            <Input
+                              placeholder="deploy.yml"
+                              value={settings.deployWorkflow ?? ''}
+                              onChange={e => setStage(stage, { deployWorkflow: e.target.value })}
+                              slotProps={{ input: { 'data-testid': `loop-form-stage-deploy-${i}` } }}
+                            />
+                          </FormControl>
+                          <FormControl>
+                            <FormLabel>Smoke check</FormLabel>
+                            <Input
+                              placeholder="https://... or a command"
+                              value={settings.smoke ?? ''}
+                              onChange={e => setStage(stage, { smoke: e.target.value })}
+                              slotProps={{ input: { 'data-testid': `loop-form-stage-smoke-${i}` } }}
+                            />
+                          </FormControl>
+                          <FormControl>
+                            <FormLabel>Hold labels</FormLabel>
+                            <Input
+                              placeholder="hold, do-not-merge"
+                              value={settings.holdLabels ?? ''}
+                              onChange={e => setStage(stage, { holdLabels: e.target.value })}
+                              slotProps={{ input: { 'data-testid': `loop-form-stage-hold-${i}` } }}
+                            />
+                          </FormControl>
+                        </>
+                      )}
                       <FormControl>
                         <FormLabel>Model</FormLabel>
                         <Select
