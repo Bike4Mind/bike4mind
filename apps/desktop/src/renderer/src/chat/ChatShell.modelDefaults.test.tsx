@@ -1,0 +1,210 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { CssVarsProvider } from '@mui/joy/styles';
+import type { ChatModelOption, ChatSession, ChatSessionSummary } from '@shared/chat';
+import type { ModelSettings } from '@shared/modelSettings';
+import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { desktopTheme } from '../theme';
+import { ChatShell } from './ChatShell';
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.mock('./CustomizePanel', () => ({ CustomizeNavItem: () => null, CustomizeScreen: () => null }));
+
+let closeModels: (() => void) | undefined;
+vi.mock('../models/ModelsScreen', () => ({
+  ModelsScreen: ({ onClose }: { onClose: () => void }) => {
+    closeModels = onClose;
+    return <div data-testid="models-screen" />;
+  },
+}));
+
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+})) as typeof window.matchMedia;
+
+window.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
+
+const QWEN = 'local:ollama:qwen3.5:0.8b';
+const GEMMA = 'local:ollama:gemma4:12b-it-qat';
+
+const local = (id: string, name: string): ChatModelOption => ({
+  id,
+  name,
+  backend: 'ollama',
+  controls: { effort: { levels: ['low', 'medium', 'high'], scope: 'request' } },
+});
+const MODELS = [local(QWEN, 'qwen3.5:0.8b'), local(GEMMA, 'gemma4:12b-it-qat')];
+
+const summary = (id: string, title: string, model: string, updatedAt: string): ChatSessionSummary =>
+  ({
+    id,
+    title,
+    mode: 'chat',
+    model,
+    messageCount: 0,
+    createdAt: '2026-10-01T00:00:00.000Z',
+    updatedAt,
+  }) as ChatSessionSummary;
+const SESSIONS = [
+  summary('s-qwen', 'Qwen chat', QWEN, '2026-10-01T00:00:02.000Z'),
+  summary('s-gemma', 'Gemma chat', GEMMA, '2026-10-01T00:00:01.000Z'),
+];
+
+function quietBridge(overrides: Record<string, unknown>) {
+  return new Proxy(overrides, {
+    get(target, name: string | symbol) {
+      if (typeof name !== 'string') return undefined;
+      if (name in target) return target[name];
+      if (name.startsWith('on')) return () => () => undefined;
+      return async () => [];
+    },
+  });
+}
+
+let root: Root | null = null;
+let host: HTMLElement | null = null;
+const getModelSettings = vi.fn<(id: string) => Promise<ModelSettings | null>>();
+
+function stubBridge() {
+  (window as unknown as { b4m: unknown }).b4m = new Proxy(
+    {
+      chat: quietBridge({
+        listSessions: async () => SESSIONS,
+        getSession: async (id: string) =>
+          ({ ...SESSIONS.find(session => session.id === id), messages: [] }) as ChatSession,
+        getQueuedMessages: async () => [],
+        getSessionStatuses: async () => [],
+        listModels: async () => ({ models: MODELS }),
+        listArtifacts: async () => ({ artifacts: [], total: 0 }),
+        getModelSettings,
+      }),
+      sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
+      getAppInfo: async () => ({ homeDirectory: '/home/test' }),
+    },
+    {
+      get(target, name: string | symbol) {
+        if (typeof name !== 'string') return undefined;
+        return name in target ? target[name as keyof typeof target] : quietBridge({});
+      },
+    }
+  );
+}
+
+beforeEach(() => {
+  Element.prototype.scrollIntoView = () => undefined;
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    }
+  );
+  closeModels = undefined;
+  getModelSettings.mockReset();
+  stubBridge();
+});
+
+afterEach(() => {
+  act(() => root?.unmount());
+  host?.remove();
+  root = null;
+  host = null;
+  vi.unstubAllGlobals();
+});
+
+async function openShell() {
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => {
+    root?.render(
+      <CssVarsProvider theme={desktopTheme}>
+        <ChatShell />
+      </CssVarsProvider>
+    );
+  });
+}
+
+async function openSession(title: string) {
+  const item = [...document.querySelectorAll<HTMLElement>('[data-testid="chat-session-item"]')].find(row =>
+    row.textContent?.includes(title)
+  );
+  await act(async () => item?.click());
+  await act(async () => undefined);
+}
+
+async function defaultLabel(): Promise<string | undefined> {
+  await act(async () => document.querySelector<HTMLElement>('[data-testid="effort-picker-btn"]')?.click());
+  const label = [...document.querySelectorAll('[data-testid="effort-picker-option"]')]
+    .map(option => option.textContent ?? '')
+    .find(text => text.includes('Default'));
+  await act(async () => {
+    document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  });
+  return label?.match(/Default(?: \(\w+\))?/)?.[0];
+}
+
+describe('the effort default shown for the conversation model', () => {
+  it('re-reads the default on returning from the Models screen', async () => {
+    getModelSettings.mockResolvedValue({ effort: 'low' });
+    await openShell();
+    await openSession('Qwen chat');
+    expect(getModelSettings).toHaveBeenCalledWith(QWEN);
+    expect(await defaultLabel()).toBe('Default (Low)');
+
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-models-btn"]')?.click());
+    getModelSettings.mockResolvedValue({ effort: 'high' });
+    await act(async () => closeModels?.());
+    await act(async () => undefined);
+    expect(getModelSettings).toHaveBeenCalledTimes(2);
+    expect(await defaultLabel()).toBe('Default (High)');
+  });
+
+  it('drops a late answer for the model the conversation has left', async () => {
+    let answerQwen: (settings: ModelSettings) => void = () => undefined;
+    getModelSettings.mockImplementation(id =>
+      id === QWEN
+        ? new Promise<ModelSettings>(resolve => {
+            answerQwen = resolve;
+          })
+        : Promise.resolve({ effort: 'high' })
+    );
+    await openShell();
+    await openSession('Qwen chat');
+    await openSession('Gemma chat');
+    expect(await defaultLabel()).toBe('Default (High)');
+
+    await act(async () => answerQwen({ effort: 'low' }));
+    expect(await defaultLabel()).toBe('Default (High)');
+  });
+
+  it('shows no default for a model whose answer is still pending, not the previous model default', async () => {
+    getModelSettings.mockImplementation(id =>
+      id === QWEN ? Promise.resolve({ effort: 'low' }) : new Promise<ModelSettings>(() => undefined)
+    );
+    await openShell();
+    await openSession('Qwen chat');
+    expect(await defaultLabel()).toBe('Default (Low)');
+
+    await openSession('Gemma chat');
+    expect(await defaultLabel()).toBe('Default');
+  });
+});
