@@ -50,6 +50,8 @@ export interface RecordOperationalUsageParams {
   cacheWriteTokens?: number;
   /** Provider COGS in USD, computed by the caller with the model-appropriate pricing fn. */
   costUsd: number;
+  /** USD the credit debit is priced on; defaults to costUsd. The recorded costUsd stays run-priced. */
+  chargedCostUsd?: number;
   /**
    * Rate provenance for costUsd (buildUsagePriceStamp), from a caller that priced a text model.
    * Unset for callers with no ModelInfo or token split (embeddings, run-level judge totals).
@@ -170,7 +172,7 @@ export async function recordOperationalUsage(
           ));
 
     if (shouldBill && db.creditTransactions && db.users && db.organizations) {
-      const credits = usdToCreditsStochastic(params.costUsd);
+      const credits = usdToCreditsStochastic(params.chargedCostUsd ?? params.costUsd);
       // Stochastic settlement legitimately rounds a sub-credit cost to 0 (paid in
       // expectation across calls); only touch the ledger when it lands above zero.
       if (credits > 0) {

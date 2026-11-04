@@ -6,20 +6,27 @@ import {
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { signupProtection } from '@server/auth/signupProtection';
+import type { IUserDocument } from '@bike4mind/common';
 
-/**
- * Releases the whole remaining signup grant once the user has paid a subscription invoice. Replays and
- * later invoices are no-ops: the remainder is already released and the ledger id is unique.
- */
-export async function unlockSignupGrantFromSubscription(
+const emailVerified = async (user: IUserDocument) => user.emailVerified;
+
+type UnlockLogger = { warn: (message: string, meta?: Record<string, unknown>) => void };
+
+/** Shared by the subscription and credit pack paths (creditPurchaseUnlock.ts). */
+export async function unlockSignupGrantFromPayment(
   userId: string,
-  logger?: { warn: (message: string, meta?: Record<string, unknown>) => void }
+  reason: 'subscription' | 'credit_purchase',
+  ledgerReason: string,
+  logger?: UnlockLogger
 ) {
   const payer = await userRepository.findById(userId);
-  // The payment event is not retried, so an unverified payer stays at the tranche until a later unlock.
-  if (payer?.signupGrant?.stage === 'pending_email' && !payer.emailVerified)
-    logger?.warn('Paid invoice for a pending_email account; signup grant not released', { userId });
-  return userService.unlockSignupGrant(userId, 'subscription', {
+  // An unverified payer stays at the tranche until a later unlock; releasing a budget-held tranche
+  // would throw, and the credit pack webhook would retry it forever.
+  if (payer?.signupGrant?.stage === 'pending_email' && !payer.emailVerified) {
+    logger?.warn('Payment from a pending_email account; signup grant not released', { userId, reason });
+    return { creditsGranted: 0, currentCredits: null };
+  }
+  return userService.unlockSignupGrant(userId, reason, {
     db: {
       users: userRepository,
       signupProtection,
@@ -27,7 +34,14 @@ export async function unlockSignupGrantFromSubscription(
       creditTransactions: creditTransactionRepository,
       creditLots: creditLotRepository,
     },
-    reason: 'Subscribed to a paid plan',
-    validators: { subscription: async user => user.emailVerified },
+    reason: ledgerReason,
+    validators: reason === 'subscription' ? { subscription: emailVerified } : { credit_purchase: emailVerified },
   });
 }
+
+/**
+ * Releases the whole remaining signup grant once the user has paid a subscription invoice. Replays and
+ * later invoices are no-ops: the remainder is already released and the ledger id is unique.
+ */
+export const unlockSignupGrantFromSubscription = (userId: string, logger?: UnlockLogger) =>
+  unlockSignupGrantFromPayment(userId, 'subscription', 'Subscribed to a paid plan', logger);

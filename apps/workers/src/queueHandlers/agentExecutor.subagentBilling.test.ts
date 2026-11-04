@@ -98,10 +98,13 @@ vi.mock('@bike4mind/services', async () => {
 
 const delegateToAgentMock = vi.fn();
 const buildSharedToolsMock = vi.fn().mockReturnValue([]);
+const orchestratorDeps: Array<{ substituteIdentity?: unknown }> = [];
 vi.mock('@bike4mind/services/llm', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
   class MockOrchestrator {
-    constructor(public deps: unknown) {}
+    constructor(public deps: { substituteIdentity?: unknown }) {
+      orchestratorDeps.push(deps);
+    }
     delegateToAgent(...args: unknown[]) {
       return delegateToAgentMock(...args);
     }
@@ -487,8 +490,18 @@ describe('processSubagentDispatch admission and billing', () => {
         modelInfo: substitute,
       });
       delegateToAgentMock.mockResolvedValue({ ...childResult, model: 'cheap-model' });
+      orchestratorDeps.length = 0;
+      buildSharedToolsMock.mockClear();
 
       await dispatch();
+
+      const identity = expect.objectContaining({
+        substituteId: 'cheap-model',
+        identityId: 'test-model',
+        chargedModel: expect.objectContaining({ id: 'test-model' }),
+      });
+      expect(orchestratorDeps.at(-1)?.substituteIdentity).toEqual(identity);
+      expect(buildSharedToolsMock.mock.calls[0][0].substituteIdentity).toEqual(identity);
 
       expect(await usageRecord()).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -501,8 +514,13 @@ describe('processSubagentDispatch admission and billing', () => {
     });
 
     it('leaves executedModel off an unrestricted run', async () => {
+      orchestratorDeps.length = 0;
+      buildSharedToolsMock.mockClear();
+
       await dispatch();
 
+      expect(orchestratorDeps.at(-1)?.substituteIdentity).toBeUndefined();
+      expect(buildSharedToolsMock.mock.calls[0][0].substituteIdentity).toBeUndefined();
       const row = (await usageRecord()).mock.calls[0][0];
       expect(row.model).toBe('test-model');
       expect(row).not.toHaveProperty('executedModel');

@@ -34,6 +34,7 @@ import {
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService, userService } from '@bike4mind/services';
 import { grantCreditPurchase } from '@server/billing/grantCreditPurchase';
+import { unlockSignupGrantFromCreditPurchase } from '@server/credits/creditPurchaseUnlock';
 import { alertStripeRiskEvent, radarRiskLine, screenPaymentOutcome } from '@server/billing/paymentRisk';
 import {
   forfeitHeldUnlockForFraudWarning,
@@ -207,6 +208,21 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         visitId: await purchaseVisitId(intent.id),
       });
 
+      // Runs last on both branches, so a failure here (thrown for a Stripe retry) never skips the
+      // first-grant-only work below; the retry lands on already_granted and finishes the release.
+      const releaseSignupGrant = async () => {
+        const signupUnlock = await unlockSignupGrantFromCreditPurchase(user.id, req.logger);
+        if (signupUnlock.creditsGranted > 0 || signupUnlock.heldUntil) {
+          req.logger.info('[CreditPurchase] Signup grant released by purchase', {
+            step: 'signup_unlock',
+            userId: user.id,
+            creditsGranted: signupUnlock.creditsGranted,
+            heldUntil: signupUnlock.heldUntil,
+            ...trace,
+          });
+        }
+      };
+
       if (outcome === 'already_granted') {
         req.logger.info('[CreditPurchase] Credits already granted for intent', {
           step: 'already_granted',
@@ -224,6 +240,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           undefined,
           req.logger
         );
+        await releaseSignupGrant();
         break;
       }
 
@@ -271,6 +288,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           sendToClient(user.id, Resource.websocket.managementEndpoint, { action: 'invalidate_query', queryKey })
         )
       );
+      await releaseSignupGrant();
       break;
     }
 

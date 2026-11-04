@@ -1,4 +1,4 @@
-import { buildUsagePriceStamp, getTextModelCost, getTurnsCost } from '@bike4mind/common';
+import { buildUsagePriceStamp, getTextModelCost, getTurnsCost, type ModelInfo } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordOperationalUsage } from '../../../billing';
 import { executedModelFields } from '../../shadowTier';
@@ -62,18 +62,31 @@ export async function recordToolOperationalUsage(
       );
     }
     const turnUsage = completionInfo?.turnUsage;
-    const costUsd = !modelInfo
-      ? 0
-      : turnUsage?.length
-        ? getTurnsCost(modelInfo, turnUsage)
+    const priceOn = (info: ModelInfo): number =>
+      turnUsage?.length
+        ? getTurnsCost(info, turnUsage)
         : getTextModelCost(
-            modelInfo,
+            info,
             inputTokens,
             outputTokens,
             cachedInputTokens,
             cacheWriteTokens,
             inputTokens + cachedInputTokens + cacheWriteTokens
           );
+    const costUsd = modelInfo ? priceOn(modelInfo) : 0;
+    // Credits follow the model the ledger row names; an unmapped or uncatalogued one stays run-priced.
+    const recordedModelInfo =
+      recordedModel === model ? modelInfo : context.availableModels?.find(m => m.id === recordedModel);
+    let chargedCostUsd = costUsd;
+    if (recordedModel !== model) {
+      if (recordedModelInfo) {
+        chargedCostUsd = priceOn(recordedModelInfo);
+      } else {
+        context.logger.warn(
+          `[recordToolOperationalUsage] ledger model "${recordedModel}" not in request catalog; credits priced on "${model}"`
+        );
+      }
+    }
 
     // Report the spend to a billing host (e.g. the agent executor) so nested tool
     // generation is folded into its ledger rather than billed at zero (#630). Fired
@@ -87,9 +100,10 @@ export async function recordToolOperationalUsage(
       cacheReadTokens: cachedInputTokens,
       cacheWriteTokens,
       costUsd,
+      chargedCostUsd,
     });
 
-    const recordedProvider = context.availableModels?.find(m => m.id === recordedModel)?.backend ?? 'unknown';
+    const recordedProvider = recordedModelInfo?.backend ?? 'unknown';
     await recordOperationalUsage(
       {
         requestId: context.sessionId ?? context.userId,
@@ -108,6 +122,7 @@ export async function recordToolOperationalUsage(
         cachedInputTokens,
         cacheWriteTokens,
         costUsd,
+        chargedCostUsd,
         priceStamp: modelInfo
           ? buildUsagePriceStamp(modelInfo, {
               turns: turnUsage,

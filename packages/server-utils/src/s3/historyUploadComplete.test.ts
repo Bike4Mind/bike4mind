@@ -19,7 +19,7 @@ const h = vi.hoisted(() => ({
   markImportComplete: vi.fn(),
 }));
 
-vi.mock('@bike4mind/server-utils/s3/utils', () => ({ withContext: (fn: unknown) => fn }));
+vi.mock('./utils', () => ({ withContext: (fn: unknown) => fn }));
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
     getMetadata = h.getMetadata;
@@ -47,7 +47,7 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' } }));
-vi.mock('@server/utils/importHistoryProgress', () => ({
+vi.mock('../utils/importHistoryProgress', () => ({
   updateImportProgress: vi.fn(),
   markImportComplete: h.markImportComplete,
   markImportFailed: vi.fn(),

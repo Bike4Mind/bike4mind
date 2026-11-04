@@ -63,6 +63,7 @@ const SIGNUP_UNLOCK_DESCRIPTIONS: Readonly<Record<SignupGrantUnlockReason, strin
   work_email_verified: 'work email verified',
   activity_drip: 'daily activity',
   subscription: 'paid subscription started',
+  credit_purchase: 'credit pack purchased',
 };
 
 const grantClock = (db: GrantAdapters['db']) => db.signupProtection?.grantBudget?.now?.() ?? new Date();
@@ -73,10 +74,11 @@ function withoutHeldUnlock(grant: SignupGrant): SignupGrant {
   return rest;
 }
 
-/** Card verification, subscription and admin releases are never throttled by the daily signup grant budget. */
+/** Payment and admin releases are never throttled by the daily signup grant budget. */
 const BUDGET_EXEMPT_REASONS: ReadonlySet<SignupGrantUnlockReason | undefined> = new Set([
   'card_verified',
   'subscription',
+  'credit_purchase',
   'admin',
 ]);
 
@@ -89,7 +91,7 @@ function isReleaseEligible(
   if (!user?.signupGrant || accountBlockReasons(user).length || isAiAccessRevoked(user)) return false;
   if (isSignupGrantBlocked(user)) return false;
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
-  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
+  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or payment unlock.
   return user.signupGrant.stage !== 'pending_email';
 }
 
@@ -105,6 +107,10 @@ function ineligibleResult(
     ? { ...noGrant(), withheld: true }
     : noGrant();
 }
+
+/** A refunded, disputed or fraud-warned payment closes every signup release except an admin's. */
+const isForfeitedRelease = (grant: SignupGrant, reason: SignupGrantUnlockReason | undefined) =>
+  !!grant.unlockForfeited && reason !== 'admin';
 
 /** Whether the stored risk score alone keeps the account in review (refreshSignupRiskScore's needsReview). */
 async function scoreNeedsReview(score: number, adminSettings: GrantAdapters['db']['adminSettings']) {
@@ -131,6 +137,7 @@ async function releaseStage(
   if (db.signupProtection) {
     const user = await db.users.findById(userId);
     if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
+    if (isForfeitedRelease(user.signupGrant, reason)) return noGrant();
     if (!user.emailVerified) {
       if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
       return noGrant();
@@ -149,6 +156,7 @@ async function releaseStage(
     const result = await withTransaction<AssessedGrantResult>(async () => {
       const user = await db.users.findById(userId);
       if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
+      if (isForfeitedRelease(user.signupGrant, reason)) return noGrant();
       const grant = user.signupGrant;
       const evidence = await validate(user);
       if (!evidence) return noGrant();
@@ -436,7 +444,7 @@ type UnlockAdapters = GrantAdapters & {
 
 /**
  * Validators are server-owned integrations, never request payloads. Missing integrations fail closed.
- * A payment unlock (card or subscription) is held for `signupUnlockPaymentHoldHours` so a stolen card
+ * A payment unlock (card, subscription or credit pack) is held for `signupUnlockPaymentHoldHours` so a stolen card
  * cannot cash out the remainder before its dispute or early fraud warning arrives.
  */
 export const unlockSignupGrant = (userId: string, reason: SignupGrantUnlockReason, adapters: UnlockAdapters) => {
@@ -504,8 +512,8 @@ async function holdPaymentUnlock(
 }
 
 /**
- * A card unlock on an account whose signup tranche is held for the budget pays the tranche under its
- * own verify-grant id, then the remainder, each once and outside the budget.
+ * A card or payment unlock on an account whose signup tranche is held for the budget pays the tranche
+ * under its own verify-grant id, then the remainder, each once and outside the budget.
  */
 async function unlockWithHeldTranche(
   userId: string,
@@ -617,9 +625,11 @@ export type ForfeitPaymentUnlockResult = {
 };
 
 /**
- * Voids payment unlocks after a dispute, refund or early fraud warning on the account's payments:
- * cancels a held bonus before the held-release job can pay it, and closes payment unlocks for good.
- * A bonus already paid is left to the dispute clawback. Idempotent: a replay finds the marker.
+ * Voids signup releases after a dispute, refund or early fraud warning on the account's payments:
+ * cancels a held bonus before the held-release job can pay it, and closes the drip and every
+ * non-admin unlock for good. A budget hold is dropped too, since the held-release cron can no longer
+ * pay it. A bonus already paid is left to the dispute clawback. Only the signup grant is written, so
+ * paid standing (purchases, plan, API trust) is untouched. Idempotent: a replay finds the marker.
  */
 export async function forfeitPaymentUnlock(
   userId: string,
@@ -635,6 +645,7 @@ export async function forfeitPaymentUnlock(
     const updated = await db.users.update({
       id: userId,
       signupGrant: { ...withoutHeldUnlock(grant), unlockForfeited: { cause, at: grantClock(db) } },
+      ...(user.signupGrantHeldReason === 'budget_exhausted' ? { signupGrantHeldReason: null } : {}),
     });
     if (!updated) throw new Error('Staged grant account update failed');
     return { outcome: grant.heldUnlock ? 'cancelled' : 'forfeited' };
@@ -665,7 +676,8 @@ export async function dripSignupGrant(
   if (!(dailyCredits > 0) || !(dripCap > 0)) return noGrant();
   if (dripCapSource === 'default') notifyUnsetDripCap(adapters.db.signupProtection, dripCap);
   const user = await adapters.db.users.findById(userId);
-  if (!user?.signupGrant || hasPaidSignupDrip(user.signupGrant, day, period)) return noGrant();
+  if (!user?.signupGrant || user.signupGrant.unlockForfeited || hasPaidSignupDrip(user.signupGrant, day, period))
+    return noGrant();
   return releaseStage(
     userId,
     'signup',

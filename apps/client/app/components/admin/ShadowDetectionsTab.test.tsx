@@ -21,7 +21,10 @@ const m = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetections: m.useShadowDetections,
   useShadowDetectionVerdict: () => ({ mutateAsync: m.mutateAsync, isPending: false, error: m.verdictError }),
+  useAbuseAssessments: () => ({ data: [], isPending: false, error: null }),
+  useRequestAbuseAssessment: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
 }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { isAdmin: true } }) }));
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => m.search,
   useNavigate: () => m.navigate,

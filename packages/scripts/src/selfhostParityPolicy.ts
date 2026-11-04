@@ -221,7 +221,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'notification:infra/buckets.ts:historyImportBucket.uploadComplete',
-    '6cf759ba3cf36c008ce65f7007e12ca65950208f8c7c77fbe92ba5041425ebd2'
+    '1757fe36989d4bc9e7ec292b89c3105695fe736cca0ee1d0af4aa897cc60cb6f'
   ),
   gap(
     'notification:infra/emailIngestion.ts:emailIngestionBucket.emailReceived',
@@ -1049,6 +1049,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     symbol: 'registerTelemetryCleanup',
     fingerprint: 'da6450a4a59ea6ac4f91f4b6adc5e7c54586164f920952bb76654f03b4b0e228',
   }),
+  gap(
+    'schedule:infra/cron.ts:abuseAssessmentSweep',
+    'ea8660b95977904b15a42e29c55cf99aa096ca8bb712e5c49606ecc007f57c34'
+  ),
   gap('schedule:infra/cron.ts:usagePatternSignals', '066edef1ae0b959ca2c6049626beb3c8630d5c22f99aed2b3bca1430f1f05766'),
   wired(
     'schedule:infra/cron.ts:voiceHoldSweep',

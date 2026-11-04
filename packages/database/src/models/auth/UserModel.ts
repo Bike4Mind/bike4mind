@@ -20,6 +20,7 @@ import {
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
+  riskEvidenceSummarySchema,
   type RiskEvidenceTrigger,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
@@ -1076,6 +1077,24 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
         }
       )
       .exec();
+  }
+
+  /**
+   * The stored evidence summary and creation time of each id, and nothing else from the account:
+   * advisory abuse assessments read only this. Unparseable or absent summaries come back null.
+   */
+  async findRiskEvidenceSummaries(
+    ids: string[]
+  ): Promise<{ id: string; createdAt: Date | null; summary: RiskEvidenceSummary | null }[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } }, { createdAt: 1, 'riskEvidence.summary': 1 })
+      .lean<{ _id: mongoose.Types.ObjectId; createdAt?: Date; riskEvidence?: { summary?: unknown } }[]>();
+    return docs.map(doc => {
+      const parsed = riskEvidenceSummarySchema.safeParse(doc.riskEvidence?.summary);
+      return { id: doc._id.toString(), createdAt: doc.createdAt ?? null, summary: parsed.success ? parsed.data : null };
+    });
   }
 
   async riskEvidenceCoverage(since: Date): Promise<RiskEvidenceCoverage> {
