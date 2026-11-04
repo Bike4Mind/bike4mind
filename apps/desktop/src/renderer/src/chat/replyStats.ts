@@ -79,7 +79,8 @@ const ESTIMATES = {
 
 /** "820ms", "12.3s", "3m 7s"; rounded before the unit is picked, so 999.6ms reads "1.0s", not "1000ms". */
 export function formatDuration(ms: number): string {
-  const clamped = Math.max(0, ms);
+  // A corrupt stored duration reads as none rather than "NaNms".
+  const clamped = Number.isFinite(ms) ? Math.max(0, ms) : 0;
   if (Math.round(clamped) < 1000) return `${Math.round(clamped)}ms`;
   const tenths = Math.round(clamped / 100);
   if (tenths < 600) return `${(tenths / 10).toFixed(1)}s`;

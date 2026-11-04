@@ -161,6 +161,10 @@ class RailErrorBoundary extends Component<{ children: ReactNode }, { failed: boo
     return { failed: true };
   }
 
+  componentDidCatch(error: unknown) {
+    console.error('Reply stats rail failed', error);
+  }
+
   render() {
     return this.state.failed ? null : this.props.children;
   }
