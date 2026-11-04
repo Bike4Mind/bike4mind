@@ -1,6 +1,6 @@
-import { thinkingSwitchedOff, type ChatModelOption, type ReasoningEffortSetting } from '@shared/chat';
-import { catalogSeed, layeredGeneration, requestGeneration, type GenerationSettings } from '@shared/generation';
-import type { ModelSettings } from '@shared/modelSettings';
+import { thinkingSwitchedOff, type ChatModelOption, type ReasoningEffortSetting } from './chat';
+import { catalogSeed, layeredGeneration, requestGeneration, type GenerationSettings } from './generation';
+import type { ModelSettings } from './modelSettings';
 import type { ReasoningEffort } from '@bike4mind/common';
 
 type TurnOption = Pick<ChatModelOption, 'thinkingToggle' | 'thinkingAlwaysOn' | 'minimalThinks' | 'controls'>;

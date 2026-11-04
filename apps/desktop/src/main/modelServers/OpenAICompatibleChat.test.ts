@@ -343,6 +343,52 @@ describe('OpenAICompatibleChat generation settings', () => {
     expect(bodies[2]).not.toHaveProperty('reasoning_effort');
   });
 
+  it.each([
+    ['llama-server', true],
+    ['vllm', true],
+    ['lmstudio', false],
+    [null, false],
+  ] as const)('sends the thinking switch only to a supported product: %s', async (product, supported) => {
+    const { fetch, bodies } = server();
+    const client = chat(fetch, product);
+    for (const thinking of [undefined, true, false]) {
+      await collect(client, ask('qwen3-8b', { thinking }));
+    }
+    expect(bodies[0]).not.toHaveProperty('chat_template_kwargs');
+    expect(bodies[1]).not.toHaveProperty('chat_template_kwargs');
+    if (supported) expect(bodies[2]).toHaveProperty('chat_template_kwargs', { enable_thinking: false });
+    else expect(bodies[2]).not.toHaveProperty('chat_template_kwargs');
+  });
+
+  it.each(['lmstudio', null] as const)('does not offer an unsupported thinking switch on %s', async product => {
+    const { fetch } = server(['qwen3-8b'], true);
+    const client = chat(fetch, product);
+    await collect(client, ask('qwen3-8b'));
+    const [model] = await client.listModels();
+    expect(model.thinkingToggle).toBeUndefined();
+    expect(model.thinkingAlwaysOn).toBe(true);
+  });
+
+  it('completes an auxiliary request on a strict OpenAI-compatible product', async () => {
+    const { fetch: upstream } = server();
+    const fetch: FetchLike = async (url, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      if ('chat_template_kwargs' in body) {
+        return Response.json(
+          { error: { message: 'Unrecognized request argument: chat_template_kwargs' } },
+          { status: 400 }
+        );
+      }
+      return upstream(url, init);
+    };
+    await expect(collect(chat(fetch, null), ask('qwen3-8b', { thinking: false }))).resolves.toEqual(
+      expect.arrayContaining([
+        { type: 'content', text: 'ok' },
+        { type: 'content', stopReason: 'stop' },
+      ])
+    );
+  });
+
   it('sends enable_thinking only for thinking switched off, never for on or unset', async () => {
     const { fetch, bodies } = server();
     const client = chat(fetch);

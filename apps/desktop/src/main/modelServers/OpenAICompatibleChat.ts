@@ -160,6 +160,10 @@ interface StreamChunk {
 
 const STOP_REASONS: Record<string, string> = { length: 'max_tokens', tool_calls: 'tool_use', stop: 'stop' };
 
+function supportsThinkingSwitch(product: OpenAICompatibleProduct | null): boolean {
+  return product === 'llama-server' || product === 'vllm';
+}
+
 /** vLLM's refusal of a prompt plus max_tokens past max_model_len. */
 async function overflowsContext(response: Response): Promise<boolean> {
   if (response.status !== 400) return false;
@@ -286,7 +290,11 @@ export class OpenAICompatibleChat implements LocalChat {
           : {}),
         ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
         // The server does not say which models think, so a model earns the switch by thinking once.
-        ...(thinks && !controls.effort ? { thinkingToggle: true, minimalThinks: true as const } : {}),
+        ...(thinks && !controls.effort
+          ? supportsThinkingSwitch(this.server.product)
+            ? { thinkingToggle: true, minimalThinks: true as const }
+            : { thinkingAlwaysOn: true }
+          : {}),
         supportsReasoningEffort: controls.effort !== undefined,
         controls,
       };
@@ -425,7 +433,9 @@ export class OpenAICompatibleChat implements LocalChat {
         ? { reasoning_effort: level, chat_template_kwargs: { reasoning_effort: level } }
         : { reasoning_effort: level };
     }
-    return request.thinking === false ? { chat_template_kwargs: { enable_thinking: false } } : {};
+    return request.thinking === false && supportsThinkingSwitch(this.server.product)
+      ? { chat_template_kwargs: { enable_thinking: false } }
+      : {};
   }
 
   private recallThinkers(): Promise<void> {

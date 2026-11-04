@@ -7,9 +7,12 @@ import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useEffect, useId, useRef, useState } from 'react';
-import type { ChatModelOption } from '@shared/chat';
+import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
+import type { ModelSettings } from '@shared/modelSettings';
+import { turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
 import {
   effectiveControls,
+  effortSent,
   GENERATION_FIELDS,
   GENERATION_LABELS,
   requestGeneration,
@@ -62,7 +65,7 @@ function FieldRow({
 }: {
   field: GenerationField;
   control: NumericControl;
-  /** What a blank field sends: the Models-screen default, else the control's own. */
+  /** What a blank field sends: the Models-screen default, catalog sampling or the control's own. */
   fallback: number | undefined;
   stored: number | undefined;
   sent: number | undefined;
@@ -199,12 +202,14 @@ export function GenerationSettingsPicker({
   model,
   generation,
   modelDefaults,
+  effort = 'default',
   disabled,
   onChange,
 }: {
   model: ChatModelOption | undefined;
   generation: GenerationSettings | undefined;
-  modelDefaults?: GenerationSettings;
+  modelDefaults?: ModelSettings;
+  effort?: ReasoningEffortSetting;
   disabled?: boolean;
   onChange: (generation: GenerationSettings) => Promise<boolean> | void;
 }) {
@@ -218,7 +223,10 @@ export function GenerationSettingsPicker({
     pending.current = undefined;
   }, [generation]);
 
-  const controls = effectiveControls(model?.controls, generation);
+  const effortSetting = turnEffortSetting(effort, modelDefaults, model);
+  const sentEffort = effortSent(effortSetting, model?.controls?.effort?.levels ?? []);
+  const inherited = turnGeneration(undefined, modelDefaults, model, turnThinks(effortSetting, model, sentEffort));
+  const controls = effectiveControls(model?.controls, { ...inherited, ...generation });
   const fields = GENERATION_FIELDS.flatMap(field => {
     const control = controls?.[field];
     return control ? [{ field, control }] : [];
@@ -226,7 +234,7 @@ export function GenerationSettingsPicker({
   if (fields.length === 0) return null;
 
   const sent = requestGeneration(generation, controls);
-  const fallbacks = requestGeneration(modelDefaults, controls);
+  const fallbacks = requestGeneration(inherited, controls);
   const applied = fields.filter(({ field }) => generation?.[field] !== undefined && sent[field] !== undefined).length;
   const resettable = fields.some(({ field, control }) => !control.locked && generation?.[field] !== undefined);
   const firstEditable = fields.find(({ control }) => !control.locked)?.field;

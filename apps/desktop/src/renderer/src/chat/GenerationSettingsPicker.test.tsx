@@ -2,8 +2,9 @@
 import { CssVarsProvider } from '@mui/joy/styles';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { ChatModelOption } from '@shared/chat';
+import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
 import type { GenerationSettings } from '@shared/generation';
+import type { ModelSettings } from '@shared/modelSettings';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GenerationSettingsPicker } from './GenerationSettingsPicker';
 
@@ -81,7 +82,8 @@ describe('GenerationSettingsPicker', () => {
   async function render(
     model: ChatModelOption | undefined,
     generation?: GenerationSettings,
-    modelDefaults?: GenerationSettings
+    modelDefaults?: ModelSettings,
+    effort: ReasoningEffortSetting = 'default'
   ) {
     await act(async () =>
       root.render(
@@ -90,6 +92,7 @@ describe('GenerationSettingsPicker', () => {
             model={model}
             generation={generation}
             modelDefaults={modelDefaults}
+            effort={effort}
             onChange={onChange}
           />
         </CssVarsProvider>
@@ -177,12 +180,51 @@ describe('GenerationSettingsPicker', () => {
   });
 
   it('shows the Models-screen default a blank field sends in place of the catalog one', async () => {
-    await render(LOCAL, undefined, { temperature: 0.4, maxOutputTokens: 99_999 });
+    await render(LOCAL, undefined, { generation: { temperature: 0.4, maxOutputTokens: 99_999 } });
     await open();
     expect(note('temperature')).toBe('Model default: 0.4.');
     expect(input('temperature').placeholder).toBe('0.4');
     expect(note('topP')).toBe('Model default: 0.95.');
     expect(note('maxOutputTokens')).toBe('Model default: 16,384. Thinking counts toward it.');
+  });
+
+  it('shows catalog sampling for the thinking state and lets model defaults override it', async () => {
+    const model: ChatModelOption = {
+      ...LOCAL,
+      thinkingToggle: true,
+      controls: { ...LOCAL.controls, effort: undefined },
+      catalogSampling: {
+        thinking: { temperature: 1, topK: 20 },
+        nonThinking: { temperature: 0.7, topK: 40 },
+      },
+    };
+    await render(model);
+    await open();
+    expect(input('temperature').placeholder).toBe('1');
+    expect(note('temperature')).toBe('Model default: 1.');
+    expect(onChange).not.toHaveBeenCalled();
+
+    await render(model, undefined, undefined, 'none');
+    expect(input('temperature').placeholder).toBe('0.7');
+    expect(input('topK').placeholder).toBe('40');
+
+    await render(model, undefined, { generation: { temperature: 0 } }, 'none');
+    expect(input('temperature').placeholder).toBe('0');
+    expect(input('topK').placeholder).toBe('40');
+  });
+
+  it('uses the model default effort to choose the blank field sampling', async () => {
+    const model: ChatModelOption = {
+      ...LOCAL,
+      controls: { ...LOCAL.controls, effort: { levels: ['none', 'low', 'high'], scope: 'request' } },
+      catalogSampling: { thinking: { temperature: 1 }, nonThinking: { temperature: 0.7 } },
+    };
+    await render(model, undefined, { effort: 'none' });
+    await open();
+    expect(input('temperature').placeholder).toBe('0.7');
+
+    await render(model, undefined, { effort: 'none' }, 'high');
+    expect(input('temperature').placeholder).toBe('1');
   });
 
   it('shows a hosted model its own fields, with temperature locked and nothing to reset', async () => {

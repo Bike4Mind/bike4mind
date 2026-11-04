@@ -1608,7 +1608,8 @@ export function ChatShell({
                   key={activeId ?? ''}
                   model={modelOption}
                   generation={conversation.session?.generation}
-                  modelDefaults={modelDefaults?.generation}
+                  modelDefaults={modelDefaults ?? undefined}
+                  effort={conversation.session?.reasoningEffort ?? 'default'}
                   disabled={!activeId}
                   onChange={conversation.setGeneration}
                 />
