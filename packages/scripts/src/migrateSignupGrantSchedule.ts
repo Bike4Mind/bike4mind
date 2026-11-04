@@ -22,7 +22,8 @@ export interface MigrationOptions {
   maxCredits?: number;
   /**
    * JSON file recording every planned change (user id, before, after), written before any write.
-   * Created with mode 0600; an existing file is refused rather than overwritten.
+   * Created with mode 0600; an existing file is refused rather than overwritten. Rewritten after the
+   * caps and writes with a status and a per-change `written` flag.
    */
   reportPath?: string;
   log?: (message: string) => void;
@@ -36,6 +37,8 @@ interface GrantFields {
 
 export interface PlannedChange {
   userId: string;
+  /** Set once `apply` has tried the write: false when the guard found the account changed since the plan. */
+  written?: boolean;
   stage: SignupGrant['stage'];
   before: GrantFields;
   after: GrantFields;
@@ -160,7 +163,10 @@ export async function migrateSignupGrantSchedule({
   let batch: StagedUser[] = [];
   const plan = async () => {
     if (batch.length === 0) return;
-    const received = await readReceivedCredits(batch.map(user => String(user._id)));
+    const received = await readReceivedCredits(
+      batch.map(user => String(user._id)),
+      'primary'
+    );
     for (const user of batch) {
       const grant = user.signupGrant;
       if (!signupGrantDripOpen(grant)) {
@@ -211,25 +217,24 @@ export async function migrateSignupGrantSchedule({
   }
   await plan();
 
-  if (reportPath) {
-    writeFileSync(
-      reportPath,
-      JSON.stringify({ apply, dripCap, skipped: result.skipped, changes: result.changes }, null, 2),
-      {
-        mode: 0o600,
-        flag: 'wx',
-      }
-    );
-    log(`Wrote the planned changes to ${reportPath}.`);
-  }
+  // `status` tells a restore which changes actually landed: only `written: true` entries did.
+  const writePlan = (status: 'planned' | 'refused' | 'applied', flag: 'wx' | 'w') => {
+    if (!reportPath) return;
+    const body = { status, apply, dripCap, skipped: result.skipped, changes: result.changes };
+    writeFileSync(reportPath, JSON.stringify(body, null, 2), { mode: 0o600, flag });
+  };
+  writePlan('planned', 'wx');
+  if (reportPath) log(`Wrote the planned changes to ${reportPath}.`);
 
   if (apply) {
     if (result.changes.length > maxUsers!) {
+      writePlan('refused', 'w');
       throw new Error(
         `Refusing to write: ${result.changes.length} accounts would change, over --max-users ${maxUsers}`
       );
     }
     if (result.remainingToDrip > maxCredits!) {
+      writePlan('refused', 'w');
       throw new Error(
         `Refusing to write: the changed accounts could drip ${result.remainingToDrip} more credits, over --max-credits ${maxCredits}`
       );
@@ -251,8 +256,10 @@ export async function migrateSignupGrantSchedule({
           'signupGrant.unlockCredits': change.after.unlockCredits,
         },
       });
+      change.written = written.modifiedCount === 1;
       result.migrated += written.modifiedCount;
     }
+    writePlan('applied', 'w');
     if (result.migrated < result.changes.length) {
       log(`Wrote ${result.migrated} of ${result.changes.length} planned account(s); the rest changed since the plan.`);
     }
@@ -261,7 +268,7 @@ export async function migrateSignupGrantSchedule({
   const { skipped } = result;
   log(
     `Drip cap ${dripCap}. In flight: ${result.inFlight}; to change: ${result.changes.length} ` +
-      `(remaining to drip ${result.remainingToDrip}). Skipped: ${skipped.flatGrant} flat-grant, ` +
+      `(remaining to drip ${result.remainingToDrip}). Skipped: ${skipped.flatGrant} without signupGrant, ` +
       `${skipped.notInFlight} not in flight, ${skipped.excluded} excluded, ${skipped['already-aligned']} aligned, ` +
       `${skipped['invalid-grant']} invalid, ${skipped['ledger-below-state']} ledger-below-state` +
       (apply ? `; migrated ${result.migrated}.` : '.')

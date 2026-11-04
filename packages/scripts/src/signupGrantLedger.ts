@@ -29,8 +29,14 @@ export function classifyGrantTransaction(transactionId: string, userId: string):
   return null;
 }
 
-/** Credits actually received per user, summed from the ledger rather than read off `currentCredits`. */
-export async function readReceivedCredits(userIds: string[]): Promise<Map<string, ReceivedCredits>> {
+/**
+ * Credits actually received per user, summed from the ledger rather than read off `currentCredits`.
+ * Callers that write from the result pass `'primary'` so the totals are never older than the user read.
+ */
+export async function readReceivedCredits(
+  userIds: string[],
+  readPreference: 'primary' | 'secondaryPreferred' = 'secondaryPreferred'
+): Promise<Map<string, ReceivedCredits>> {
   const totals = new Map<string, ReceivedCredits>();
   for (const id of userIds) totals.set(id, { received: 0, dripped: 0 });
   const idPattern = new RegExp(`^(${GRANT_ID_PREFIXES.join('|')}):`);
@@ -41,7 +47,7 @@ export async function readReceivedCredits(userIds: string[]): Promise<Map<string
       { ownerId: { $in: batch }, ownerType: 'User', type: 'generic_add', transactionId: idPattern },
       { ownerId: 1, transactionId: 1, credits: 1, _id: 0 }
     )
-      .read('secondaryPreferred')
+      .read(readPreference)
       .lean<{ ownerId: string; transactionId?: string; credits: number }[]>()
       .cursor({ batchSize: LEDGER_BATCH_SIZE });
 

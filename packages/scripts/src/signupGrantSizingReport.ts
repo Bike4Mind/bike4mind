@@ -32,12 +32,14 @@ export interface SignupGrantSizingReport {
   pendingFreeCreditsTagged: number;
   staged: {
     byStage: Record<SignupGrant['stage'], number>;
-    /** Accounts the drip can still pay: mid-drip, or completed by the drip and reopenable by a raised cap. */
+    /** Payable accounts: mid-drip, or completed by the drip and reopenable by a raised cap. */
     inFlight: number;
     inFlightReceived: number;
     /** In-flight accounts whose `creditsReleased` differs from the ledger-received total. */
     inFlightLedgerMismatch: number;
     remainingToDrip: number;
+    /** Drip-open accounts the drip cannot pay (banned, moderated, disputed, suspended, deleted); left out of the figures above. */
+    inFlightBlocked: number;
   };
   dripCap: number;
   dripCapSource: SignupGrantDripCapSource;
@@ -47,12 +49,21 @@ type SizingUser = {
   _id: unknown;
   emailVerified?: boolean;
   isBanned?: boolean;
+  isModerated?: boolean;
+  disputePending?: boolean;
+  moderation?: { status?: string };
+  deletedAt?: Date | null;
   isAdmin?: boolean;
   lastActiveAt?: Date;
   currentCredits?: number;
   tags?: string[];
   signupGrant?: SignupGrant;
 };
+
+/** Mirrors NOT_BLOCKED in migrateSignupGrantSchedule.ts: accounts the drip never pays and the migration skips. */
+const isDripBlocked = (user: SizingUser) =>
+  Boolean(user.isBanned || user.isModerated || user.disputePending || user.moderation?.status === 'suspended') ||
+  user.deletedAt != null;
 
 const emptyBuckets = (): BucketCounts => ({ '<0': 0, '0': 0, '1': 0, '2-99': 0, '100-999': 0, '1000+': 0 });
 
@@ -89,6 +100,7 @@ export async function buildSignupGrantSizingReport({
       inFlightReceived: 0,
       inFlightLedgerMismatch: 0,
       remainingToDrip: 0,
+      inFlightBlocked: 0,
     },
     dripCap: schedule.dripCap,
     dripCapSource: schedule.dripCapSource,
@@ -101,6 +113,10 @@ export async function buildSignupGrantSizingReport({
         projection: {
           emailVerified: 1,
           isBanned: 1,
+          isModerated: 1,
+          disputePending: 1,
+          'moderation.status': 1,
+          deletedAt: 1,
           isAdmin: 1,
           lastActiveAt: 1,
           currentCredits: 1,
@@ -130,6 +146,10 @@ export async function buildSignupGrantSizingReport({
       }
       report.staged.byStage[grant.stage] = (report.staged.byStage[grant.stage] ?? 0) + 1;
       if (!signupGrantDripOpen(grant)) continue;
+      if (isDripBlocked(user)) {
+        report.staged.inFlightBlocked++;
+        continue;
+      }
       report.staged.inFlight++;
       report.staged.inFlightReceived += ledger.received;
       if (grant.creditsReleased !== ledger.received) report.staged.inFlightLedgerMismatch++;
@@ -166,6 +186,7 @@ export function formatSizingReport(report: SignupGrantSizingReport): string[] {
     `Staged by stage: pending_email ${report.staged.byStage.pending_email}, signup ${report.staged.byStage.signup}, unlocked ${report.staged.byStage.unlocked}`,
     `In flight (drip still open): ${report.staged.inFlight}, ledger-received total ${report.staged.inFlightReceived}, ` +
       `${report.staged.inFlightLedgerMismatch} with creditsReleased != ledger`,
+    `Drip-open but blocked (excluded from the figures above): ${report.staged.inFlightBlocked}`,
     `Drip cap ${report.dripCap} (${report.dripCapSource}); remaining to drip across in-flight accounts: ${report.staged.remainingToDrip}`,
   ];
 }
