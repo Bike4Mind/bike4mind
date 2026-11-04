@@ -7,6 +7,8 @@ import { Loop, loopRepository } from './LoopModel';
 const USER = 'user-1';
 const LEASE_MS = 5 * 60 * 1000;
 
+const later = (at: Date) => new Date(at.getTime() + 60_000);
+
 const create = async (overrides: Record<string, unknown> = {}) => {
   const doc = await Loop.create({
     userId: USER,
@@ -247,13 +249,95 @@ describe('LoopRepository', () => {
     const lease = new Date(now.getTime() + 60_000);
     const live = await create({ status: 'live', nextRunAt: now, leaseUntil: lease });
     const paused = await create({ status: 'paused', nextRunAt: now, leaseUntil: lease });
-    await loopRepository.deferUntil(live.id, later);
-    await loopRepository.deferUntil(paused.id, later);
+    await loopRepository.deferUntil(live.id, later, now);
+    await loopRepository.deferUntil(paused.id, later, now);
     const [l, p] = [await loopRepository.findById(live.id), await loopRepository.findById(paused.id)];
-    expect(l).toMatchObject({ status: 'live', nextRunAt: later });
+    expect(l).toMatchObject({ status: 'live', nextRunAt: later, hold: { kind: 'pacing', until: later, at: now } });
     expect(l?.leaseUntil).toBeUndefined();
     expect(p?.nextRunAt).toEqual(now);
     expect(p?.leaseUntil).toBeUndefined();
+    expect(p?.hold).toBeUndefined();
+  });
+
+  describe('holds and alarms', () => {
+    const now = new Date('2026-11-04T12:00:00Z');
+    const earlier = new Date('2026-11-04T11:00:00Z');
+
+    it('markDispatched and foldRun clear them', async () => {
+      const loop = await create({
+        status: 'live',
+        hold: { kind: 'pacing', until: now, at: earlier },
+        alarm: { kind: 'idle_with_work', reason: 'idle', since: earlier },
+      });
+      await loopRepository.markDispatched(loop.id, 'exec-1', now);
+      const dispatched = await loopRepository.findById(loop.id);
+      expect(dispatched?.hold).toBeUndefined();
+      expect(dispatched?.alarm).toBeUndefined();
+
+      await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'exec-1' });
+      expect(await loopRepository.foldRun(loop.id, 'exec-1', {})).toBe(true);
+      expect((await loopRepository.findById(loop.id))?.alarm).toBeUndefined();
+    });
+
+    it('setCapacityHolds marks only claimable loops outside skipIds; clearCapacityHolds keeps pacing holds', async () => {
+      const due = await create({ status: 'live', nextRunAt: earlier });
+      const claimed = await create({ status: 'live', nextRunAt: earlier });
+      const running = await create({ status: 'live', nextRunAt: earlier, activeExecutionId: 'exec-1' });
+      const future = await create({ status: 'live', nextRunAt: new Date(now.getTime() + 60_000) });
+      const paused = await create({ status: 'paused', nextRunAt: earlier });
+      const paced = await create({ status: 'live', nextRunAt: now, hold: { kind: 'pacing', until: now, at: earlier } });
+
+      await loopRepository.setCapacityHolds(now, [claimed.id]);
+      const held = async (id: string) => (await loopRepository.findById(id))?.hold?.kind;
+      expect(await held(due.id)).toBe('capacity');
+      expect(await held(paced.id)).toBe('capacity');
+      for (const id of [claimed.id, running.id, future.id, paused.id]) expect(await held(id)).toBeUndefined();
+
+      await loopRepository.updateForUser(paced.id, USER, { hold: { kind: 'pacing', until: now, at: earlier } });
+      await loopRepository.clearCapacityHolds();
+      expect(await held(due.id)).toBeUndefined();
+      expect(await held(paced.id)).toBe('pacing');
+    });
+
+    it('setAlarm keeps since for the same alarm and resets it for another kind or run', async () => {
+      const loop = await create({ status: 'live' });
+      await loopRepository.setAlarm(loop.id, { kind: 'idle_with_work', reason: 'first', since: earlier });
+      await loopRepository.setAlarm(loop.id, { kind: 'idle_with_work', reason: '$second', since: now });
+      expect((await loopRepository.findById(loop.id))?.alarm).toEqual({
+        kind: 'idle_with_work',
+        reason: '$second',
+        since: earlier,
+      });
+
+      await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'a' });
+      expect((await loopRepository.findById(loop.id))?.alarm?.since).toEqual(now);
+      await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: later(now), executionId: 'a' });
+      expect((await loopRepository.findById(loop.id))?.alarm?.since).toEqual(now);
+      await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: later(now), executionId: 'b' });
+      expect((await loopRepository.findById(loop.id))?.alarm).toMatchObject({ since: later(now), executionId: 'b' });
+    });
+
+    it('clearAlarm is conditional on kind; listAlarmed filters by kind', async () => {
+      const idle = await create({ alarm: { kind: 'idle_with_work', reason: 'idle', since: now } });
+      const long = await create({ alarm: { kind: 'long_run', reason: 'long', since: now, executionId: 'e' } });
+      await create();
+      expect((await loopRepository.listAlarmed()).map(loop => loop.id).sort()).toEqual([idle.id, long.id].sort());
+      expect((await loopRepository.listAlarmed(['long_run'])).map(loop => loop.id)).toEqual([long.id]);
+
+      await loopRepository.clearAlarm(idle.id, 'long_run');
+      expect((await loopRepository.findById(idle.id))?.alarm?.kind).toBe('idle_with_work');
+      await loopRepository.clearAlarm(idle.id, 'idle_with_work');
+      expect((await loopRepository.findById(idle.id))?.alarm).toBeUndefined();
+    });
+
+    it('listPastDueLive returns live loops with no run, due by the cutoff, oldest first', async () => {
+      const older = await create({ status: 'live', nextRunAt: new Date(earlier.getTime() - 60_000) });
+      const old = await create({ status: 'live', nextRunAt: earlier });
+      await create({ status: 'live', nextRunAt: now });
+      await create({ status: 'live', nextRunAt: earlier, activeExecutionId: 'exec-1' });
+      await create({ status: 'paused', nextRunAt: earlier });
+      expect((await loopRepository.listPastDueLive(earlier, 10)).map(loop => loop.id)).toEqual([older.id, old.id]);
+    });
   });
 
   it("pauseAllLiveForUser pauses only that user's live loops", async () => {

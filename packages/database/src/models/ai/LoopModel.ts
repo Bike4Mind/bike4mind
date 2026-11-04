@@ -2,12 +2,16 @@ import mongoose, { Model, Schema, model } from 'mongoose';
 import {
   DEFAULT_LOOP_STAGES,
   ILoop,
+  ILoopAlarm,
   ILoopRepository,
   ILoopMemory,
+  LOOP_ALARM_KINDS,
   LOOP_AUTO_RESUME_KINDS,
+  LOOP_HOLD_KINDS,
   LOOP_MERGE_POLICIES,
   LOOP_STAGE_RUNNERS,
   LOOP_STATUSES,
+  LoopAlarmKind,
   LoopAutoResume,
   LoopStatus,
 } from '@bike4mind/common';
@@ -100,18 +104,82 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       { _id: id },
       {
         $set: { lastExecutionId: executionId, activeExecutionId: executionId, nextRunAt },
-        $unset: { leaseUntil: '' },
+        $unset: { leaseUntil: '', hold: '', alarm: '' },
       }
     );
   }
 
   /** Pushes a claimed live loop's next run out without pausing it, and releases the claim. */
-  async deferUntil(id: string, nextRunAt: Date): Promise<void> {
+  async deferUntil(id: string, nextRunAt: Date, now: Date): Promise<void> {
     const result = await this.loopModel.updateOne(
       { _id: id, status: 'live' },
-      { $set: { nextRunAt }, $unset: { leaseUntil: '' } }
+      { $set: { nextRunAt, hold: { kind: 'pacing', until: nextRunAt, at: now } }, $unset: { leaseUntil: '' } }
     );
     if (result.matchedCount === 0) await this.releaseLease(id);
+  }
+
+  // The hold/alarm queries state `$exists: true` so the planner can use their partial indexes.
+  async clearCapacityHolds(): Promise<void> {
+    await this.loopModel.updateMany({ hold: { $exists: true }, 'hold.kind': 'capacity' }, { $unset: { hold: '' } });
+  }
+
+  /** Same filter as `claimDue`, so only loops the run cap kept out this tick are marked. */
+  async setCapacityHolds(now: Date, skipIds: string[]): Promise<void> {
+    await this.loopModel.updateMany(
+      {
+        ...(skipIds.length > 0 && { _id: { $nin: skipIds } }),
+        status: 'live',
+        nextRunAt: { $lte: now },
+        activeExecutionId: { $exists: false },
+        $or: [{ leaseUntil: { $exists: false } }, { leaseUntil: { $lt: now } }],
+      },
+      { $set: { hold: { kind: 'capacity', at: now } } }
+    );
+  }
+
+  async listPastDueLive(before: Date, limit: number): Promise<ILoop[]> {
+    const results = await this.loopModel
+      .find({ status: 'live', nextRunAt: { $lte: before }, activeExecutionId: { $exists: false } })
+      .sort({ nextRunAt: 1 })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
+  async listAlarmed(kinds?: LoopAlarmKind[]): Promise<ILoop[]> {
+    const results = await this.loopModel.find({
+      alarm: { $exists: true },
+      ...(kinds && { 'alarm.kind': { $in: kinds } }),
+    });
+    return results.map(doc => doc.toJSON());
+  }
+
+  async setAlarm(id: string, alarm: ILoopAlarm): Promise<void> {
+    const same = {
+      $and: [
+        { $eq: ['$alarm.kind', alarm.kind] },
+        { $eq: [{ $ifNull: ['$alarm.executionId', null] }, alarm.executionId ?? null] },
+      ],
+    };
+    await this.loopModel.updateOne({ _id: id }, [
+      {
+        $set: {
+          alarm: {
+            kind: alarm.kind,
+            // $literal: a pipeline update would read a reason starting with '$' as a field path.
+            reason: { $literal: alarm.reason },
+            since: { $cond: [same, '$alarm.since', alarm.since] },
+            ...(alarm.executionId && { executionId: alarm.executionId }),
+          },
+        },
+      },
+    ]);
+  }
+
+  async clearAlarm(id: string, kind: LoopAlarmKind): Promise<void> {
+    await this.loopModel.updateOne(
+      { _id: id, alarm: { $exists: true }, 'alarm.kind': kind },
+      { $unset: { alarm: '' } }
+    );
   }
 
   /**
@@ -145,7 +213,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   ): Promise<boolean> {
     const result = await this.loopModel.updateOne(
       { _id: id, activeExecutionId: executionId },
-      { ...update, $unset: { ...update.$unset, activeExecutionId: '' } }
+      // An idle alarm cannot coexist with an active run, so any alarm here is this run's long_run alarm.
+      { ...update, $unset: { ...update.$unset, activeExecutionId: '', alarm: '' } }
     );
     return result.modifiedCount > 0;
   }
@@ -265,6 +334,27 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     idleStreak: { type: Number, default: 0 },
     idleResetAt: { type: Date },
     oversees: { type: [String], default: undefined },
+    hold: {
+      type: new Schema(
+        {
+          kind: { type: String, enum: LOOP_HOLD_KINDS, required: true },
+          until: Date,
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+    },
+    alarm: {
+      type: new Schema(
+        {
+          kind: { type: String, enum: LOOP_ALARM_KINDS, required: true },
+          reason: { type: String, required: true },
+          since: { type: Date, required: true },
+          executionId: { type: String },
+        },
+        { _id: false }
+      ),
+    },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },
@@ -276,6 +366,8 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
 LoopSchema.index({ status: 1, nextRunAt: 1 });
 LoopSchema.index({ activeExecutionId: 1 }, { partialFilterExpression: { activeExecutionId: { $exists: true } } });
 LoopSchema.index({ userId: 1, updatedAt: -1 });
+LoopSchema.index({ 'alarm.kind': 1 }, { partialFilterExpression: { alarm: { $exists: true } } });
+LoopSchema.index({ 'hold.kind': 1 }, { partialFilterExpression: { hold: { $exists: true } } });
 
 export const Loop: ILoopModel =
   (mongoose.models[ModelName] as unknown as ILoopModel) ?? model<ILoop, ILoopModel>(ModelName, LoopSchema);

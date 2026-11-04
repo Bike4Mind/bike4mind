@@ -219,6 +219,22 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     );
   }
 
+  async listInProgressForLoops(limit: number): Promise<IWorkItem[]> {
+    const results = await this.workItemModel
+      .find({ status: 'in_progress', loopId: { $exists: true }, deletedAt: null })
+      .sort({ updatedAt: 1 })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
+  async releaseStranded(id: string, executionId?: string): Promise<boolean> {
+    const result = await this.workItemModel.updateOne(
+      { _id: id, status: 'in_progress', executionId: executionId ?? { $exists: false } },
+      { $set: { status: 'open' }, $unset: { executionId: '' }, $inc: { runCount: -1 } }
+    );
+    return result.modifiedCount > 0;
+  }
+
   async findByExecutionId(executionId: string): Promise<IWorkItem | null> {
     const result = await this.workItemModel.findOne({ executionId, deletedAt: null });
     return result?.toJSON() ?? null;

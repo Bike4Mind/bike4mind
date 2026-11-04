@@ -447,6 +447,30 @@ describe('WorkItemRepository', () => {
       expect(await workItemRepository.findNextReadyForLoop(USER, LOOP, STAGES, ['doing'])).toBeNull();
     });
 
+    it('releaseStranded reopens only under the same run, uncounted; listInProgressForLoops lists loop claims', async () => {
+      const bare = await ticket('Bare');
+      const linked = await ticket('Linked');
+      await workItemRepository.claimForRun(bare.id, LOOP);
+      await workItemRepository.claimForRun(linked.id, LOOP);
+      await workItemRepository.setExecution(linked.id, 'exec-1');
+      await create('Plain', { status: 'in_progress' });
+
+      expect((await workItemRepository.listInProgressForLoops(10)).map(item => item.id).sort()).toEqual(
+        [bare.id, linked.id].sort()
+      );
+      expect(await workItemRepository.releaseStranded(bare.id, 'exec-1')).toBe(false);
+      expect(await workItemRepository.releaseStranded(linked.id)).toBe(false);
+      expect(await workItemRepository.releaseStranded(linked.id, 'exec-2')).toBe(false);
+      expect(await workItemRepository.releaseStranded(bare.id)).toBe(true);
+      expect(await workItemRepository.releaseStranded(linked.id, 'exec-1')).toBe(true);
+      expect(await workItemRepository.releaseStranded(linked.id, 'exec-1')).toBe(false);
+      for (const id of [bare.id, linked.id]) {
+        const item = await workItemRepository.findByIdForUser(id, USER);
+        expect(item).toMatchObject({ status: 'open', runCount: 0 });
+        expect(item?.executionId).toBeUndefined();
+      }
+    });
+
     it('claimForRun wins once; releaseClaim reopens and unlinks', async () => {
       const t = await ticket('T');
       expect(await workItemRepository.claimForRun(t.id, 'other-loop')).toBeNull();

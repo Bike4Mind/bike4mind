@@ -1267,16 +1267,19 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     loopId: string,
     sessionId: string,
     limit: number
-  ): Promise<Pick<IAgentExecution, 'id' | 'status' | 'failureReason' | 'completedAt' | 'totalCreditsUsed'>[]> {
+  ): Promise<
+    Pick<IAgentExecution, 'id' | 'status' | 'failureReason' | 'createdAt' | 'completedAt' | 'totalCreditsUsed'>[]
+  > {
     const results = await this.model
       .find({ sessionId, loopId, parentExecutionId: null })
       .sort({ createdAt: -1 })
       .limit(limit)
-      .select({ status: 1, failureReason: 1, completedAt: 1, totalCreditsUsed: 1 });
+      .select({ status: 1, failureReason: 1, createdAt: 1, completedAt: 1, totalCreditsUsed: 1 });
     return results.map(doc => ({
       id: doc.id,
       status: doc.status,
       failureReason: doc.failureReason,
+      createdAt: doc.createdAt,
       completedAt: doc.completedAt,
       totalCreditsUsed: doc.totalCreditsUsed,
     }));

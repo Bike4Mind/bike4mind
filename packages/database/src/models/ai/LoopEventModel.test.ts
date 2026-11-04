@@ -72,6 +72,19 @@ describe('LoopEventRepository', () => {
     expect(await loopEventRepository.listResumedUnfolded(10)).toEqual([]);
   });
 
+  it('hasUnfolded is true only for a resumed, unfolded event of that run', async () => {
+    expect(await loopEventRepository.hasUnfolded('exec-1')).toBe(false);
+    await loopEventRepository.resolveUnsure(fields(), { outcome: 'rejected', at: new Date() });
+    expect(await loopEventRepository.hasUnfolded('exec-1')).toBe(false);
+    await LoopEvent.deleteMany({});
+    await loopEventRepository.resolveUnsure(fields(), { outcome: 'resumed', at: new Date() });
+    expect(await loopEventRepository.hasUnfolded('exec-1')).toBe(true);
+    expect(await loopEventRepository.hasUnfolded('exec-2')).toBe(false);
+    const [event] = await loopEventRepository.listResumedUnfolded(1);
+    await loopEventRepository.markFolded(event.id, new Date());
+    expect(await loopEventRepository.hasUnfolded('exec-1')).toBe(false);
+  });
+
   it('records an auto_resumed event without iteration or confidence, and still requires them on unsure', async () => {
     await loopEventRepository.recordAutoResumed({
       loopId: LOOP,

@@ -219,6 +219,15 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
 
   findByExecutionId(executionId: string): Promise<IWorkItem | null>;
 
+  /** Loop tickets `in_progress` across all users, least recently updated first. */
+  listInProgressForLoops(limit: number): Promise<IWorkItem[]>;
+
+  /**
+   * Reopens a stranded loop ticket (uncounted, like `releaseClaim`), conditional on it still being `in_progress`
+   * under `executionId` (or under none when undefined). False when it was not.
+   */
+  releaseStranded(id: string, executionId?: string): Promise<boolean>;
+
   /**
    * Applies a finished run's outcome, conditional on the ticket still being `in_progress` under that
    * run - so a run that set its own ticket's status is respected and a second fold is a no-op.

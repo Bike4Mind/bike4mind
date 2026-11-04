@@ -3,10 +3,12 @@ import {
   ILoopDirective,
   ILoopDirectiveReply,
   ILoopDirectiveRepository,
+  LOOP_DIRECTIVE_ACTIONS,
   LOOP_DIRECTIVE_INSTRUCTION_MAX,
   LOOP_DIRECTIVE_NOTE_MAX,
   LOOP_DIRECTIVE_REASON_MAX,
   LOOP_DIRECTIVE_STATES,
+  LoopDirectiveAction,
   LoopDirectiveState,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -23,6 +25,10 @@ export class LoopDirectiveRepository extends BaseRepository<ILoopDirective> impl
 
   async countByExecution(executionId: string): Promise<number> {
     return this.loopDirectiveModel.countDocuments({ executionId });
+  }
+
+  async countActionsSince(loopId: string, action: LoopDirectiveAction, since: Date): Promise<number> {
+    return this.loopDirectiveModel.countDocuments({ loopId, createdAt: { $gte: since }, action });
   }
 
   async listOpenForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]> {
@@ -103,6 +109,7 @@ export const LoopDirectiveSchema = new Schema<ILoopDirective, ILoopDirectiveMode
     reason: { type: String, required: true, maxlength: LOOP_DIRECTIVE_REASON_MAX },
     state: { type: String, enum: LOOP_DIRECTIVE_STATES, required: true, default: 'open' },
     replies: { type: [ReplySchema], default: [] },
+    action: { type: String, enum: LOOP_DIRECTIVE_ACTIONS },
   },
   {
     timestamps: { createdAt: true, updatedAt: true },

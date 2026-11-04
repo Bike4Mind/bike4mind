@@ -36,11 +36,39 @@ export const LOOP_TICKET_TOOL_NAMES = [
  * pre-approved on headless loop runs in `startAgentExecution`.
  */
 export const LOOP_DIRECTIVE_TOOL_NAMES = ['loop_directive_respond'] as const;
-export const LOOP_OVERSEER_TOOL_NAMES = ['loop_oversee_status', 'loop_directive_issue'] as const;
+export const LOOP_OVERSEER_TOOL_NAMES = [
+  'loop_oversee_status',
+  'loop_directive_issue',
+  'loop_run_now',
+  'loop_resume',
+] as const;
 
 export const LOOP_AUTO_RESUME_KINDS = ['budget', 'credits'] as const;
 
 export type LoopAutoResume = (typeof LOOP_AUTO_RESUME_KINDS)[number];
+
+/** Why a live, otherwise due loop is not running: paced to its daily budget, or the server-wide run cap. */
+export const LOOP_HOLD_KINDS = ['pacing', 'capacity'] as const;
+export type LoopHoldKind = (typeof LOOP_HOLD_KINDS)[number];
+
+/** Liveness problems the scheduler flags to the owner: a live loop idle with ready tickets, or a run far longer than usual. */
+export const LOOP_ALARM_KINDS = ['idle_with_work', 'long_run'] as const;
+export type LoopAlarmKind = (typeof LOOP_ALARM_KINDS)[number];
+
+export interface ILoopHold {
+  kind: LoopHoldKind;
+  /** Pacing only: when the deferred run is due. */
+  until?: Date;
+  at: Date;
+}
+
+export interface ILoopAlarm {
+  kind: LoopAlarmKind;
+  reason: string;
+  since: Date;
+  /** long_run only: the run that is going long. */
+  executionId?: string;
+}
 
 /** Midnight UTC of `now`'s day; a loop's daily budget counts runs started since then. */
 export const startOfUtcDay = (now: Date): Date =>
@@ -206,6 +234,10 @@ export interface ILoop {
   idleResetAt?: Date;
   /** Ids of the same owner's loops this loop oversees: its runs may read their state and send them directives. */
   oversees?: string[];
+  /** Why a live loop is held back on purpose right now; written only by the scheduler. */
+  hold?: ILoopHold;
+  /** A liveness problem for the owner; written only by the scheduler. */
+  alarm?: ILoopAlarm;
 
   createdAt: Date;
   updatedAt: Date;
@@ -277,6 +309,18 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
    * Never touches `activeExecutionId`, which only cloud runs hold.
    */
   foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void>;
+  /** Defers a claimed live loop to `nextRunAt` (a pacing hold) and releases the claim. */
+  deferUntil(id: string, nextRunAt: Date, now: Date): Promise<void>;
+  clearCapacityHolds(): Promise<void>;
+  /** Marks every live loop `claimDue` would take now, except `skipIds`, as held by the run cap. */
+  setCapacityHolds(now: Date, skipIds: string[]): Promise<void>;
+  /** Live loops with no run in flight due at or before `before`, oldest first. */
+  listPastDueLive(before: Date, limit: number): Promise<ILoop[]>;
+  /** Loops carrying an alarm, of `kinds` when given. */
+  listAlarmed(kinds?: LoopAlarmKind[]): Promise<ILoop[]>;
+  /** Sets the alarm, keeping `since` when the same alarm (kind, and run for long_run) is already set. */
+  setAlarm(id: string, alarm: ILoopAlarm): Promise<void>;
+  clearAlarm(id: string, kind: LoopAlarmKind): Promise<void>;
 }
 
 /**
@@ -359,6 +403,8 @@ export interface ILoopEventRepository extends IBaseRepository<ILoopEvent> {
   reopenAsked(id: string, at: Date): Promise<void>;
   /** A ticket's resumed `asked` events that carry the owner's answer, newest first. */
   listAnsweredForTicket(userId: string, workItemId: string, limit: number): Promise<ILoopEvent[]>;
+  /** Whether a resumed event for this run is still waiting for the scheduler's fold. */
+  hasUnfolded(executionId: string): Promise<boolean>;
   deleteManyForLoop(userId: string, loopId: string): Promise<number>;
 }
 
@@ -397,6 +443,10 @@ export const LOOP_DIRECTIVE_TRANSITIONS: Record<
   overrule: ['pushed_back'],
 };
 
+/** An action an overseer took on a worker itself (`loop_run_now`, `loop_resume`), logged as a `done` directive. */
+export const LOOP_DIRECTIVE_ACTIONS = ['run_now', 'resume'] as const;
+export type LoopDirectiveAction = (typeof LOOP_DIRECTIVE_ACTIONS)[number];
+
 export type ILoopDirectiveReply =
   | { by: 'worker'; outcome: LoopDirectiveWorkerOutcome; note?: string; executionId: string; at: Date }
   | { by: 'owner'; outcome: 'withdrawn' | 'overruled'; note?: string; userId: string; at: Date };
@@ -415,12 +465,16 @@ export interface ILoopDirective {
   reason: string;
   state: LoopDirectiveState;
   replies: ILoopDirectiveReply[];
+  /** Set on an overseer action; such a row is always `done`, so it never reaches the worker or the owner's buttons. */
+  action?: LoopDirectiveAction;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface ILoopDirectiveRepository extends IBaseRepository<ILoopDirective> {
   countByExecution(executionId: string): Promise<number>;
+  /** Overseer actions of this kind on a loop since `since`. */
+  countActionsSince(loopId: string, action: LoopDirectiveAction, since: Date): Promise<number>;
   /** Open and accepted directives to a loop, oldest first: what its next run is shown. */
   listOpenForLoop(userId: string, loopId: string, limit: number): Promise<ILoopDirective[]>;
   /** Directives to a loop in any state, newest first. */

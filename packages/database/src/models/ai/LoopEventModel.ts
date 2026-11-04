@@ -57,6 +57,14 @@ export class LoopEventRepository extends BaseRepository<ILoopEvent> implements I
     return results.map(doc => doc.toJSON());
   }
 
+  async hasUnfolded(executionId: string): Promise<boolean> {
+    return !!(await this.loopEventModel.exists({
+      executionId,
+      'resolution.outcome': 'resumed',
+      foldedAt: { $exists: false },
+    }));
+  }
+
   async markFolded(id: string, now: Date): Promise<void> {
     await this.loopEventModel.updateOne({ _id: id, foldedAt: { $exists: false } }, { $set: { foldedAt: now } });
   }

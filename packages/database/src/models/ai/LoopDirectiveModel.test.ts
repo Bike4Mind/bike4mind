@@ -55,6 +55,17 @@ describe('LoopDirectiveRepository', () => {
     expect(await loopDirectiveRepository.countByExecution('exec-1')).toBe(2);
   });
 
+  it('countActionsSince counts only that action on that loop since the cutoff, and rejects an unknown action', async () => {
+    await create({ state: 'done', action: 'resume', createdAt: new Date(5000) });
+    await create({ state: 'done', action: 'resume', createdAt: new Date(1000) });
+    await create({ state: 'done', action: 'run_now', createdAt: new Date(5000) });
+    await create({ state: 'done', action: 'resume', loopId: 'loop-other', createdAt: new Date(5000) });
+    await create();
+    expect(await loopDirectiveRepository.countActionsSince(WORKER, 'resume', new Date(2000))).toBe(1);
+    expect(await loopDirectiveRepository.countActionsSince(WORKER, 'run_now', new Date(2000))).toBe(1);
+    await expect(create({ action: 'pause' })).rejects.toThrow(/action/);
+  });
+
   it('lists open and accepted directives oldest first, and both sides of a loop newest first', async () => {
     const at = (ms: number) => ({ createdAt: new Date(ms) });
     const first = await create({ instruction: 'first', ...at(1000) });
