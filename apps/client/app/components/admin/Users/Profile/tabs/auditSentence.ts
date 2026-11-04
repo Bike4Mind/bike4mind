@@ -20,6 +20,7 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.subscription.removed': 'Removed the subscription',
   'user.subscriptions.canceled': 'Canceled the Stripe subscriptions',
   'billing.comp.changed': 'Changed a comp',
+  'billing.subscription.synced': 'Synced a subscription from Stripe',
   'user.api_key.generated': 'Generated an API key',
   'user.api_key.rate_limit_updated': 'Changed API key rate limits',
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',

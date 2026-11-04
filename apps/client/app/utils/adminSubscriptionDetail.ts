@@ -40,6 +40,31 @@ export type AdminCompChange = z.infer<typeof AdminCompChangeSchema>;
 
 export type AdminCompChangeResponse = { subscription: AdminSubscriptionRow };
 
+/**
+ * Body of POST /api/admin/subscriptions/[id]/sync, plus the audited `reason`. `expectedUpdatedAt` is the
+ * row version the admin previewed; a row changed since then is a 409.
+ */
+export const AdminSubscriptionSyncSchema = z.object({ expectedUpdatedAt: z.iso.datetime() });
+export type AdminSubscriptionSync = z.infer<typeof AdminSubscriptionSyncSchema>;
+
+/** One value Sync from Stripe would change. Dates are ISO strings, absent values null. */
+export type AdminSubscriptionSyncChange = { field: string; before: string | null; after: string | null };
+
+/** Response of GET /api/admin/subscriptions/[id]/sync: a live Stripe read, nothing written. */
+export type AdminSubscriptionSyncPreview = {
+  changes: AdminSubscriptionSyncChange[];
+  /** Stripe has no such subscription, so Sync marks the row canceled. */
+  stripeMissing: boolean;
+  stripeStatus: string | null;
+  /** The row version to send back as `expectedUpdatedAt`. */
+  updatedAt: string;
+};
+
+export type AdminSubscriptionSyncResponse = {
+  subscription: AdminSubscriptionRow;
+  changes: AdminSubscriptionSyncChange[];
+};
+
 export type AdminSubscriptionCreditGrant = {
   id: string;
   credits: number;

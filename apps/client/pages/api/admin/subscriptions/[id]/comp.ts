@@ -1,5 +1,5 @@
 import { ApiKeyScope } from '@bike4mind/common';
-import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import {
@@ -15,6 +15,7 @@ import {
   type AdminCompChange,
   type AdminCompChangeResponse,
 } from '@client/app/utils/adminSubscriptionDetail';
+import { resolveSubscriptionOwner as resolveOwner } from '@server/admin/subscriptionDetail/resolveSubscriptionOwner';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Subscription, subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -29,7 +30,6 @@ import {
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { Resource } from 'sst';
 
-type AuditTarget = Parameters<typeof recordAdminActionFromRequest>[1]['target'];
 type AuditChange = { field: string; before: unknown; after: unknown };
 
 type Mutation = {
@@ -118,39 +118,6 @@ const planMutation = (
     case 'reopen':
       return planReopen(subscription);
   }
-};
-
-type OwnerContext = {
-  target: AuditTarget;
-  organizationId?: string;
-  notifyUserId: string | null;
-  actingUserId: string | null;
-};
-
-const resolveOwner = async (subscription: ISubscription): Promise<OwnerContext> => {
-  if (subscription.ownerType === SubscriptionOwnerType.User) {
-    const user = await userRepository.findById(subscription.ownerId);
-    return {
-      target: {
-        kind: 'user',
-        id: subscription.ownerId,
-        displayName: user?.email ?? user?.username ?? subscription.ownerId,
-      },
-      notifyUserId: subscription.ownerId,
-      actingUserId: subscription.ownerId,
-    };
-  }
-  const organization = await organizationRepository.findById(subscription.ownerId);
-  return {
-    target: {
-      kind: 'organization',
-      id: subscription.ownerId,
-      displayName: organization?.name ?? subscription.ownerId,
-    },
-    organizationId: subscription.ownerId,
-    notifyUserId: organization?.userId ?? null,
-    actingUserId: organization?.userId ?? null,
-  };
 };
 
 const COMP_CHANGED_CONCURRENTLY_MESSAGE = 'This subscription changed; reload and try again.';
