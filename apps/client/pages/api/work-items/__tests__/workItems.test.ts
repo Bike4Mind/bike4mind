@@ -656,6 +656,25 @@ describe('loop tickets through the work-items routes', () => {
     expect(repo.updateForUser.mock.lastCall![2]).toMatchObject({ stage: 'doing', blockedOn: undefined });
   });
 
+  it('parking checks the dependencies sent in the same PATCH, not the stored ones', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', dependencies: [] }));
+    repo.findManyByIdsForUser.mockResolvedValue([item({ id: OID_B, status: 'open' })]);
+    const park = { status: 'blocked', blockedOn: 'dependencies' };
+    await call('item', 'patch', { query: { id: OID_A }, body: { ...park, reason: '', dependencies: [OID_B] } }).result;
+    expect(repo.findManyByIdsForUser).toHaveBeenLastCalledWith([OID_B], 'u1');
+    expect(repo.updateForUser.mock.lastCall![2]).toMatchObject({
+      dependencies: [OID_B],
+      blockedOn: 'dependencies',
+      statusReason: 'Waiting on dependencies',
+    });
+
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', dependencies: [OID_B] }));
+    repo.findManyByIdsForUser.mockResolvedValue([]);
+    await expect(
+      call('item', 'patch', { query: { id: OID_A }, body: { ...park, dependencies: [] } }).result
+    ).rejects.toThrow('blockedOn dependencies needs an open dependency');
+  });
+
   it('detaching a ticket clears its priority and blockedOn', async () => {
     repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo', priority: 'p0' }));
     await call('item', 'patch', { query: { id: OID_A }, body: { loopId: null } }).result;

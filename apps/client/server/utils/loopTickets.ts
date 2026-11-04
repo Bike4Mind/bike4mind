@@ -38,7 +38,7 @@ export function resolveTicketStage(loop: Pick<ILoop, 'stages'>, requested?: unkn
   return requested;
 }
 
-export const WAITING_ON_DEPENDENCIES = 'Waiting on dependencies';
+const WAITING_ON_DEPENDENCIES = 'Waiting on dependencies';
 
 /**
  * The stage/status/closedAt/statusReason/blockedOn patch for moving a ticket. `current` is the ticket as stored
@@ -74,7 +74,7 @@ export function ticketMovePatch(
         : (current?.status ?? 'open'));
   const blockedOn = validateWorkItemBlocker(move.blockedOn);
   if (blockedOn && status !== 'blocked') throw new BadRequestError('blockedOn is only valid with status blocked');
-  const reason = move.reason ?? (blockedOn && WAITING_ON_DEPENDENCIES);
+  const reason = blockedOn && !move.reason ? WAITING_ON_DEPENDENCIES : move.reason;
   const keepsReason = status === 'blocked' && current?.status === 'blocked' && reason === undefined;
 
   if (status === 'closed') stage = last;
