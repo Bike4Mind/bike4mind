@@ -289,7 +289,8 @@ export class OpenAICompatibleChat implements LocalChat {
           ? { aliasIds: model.aliases.map(alias => localModelId(this.server.runtimeId, alias)) }
           : {}),
         ...(this.toolsOffFor(model.name) ? { supportsTools: false } : {}),
-        // The server does not say which models think, so a model earns the switch by thinking once.
+        // The server does not say which models think; one that has thought is marked always-on, or switchable
+        // where the product takes enable_thinking.
         ...(thinks && !controls.effort
           ? supportsThinkingSwitch(this.server.product)
             ? { thinkingToggle: true, minimalThinks: true as const }
@@ -421,8 +422,8 @@ export class OpenAICompatibleChat implements LocalChat {
   }
 
   /**
-   * gpt-oss templates take a `reasoning_effort` level and cannot stop reasoning; other templates
-   * that think take Off as `chat_template_kwargs.enable_thinking`. Thinking left on sends nothing.
+   * gpt-oss templates take a `reasoning_effort` level and cannot stop reasoning; on llama-server and
+   * vLLM other templates take Off as `chat_template_kwargs.enable_thinking`. Thinking left on sends nothing.
    */
   private thinkingFields(model: string, request: CompletionRequest): Record<string, unknown> {
     if (this.effortModels.has(model) || takesReasoningEffort({ name: model })) {
