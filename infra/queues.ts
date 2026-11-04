@@ -424,6 +424,7 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
       fabFileBucket,
       appFilesBucket,
       imageProcessor,
+      eventBus,
       generationCallbackQueue,
     ],
     environment: {
@@ -584,7 +585,7 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
