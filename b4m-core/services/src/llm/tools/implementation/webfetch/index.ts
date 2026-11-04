@@ -518,7 +518,11 @@ export const webFetchTool: ToolDefinition = {
         }
 
         if (error instanceof UnsupportedContentTypeError) {
-          context.logger.warn('WebFetch unsupported file type', { url: params.url, error: errorMessage });
+          context.logger.warn('WebFetch unsupported file type', {
+            url: params.url,
+            error: errorMessage,
+            cause: error.cause instanceof Error ? error.cause.message : undefined,
+          });
           await context.statusUpdate({}, 'WebFetch: unsupported file type');
           return WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG;
         }
