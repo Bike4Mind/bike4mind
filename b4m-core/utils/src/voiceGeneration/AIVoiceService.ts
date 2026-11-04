@@ -4,7 +4,7 @@ import { VoiceOutputFormat } from '@bike4mind/common';
 export interface VoiceSynthesisOptions {
   // Provider voice id/name. OpenAI: 'alloy' etc.; ElevenLabs: a voiceId.
   voice?: string;
-  // Provider model id. OpenAI: 'tts-1'; ElevenLabs: 'eleven_monolingual_v1'.
+  // Provider model id. OpenAI: 'gpt-4o-mini-tts'; ElevenLabs: 'eleven_multilingual_v2'.
   model?: string;
   format?: VoiceOutputFormat;
   // ElevenLabs voice_settings; other providers ignore these.

@@ -11,12 +11,21 @@ const BASE = '/api/admin/grant-packages';
 
 export const GRANT_PACKAGES_QUERY_KEY = 'admin-grant-packages';
 
-export type GrantPackageRow = IGrantPackageDocument & { redeemedToday: number };
+/** Present only when the list is fetched with `usage: true`. nextCodeExpiry is an ISO string or null. */
+export type GrantPackageUsage = {
+  codes: number;
+  activeCodes: number;
+  nextCodeExpiry: string | null;
+  partnerDomains: number;
+  enabledPartnerDomains: number;
+};
+
+export type GrantPackageRow = IGrantPackageDocument & { redeemedToday: number; usage?: GrantPackageUsage };
 
 export type GrantPackageList = PaginatedResponse<GrantPackageRow> & { reasonPolicy: GrantPackageReasonPolicy };
 
-export const fetchGrantPackages = async (params: { page?: number; limit?: number }) => {
-  const response = await api.get<GrantPackageList>(BASE, { params });
+export const fetchGrantPackages = async ({ usage, ...params }: { page?: number; limit?: number; usage?: boolean }) => {
+  const response = await api.get<GrantPackageList>(BASE, { params: usage ? { ...params, usage: '1' } : params });
   return response.data;
 };
 

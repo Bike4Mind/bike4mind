@@ -623,7 +623,36 @@ export interface ChatRelayOrigin {
   /** The sending conversation's title as it was at send time, for the row that names it. */
   fromTitle: string;
   hops: number;
+  /** The sender's project folder name, set only when it is not the receiver's project. */
+  fromProject?: string;
+  /** The sender asked to be told when the turn this message runs in ends. */
+  notify?: boolean;
+  /**
+   * 'done' is the app's own notice back to a sender that asked for `notify`: the receiver's
+   * turn ended. Its text is app-written, never the receiver's words. Absent on a message.
+   */
+  kind?: 'done';
 }
+
+/**
+ * A relay waiting for the receiving conversation's user to let it in.
+ *
+ * Held rather than queued when delivering it could let the sender reach something its own user
+ * never allowed: a receiver in a different project works in other folders, and a receiver in a
+ * looser approval mode would run tools the sender would have had to ask for. See relayHoldReason.
+ * In memory only, like the queue: a hold outliving a restart would surface hours later.
+ */
+export interface ChatHeldRelay {
+  id: string;
+  /** The receiving conversation. */
+  sessionId: string;
+  text: string;
+  relay: ChatRelayOrigin;
+  heldAt: string;
+  reason: ChatRelayHoldReason;
+}
+
+export type ChatRelayHoldReason = 'other-project' | 'looser-mode';
 
 /**
  * A turn the APP started rather than anyone typing it. Carried on the queue entry and on the
@@ -707,6 +736,12 @@ export interface ChatMessage {
   relay?: ChatRelayOrigin;
   /** Set with `system` when the app started this turn on its own; see ChatAutomaticOrigin. */
   automatic?: ChatAutomaticOrigin;
+  /**
+   * Set on a spawned session's first prompt, which the parent conversation's model wrote. The
+   * thread still draws it as the prompt, but nothing that trusts what the user typed counts it:
+   * a session mention in it must not open another project to session_read (ChatService.knownTo).
+   */
+  seed?: true;
   /**
    * What the THREAD shows in place of `content`, on messages the app wrote rather than either
    * speaker.
@@ -1448,7 +1483,9 @@ export type ChatStreamEvent =
    */
   | { type: 'spawn-failed'; sessionId: string; title: string; message: string }
   /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */
-  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] };
+  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] }
+  /** Messages from other conversations waiting for this one's user; carries the whole list. */
+  | { type: 'held-relays'; sessionId: string; held: ChatHeldRelay[] };
 
 /**
  * What a session is doing, as the sidebar draws it.
@@ -1840,7 +1877,8 @@ export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion 
  * and are told apart because only one of them is worth waiting out: a turn that has run out of
  * hops will never get more, and saying so stops the model retrying.
  */
-export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
+export type RelayRefusal =
+  'hops' | 'fan-out' | 'no-target' | 'ambiguous' | 'archived' | 'self' | 'empty-message' | 'held-full' | 'unavailable';
 
 /**
  * The server-side prompt cache a reply left behind. `cachedAt` is the last request's first
