@@ -33,9 +33,14 @@ describe('browserPaneMaxWidth', () => {
     expect(browserPaneMaxWidth(1200, 500)).toBe(BROWSER_PANE_MIN_WIDTH);
   });
 
-  // The pane yields first on a window too small for both; see BROWSER_PANE_MAX_FRACTION.
+  // The pane yields first on a window too small for both; see BROWSER_PANE_CRAMPED_FRACTION.
   it('lets the window fraction win below the minimum', () => {
     expect(browserPaneMaxWidth(600, 300)).toBe(252);
+  });
+
+  it('switches to the conversation cap exactly where both panes fit', () => {
+    expect(browserPaneMaxWidth(600, CONVERSATION_MIN_WIDTH + BROWSER_PANE_MIN_WIDTH)).toBe(BROWSER_PANE_MIN_WIDTH);
+    expect(browserPaneMaxWidth(600, CONVERSATION_MIN_WIDTH + BROWSER_PANE_MIN_WIDTH - 1)).toBe(252);
   });
 });
 
