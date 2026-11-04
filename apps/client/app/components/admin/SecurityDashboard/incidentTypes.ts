@@ -68,11 +68,18 @@ export interface IncidentSignals {
   blockLists: IncidentBlockLists;
 }
 
+export interface IncidentGrantPool {
+  pool: 'signup' | 'trickle';
+  limit: number;
+  spentToday: number;
+  missing: boolean;
+}
+
 export interface IncidentDefenses {
   /** null when settings could not be read. `secretConfigured` is null when the secret could not be read (unknown). */
   turnstile: { enabled: boolean; failClosed: boolean; secretConfigured: boolean | null } | null;
-  /** null when the budget is unmetered (setting 0 or unset), or on error. */
-  grantBudget: { limit: number; spentToday: number; day: string } | null;
+  /** null on error. A pool whose limit is 0 is paused; `missing` means its setting is unset or invalid. */
+  grantBudget: { day: string; pools: IncidentGrantPool[] } | null;
   /** null when the new-account spend caps are off (0), or on error. */
   newAccountSpendCapDays: number | null;
   paymentRisk: {

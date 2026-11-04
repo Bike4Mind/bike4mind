@@ -166,6 +166,7 @@ describe('hiddenAdminSettingKeys', () => {
       'signupGrantActivityMinDays',
       'signupGrantActivityMinMessages',
       'signupGrantActivityPreviewTestMode',
+      'signupGrantDailyBudget',
     ]);
   });
 

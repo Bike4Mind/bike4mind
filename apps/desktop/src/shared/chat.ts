@@ -897,13 +897,17 @@ export function findModelOption<T extends { id: string; aliasIds?: readonly stri
   return models.find(model => model.id === id) ?? models.find(model => model.aliasIds?.includes(id));
 }
 
-/** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
+/**
+ * The device-local model a conversation moves to: the remembered pick if listed, else the first ready one. A
+ * remembered pick on a server still listing is kept; the fallback never lands on such a model unasked.
+ */
 export function pickLocalModel(
-  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string }[],
+  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string; pending?: boolean }[],
   remembered?: string | null
 ): string | null {
   const usable = models.filter(model => !model.unavailable);
-  if (remembered && findModelOption(usable, remembered)) return remembered;
+  const remembers = models.filter(model => !model.unavailable || model.pending);
+  if (remembered && findModelOption(remembers, remembered)) return remembered;
   return usable[0]?.id ?? null;
 }
 
@@ -962,6 +966,10 @@ export interface ChatModelOption {
   aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
+  /** Set with `unavailable` while its server is still listing models: not picked yet, but not down either. */
+  pending?: boolean;
+  /** Set with `unavailable` when its server wants credentials: `rejected` when it turned down the ones Desktop sent. */
+  wantsCredentials?: 'missing' | 'rejected';
   /** Listed by the server but refused at call time (ModelInfo.disabled); the picker prefers an enabled route of it. */
   disabled?: boolean;
   /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */

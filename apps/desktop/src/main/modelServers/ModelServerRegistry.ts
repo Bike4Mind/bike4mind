@@ -68,6 +68,13 @@ const RECHECK_AFTER_MS = 10_000;
 const RESOLVE_TIMEOUT_MS = 5_000;
 /** How long a picker load waits on a down server's check before listing its last models. */
 export const PICKER_CHECK_WAIT_MS = 2_000;
+/**
+ * How long a picker load waits on an online server's model list before showing its last names, disabled. A LAN
+ * Ollama lists in well under a second; this leaves room for an SSH server's connection setup.
+ */
+export const PICKER_LIST_WAIT_MS = 3_000;
+/** Counted from the last late-listing notice too, so the reload a notice causes starts no new slow listing. */
+export const LISTED_FRESH_MS = 5_000;
 
 interface ServerClient extends LocalChat {
   listModels(): Promise<ChatModelOption[]>;
@@ -90,6 +97,30 @@ interface Entry {
   product: OpenAICompatibleProduct | null;
   /** From the last listing, so a conversation saved on an alias still finds its model while the server is down. */
   aliasIds?: ReadonlyMap<string, string[]>;
+  /** The listing in flight, shared by the picker and health checks. */
+  slot?: Slot;
+  /** Sequence number of the last listing started. */
+  listSeq: number;
+  /** Listings numbered below this started before a pull or removal and change nothing when they land. */
+  floor: number;
+  /** A listing that finished after a caller was given pending rows, served instead of a new listing while fresh. */
+  kept?: { models: ChatModelOption[]; at: number };
+}
+
+type Listing = { ok: true; models: ChatModelOption[] } | { ok: false; error: unknown };
+
+export interface ModelListOptions {
+  /** The server a turn runs on: the read waits out its listing, and every other server keeps the picker's wait. */
+  untilListed?: string;
+}
+
+interface Slot {
+  seq: number;
+  promise: Promise<Listing>;
+  /** A caller was given pending rows for this listing, so its result is kept and announced when it lands. */
+  reported: boolean;
+  /** A models() call waits on this listing, so its failure marks the server down; a health check's alone does not. */
+  picker: boolean;
 }
 
 export interface ModelServerRegistryDeps {
@@ -97,6 +128,10 @@ export interface ModelServerRegistryDeps {
   logger: { debug(message: string): void; warn(message: string): void };
   /** Called with the full list whenever a server or its health changes. */
   changed?(servers: ModelServerView[]): void;
+  /** A server was added, saved or removed, or its tools changed, so a model list read before now is out of date. */
+  edited?(): void;
+  /** The picker should list again: a server was removed, or its listing outlasted the picker's wait and finished. */
+  listedLate?(serverId: string): void;
   /** Resolves a host name to its addresses; defaults to `dns.lookup` with `all: true`. */
   resolve?(host: string): Promise<string[]>;
   fetchFor?(endpoint: ServerEndpoint): FetchLike;
@@ -131,7 +166,8 @@ export class ModelServerRegistry {
   private timer: ReturnType<typeof setInterval> | undefined;
   private loaded: Promise<void> | null = null;
   private readonly savedListeners = new Set<(id: string) => void>();
-  private readonly checking = new WeakMap<Entry, Promise<void>>();
+  private readonly checking = new WeakMap<Entry, Promise<Listing | undefined>>();
+  private lateNoticeAt = 0;
 
   constructor(private readonly deps: ModelServerRegistryDeps) {}
 
@@ -309,6 +345,7 @@ export class ModelServerRegistry {
     );
     const entry = this.build(record);
     this.entries.set(record.id, entry);
+    this.deps.edited?.();
     await this.check(record.id);
     return this.views();
   }
@@ -342,6 +379,7 @@ export class ModelServerRegistry {
     }
     const record = await this.deps.store.update(id, input);
     this.entries.set(id, this.build(record, entry));
+    this.deps.edited?.();
     this.saved(id);
     if (input.credential || input.kind) await this.check(id);
     else this.emit();
@@ -351,9 +389,12 @@ export class ModelServerRegistry {
   async remove(id: string): Promise<ModelServerView[]> {
     await this.load();
     await this.deps.store.remove(id);
+    const entry = this.entries.get(id);
     this.entries.delete(id);
+    this.deps.edited?.();
     this.saved(id);
     this.emit();
+    if (entry) this.announce(entry, true);
     return this.views();
   }
 
@@ -370,69 +411,200 @@ export class ModelServerRegistry {
     return this.views();
   }
 
-  /** Every saved server's chat models. A server that does not answer lists its last models, disabled. */
-  async models(): Promise<ChatModelOption[]> {
+  /** Every saved server's chat models. A server that does not answer, or not in time, lists its last models, disabled. */
+  async models(options: ModelListOptions = {}): Promise<ChatModelOption[]> {
     await this.load();
-    const lists = await Promise.all(
-      [...this.entries.values()].map(async entry => {
-        const server = { id: entry.record.id, name: entry.record.name };
-        // Asking without the credential would get a 401 that replaces this message with a vaguer one.
-        const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
-        if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
-          this.setHealth(entry, missing);
-          this.emit();
-        }
-        // A server shown as down may be back: a check already running (say, after a pull) decides, or a
-        // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
-        const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
-        const running = this.checking.get(entry);
-        if (down && (running || this.stale(entry))) {
-          const check = (running ?? this.checkEntry(entry).then(() => this.emit())).catch(() => undefined);
-          await within(check, PICKER_CHECK_WAIT_MS, undefined);
-        }
-        if (entry.health.state === 'online' || entry.health.state === 'unknown') {
-          try {
-            const listed = await entry.client.listModels();
-            void this.deps.store
-              .setModels(
-                entry.record.id,
-                listed.map(model => model.name)
-              )
-              .catch(() => undefined);
-            entry.record = { ...entry.record, models: listed.map(model => model.name) };
-            entry.aliasIds = aliasIdsOf(listed);
-            if (entry.health.state === 'unknown') void this.check(entry.record.id);
-            return listed.map(model => ({ ...model, server }));
-          } catch (raw) {
-            const err = this.unwrapFailure(raw, entry);
-            entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
-              ...entry.health,
-              state: 'unreachable',
-              error: withLocalNetworkHint(
-                `${entry.record.name}: ${describeFailure(err)}`,
-                errorCode(err),
-                entry.scope,
-                this.platform
-              ),
-            };
-          }
-        }
-        const reason = unavailableReason(entry);
-        const runtimeId = serverRuntimeId(entry.record.id);
-        return entry.record.models.map(name => {
-          const aliasIds = entry.aliasIds?.get(name);
-          return {
-            id: localModelId(runtimeId, name),
-            name,
-            backend: localBackend(runtimeId),
-            server,
-            ...(aliasIds ? { aliasIds } : {}),
-            unavailable: reason,
-          };
-        });
-      })
-    );
+    const lists = await Promise.all([...this.entries.values()].map(entry => this.entryModels(entry, options)));
     return lists.flat();
+  }
+
+  /** One server's chat models. A server saved again during the waits lists as saved; a removed one lists nothing. */
+  private async entryModels(
+    entry: Entry,
+    options: ModelListOptions,
+    // One budget for the check wait and the listing wait together, kept across a re-save during the wait.
+    deadline = Date.now() + PICKER_LIST_WAIT_MS
+  ): Promise<ChatModelOption[]> {
+    const server = { id: entry.record.id, name: entry.record.name };
+    // Asking without the credential would get a 401 that replaces this message with a vaguer one.
+    const missing = this.deps.store.credentialMissing(entry.record) ? this.missingCredentialHealth() : null;
+    if (missing && (entry.health.state !== missing.state || entry.health.error !== missing.error)) {
+      this.setHealth(entry, missing);
+      this.emit();
+    }
+    // A server shown as down may be back: a check already running (say, after a pull) decides, or a
+    // picker refresh starts one when the last is stale. A server not checked yet is listed directly.
+    const turn = options.untilListed === entry.record.id;
+    const down = entry.health.state !== 'online' && entry.health.state !== 'unknown';
+    const running = this.checking.get(entry);
+    let checked: Listing | undefined;
+    if (down && (running || this.stale(entry))) {
+      const check = (
+        running ??
+        this.checkEntry(entry).then(listing => {
+          this.emit();
+          return listing;
+        })
+      ).catch(() => undefined);
+      // A turn waits for the check like it waits for the listing; Stop still ends it.
+      checked = turn ? await check : await within(check, PICKER_CHECK_WAIT_MS, undefined);
+    }
+    if (!this.current(entry)) return this.savedModels(entry, options, deadline);
+    let reason: string | null = null;
+    if (listable(entry)) {
+      const fresh = this.freshKept(entry);
+      const known: Listing | undefined = fresh ? { ok: true, models: fresh } : checked?.ok ? checked : undefined;
+      let slot = known ? null : this.listEntry(entry);
+      // undefined: still listing when the wait ran out, or already reported as still listing.
+      let result: Listing | undefined = known;
+      if (slot) slot.picker = true;
+      const wait = (listing: Slot) =>
+        turn ? listing.promise : within(listing.promise, Math.max(deadline - Date.now(), 0), undefined);
+      if (slot && (turn || !slot.reported)) {
+        result = await wait(slot);
+        // A pull or removal during the wait dropped that listing, so the one started after it decides. The
+        // picker keeps a dropped listing that succeeded, but a failed one says nothing about the server.
+        while (result && slot.seq < entry.floor && (turn || !result.ok) && this.current(entry)) {
+          slot = this.listEntry(entry);
+          slot.picker = true;
+          result = await wait(slot);
+        }
+      }
+      if (!this.current(entry)) return this.savedModels(entry, options, deadline);
+      if (result?.ok) {
+        if (entry.health.state === 'unknown') void this.check(entry.record.id);
+        return result.models.map(model => ({ ...model, server }));
+      }
+      // A check that found the server down during the wait decides the label.
+      if (result === undefined && listable(entry)) {
+        if (slot) slot.reported = true;
+        reason = `${entry.record.name} is still listing its models`;
+      }
+    }
+    const pending = reason !== null;
+    reason ??= unavailableReason(entry);
+    const wantsCredentials = entry.health.state === 'credentials' && !pending;
+    const rejected = wantsCredentials && !!this.deps.store.headers(entry.record);
+    const runtimeId = serverRuntimeId(entry.record.id);
+    return entry.record.models.map(name => {
+      const aliasIds = entry.aliasIds?.get(name);
+      return {
+        id: localModelId(runtimeId, name),
+        name,
+        backend: localBackend(runtimeId),
+        server,
+        ...(aliasIds ? { aliasIds } : {}),
+        unavailable: reason,
+        ...(pending ? { pending: true } : {}),
+        ...(wantsCredentials ? { wantsCredentials: rejected ? ('rejected' as const) : ('missing' as const) } : {}),
+      };
+    });
+  }
+
+  private savedModels(replaced: Entry, options: ModelListOptions, deadline: number): Promise<ChatModelOption[]> {
+    const saved = this.entries.get(replaced.record.id);
+    return saved ? this.entryModels(saved, options, deadline) : Promise.resolve([]);
+  }
+
+  /** A pull or removal changed what the server holds, so its last listing is no longer served. */
+  private forget(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.kept = undefined;
+    entry.slot = undefined;
+    entry.floor = entry.listSeq + 1;
+  }
+
+  /** Rows listed before a server's tool support changed carry the old `supportsTools`. */
+  private toolsChanged(id: string): void {
+    const entry = this.entries.get(id);
+    if (entry) entry.kept = undefined;
+    this.deps.edited?.();
+    this.emit();
+  }
+
+  /** False once update() or remove() replaced this entry; its late results then change nothing. */
+  private current(entry: Entry): boolean {
+    return this.entries.get(entry.record.id) === entry;
+  }
+
+  private freshKept(entry: Entry): ChatModelOption[] | null {
+    const kept = entry.kept;
+    if (!kept) return null;
+    return Date.now() - Math.max(kept.at, this.lateNoticeAt) < LISTED_FRESH_MS ? kept.models : null;
+  }
+
+  /** One listing per server at a time, shared by the picker and health checks; its promise never rejects. */
+  private listEntry(entry: Entry): Slot {
+    if (entry.slot) return entry.slot;
+    const slot = { seq: ++entry.listSeq, reported: false, picker: false } as Slot;
+    slot.promise = entry.client
+      .listModels()
+      .then(
+        (models): Listing => ({ ok: true, models }),
+        (error: unknown): Listing => ({ ok: false, error })
+      )
+      .then(result => this.settle(entry, slot, result));
+    entry.slot = slot;
+    return slot;
+  }
+
+  /** Applies a finished listing once, whoever waits on it, and announces it when a caller was given pending rows. */
+  private async settle(entry: Entry, slot: Slot, result: Listing): Promise<Listing> {
+    try {
+      if (!this.current(entry)) {
+        // Saved again after a caller was shown this listing as pending: the picker lists the saved server again.
+        const saved = this.entries.get(entry.record.id);
+        if (saved && slot.reported) this.announce(saved, true);
+        return { ok: false, error: new Error(`${entry.record.name} was changed.`) };
+      }
+      if (slot.seq < entry.floor) {
+        // A pull or removal that failed reloads nothing, so a picker shown this listing as pending must be told.
+        if (slot.reported) this.announce(entry, true);
+        return result;
+      }
+      if (result.ok) {
+        const names = result.models.map(model => model.name);
+        entry.record = { ...entry.record, models: names };
+        entry.aliasIds = aliasIdsOf(result.models);
+        // Only a listing a caller was told is pending is kept; any other result makes an older kept list stale.
+        entry.kept = slot.reported ? { models: result.models, at: Date.now() } : undefined;
+      } else {
+        entry.kept = undefined;
+        if (slot.picker) this.listingFailed(entry, result.error);
+      }
+      if (slot.reported) this.announce(entry, result.ok);
+      if (result.ok) await this.deps.store.setModels(entry.record.id, entry.record.models).catch(() => undefined);
+      return result;
+    } finally {
+      if (entry.slot === slot) entry.slot = undefined;
+    }
+  }
+
+  private announce(entry: Entry, ok: boolean): void {
+    try {
+      // Settings and the Models screen show the new health; the picker reloads on listedLate.
+      if (!ok) this.emit();
+      this.lateNoticeAt = Date.now();
+      this.deps.listedLate?.(entry.record.id);
+    } catch (err) {
+      this.deps.logger.warn(`MODEL SERVERS: reporting a late listing failed: ${String(err)}`);
+    }
+  }
+
+  private listingFailed(entry: Entry, raw: unknown): void {
+    const err = this.unwrapFailure(raw, entry);
+    entry.health = failureHealth(err, entry.record.name, entry.scope, this.platform) ?? {
+      ...entry.health,
+      state: 'unreachable',
+      checkedAt: new Date().toISOString(),
+      error: withLocalNetworkHint(
+        `${entry.record.name}: ${describeFailure(err)}`,
+        errorCode(err),
+        entry.scope,
+        this.platform
+      ),
+    };
   }
 
   /** The chat client for a `srv-<id>` runtime id; null for any other id. */
@@ -469,8 +641,10 @@ export class ModelServerRegistry {
         list: () => this.run(id, undefined, current => current.runtime.list()),
         loaded: () => this.run(id, undefined, current => current.runtime.loaded()),
         inspect: (model, options) => this.run(id, options?.signal, current => current.runtime.inspect(model, options)),
-        pull: (ref, options) => this.run(id, options?.signal, current => current.runtime.pull(ref, options)),
-        remove: model => this.run(id, undefined, current => current.runtime.remove(model)),
+        pull: (ref, options) =>
+          this.run(id, options?.signal, current => current.runtime.pull(ref, options)).finally(() => this.forget(id)),
+        remove: model =>
+          this.run(id, undefined, current => current.runtime.remove(model)).finally(() => this.forget(id)),
       },
     };
   }
@@ -546,8 +720,8 @@ export class ModelServerRegistry {
     }
   }
 
-  /** One check per server at a time; callers during a check share its result. */
-  private checkEntry(entry: Entry): Promise<void> {
+  /** One check per server at a time; callers during a check share its result: the listing it made, if it made one. */
+  private checkEntry(entry: Entry): Promise<Listing | undefined> {
     const running = this.checking.get(entry);
     if (running) return running;
     const done = this.probeEntry(entry).finally(() => this.checking.delete(entry));
@@ -555,11 +729,11 @@ export class ModelServerRegistry {
     return done;
   }
 
-  private async probeEntry(entry: Entry): Promise<void> {
+  private async probeEntry(entry: Entry): Promise<Listing | undefined> {
     entry.scope = (await this.scopeOf(entry.parsed.host)) ?? entry.scope;
     if (this.deps.store.credentialMissing(entry.record)) {
       this.setHealth(entry, this.missingCredentialHealth());
-      return;
+      return undefined;
     }
     const outcome = await probeServer(
       entry.fetch,
@@ -578,7 +752,7 @@ export class ModelServerRegistry {
         checkedAt,
         error: new ServerCredentialsError(entry.record.name, !!this.deps.store.headers(entry.record)).message,
       });
-      return;
+      return undefined;
     }
     if (!outcome.kind) {
       if (outcome.code) {
@@ -593,7 +767,7 @@ export class ModelServerRegistry {
         checkedAt,
         error: outcome.error && withLocalNetworkHint(outcome.error, outcome.code, entry.scope, this.platform),
       });
-      return;
+      return undefined;
     }
     if (outcome.product && outcome.product !== entry.product) {
       entry.product = outcome.product;
@@ -609,13 +783,11 @@ export class ModelServerRegistry {
       checkedAt,
       error: null,
     });
-    try {
-      const listed = await entry.client.listModels();
-      const names = listed.map(model => model.name);
-      entry.record = { ...entry.record, models: names };
-      entry.aliasIds = aliasIdsOf(listed);
-      await this.deps.store.setModels(entry.record.id, names);
-    } catch (err) {
+    // A fresh kept listing is what the picker serves; listing again would take its rows back to pending.
+    const slot = this.freshKept(entry) ? null : this.listEntry(entry);
+    const listing = slot ? await slot.promise : null;
+    if (listing && !listing.ok) {
+      const err = listing.error;
       this.deps.logger.debug(
         `MODEL SERVERS: listing ${entry.record.id} failed: ${err instanceof Error ? err.name : 'unknown'}`
       );
@@ -623,6 +795,8 @@ export class ModelServerRegistry {
     // Each check is how tools come back after the server restarts with tool calling on. Not awaited: the probe
     // generates a token, and a change reaches Settings and the picker through toolsChanged.
     void entry.client.recheckTools?.(entry.record.models[0]);
+    // A picker read that waited on this check serves its listing; one a pull or removal dropped is not served.
+    return slot && listing?.ok && slot.seq >= entry.floor ? listing : undefined;
   }
 
   private missingCredentialHealth(): ModelServerHealth {
@@ -680,7 +854,7 @@ export class ModelServerRegistry {
             fetch,
             hasCredentials,
             redact: redactServerResponse,
-            toolsChanged: () => this.emit(),
+            toolsChanged: () => this.toolsChanged(record.id),
           });
     const runtime: LocalRuntime =
       record.kind === 'ollama'
@@ -697,6 +871,8 @@ export class ModelServerRegistry {
       health: previous && previous.record.kind === record.kind ? previous.health : { ...UNKNOWN_HEALTH },
       product,
       ...(previous?.aliasIds ? { aliasIds: previous.aliasIds } : {}),
+      listSeq: 0,
+      floor: 0,
     };
   }
 
@@ -814,10 +990,16 @@ function aliasIdsOf(listed: readonly ChatModelOption[]): Map<string, string[]> {
   );
 }
 
+function listable(entry: Entry): boolean {
+  return entry.health.state === 'online' || entry.health.state === 'unknown';
+}
+
 function unavailableReason(entry: Entry): string {
   if (entry.health.state === 'credentials') return `${entry.record.name} needs new credentials`;
   if (entry.health.state === 'refused')
-    return `${entry.record.name} was refused: ${entry.health.error ?? 'check Settings'}`;
+    return entry.health.error
+      ? `${entry.record.name} was refused: ${entry.health.error}`
+      : `${entry.record.name} was refused`;
   return `${entry.record.name} is unreachable`;
 }
 

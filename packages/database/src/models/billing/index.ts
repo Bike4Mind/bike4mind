@@ -16,3 +16,4 @@ export * from './SpendReconciliationModel';
 export * from './RevenueSnapshotModel';
 export * from './SpendRollupModel';
 export * from './newAccountSpendCapAdapters';
+export * from './HeldCreditRewardModel';

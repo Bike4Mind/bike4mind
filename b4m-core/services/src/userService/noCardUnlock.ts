@@ -280,7 +280,8 @@ export async function grantNoCardUnlock(
       const reservation = await reserveSignupGrantBudget(
         { adminSettings: db.adminSettings, signupProtection },
         transactionId,
-        amount
+        amount,
+        { pool: 'signup' }
       );
       reservations.push(reservation);
       if (reservation.outcome === 'exhausted') return refused('daily_budget_reached');

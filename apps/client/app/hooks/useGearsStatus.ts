@@ -21,6 +21,8 @@ export interface GearStatus {
   claimable?: boolean;
   /** Paid - stays true even if the unlock later lapses (see the endpoint). */
   claimed?: boolean;
+  /** Claimed while today's reward budget was spent: it pays out once the budget allows. */
+  rewardQueued?: boolean;
   rewardPending?: boolean;
   /** Why rewardPending is true - drives UI copy. */
   pendingReason?: GearPendingReason;
@@ -66,6 +68,8 @@ export interface ClaimGearResponse {
   /** Set only on the response that actually paid - see pages/api/gears/claim.ts. */
   creditsAwarded?: number;
   alreadyClaimed?: boolean;
+  /** 202: held for the reward budget and paid later; the card reads as claimed. */
+  queued?: boolean;
 }
 
 /**

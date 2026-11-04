@@ -49,7 +49,8 @@ export type GearKey = (typeof GEAR_KEYS)[number];
 export type GearKind = 'destination' | 'skill';
 
 /** Why an unlocked gear's payout is held back - set by evaluateGears in the catalog. */
-export type GearPendingReason = 'unverified' | 'too_new' | 'reward_check';
+/** `unavailable`: the account is refused gear payouts (blocked now, or the queued reward was voided at release). */
+export type GearPendingReason = 'unverified' | 'too_new' | 'reward_check' | 'unavailable';
 
 /** Gear payouts also need a verified email and an account at least this many days old
  *  (anti-farm: the unlocks are trivial to automate on fresh accounts). The live value is the
