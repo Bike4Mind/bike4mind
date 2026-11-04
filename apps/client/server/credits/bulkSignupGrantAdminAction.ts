@@ -5,7 +5,7 @@ import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { BadRequestError } from '@bike4mind/utils';
 import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@server/utils/adminAudit';
-import { signupGrantAuditTarget } from './signupGrantAdminAction';
+import { signupGrantAuditTarget, type SignupGrantAuditTarget } from './signupGrantAdminAction';
 
 const bodySchema = z.object({
   userIds: z
@@ -24,7 +24,13 @@ export async function readBulkSignupGrantAction(
   req: Request,
   attempted: AdminAuditAction,
   guardTargetVerb: string
-): Promise<{ userIds: string[]; reason: string | undefined; dryRun: boolean }> {
+): Promise<{
+  userIds: string[];
+  reason: string | undefined;
+  dryRun: boolean;
+  /** Audit target per id, with the email or username as its display name; an id with no account is absent. */
+  targets: Map<string, SignupGrantAuditTarget>;
+}> {
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success)
     throw new BadRequestError(`Expected 1 to ${userService.MAX_BULK_SIGNUP_GRANT_ACTION} user ids in userIds`);
@@ -39,9 +45,10 @@ export async function readBulkSignupGrantAction(
     });
   }
   const reason = dryRun ? undefined : parseAdminActionReason((req.body as { reason?: unknown }).reason);
-  for (const userId of userIds) {
-    const target = await userRepository.findById(userId);
-    if (target) assertCanActOnAdminTarget(req.user, target, guardTargetVerb);
+  const targets = new Map<string, SignupGrantAuditTarget>();
+  for (const account of await userRepository.findAdminTargetsByIds(userIds)) {
+    assertCanActOnAdminTarget(req.user, account, guardTargetVerb);
+    targets.set(account.id, signupGrantAuditTarget(account.id, account.email ?? account.username));
   }
-  return { userIds, reason, dryRun };
+  return { userIds, reason, dryRun, targets };
 }
