@@ -157,6 +157,23 @@ describe('held grant release', () => {
     expect(cron).toMatchObject({ scanned: 1, failed: 1, withheld: 0 });
   });
 
+  it('withholds a grant that is still in the risk review queue, like the dry-run classifier', async () => {
+    const adapters = buildReleaseAdapters();
+    adapters.grant.db.users.findById.mockResolvedValueOnce({
+      id: 'user-1',
+      tags: [PENDING_FREE_CREDITS_TAG],
+      signupGrantHeldReason: 'budget_exhausted',
+      emailVerified: true,
+      signupGrantAssessment: { band: 'review', status: 'evaluated' },
+      signupGrant: { stage: 'signup', creditsReleased: 0, signupCredits: 100 },
+    } as never);
+
+    const bulk = await bulkReleaseHeldGrants({ actorId: 'admin-1', userIds: ['user-1'] }, adapters);
+
+    expect(bulk.results).toEqual([{ userId: 'user-1', outcome: 'withheld', credits: 0 }]);
+    expect(releasePendingFreeCredits).not.toHaveBeenCalled();
+  });
+
   it('keeps a committed payout as released when clearing the hold fails', async () => {
     vi.mocked(releasePendingFreeCredits).mockResolvedValue({
       released: true,
