@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Dropdown, IconButton, Menu, MenuButton, MenuItem, Skeleton, Stack } from '@mui/joy';
+import { Alert, Button, Dropdown, IconButton, Link, Menu, MenuButton, MenuItem, Skeleton, Stack } from '@mui/joy';
 import DownloadIcon from '@mui/icons-material/Download';
 import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import { toast } from 'sonner';
@@ -18,6 +18,7 @@ import {
   type DataTableSort,
   type ViewTab,
 } from '../shared';
+import { AnomalyBanner } from '../shared/AnomalyBanner';
 import { adminFocus } from '../shared/adminStyles';
 import { useAdminModal } from '../useAdminModal';
 import { SUBSCRIPTIONS_SORT_COLUMNS, subscriptionsColumns } from './subscriptionsColumns';
@@ -242,6 +243,7 @@ const AdminSubscriptions: React.FC = () => {
   const summary = summaryQuery.data;
   const pastDue = summary?.views.pastDue;
   const mrr = summary?.mrr;
+  const mismatches = summary?.mismatches;
 
   return (
     <Stack
@@ -309,6 +311,18 @@ const AdminSubscriptions: React.FC = () => {
         />
       </StatStrip>
 
+      {mismatches && mismatches.open > 0 && activeView?.id !== 'mismatched' && (
+        <AnomalyBanner
+          headline={`${mismatches.open} ${mismatches.open === 1 ? 'subscription differs' : 'subscriptions differ'} from Stripe`}
+          detail="Found by the nightly check. Review them and sync from Stripe."
+          actionLabel="Review mismatches"
+          onAction={() => applyView('mismatched')}
+          dismissKey={String(mismatches.open)}
+          testId="subscriptions-mismatch-banner"
+          actionTestId="subscriptions-mismatch-review-btn"
+          dismissTestId="subscriptions-mismatch-dismiss-btn"
+        />
+      )}
       <ViewTabs
         aria-label="Subscription views"
         data-testid="admin-subscriptions-views"
@@ -316,6 +330,27 @@ const AdminSubscriptions: React.FC = () => {
         views={viewTabs}
         onSelect={applyView}
       />
+      {activeView?.id === 'mismatched' && mismatches && mismatches.orphans.length > 0 && (
+        <Alert color="warning" data-testid="subscriptions-orphans">
+          <Stack gap={0.5}>
+            <span>
+              {mismatches.orphanStripe} Stripe{' '}
+              {mismatches.orphanStripe === 1 ? 'subscription has' : 'subscriptions have'} no record here:
+            </span>
+            {mismatches.orphans.map(orphan => (
+              <Link
+                key={orphan.stripeSubscriptionId}
+                href={`https://dashboard.stripe.com/subscriptions/${encodeURIComponent(orphan.stripeSubscriptionId)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid={`subscriptions-orphan-${orphan.stripeSubscriptionId}`}
+              >
+                {orphan.stripeSubscriptionId} (open in Stripe)
+              </Link>
+            ))}
+          </Stack>
+        </Alert>
+      )}
       <SubscriptionsToolbar params={params} search={search} onSearchChange={setSearch} onChange={setParams} />
       {listQuery.data?.searchTruncated && (
         <Alert color="warning" data-testid="admin-subscriptions-search-truncated">

@@ -18,6 +18,7 @@ describe('subscriptionActionAvailability', () => {
       compActions: true,
       editCredits: { visible: true, disabledReason: null },
       remove: { disabledReason: null },
+      sync: { visible: false, disabledReason: null },
     });
   });
 
@@ -26,6 +27,7 @@ describe('subscriptionActionAvailability', () => {
       compActions: false,
       editCredits: { visible: true, disabledReason: null },
       remove: { disabledReason: REMOVE_LIVE_STRIPE_REASON },
+      sync: { visible: true, disabledReason: null },
     });
   });
 
@@ -37,6 +39,7 @@ describe('subscriptionActionAvailability', () => {
       compActions: false,
       editCredits: { visible: false, disabledReason: null },
       remove: { disabledReason: null },
+      sync: { visible: true, disabledReason: null },
     });
     expect(
       subscriptionActionAvailability(buildDetail({ subscription: { status: 'incomplete_expired' } })).compActions

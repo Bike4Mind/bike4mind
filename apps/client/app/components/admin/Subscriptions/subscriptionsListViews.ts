@@ -13,7 +13,7 @@ import {
 } from './subscriptionsTabSearch';
 
 export type SubscriptionsBuiltInView = {
-  id: 'paying' | 'pastDue' | 'canceling' | 'comped' | 'churned' | 'all';
+  id: 'paying' | 'pastDue' | 'mismatched' | 'canceling' | 'comped' | 'churned' | 'all';
   label: string;
   /** The filters the view applies on top of a cleared filter set. */
   filters: Partial<SubscriptionsListView>;
@@ -44,6 +44,12 @@ export const SUBSCRIPTIONS_BUILT_IN_VIEWS: readonly SubscriptionsBuiltInView[] =
     label: 'Past due',
     filters: { status: ['past_due', 'unpaid', 'incomplete'] },
     empty: { title: 'Nobody is past due', description: 'Every Stripe renewal has gone through.' },
+  },
+  {
+    id: 'mismatched',
+    label: 'Mismatched',
+    filters: { mismatch: 'yes' },
+    empty: { title: 'Nothing is out of sync', description: 'Stripe and Mongo agree on every subscription.' },
   },
   {
     id: 'canceling',

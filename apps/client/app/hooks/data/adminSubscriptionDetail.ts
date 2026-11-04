@@ -9,6 +9,8 @@ import type {
   AdminCompChangeResponse,
   AdminSubscriptionByStripeIdResponse,
   AdminSubscriptionDetail,
+  AdminSubscriptionSyncPreview,
+  AdminSubscriptionSyncResponse,
 } from '@client/app/utils/adminSubscriptionDetail';
 import { reviveAuditEntry, type WireAuditEntry } from './adminAuditLog';
 import { ADMIN_GRANTS_KEY } from './adminOrganizations';
@@ -94,6 +96,34 @@ export const useAdminSubscriptionCompChange = (id: string) => {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ADMIN_GRANTS_KEY });
+    },
+    onError: error => {
+      toast.error(getErrorMessage(error));
+    },
+  });
+};
+
+/** A live Stripe read of what Sync would change; never cached, so the dialog always shows current values. */
+export const useAdminSubscriptionSyncPreview = (id: string, enabled = true) =>
+  useQuery({
+    queryKey: [...adminSubscriptionDetailKey(id), 'sync-preview'],
+    queryFn: async (): Promise<AdminSubscriptionSyncPreview> =>
+      (await api.get<AdminSubscriptionSyncPreview>(`${subscriptionPath(id)}/sync`)).data,
+    enabled: enabled && isSubscriptionObjectId(id),
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+
+/** Sync from Stripe. Failures toast and reject so the dialog stays open (a 409 means the row moved: reopen). */
+export const useAdminSubscriptionSync = (id: string) => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { expectedUpdatedAt: string; reason: string }): Promise<AdminSubscriptionSyncResponse> =>
+      (await api.post<AdminSubscriptionSyncResponse>(`${subscriptionPath(id)}/sync`, body)).data,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'organizations'] });
     },
     onError: error => {
       toast.error(getErrorMessage(error));

@@ -61,6 +61,7 @@ export const SUBSCRIPTIONS_FILTER_PARAMS = {
   interval: 'subsInterval',
   renews: 'subsRenews',
   cancel: 'subsCancel',
+  mismatch: 'subsMismatch',
 } as const satisfies Record<SubscriptionsFilterKey, string>;
 export const SUBSCRIPTIONS_FILTER_KEYS = Object.keys(SUBSCRIPTIONS_FILTER_PARAMS) as SubscriptionsFilterKey[];
 
@@ -89,6 +90,7 @@ export type SubscriptionsSearch = {
   subsInterval?: SubscriptionsListView['interval'];
   subsRenews?: SubscriptionsListView['renews'];
   subsCancel?: SubscriptionsListView['cancel'];
+  subsMismatch?: SubscriptionsListView['mismatch'];
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -150,6 +152,7 @@ export const SUBSCRIPTIONS_SEARCH_PARSERS: {
   subsInterval: oneOf(SUBSCRIPTION_INTERVAL_FILTERS),
   subsRenews: oneOf(SUBSCRIPTION_RENEWS_FILTERS),
   subsCancel: oneOf(SUBSCRIPTION_CANCEL_FILTERS),
+  subsMismatch: oneOf(['yes'] as const),
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<SubscriptionsListView, SubscriptionsFilterKey> {
@@ -162,6 +165,7 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<SubscriptionsL
     interval: parsers.subsInterval(search.subsInterval),
     renews: parsers.subsRenews(search.subsRenews),
     cancel: parsers.subsCancel(search.subsCancel),
+    mismatch: parsers.subsMismatch(search.subsMismatch),
   };
 }
 
@@ -207,6 +211,7 @@ export function subscriptionsViewToSearch(view: SubscriptionsListView): Subscrip
     subsInterval: view.interval,
     subsRenews: view.renews,
     subsCancel: view.cancel,
+    subsMismatch: view.mismatch,
   };
 }
 
@@ -226,7 +231,8 @@ export function isSameSubscriptionsView(a: SubscriptionsListView, b: Subscriptio
     a.source === b.source &&
     a.interval === b.interval &&
     a.renews === b.renews &&
-    a.cancel === b.cancel
+    a.cancel === b.cancel &&
+    a.mismatch === b.mismatch
   );
 }
 

@@ -75,4 +75,28 @@ describe('SubscriptionDetailHeader', () => {
     fireEvent.click(screen.getByTestId('subscription-detail-owner-link'));
     expect(onOpenOwner).toHaveBeenCalledWith({ kind: 'user', userId: OWNER_ID });
   });
+
+  it('offers Sync from Stripe on a Stripe row only, and flags an open mismatch', () => {
+    const { onAction } = setup(
+      buildDetail({
+        subscription: STRIPE_ROW,
+        mismatch: {
+          kind: 'drift',
+          fields: [],
+          firstSeenAt: '2026-10-01T00:00:00.000Z',
+          lastSeenAt: '2026-10-02T00:00:00.000Z',
+        },
+      })
+    );
+
+    expect(screen.getByTestId('subscription-detail-mismatch-chip')).toHaveTextContent('Mismatch');
+    fireEvent.click(screen.getByTestId('subscription-detail-menu-sync-item'));
+    expect(onAction).toHaveBeenLastCalledWith('sync');
+  });
+
+  it('hides Sync from Stripe on a comp', () => {
+    setup(buildDetail());
+    expect(screen.queryByTestId('subscription-detail-menu-sync-item')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-detail-mismatch-chip')).not.toBeInTheDocument();
+  });
 });

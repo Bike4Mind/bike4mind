@@ -69,6 +69,7 @@ export const buildDetail = (
     otherSubscriptions: [],
     seats: null,
     actingUserId: OWNER_ID,
+    mismatch: null,
     ...rest,
   };
 };
