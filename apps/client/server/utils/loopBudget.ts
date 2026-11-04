@@ -110,7 +110,8 @@ export async function loopAdmission(loop: ILoop, model: string, now: Date): Prom
 
   const budgets: Array<{ budget: number; spent: number }> = [];
   if (loop.budgetCreditsPerDay) {
-    const spent = (await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], today))[loop.id] ?? 0;
+    const spent =
+      (await agentExecutionRepository.sumCreditsByLoop([loop.id], [loop.sessionId], today, true))[loop.id] ?? 0;
     if (loop.budgetCreditsPerDay - spent < (await budgetPrice())) return { ok: false, kind: 'loop_budget' };
     budgets.push({ budget: loop.budgetCreditsPerDay, spent });
   }

@@ -851,7 +851,8 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect(agentExecutionRepository.sumCreditsByLoop).toHaveBeenCalledWith(
       [loop.id],
       ['session-1'],
-      new Date('2026-10-29T00:00:00Z')
+      new Date('2026-10-29T00:00:00Z'),
+      true
     );
     const after = await reload(loop.id);
     expect(after).toMatchObject({
@@ -877,7 +878,8 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect(agentExecutionRepository.sumCreditsByLoop).toHaveBeenCalledWith(
       [budgeted.id],
       expect.anything(),
-      expect.anything()
+      expect.anything(),
+      true
     );
   });
 

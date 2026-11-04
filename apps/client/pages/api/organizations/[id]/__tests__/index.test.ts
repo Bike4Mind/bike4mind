@@ -104,7 +104,7 @@ vi.mock('@bike4mind/server-utils/lib/subscriptions/types', () => ({
 }));
 
 import '@pages/api/organizations/[id]/index';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
 function mocks(user: unknown, method: 'GET' | 'PUT' = 'GET') {
   const { req, res } = createMocks({ method, query: { id: 'org1' } });
@@ -267,7 +267,10 @@ describe('PUT /api/organizations/[id] - loopsGreenCiMergeDisabled', () => {
     name: 'Acme',
     userId: 'owner1',
     adminUserIds: ['manager2'],
-    users: [{ userId: 'manager2' }, { userId: 'member3' }],
+    users: [
+      { userId: 'manager2', permissions: ['read'] },
+      { userId: 'member3', permissions: ['read'] },
+    ],
   };
   beforeEach(() => {
     update.mockClear();
@@ -281,6 +284,27 @@ describe('PUT /api/organizations/[id] - loopsGreenCiMergeDisabled', () => {
     await expect(mockRefs.putHandler!(req, res)).rejects.toBeInstanceOf(ForbiddenError);
     expect(credits.updateOrg).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('answers a non-member and a missing org alike with a 404', async () => {
+    const outsider = mocks({ id: 'stranger', isAdmin: false }, 'PUT');
+    (outsider.req as any).body = { loopsGreenCiMergeDisabled: true };
+    await expect(mockRefs.putHandler!(outsider.req, outsider.res)).rejects.toBeInstanceOf(NotFoundError);
+
+    credits.findById.mockResolvedValueOnce(null as never);
+    const missing = mocks({ id: 'staff', isAdmin: true }, 'PUT');
+    (missing.req as any).body = { loopsGreenCiMergeDisabled: true };
+    await expect(mockRefs.putHandler!(missing.req, missing.res)).rejects.toBeInstanceOf(NotFoundError);
+    expect(credits.updateOrg).not.toHaveBeenCalled();
+  });
+
+  it('also applies a profile field sent with it', async () => {
+    const { req, res } = mocks({ id: 'owner1', isAdmin: false }, 'PUT');
+    (req as any).body = { loopsGreenCiMergeDisabled: false, name: 'renamed' };
+    await mockRefs.putHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(update).toHaveBeenCalled();
+    expect(credits.updateOrg).toHaveBeenCalledWith({ id: 'org1', loopsGreenCiMergeDisabled: false });
   });
 
   it.each([
