@@ -144,6 +144,7 @@ async function clawbackPaymentUnlock(
   const user = await userRepository.findById(userId);
   const grant = user?.signupGrant;
   // unlockedBy is set only once the bonus is paid out; a bonus still held is never clawed back here.
+  // The grant stores no payment id, so a warning on any later charge of the same kind also claws it back.
   if (!user || grant?.unlockedBy !== unlockedBy || !grant.unlockCredits) return 0;
   const credits = Math.max(0, Math.min(user.currentCredits ?? 0, grant.unlockCredits));
   if (credits === 0) return 0;

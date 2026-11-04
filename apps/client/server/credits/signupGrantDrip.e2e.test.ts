@@ -421,6 +421,19 @@ describe('signup activity drip', () => {
     expect(await creditsOf(user.id)).toBe(10000);
   });
 
+  it('leaves a budget-held tranche of an unverified payer unreleased without failing the webhook', async () => {
+    const user = await createUser();
+    await User.updateOne(
+      { _id: user.id },
+      { $set: { emailVerified: false, signupGrantHeldReason: 'budget_exhausted' } }
+    );
+
+    await expect(unlockSignupGrantFromCreditPurchase(user.id)).resolves.toMatchObject({ creditsGranted: 0 });
+    await expect(unlockSignupGrantFromSubscription(user.id)).resolves.toMatchObject({ creditsGranted: 0 });
+    expect((await User.findById(user.id))?.signupGrant?.stage).toBe('pending_email');
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
   it.each(['refund', 'dispute'] as const)(
     'after a %s forfeit, pays no drip or non-admin unlock but still honors an admin release',
     async cause => {

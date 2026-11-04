@@ -89,7 +89,7 @@ function isReleaseEligible(
 ): user is IUserDocument & { signupGrant: SignupGrant } {
   if (!user?.signupGrant || accountBlockReasons(user).length || isAiAccessRevoked(user)) return false;
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
-  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or subscription unlock.
+  // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or payment unlock.
   return user.signupGrant.stage !== 'pending_email';
 }
 
@@ -494,8 +494,8 @@ async function holdPaymentUnlock(
 }
 
 /**
- * A card unlock on an account whose signup tranche is held for the budget pays the tranche under its
- * own verify-grant id, then the remainder, each once and outside the budget.
+ * A card or payment unlock on an account whose signup tranche is held for the budget pays the tranche
+ * under its own verify-grant id, then the remainder, each once and outside the budget.
  */
 async function unlockWithHeldTranche(
   userId: string,

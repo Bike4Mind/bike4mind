@@ -55,23 +55,26 @@ async function findCreditPackBuyerId(paymentIntent: ChargeRef['payment_intent'])
   return purchase?.ownerType === CreditHolderType.User && purchase.ownerId ? String(purchase.ownerId) : null;
 }
 
+async function findChargePayerId(charge: ChargeRef) {
+  return (await findUserByStripeCustomer(charge.customer))?.id ?? (await findCreditPackBuyerId(charge.payment_intent));
+}
+
 /**
  * charge.refunded: the charge's payer, including a subscription charge with no credit purchase row,
  * or else the buyer of the refunded credit pack.
  */
 export async function forfeitHeldUnlockForRefund(charge: ChargeRef, logger: ForfeitLogger) {
-  const userId =
-    (await findUserByStripeCustomer(charge.customer))?.id ?? (await findCreditPackBuyerId(charge.payment_intent));
+  const userId = await findChargePayerId(charge);
   if (userId) await forfeitSignupUnlock(userId, 'refund', logger);
 }
 
-/** radar.early_fraud_warning.created: resolves the warned charge's payer. */
+/** radar.early_fraud_warning.created: resolves the warned charge's payer the same way as a refund. */
 export async function forfeitHeldUnlockForFraudWarning(
   warning: { id: string; charge: string | { id: string } },
   logger: ForfeitLogger & { warn: (message: string) => void }
 ) {
   const chargeId = typeof warning.charge === 'string' ? warning.charge : warning.charge.id;
-  const user = await findUserByStripeCustomer((await stripe.charges.retrieve(chargeId)).customer);
-  if (user) await forfeitSignupUnlock(user.id, 'fraud_warning', logger);
+  const userId = await findChargePayerId(await stripe.charges.retrieve(chargeId));
+  if (userId) await forfeitSignupUnlock(userId, 'fraud_warning', logger);
   else logger.warn(`Could not find user for early fraud warning ${warning.id}`);
 }

@@ -20,9 +20,12 @@ export async function unlockSignupGrantFromPayment(
   logger?: UnlockLogger
 ) {
   const payer = await userRepository.findById(userId);
-  // The payment event is not retried, so an unverified payer stays at the tranche until a later unlock.
-  if (payer?.signupGrant?.stage === 'pending_email' && !payer.emailVerified)
+  // An unverified payer stays at the tranche until a later unlock; releasing it would throw and the
+  // webhook would retry forever.
+  if (payer?.signupGrant?.stage === 'pending_email' && !payer.emailVerified) {
     logger?.warn('Payment from a pending_email account; signup grant not released', { userId, reason });
+    return { creditsGranted: 0, currentCredits: null };
+  }
   return userService.unlockSignupGrant(userId, reason, {
     db: {
       users: userRepository,

@@ -518,6 +518,13 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       mockUnlockFromCreditPurchase.mockRejectedValue(new Error('release write failed'));
 
       await expect(invokeWebhookWithEvent(packEvent)).rejects.toThrow('release write failed');
+      // The first-grant-only work already ran; the retry lands on already_granted and skips it.
+      expect(mockScreenPaymentOutcome).toHaveBeenCalledOnce();
+      expect(mockLogEventSafe).toHaveBeenCalledWith(
+        expect.objectContaining({ type: CreditPurchaseEvents.CREDITS_GRANTED }),
+        undefined,
+        expect.anything()
+      );
     });
 
     it('does not release the signup schedule when the grant rolls back', async () => {
