@@ -168,6 +168,20 @@ describe('listRunnerTickets', () => {
   });
 });
 
+describe('listRunnerTickets priority', () => {
+  it("orders tickets by priority across loops, not by each loop's place in the list", async () => {
+    const older = await createLoop();
+    const newer = await createLoop();
+    // listForUser reads loops newest first, so the newer loop's p3 would come first without the sort.
+    await Loop.updateOne({ _id: older.id }, { $set: { updatedAt: new Date(2000, 0, 1) } }, { timestamps: false });
+    await Loop.updateOne({ _id: newer.id }, { $set: { updatedAt: new Date(2000, 0, 2) } }, { timestamps: false });
+    const low = await createTicket(newer.id, { priority: 'p3' });
+    const high = await createTicket(older.id, { priority: 'p0' });
+
+    expect((await listRunnerTickets(USER, NOW)).map(ticket => ticket.ticketId)).toEqual([high.id, low.id]);
+  });
+});
+
 describe('claimRunnerTicket', () => {
   it('claims the ticket under a new leased run and serves the cloud prompt, the stage model and guards', async () => {
     const loop = await createLoop();
@@ -485,6 +499,19 @@ describe('completeRunnerRun', () => {
     expect(await ticketOf(moved.id)).toMatchObject({ status: 'open', stage: 'todo' });
     expect(await runOf(second.runId)).toMatchObject({ status: 'completed' });
   });
+
+  it('refuses a completion after a web Stop and blocks the ticket instead of advancing it', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+    const { runId } = await claim(ticket.id);
+    await agentExecutionRepository.setAbortFlag(runId);
+
+    expect(
+      await completeRunnerRun(USER, runId, { outcome: 'advanced', answer: 'done', durationMs: 1 }, NOW, logger)
+    ).toMatchObject({ status: 410, reason: 'aborted' });
+    expect(await runOf(runId)).toMatchObject({ status: 'aborted' });
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Run aborted', stage: 'build' });
+  });
 });
 
 describe('releaseExpiredRunnerLeases', () => {
@@ -506,6 +533,18 @@ describe('releaseExpiredRunnerLeases', () => {
     expect(await runOf(freshRun.runId)).toMatchObject({ status: 'running' });
     expect(await ticketOf(moved.id)).toMatchObject({ status: 'blocked', statusReason: 'By hand' });
     expect(await runOf(movedRun.runId)).toMatchObject({ status: 'failed', failureReason: 'abandoned' });
+  });
+
+  it('blocks the ticket of a run stopped from the web once its lease lapses, rather than reopening it', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+    const { runId } = await claim(ticket.id, new Date(NOW.getTime() - 10 * 60_000));
+    await agentExecutionRepository.setAbortFlag(runId);
+
+    await releaseExpiredRunnerLeases(NOW, logger);
+
+    expect(await runOf(runId)).toMatchObject({ status: 'aborted' });
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'blocked', statusReason: 'Run aborted' });
   });
 });
 
