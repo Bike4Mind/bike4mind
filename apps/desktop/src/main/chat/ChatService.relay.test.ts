@@ -888,7 +888,11 @@ describe('ChatService session_send', () => {
         { id: 'l-all', name: 'session_list', input: { scope: 'all' } },
         { id: 'r-before', name: 'session_read', input: { session_id: target.id } },
       ]);
-      await vi.waitUntil(() => !!callById('r-before'), { timeout: 5000, interval: 5 });
+      // The three calls run concurrently, so wait for every one of them, not just the last listed.
+      await vi.waitUntil(() => ['l-project', 'l-all', 'r-before'].every(id => !!callById(id)), {
+        timeout: 5000,
+        interval: 5,
+      });
       expect(callById('l-project')?.preview).not.toContain(target.id);
       expect(callById('l-all')?.preview).toContain(target.id);
       expect(callById('r-before')?.error).toMatch(/another project/);
