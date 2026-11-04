@@ -35,7 +35,8 @@ export async function readBulkSignupGrantAction(
   if (!parsed.success)
     throw new BadRequestError(`Expected 1 to ${userService.MAX_BULK_SIGNUP_GRANT_ACTION} user ids in userIds`);
   if (!req.user) throw new ForbiddenError('Authentication required');
-  const { userIds, dryRun = false } = parsed.data;
+  const { dryRun = false } = parsed.data;
+  const userIds = parsed.data.userIds.map(id => id.toLowerCase());
   for (const userId of userIds) {
     if (!isSelfOrImpersonator(req.user, userId)) continue;
     await denySelfAdminAction(req, {

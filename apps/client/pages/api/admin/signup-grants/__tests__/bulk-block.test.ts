@@ -121,6 +121,14 @@ describe('admin bulk block signup grant', () => {
     expect(h.audit).not.toHaveBeenCalled();
   });
 
+  it('hands the action lowercase ids so a differently cased id is the same account', async () => {
+    const upper = 'ABCDEF012345678901234567';
+    await h.handler!(request({ body: { userIds: [upper], reason: 'Confirmed farming ring' } }), { json: vi.fn() });
+
+    expect(h.findTargets).toHaveBeenCalledExactlyOnceWith([upper.toLowerCase()]);
+    expect(h.run.mock.calls[0][0].userIds).toEqual([upper.toLowerCase()]);
+  });
+
   it('runs the bulk action and builds one audit write per account with the reason', async () => {
     const res = { json: vi.fn() };
     await h.handler!(request(), res);
