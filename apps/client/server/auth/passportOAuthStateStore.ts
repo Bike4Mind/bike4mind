@@ -15,6 +15,22 @@ import { recordTurnstileVerification, wasTurnstileVerified } from './signupChall
  */
 export const OAUTH_NONCE_HASH_REQ_KEY = '__oauthNonceHash';
 
+const MAX_OAUTH_INVITE_CODE_LENGTH = 64;
+
+/** Trimmed invite code, or undefined for anything that is not a 1..64 char string. */
+export function sanitizeOAuthInviteCode(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed && trimmed.length <= MAX_OAUTH_INVITE_CODE_LENGTH ? trimmed : undefined;
+}
+
+// Set only by verify() from a valid state token, so the code a callback sees is the one the
+// flow started with, never a value the callback request itself carried.
+const verifiedInviteCodes = new WeakMap<object, string>();
+
+/** The invite code carried by this callback's verified OAuth state, if any (verifyCallback.ts). */
+export const readOAuthInviteCode = (req: object): string | null => verifiedInviteCodes.get(req) ?? null;
+
 type Metadata = OAuth2Strategy.Metadata;
 type StoreCallback = OAuth2Strategy.StateStoreStoreCallback;
 type VerifyCallback = OAuth2Strategy.StateStoreVerifyCallback;
@@ -56,12 +72,15 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
       // The OAuth client a signup came through, for its source tag (stampOAuthSourceTag).
       const clientId = clientIdFromAuthorizeRedirect(redirectTo);
       const nonceHash = (req as unknown as Record<string, unknown>)[OAUTH_NONCE_HASH_REQ_KEY];
+      // A registration invite code typed on /register, redeemed if this login creates an account.
+      const inviteCode = sanitizeOAuthInviteCode(req.query?.inviteCode);
       const token = createStateToken(
         { audience: this.audience },
         {
           challengeVerified: wasTurnstileVerified(req),
           ...(redirectTo ? { redirectTo } : {}),
           ...(clientId ? { clientId } : {}),
+          ...(inviteCode ? { inviteCode } : {}),
         },
         typeof nonceHash === 'string' ? nonceHash : undefined
       );
@@ -76,6 +95,7 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
   verify(req: Request, state: string, metaOrCallback: Metadata | VerifyCallback, callback?: VerifyCallback): void {
     const cb = (typeof metaOrCallback === 'function' ? metaOrCallback : callback) as VerifyCallback;
     recordTurnstileVerification(req, false);
+    verifiedInviteCodes.delete(req);
     try {
       // Enforce browser-binding: the token's nonce hash must match this browser's
       // cookie (readStateNonceHash returns null when absent -> fails closed).
@@ -89,6 +109,11 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
             'challengeVerified' in payload &&
             payload.challengeVerified === true
         );
+        const inviteCode =
+          typeof payload === 'object' && payload !== null && 'inviteCode' in payload
+            ? sanitizeOAuthInviteCode(payload.inviteCode)
+            : undefined;
+        if (inviteCode) verifiedInviteCodes.set(req, inviteCode);
         cb(null, true, result.payload);
       } else {
         cb(null, false, { code: STATE_REASON_TO_CODE[result.reason], message: result.message });

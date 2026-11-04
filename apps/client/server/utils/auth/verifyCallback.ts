@@ -4,6 +4,7 @@ import {
   adminSettingsRepository,
   authSessionRepository,
   realtimeConnectionRepository,
+  registrationInviteRepository,
   type IUserObject,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
@@ -16,9 +17,10 @@ import { isSignupNetworkOverLimit } from '@server/auth/signupNetworkLimits';
 import { signupProtection } from '@server/auth/signupProtection';
 import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
+import { readOAuthInviteCode } from '@server/auth/passportOAuthStateStore';
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { emitEmailVerifiedFunnelEvents } from '@server/analytics/funnel';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { createUniqueOAuthUser, deriveOAuthUsername } from './createOAuthUser';
 import { OAuthFailureReason } from './oauthFailureReason';
@@ -46,6 +48,34 @@ export type OAuthUser = IUserObject & {
   signupCreditsGranted?: number;
 };
 
+type ResolvedReferral = NonNullable<Awaited<ReturnType<typeof userService.resolveRegistrationInvite>>>;
+
+/**
+ * The refer-flow invite an OAuth signup carried, checked with the same expiry, single-use and
+ * email-binding rules as registerUser. Any other outcome (bad code, admin or unlimited code, read
+ * error) signs up uninvited: a code typed alongside a social login must never fail the login.
+ */
+async function resolveOAuthReferral(code: string, verifiedEmail: string): Promise<ResolvedReferral | null> {
+  try {
+    const resolved = await userService.resolveRegistrationInvite(
+      code,
+      verifiedEmail.toLowerCase().trim(),
+      registrationInviteRepository
+    );
+    if (!resolved) return null;
+    if (!resolved.isReferral) {
+      Logger.globalInstance.info('[oauth signup] invite code ignored: not a referral invite');
+      return null;
+    }
+    return resolved;
+  } catch (e) {
+    // BadRequestError messages are fixed strings with no user data.
+    const reason = e instanceof BadRequestError ? e.message : 'lookup failed';
+    Logger.globalInstance.info(`[oauth signup] invite code ignored: ${reason}`);
+    return null;
+  }
+}
+
 // Core authentication logic shared by all strategies
 const authenticateUser = async (
   strategy: AuthStrategy,
@@ -55,7 +85,8 @@ const authenticateUser = async (
   done: any,
   authProvider?: Partial<IAuthProviders>,
   signupNetwork?: INetworkMeta,
-  challengeVerified?: true | null
+  challengeVerified?: true | null,
+  inviteCode?: string | null
 ) => {
   const selectedEmail = selectProviderEmail(profile)?.value;
   const email = typeof selectedEmail === 'string' ? selectedEmail : null;
@@ -276,6 +307,19 @@ const authenticateUser = async (
       // so a self-serve account is created tagged and the flat grant released right away; a
       // failed release leaves the tag for the backfill script. Okta/SAML get no flat grant.
       const pendingFreeCredits = SELF_SERVE_STRATEGIES.has(strategy);
+      // An invite never opens a closed instance: the gate above ran first. Self-serve only, where
+      // the email was just required to be provider-verified, so the email binding holds.
+      const referral =
+        inviteCode && pendingFreeCredits && emailForNewAccount
+          ? await resolveOAuthReferral(inviteCode, emailForNewAccount)
+          : null;
+      const referralInvite = referral
+        ? {
+            inviteId: referral.invite.id,
+            inviterId: referral.invite.userId ?? null,
+            grantCredits: await userService.referralInviteCredits(referral.invite, adminSettingsRepository),
+          }
+        : undefined;
       user = await createUniqueOAuthUser({
         name,
         baseUsername,
@@ -283,8 +327,17 @@ const authenticateUser = async (
         oauthCredentials,
         pendingFreeCredits,
         ...(signupNetwork ? { signupMeta: { ...signupNetwork, capturedAt: new Date(), challengeVerified } } : {}),
+        ...(referralInvite ? { referralInvite } : {}),
       });
       const newUserId = String(user._id);
+      if (referral) {
+        try {
+          await userService.redeemRegistrationInvite(referral, newUserId, registrationInviteRepository);
+        } catch (e) {
+          // The account exists and is attributed; a failed close only leaves the code open.
+          console.error('[oauth signup] invite redeem failed:', e);
+        }
+      }
       let creditsGranted = 0;
       if (pendingFreeCredits) {
         const release = await releaseVerifiedPendingFreeCredits(
@@ -370,7 +423,8 @@ export const selfServeVerifyCallback =
       done,
       undefined,
       readNetworkMeta(req),
-      wasTurnstileVerified(req)
+      wasTurnstileVerified(req),
+      readOAuthInviteCode(req)
     );
 
 /**
@@ -395,5 +449,6 @@ export const authenticateSelfServeProfile = (
     done,
     authProvider,
     readNetworkMeta(req),
-    wasTurnstileVerified(req)
+    wasTurnstileVerified(req),
+    readOAuthInviteCode(req)
   );

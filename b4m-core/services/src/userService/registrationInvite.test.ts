@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { RegInviteSource, RegInviteStatusType, type IRegInviteDocument } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { redeemRegistrationInvite, resolveRegistrationInvite } from './registrationInvite';
+import { redeemRegistrationInvite, referralInviteCredits, resolveRegistrationInvite } from './registrationInvite';
 
 const EMAIL = 'invitee@example.com';
 
@@ -90,5 +90,31 @@ describe('redeemRegistrationInvite', () => {
       usageHistory: [prior, { userId: 'user-1', usedAt: expect.any(Date) }],
     });
     expect(options).toEqual({ unset: ['used', 'usedbyId'] });
+  });
+});
+
+describe('referralInviteCredits', () => {
+  const settings = (settingValue: unknown) => ({ findBySettingName: vi.fn().mockResolvedValue({ settingValue }) });
+
+  it("prefers the invite's own startingCredits over the admin default", async () => {
+    const adminSettings = settings('500');
+    await expect(referralInviteCredits(invite({ startingCredits: 750 }), adminSettings)).resolves.toBe(750);
+    expect(adminSettings.findBySettingName).not.toHaveBeenCalled();
+  });
+
+  it('falls back to ReferralCreditsAmount', async () => {
+    const adminSettings = settings('500');
+    await expect(referralInviteCredits(invite(), adminSettings)).resolves.toBe(500);
+    expect(adminSettings.findBySettingName).toHaveBeenCalledWith('ReferralCreditsAmount');
+  });
+
+  it.each([[undefined], [''], ['abc'], ['-5'], ['0']])('returns 0 for an unusable setting %j', async value => {
+    await expect(referralInviteCredits(invite(), settings(value))).resolves.toBe(0);
+  });
+
+  it('returns 0 when the setting is absent', async () => {
+    await expect(referralInviteCredits(invite(), { findBySettingName: vi.fn().mockResolvedValue(null) })).resolves.toBe(
+      0
+    );
   });
 });

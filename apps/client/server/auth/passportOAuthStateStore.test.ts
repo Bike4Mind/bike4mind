@@ -20,7 +20,12 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 
-import { PassportOAuthStateStore, OAUTH_NONCE_HASH_REQ_KEY } from './passportOAuthStateStore';
+import {
+  PassportOAuthStateStore,
+  OAUTH_NONCE_HASH_REQ_KEY,
+  readOAuthInviteCode,
+  sanitizeOAuthInviteCode,
+} from './passportOAuthStateStore';
 import { recordTurnstileVerification, wasTurnstileVerified } from './signupChallenge';
 import { STATE_NONCE_COOKIE_NAME } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 import type OAuth2Strategy from 'passport-oauth2';
@@ -82,6 +87,49 @@ describe('PassportOAuthStateStore', () => {
     const { token: skipped } = await callStore(store, nonceStoreReq());
     expect((await callVerify(store, callback, skipped!)).ok).toBe(true);
     expect(wasTurnstileVerified(callback)).toBeNull();
+  });
+
+  describe('invite code', () => {
+    it('round-trips a trimmed query inviteCode to the verified callback request', async () => {
+      const { token } = await callStore(store, nonceStoreReq({ query: { inviteCode: '  REF-123 ' } }));
+      expect((jwt.decode(token!) as Record<string, unknown>).inviteCode).toBe('REF-123');
+      const callback = { ...nonceVerifyReq };
+      expect((await callVerify(store, callback, token!)).ok).toBe(true);
+      expect(readOAuthInviteCode(callback)).toBe('REF-123');
+    });
+
+    it('leaves the claim out and reads null when the flow started without a code', async () => {
+      const { token } = await callStore(store, nonceStoreReq({ query: {} }));
+      expect(jwt.decode(token!) as Record<string, unknown>).not.toHaveProperty('inviteCode');
+      const callback = { ...nonceVerifyReq };
+      expect((await callVerify(store, callback, token!)).ok).toBe(true);
+      expect(readOAuthInviteCode(callback)).toBeNull();
+    });
+
+    it.each([[['A', 'B']], [42], [''], ['   '], ['x'.repeat(65)]])('drops a non-usable inviteCode %j', async raw => {
+      const { token } = await callStore(store, nonceStoreReq({ query: { inviteCode: raw } }));
+      expect(jwt.decode(token!) as Record<string, unknown>).not.toHaveProperty('inviteCode');
+    });
+
+    it('does not expose the code from a state that fails verification, and clears a stale one', async () => {
+      const { token } = await callStore(store, nonceStoreReq({ query: { inviteCode: 'REF-123' } }));
+      const callback = { ...nonceVerifyReq };
+      await callVerify(store, callback, token!);
+      expect(readOAuthInviteCode(callback)).toBe('REF-123');
+
+      const forged = jwt.sign({ ...(jwt.decode(token!) as object), inviteCode: 'OTHER' }, 'not-the-secret');
+      expect((await callVerify(store, callback, forged)).ok).toBe(false);
+      expect(readOAuthInviteCode(callback)).toBeNull();
+      // Valid signature, wrong browser: the nonce check fails, so the code never surfaces.
+      expect((await callVerify(store, mockReq, token!)).ok).toBe(false);
+      expect(readOAuthInviteCode(mockReq)).toBeNull();
+    });
+
+    it('sanitizes to undefined for non-strings and over-long codes', () => {
+      expect(sanitizeOAuthInviteCode(undefined)).toBeUndefined();
+      expect(sanitizeOAuthInviteCode('x'.repeat(64))).toBe('x'.repeat(64));
+      expect(sanitizeOAuthInviteCode('x'.repeat(65))).toBeUndefined();
+    });
   });
 
   describe('store()', () => {

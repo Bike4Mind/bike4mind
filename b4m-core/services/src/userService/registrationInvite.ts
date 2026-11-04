@@ -52,6 +52,21 @@ export async function resolveRegistrationInvite(
   return { invite, isUnlimited, isReferral: !isUnlimited && invite.source === RegInviteSource.referral };
 }
 
+/**
+ * Grant total a referral invitee is owed: the invite's own startingCredits, else the admin
+ * ReferralCreditsAmount. Mirrors registerUser's invite > admin-default priority (subscriber
+ * allocations never apply to a refer-flow code). 0 means "no override, use the default grant".
+ */
+export async function referralInviteCredits(
+  invite: Pick<IRegInviteDocument, 'startingCredits'>,
+  adminSettings: { findBySettingName: (name: 'ReferralCreditsAmount') => Promise<{ settingValue?: unknown } | null> }
+): Promise<number> {
+  if (invite.startingCredits && invite.startingCredits > 0) return invite.startingCredits;
+  const setting = await adminSettings.findBySettingName('ReferralCreditsAmount');
+  const parsed = parseInt(String(setting?.settingValue ?? '0'), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 /** Records `userId`'s use of the invite: closes a single-use code, appends history for an unlimited one. */
 export async function redeemRegistrationInvite(
   { invite, isUnlimited }: Pick<ResolvedRegistrationInvite, 'invite' | 'isUnlimited'>,
