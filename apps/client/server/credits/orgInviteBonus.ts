@@ -48,46 +48,36 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
 
 /**
  * Pays the bonus to an account marked with `organizationId`'s invite, once its standing is confirmed.
- * Each payout holds one of the organization's seats on its own counter, so a paying organization
- * cannot fund more bonuses than it has seats; a hold that pays nothing is handed back. An account not
- * yet eligible takes no hold, so its retries cannot crowd out an eligible one at the last seat.
+ * The seat and bonus commit in one transaction, so an interrupted payout cannot leave a seat held.
+ * An account not yet eligible takes no hold and cannot crowd out an eligible one at the last seat.
  */
 async function payForPayingOrganization(userId: string, organizationId: string): Promise<number> {
   const user = await userRepository.findById(userId);
   if (user?.signupInvite?.source !== 'organization' || user.signupInvite.organizationId !== organizationId) return 0;
   if (!userService.isInviteBonusEligible(user, true)) return 0;
   if (!(await isPayingOrganization(organizationId))) return 0;
-  const reservation = await Organization.updateOne(
-    {
-      _id: organizationId,
-      seats: { $gt: 0 },
-      $expr: { $lt: [{ $ifNull: ['$signupInviteBonusCount', 0] }, '$seats'] },
+  const result = await userService.payInviteBonus(userId, {
+    db: {
+      users: userRepository,
+      signupProtection,
+      adminSettings: adminSettingsRepository,
+      creditTransactions: creditTransactionRepository,
+      creditLots: creditLotRepository,
     },
-    { $inc: { signupInviteBonusCount: 1 } }
-  );
-  if (reservation.modifiedCount !== 1) return 0;
-  let paid = 0;
-  try {
-    const result = await userService.payInviteBonus(userId, {
-      db: {
-        users: userRepository,
-        signupProtection,
-        adminSettings: adminSettingsRepository,
-        creditTransactions: creditTransactionRepository,
-        creditLots: creditLotRepository,
-      },
-      orgStandingVerified: true,
-    });
-    paid = result.creditsGranted;
-    return paid;
-  } finally {
-    if (paid <= 0) {
-      await Organization.updateOne(
-        { _id: organizationId, signupInviteBonusCount: { $gt: 0 } },
-        { $inc: { signupInviteBonusCount: -1 } }
-      ).catch(() => console.warn('[org-invite-bonus] seat hand-back failed; one bonus seat stays held'));
-    }
-  }
+    orgStandingVerified: true,
+    reserveOrganizationBonusSeat: async () => {
+      const reservation = await Organization.updateOne(
+        {
+          _id: organizationId,
+          seats: { $gt: 0 },
+          $expr: { $lt: [{ $ifNull: ['$signupInviteBonusCount', 0] }, '$seats'] },
+        },
+        { $inc: { signupInviteBonusCount: 1 } }
+      );
+      return reservation.modifiedCount === 1;
+    },
+  });
+  return result.creditsGranted;
 }
 
 /**

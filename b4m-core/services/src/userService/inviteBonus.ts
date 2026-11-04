@@ -14,6 +14,8 @@ type InviteBonusAdapters = Pick<FreeCreditAdapters, 'db' | 'bypassBudget'> & {
    * (apps/client/server/credits/orgInviteBonus.ts); an organization invite's bonus is never paid without it.
    */
   orgStandingVerified?: boolean;
+  /** Reserves an organization's bonus seat inside the payout transaction, so a failed payout rolls it back. */
+  reserveOrganizationBonusSeat?: () => Promise<boolean>;
 };
 
 class InviteBonusClaimDeniedError extends Error {}
@@ -64,6 +66,11 @@ export async function payInviteBonus(userId: string, adapters: InviteBonusAdapte
         if (reservation.outcome === 'exhausted') return { creditsGranted: 0, budgetExhausted: true };
         // Another attempt may refund its draw. A transaction retry can reuse our own earlier draw.
         if (reservation.outcome === 'reserved' && !reservations.some(held => held.fresh)) return { creditsGranted: 0 };
+      }
+      if (user.signupInvite?.source === 'organization') {
+        if (!adapters.reserveOrganizationBonusSeat)
+          throw new Error('Organization invite bonus requires a transactional seat reservation');
+        if (!(await adapters.reserveOrganizationBonusSeat())) return { creditsGranted: 0 };
       }
       // A denied claim may have aborted the Mongo transaction, so leave it by throwing.
       if (!(await db.users.claimFreeCreditGrant(userId))) throw new InviteBonusClaimDeniedError();

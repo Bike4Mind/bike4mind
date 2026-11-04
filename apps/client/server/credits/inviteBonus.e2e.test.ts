@@ -16,6 +16,7 @@ import {
   settleAutoIndexBuilds,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
+import { callerTransactionSession } from '../../../../b4m-core/services/src/userService/callerTransaction';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -90,6 +91,20 @@ async function createUser(n: number, invited: boolean) {
   });
 }
 
+async function createOrganizationInvitee() {
+  const invited = await createUser(1, false);
+  await User.collection.updateOne(
+    { _id: invited._id },
+    {
+      $set: {
+        signupInvite: { source: 'organization', inviteId: 'invite-1', organizationId: 'org-1', at: new Date() },
+      },
+    }
+  );
+  await userService.releaseSignupTranche(invited.id, adapters);
+  return invited;
+}
+
 const creditsOf = async (id: string) => (await User.findById(id))?.currentCredits ?? 0;
 const bonusRows = () => CreditTransaction.countDocuments({ transactionId: /^invite-bonus:/ });
 const spent = async (pool: 'signup' | 'trickle') =>
@@ -150,19 +165,75 @@ describe('invite bonus', () => {
   });
 
   it('does not pay an organization invite bonus without a confirmed paying organization', async () => {
-    const invited = await createUser(1, false);
-    await User.collection.updateOne(
-      { _id: invited._id },
-      {
-        $set: {
-          signupInvite: { source: 'organization', inviteId: 'invite-1', organizationId: 'org-1', at: new Date() },
-        },
-      }
-    );
-    await userService.releaseSignupTranche(invited.id, adapters);
+    const invited = await createOrganizationInvitee();
     expect(await creditsOf(invited.id)).toBe(1000);
     expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
     expect(await bonusRows()).toBe(0);
+  });
+
+  it('requires a transactional seat reservation for a verified organization invite bonus', async () => {
+    const invited = await createOrganizationInvitee();
+    await expect(userService.payInviteBonus(invited.id, { ...adapters, orgStandingVerified: true })).rejects.toThrow(
+      'Organization invite bonus requires a transactional seat reservation'
+    );
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect(await spent('signup')).toBe(1000);
+    expect(await bonusRows()).toBe(0);
+    expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+  });
+
+  it('leaves the bonus unpaid and refunds its budget when no organization seat is available', async () => {
+    const invited = await createOrganizationInvitee();
+    const reserveOrganizationBonusSeat = vi.fn(async () => false);
+    expect(
+      await userService.payInviteBonus(invited.id, {
+        ...adapters,
+        orgStandingVerified: true,
+        reserveOrganizationBonusSeat,
+      })
+    ).toEqual({ creditsGranted: 0 });
+    expect(reserveOrganizationBonusSeat).toHaveBeenCalledExactlyOnceWith();
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect(await spent('signup')).toBe(1000);
+    expect(await bonusRows()).toBe(0);
+    expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+  });
+
+  it('reserves no organization seat while the bonus budget is exhausted', async () => {
+    const invited = await createOrganizationInvitee();
+    config.signupGrantSignupPoolDaily = '1000';
+    const reserveOrganizationBonusSeat = vi.fn(async () => true);
+    expect(
+      await userService.payInviteBonus(invited.id, {
+        ...adapters,
+        orgStandingVerified: true,
+        reserveOrganizationBonusSeat,
+      })
+    ).toEqual({ creditsGranted: 0, budgetExhausted: true });
+    expect(reserveOrganizationBonusSeat).not.toHaveBeenCalled();
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect(await spent('signup')).toBe(1000);
+    expect(await bonusRows()).toBe(0);
+  });
+
+  it('reserves the organization seat inside the active bonus payout transaction', async () => {
+    const invited = await createOrganizationInvitee();
+    const reserveOrganizationBonusSeat = vi.fn(async () => {
+      expect(callerTransactionSession()?.inTransaction()).toBe(true);
+      return true;
+    });
+    expect(
+      await userService.payInviteBonus(invited.id, {
+        ...adapters,
+        orgStandingVerified: true,
+        reserveOrganizationBonusSeat,
+      })
+    ).toEqual({ creditsGranted: 2000 });
+    expect(reserveOrganizationBonusSeat).toHaveBeenCalledExactlyOnceWith();
+    expect(await creditsOf(invited.id)).toBe(3000);
+    expect(await spent('signup')).toBe(3000);
+    expect(await bonusRows()).toBe(1);
+    expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBe(2000);
   });
 
   it('pays no bonus on a reduced tranche or to an account held for review', async () => {

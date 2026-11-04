@@ -1,18 +1,20 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InviteType, SIGNUP_UNLOCK_FORFEIT_CAUSES } from '@bike4mind/common';
-import { userService } from '@bike4mind/services';
-import { AdminSettings, CreditTransaction, Invite, mongoose, Organization, User } from '@bike4mind/database';
+import {
+  AdminSettings,
+  CreditTransaction,
+  Invite,
+  mongoose,
+  Organization,
+  User,
+  userRepository,
+} from '@bike4mind/database';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { retryOrgInviteBonus, payOrgInviteBonus, recordOrgSignupInvite } from './orgInviteBonus';
-
-vi.mock('@bike4mind/services', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/services')>();
-  return { ...actual, userService: { ...actual.userService } };
-});
 
 // Without the signup protection wiring the budget is unmetered; signupGrantBudget covers the pools.
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: undefined }));
@@ -237,23 +239,72 @@ describe('payOrgInviteBonus', () => {
     expect(org?.signupInviteBonusCount).toBe(1);
   });
 
-  it.each(['exhausted', 'failed'] as const)('hands a reserved seat back when the bonus payout is %s', async outcome => {
+  it('commits only one bonus when two invitees race for the final organization seat', async () => {
+    await createOrganization(true);
+    const organizationFilter = { _id: new mongoose.Types.ObjectId(organizationId) };
+    await Organization.collection.updateOne(organizationFilter, { $set: { seats: 1 } });
+    const invite = await createInvite();
+    const first = await createUser('first', released);
+    const second = await createUser('second', released);
+
+    const results = await Promise.all([
+      payOrgInviteBonus(first.id, invite.id),
+      payOrgInviteBonus(second.id, invite.id),
+    ]);
+    expect(results.sort()).toEqual([0, 2000]);
+    expect((await Organization.collection.findOne(organizationFilter))?.signupInviteBonusCount).toBe(1);
+    expect(await CreditTransaction.countDocuments({})).toBe(1);
+  });
+
+  it('keeps the seat reservation uncommitted until its payout commits', async () => {
+    await createOrganization(true);
+    const organizationFilter = { _id: new mongoose.Types.ObjectId(organizationId) };
+    const invite = await createInvite();
+    const user = await createUser('interrupted', released);
+    let signalPayoutStarted: () => void = () => {};
+    const payoutStarted = new Promise<void>(resolve => {
+      signalPayoutStarted = resolve;
+    });
+    let releasePayout: () => void = () => {};
+    const payoutReleased = new Promise<void>(resolve => {
+      releasePayout = resolve;
+    });
+    vi.spyOn(userRepository, 'claimFreeCreditGrant').mockImplementationOnce(async () => {
+      signalPayoutStarted();
+      await payoutReleased;
+      throw new Error('interrupted payout');
+    });
+    const payoutFailure = expect(payOrgInviteBonus(user.id, invite.id)).rejects.toThrow('interrupted payout');
+    try {
+      await payoutStarted;
+      expect((await Organization.collection.findOne(organizationFilter))?.signupInviteBonusCount ?? 0).toBe(0);
+      expect(await CreditTransaction.countDocuments({})).toBe(0);
+    } finally {
+      releasePayout();
+      await payoutFailure;
+    }
+    expect((await Organization.collection.findOne(organizationFilter))?.signupInviteBonusCount ?? 0).toBe(0);
+  });
+
+  it.each(['refused', 'failed'] as const)('rolls back the seat when the bonus payout is %s', async outcome => {
     await createOrganization(true);
     const organizationFilter = { _id: new mongoose.Types.ObjectId(organizationId) };
     await Organization.collection.updateOne(organizationFilter, { $set: { seats: 1 } });
     const invite = await createInvite();
     const user = await createUser('unpaid', released);
-    const payBonus = vi.spyOn(userService, 'payInviteBonus');
-    if (outcome === 'exhausted') {
-      payBonus.mockResolvedValueOnce({ creditsGranted: 0, budgetExhausted: true });
+    const reserveSeat = vi.spyOn(Organization, 'updateOne');
+    if (outcome === 'refused') {
+      vi.spyOn(userRepository, 'markInviteBonusPaid').mockResolvedValueOnce(false);
       expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
     } else {
-      payBonus.mockRejectedValueOnce(new Error('payout failed'));
+      vi.spyOn(userRepository, 'claimFreeCreditGrant').mockRejectedValueOnce(new Error('payout failed'));
       await expect(payOrgInviteBonus(user.id, invite.id)).rejects.toThrow('payout failed');
     }
 
-    expect(payBonus).toHaveBeenCalledOnce();
-    expect((await Organization.collection.findOne(organizationFilter))?.signupInviteBonusCount).toBe(0);
+    expect(reserveSeat).toHaveBeenCalledWith(expect.objectContaining({ _id: organizationId }), {
+      $inc: { signupInviteBonusCount: 1 },
+    });
+    expect((await Organization.collection.findOne(organizationFilter))?.signupInviteBonusCount ?? 0).toBe(0);
     expect(await CreditTransaction.countDocuments({})).toBe(0);
     const nextUser = await createUser('next', released);
     expect(await payOrgInviteBonus(nextUser.id, invite.id)).toBe(2000);
