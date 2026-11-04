@@ -1,5 +1,5 @@
 import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
-import { CreditHolderType } from '@bike4mind/common';
+import { CreditHolderType, isSignupGrantBlocked } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -175,7 +175,10 @@ export async function applySignupDomainGrant(params: {
       // Domain credits are not a second pot on top of the signup grant: one canonical inbox earns
       // one free-credit grant, so an alias of an inbox that already earned one is withheld here.
       // The claim is idempotent for the account that holds it, so a re-verify still grants once.
-      if (!(await userRepository.claimFreeCreditGrant(userId))) {
+      // Checked before the claim, which is a write: a blocked account must not take the inbox's one grant either.
+      if (isSignupGrantBlocked((await userRepository.findById(userId)) ?? {})) {
+        logger.info(`Domain-grant signup credits withheld for user ${userId} (${trigger}): signup grants are blocked`);
+      } else if (!(await userRepository.claimFreeCreditGrant(userId))) {
         logger.info(
           `Domain-grant signup credits withheld for user ${userId} (${trigger}): another account ` +
             `already holds the free-credit claim for this inbox`

@@ -276,6 +276,12 @@ export function redactUserSecretsForSelf(
     }
   }
 
+  // The grant stays visible to its holder (the signup credits UI reads it), but an admin's block is not.
+  if (user.signupGrant?.blocked) {
+    const { blocked: _blocked, ...grant } = user.signupGrant;
+    u.signupGrant = grant;
+  }
+
   // Separate door for the admin-only fields, so a viewer check is required to open it.
   for (const f of options?.keepAdminOnly ?? []) {
     if (!ADMIN_ONLY_USER_FIELDS.includes(f)) continue;

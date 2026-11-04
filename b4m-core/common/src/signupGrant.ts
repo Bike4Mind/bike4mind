@@ -58,7 +58,18 @@ export interface SignupGrant {
   heldUnlock?: { reason: PaymentUnlockReason; heldAt: Date; releaseAt: Date };
   /** A disputed, refunded or fraud-warned payment: only an admin can release more of the grant. */
   unlockForfeited?: { cause: SignupUnlockForfeitCause; at: Date };
+  /**
+   * An admin stopped every grant and reward for this account; nothing already granted is taken back.
+   * Only the time lives here: the reason and the acting admin are in the audit entry. redactUserSecretsForSelf
+   * (REST) and the users websocket field limits remove this field from every user-facing copy, admin views of
+   * another user included, so admin tooling reads block state from its own admin endpoint.
+   */
+  blocked?: { at: Date };
 }
+
+/** Whether an admin has stopped grants and rewards for this account (see SignupGrant.blocked). */
+export const isSignupGrantBlocked = (user: { signupGrant?: Pick<SignupGrant, 'blocked'> | null }): boolean =>
+  !!user.signupGrant?.blocked;
 
 export function hasPaidSignupDrip(
   grant: Pick<SignupGrant, 'lastDripDay' | 'lastDripPeriod'>,

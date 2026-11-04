@@ -92,6 +92,7 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
       moderation: 1,
       deletedAt: 1,
       isSynthetic: 1,
+      'signupGrant.blocked': 1,
     }).lean() as Promise<({ createdAt?: Date; emailVerified?: boolean } & creditService.RewardPartyFields) | null>,
   ]);
   // Mirrors accountCreatedMs in userApiKeyService/trust.ts.
@@ -109,7 +110,7 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
     stamps,
     accountAgeInDays,
     emailVerified: user?.emailVerified ?? false,
-    rewardBlocked: !user || creditService.isRewardPartyBlocked(user),
+    rewardBlocked: !user || creditService.isRewardRecipientBlocked(user),
   };
 }
 

@@ -1,4 +1,5 @@
 import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -507,7 +508,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
   };
 
   // Helper to build and send export (supports partial exports)
-  const buildAndSendExport = () => {
+  const buildAndSendExport = async () => {
     stats.duration_ms = Date.now() - startTime;
 
     const exportData: ExportResult = {
@@ -564,6 +565,20 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
       durationMs: stats.duration_ms,
     });
 
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_channel.exported',
+      target: { kind: 'settings', id: channelId, displayName: `Slack channel ${channelName ?? channelId}` },
+      summary: `exported Slack channel ${channelName ?? channelId} (${exportStatus})`,
+      details: {
+        workspaceId,
+        channelId,
+        format,
+        mode: 'download',
+        status: exportStatus,
+        messageCount: messages.length,
+      },
+    });
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', buildContentDisposition(filename));
     // Add custom header to indicate partial export (useful for client-side handling)
@@ -617,7 +632,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
         phase: currentPhase,
         suggestion: 'Try using a narrower date range to export smaller batches.',
       };
-      return buildAndSendExport();
+      return await buildAndSendExport();
     }
 
     Logger.info('✅ Fetched all messages', { count: messages.length });
@@ -683,7 +698,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
           phase: currentPhase,
           suggestion: 'Messages were exported but some thread replies may be missing.',
         };
-        return buildAndSendExport();
+        return await buildAndSendExport();
       }
     }
 
@@ -768,7 +783,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
       if (isTimedOut()) {
         addWarning('resolving_users', 'Export timed out while resolving user names', 'Some users may show as IDs');
         exportStatus = 'partial';
-        return buildAndSendExport();
+        return await buildAndSendExport();
       }
     }
 
@@ -795,7 +810,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
     }
 
     // Success - send complete export
-    return buildAndSendExport();
+    return await buildAndSendExport();
   } catch (error: any) {
     clearTimeout(requestTimeoutId);
 

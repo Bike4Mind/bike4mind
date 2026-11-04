@@ -12,7 +12,7 @@ import { type MigrationFile } from './index';
  * hit an IndexKeySpecsConflict.
  */
 const migration: MigrationFile = {
-  id: 20260921239600,
+  id: 20260921239700,
   name: 'ensure user deletion scheduledFor index',
 
   up: async () => {
