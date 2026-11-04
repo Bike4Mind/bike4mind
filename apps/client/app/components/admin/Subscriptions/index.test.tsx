@@ -315,6 +315,15 @@ describe('AdminSubscriptions', () => {
     );
   });
 
+  it('warns when the Mismatched view is capped', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data: url === SUMMARY_PATH ? SUMMARY : { ...listResponse(), mismatchTruncated: true },
+    }));
+    renderTab();
+
+    expect(await screen.findByTestId('admin-subscriptions-mismatch-truncated')).toBeTruthy();
+  });
+
   it('shows no mismatch banner when nothing is open', async () => {
     renderTab();
     await screen.findByTestId('admin-subscriptions-row-s1');

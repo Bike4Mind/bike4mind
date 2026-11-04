@@ -13,6 +13,7 @@ import { escapeCsvCell } from '@client/app/utils/csv';
 import {
   adminSubscriptionsExportPage,
   adminSubscriptionsMatch,
+  MISMATCH_ID_LIMIT,
   OWNER_SEARCH_LIMIT,
   type ExportCursor,
 } from '@server/admin/subscriptionsList/listAdminSubscriptions';
@@ -106,7 +107,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       }
 
       const catalog = subscriptionPlanCatalog();
-      const { match, searchTruncated } = await adminSubscriptionsMatch(parsed.data, new Date(), catalog);
+      const { match, searchTruncated, mismatchTruncated } = await adminSubscriptionsMatch(parsed.data, new Date(), catalog);
       let after: ExportCursor | null = null;
       let truncated = false;
       let rowsWritten = 0;
@@ -152,6 +153,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       }
       if (searchTruncated) {
         res.write(`# Search matched more than ${OWNER_SEARCH_LIMIT} owners; narrow it to export every match\n`);
+      }
+      if (mismatchTruncated) {
+        res.write(`# Mismatched view covers the first ${MISMATCH_ID_LIMIT} subscriptions with open findings\n`);
       }
       res.end();
     })

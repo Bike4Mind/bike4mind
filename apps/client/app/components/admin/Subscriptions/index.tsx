@@ -196,6 +196,8 @@ const AdminSubscriptions: React.FC = () => {
       if (result.truncated) toast.warning('The export hit its row cap. Narrow the filters to export the rest.');
       if (result.searchTruncated)
         toast.warning('The search matched too many accounts. Narrow it to export every match.');
+      if (result.mismatchTruncated)
+        toast.warning('The Mismatched view is capped, so the export is missing some subscriptions.');
     } catch (error) {
       console.error('Failed to export subscriptions CSV:', error);
       toast.error('Failed to download the subscriptions CSV.');
@@ -355,6 +357,12 @@ const AdminSubscriptions: React.FC = () => {
       {listQuery.data?.searchTruncated && (
         <Alert color="warning" data-testid="admin-subscriptions-search-truncated">
           This search matches more accounts than the list can resolve. Narrow it to see every match.
+        </Alert>
+      )}
+
+      {listQuery.data?.mismatchTruncated && (
+        <Alert color="warning" data-testid="admin-subscriptions-mismatch-truncated">
+          More subscriptions have open mismatches than the list can show. Sync the ones listed to see the rest.
         </Alert>
       )}
 

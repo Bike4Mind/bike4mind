@@ -124,6 +124,8 @@ export const useAdminSubscriptionSync = (id: string) => {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'organizations'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
+      void queryClient.invalidateQueries({ queryKey: ['organizations'] });
     },
     onError: error => {
       toast.error(getErrorMessage(error));

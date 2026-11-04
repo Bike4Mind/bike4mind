@@ -282,7 +282,31 @@ describe('SyncFromStripeDialog', () => {
     previewOf({ changes: [], stripeMissing: false, stripeStatus: 'active', updatedAt: '2026-10-02T00:00:00.000Z' });
     open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
 
+    pickReason('sync-subscription-dialog');
     expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Already in sync with Stripe');
+    expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+    confirm('sync-subscription-dialog');
+    expect(mocks.sync).not.toHaveBeenCalled();
+  });
+
+  it('blocks the sync while the preview loads', () => {
+    previewOf(undefined, { isLoading: true });
+    open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
+
+    pickReason('sync-subscription-dialog');
+    expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Reading from Stripe');
+    expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+    expect(mocks.sync).not.toHaveBeenCalled();
+  });
+
+  it('blocks the sync when the preview fails', () => {
+    previewOf(undefined, { isError: true });
+    open(SyncFromStripeDialog, buildDetail({ subscription: STRIPE_ROW }));
+
+    pickReason('sync-subscription-dialog');
+    expect(screen.getByTestId('sync-subscription-dialog')).toHaveTextContent('Could not read the subscription');
+    expect(screen.getByTestId('sync-subscription-dialog-confirm-btn')).toBeDisabled();
+    expect(mocks.sync).not.toHaveBeenCalled();
   });
 
   it('warns that a subscription missing from Stripe is marked canceled', () => {
