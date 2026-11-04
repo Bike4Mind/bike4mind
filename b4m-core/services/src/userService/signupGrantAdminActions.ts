@@ -1,5 +1,6 @@
 import { PENDING_FREE_CREDITS_TAG, signupGrantRemaining, isSignupGrantBlocked } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/db-core';
+import type { HeldCreditRewardRepository } from '../creditService/payCreditReward';
 import type { FreeCreditAdapters } from './freeCredits';
 import { releaseHeldGrantNow, type HeldGrantAdapters } from './heldSignupGrants';
 import { isSignupGrantHeldForReview } from './signupRisk';
@@ -70,10 +71,7 @@ export async function releaseRemainingSignupGrant(
 
 export type SignupGrantBlockAdapters = {
   users: FreeCreditAdapters['db']['users'];
-  heldRewards: {
-    pauseForUser(userId: string): Promise<number>;
-    resumeForUser(userId: string): Promise<number>;
-  };
+  heldRewards: Pick<HeldCreditRewardRepository, 'pauseForUser' | 'resumeForUser'>;
   now?: () => Date;
   /** Runs in the same transaction as the flag write, so a failed audit entry rolls the change back. */
   audit?: () => Promise<void>;

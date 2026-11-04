@@ -44,6 +44,10 @@ export interface HeldCreditRewardRepository {
   settle(transactionId: string, status: 'paid' | 'void'): Promise<void>;
   /** Moves a user's held rewards out of the queue; returns how many moved. */
   pauseForUser(userId: string): Promise<number>;
+  /** Moves one held reward out of the queue, leaving the user's other rows alone; returns how many moved. */
+  pauseOne(transactionId: string): Promise<number>;
+  /** Puts a user's paused rewards back in the queue at their original place; returns how many moved. */
+  resumeForUser(userId: string): Promise<number>;
 }
 
 export type RewardPartyFields = AccountStateFields & {
@@ -182,7 +186,8 @@ async function payNow(reward: HeldCreditRewardInput, adapters: PayCreditRewardAd
 /**
  * Pays a free reward (gear, referral) from the trickle pool. A dry pool, or a queued older reward the
  * pool could no longer cover after this one, holds it for releaseHeldCreditRewards; a blocked account
- * gets nothing and nothing is queued. Idempotent on `transactionId`.
+ * gets nothing and nothing is queued, except that a block landing after the queue insert pauses that row.
+ * Idempotent on `transactionId`.
  */
 export async function payCreditReward(
   reward: HeldCreditRewardInput,
@@ -214,7 +219,7 @@ export async function payCreditReward(
   // A block can commit between the check above and this insert, after its pause already ran; the flag is
   // read again once the row exists, so either that pause or this one takes it out of the queue.
   if (isSignupGrantBlocked((await adapters.users.findById(reward.userId)) ?? {})) {
-    await adapters.heldRewards.pauseForUser(reward.userId);
+    await adapters.heldRewards.pauseOne(reward.transactionId);
     return { outcome: 'blocked' };
   }
   return { outcome: 'queued' };

@@ -350,6 +350,40 @@ describe('queued rewards while blocked', () => {
     expect(await HeldCreditRewardModel.countDocuments({ userId: user.id, status: 'held' })).toBe(0);
   });
 
+  it('pauses only the row it queued on a late block, leaving the same users other held rows queued', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const user = await makeGrantUser();
+    await creditService.payCreditReward(reward(user.id, 'projects'), rewardAdapters);
+    const racingRewards = new Proxy(heldCreditRewardRepository, {
+      get(target, key) {
+        if (key !== 'hold') return Reflect.get(target, key, target);
+        // Sets the flag without pausing, as a block whose pause has not run yet.
+        return async (input: Parameters<typeof heldCreditRewardRepository.hold>[0]) => {
+          await heldCreditRewardRepository.hold(input);
+          await User.collection.updateOne(
+            { _id: new mongoose.Types.ObjectId(user.id) },
+            { $set: { 'signupGrant.blocked': { at: new Date() } } }
+          );
+        };
+      },
+    });
+
+    const result = await creditService.payCreditReward(reward(user.id, 'skills'), {
+      ...rewardAdapters,
+      heldRewards: racingRewards,
+    });
+
+    expect(result.outcome).toBe('blocked');
+    expect(
+      await HeldCreditRewardModel.findOne({ transactionId: `gear-unlock:${user.id}:skills` }).lean()
+    ).toMatchObject({
+      status: 'paused',
+    });
+    expect(
+      await HeldCreditRewardModel.findOne({ transactionId: `gear-unlock:${user.id}:projects` }).lean()
+    ).toMatchObject({ status: 'held' });
+  });
+
   it('still pays an inviter whose invited friend is blocked, since the block follows the recipient only', async () => {
     const inviter = await makeUser();
     const friend = await makeGrantUser();
@@ -374,6 +408,76 @@ describe('queued rewards while blocked', () => {
     config.signupGrantTricklePoolDaily = '150';
     const other = await makeUser();
     expect((await creditService.payCreditReward(reward(other.id, 'skills'), rewardAdapters)).outcome).toBe('paid');
+  });
+});
+
+describe('a block or unblock whose reward write fails once', () => {
+  const failingOnce = (method: 'pauseForUser' | 'resumeForUser') => {
+    let failed = false;
+    return new Proxy(heldCreditRewardRepository, {
+      get(target, key) {
+        if (key !== method) return Reflect.get(target, key, target);
+        return async (userId: string) => {
+          if (!failed) {
+            failed = true;
+            throw new Error(`${method} failed`);
+          }
+          return heldCreditRewardRepository[method](userId);
+        };
+      },
+    });
+  };
+
+  it('keeps the flag set and the rewards held, defers them at release, and a repeat block pauses them', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const user = await makeGrantUser();
+    await creditService.payCreditReward(reward(user.id, 'projects'), rewardAdapters);
+
+    await expect(
+      userService.blockSignupGrant(user.id, { ...blockAdapters, heldRewards: failingOnce('pauseForUser') })
+    ).rejects.toThrow('pauseForUser failed');
+    expect((await rawUser(user.id))?.signupGrant.blocked).toBeDefined();
+    expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'held' });
+
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(rewardAdapters, { limit: 10 })).toMatchObject({
+      deferred: 1,
+      voided: 0,
+      paid: 0,
+    });
+    expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'held' });
+    expect(await balance(user.id)).toBe(0);
+
+    expect(await userService.blockSignupGrant(user.id, blockAdapters)).toMatchObject({
+      outcome: 'noop',
+      reason: 'already_blocked',
+      rewardsAffected: 1,
+    });
+    expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'paused' });
+  });
+
+  it('keeps the flag lifted and the rewards paused, and a repeat unblock resumes them', async () => {
+    config.signupGrantTricklePoolDaily = '0';
+    const user = await makeGrantUser();
+    await creditService.payCreditReward(reward(user.id, 'projects'), rewardAdapters);
+    await userService.blockSignupGrant(user.id, blockAdapters);
+
+    await expect(
+      userService.unblockSignupGrant(user.id, { ...blockAdapters, heldRewards: failingOnce('resumeForUser') })
+    ).rejects.toThrow('resumeForUser failed');
+    expect((await rawUser(user.id))?.signupGrant.blocked).toBeUndefined();
+    expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'paused' });
+
+    expect(await userService.unblockSignupGrant(user.id, blockAdapters)).toMatchObject({
+      outcome: 'noop',
+      reason: 'not_blocked',
+      rewardsAffected: 1,
+    });
+    expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'held' });
+
+    config.signupGrantTricklePoolDaily = '1000';
+    expect(await creditService.releaseHeldCreditRewards(rewardAdapters, { limit: 10 })).toMatchObject({ paid: 1 });
+    expect(await balance(user.id)).toBe(100);
   });
 });
 

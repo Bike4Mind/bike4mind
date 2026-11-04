@@ -93,6 +93,14 @@ export const heldCreditRewardRepository = {
     );
     return modifiedCount;
   },
+  /** Takes one queued reward out of the queue, leaving the user's other rows as they are. */
+  async pauseOne(transactionId: string): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateOne(
+      { transactionId, status: 'held' },
+      { $set: { status: 'paused' } }
+    );
+    return modifiedCount;
+  },
   /** Puts a user's paused rewards back in the queue at their original place. */
   async resumeForUser(userId: string): Promise<number> {
     const { modifiedCount } = await HeldCreditRewardModel.updateMany(
