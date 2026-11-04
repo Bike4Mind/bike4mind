@@ -192,6 +192,8 @@ import ReplaceCreditTransactionOwnerIndex from './20260921235957_replace-credit-
 import EnsureFabFileOwnedKeysetIndex from './20260921235994_ensure-fabfile-owned-keyset-index';
 import EnsureFabFileFilePathIndex from './20260921235981_ensure-fabfile-filepath-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EncryptSensitiveAdminSettings from './20260921235955_encrypt-sensitive-admin-settings';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureFabFileDerivedFromIndex from './20260921235976_ensure-fabfile-derived-from-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import UnsetStoredDefaultForcedRetrievalFloor from './20260921235999_unset-stored-default-forced-retrieval-floor';
@@ -417,6 +419,7 @@ const coreMigrations: MigrationFile[] = [
   ReplaceCreditTransactionOwnerIndex,
   EnsureFabFileOwnedKeysetIndex,
   EnsureFabFileFilePathIndex,
+  EncryptSensitiveAdminSettings,
   EnsureFabFileDerivedFromIndex,
   UnsetStoredDefaultForcedRetrievalFloor,
   EnsureArtifactOwnedKeysetIndex,
