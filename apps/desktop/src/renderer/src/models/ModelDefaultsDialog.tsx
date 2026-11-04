@@ -148,7 +148,7 @@ function ModelDefaultsForm({ option, onClose }: { option: ChatModelOption | null
         const current = settings ?? {};
         setLoaded(current);
         lastGood.current = draftsOf(current.generation);
-        setDrafts(lastGood.current);
+        setDrafts({ ...lastGood.current });
         setEffort(current.effort ?? null);
       },
       (reason: unknown) => {
