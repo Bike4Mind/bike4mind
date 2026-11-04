@@ -1,12 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InviteType } from '@bike4mind/common';
-import { Invite, mongoose, User } from '@bike4mind/database';
+import { AdminSettings, CreditTransaction, Invite, mongoose, Organization, User } from '@bike4mind/database';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
-import { recordOrgSignupInvite } from './orgInviteBonus';
+import { payOrgInviteBonus, recordOrgSignupInvite } from './orgInviteBonus';
+
+// Without the signup protection wiring the budget is unmetered; signupGrantBudget covers the pools.
+vi.mock('@server/auth/signupProtection', () => ({ signupProtection: undefined }));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -14,9 +17,13 @@ let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 
 beforeAll(async () => {
   server = await createMongoReplSet();
+  mongoose.set('transactionAsyncLocalStorage', true);
   await mongoose.connect(server.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
-  await Promise.all([User.createCollection(), Invite.createCollection()]);
+  await Promise.all(
+    [User, Invite, Organization, CreditTransaction, AdminSettings].map(model => model.createCollection())
+  );
+  await CreditTransaction.collection.createIndex({ transactionId: 1 }, { unique: true, sparse: true });
 });
 
 afterAll(async () => {
@@ -25,7 +32,10 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await Promise.all([User.collection.deleteMany({}), Invite.collection.deleteMany({})]);
+  await Promise.all(
+    [User, Invite, Organization, CreditTransaction, AdminSettings].map(model => model.collection.deleteMany({}))
+  );
+  await AdminSettings.collection.insertOne({ settingName: 'signupGrantInviteBonusCredits', settingValue: '2000' });
 });
 
 const organizationId = new mongoose.Types.ObjectId().toHexString();
@@ -88,5 +98,58 @@ describe('recordOrgSignupInvite', () => {
     );
     expect(await recordOrgSignupInvite(user.id, orgInvite.id)).toBe(false);
     expect((await User.findById(user.id).lean())?.signupInvite?.source).toBe('referral');
+  });
+});
+
+describe('payOrgInviteBonus', () => {
+  const released = {
+    emailVerified: true,
+    signupGrantAssessment: {
+      band: 'full',
+      credits: 10,
+      score: null,
+      reasons: [],
+      missing: [],
+      policyVersion: null,
+      status: 'disabled',
+    },
+  };
+
+  async function createOrganization(paying: boolean) {
+    await Organization.collection.insertOne({
+      _id: new mongoose.Types.ObjectId(organizationId),
+      name: 'Acme',
+      seats: 5,
+      ...(paying ? { lastCreditsPurchasedAt: new Date() } : {}),
+    });
+  }
+
+  it('marks and pays a new account that accepted a paying organization invite, once', async () => {
+    await createOrganization(true);
+    const invite = await createInvite();
+    const user = await createUser('new', released);
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(2000);
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    const stored = await User.findById(user.id).lean();
+    expect(stored?.signupInvite?.source).toBe('organization');
+    expect(stored?.signupGrant?.inviteBonusPaid).toBe(2000);
+    expect(await CreditTransaction.countDocuments({ transactionId: `invite-bonus:${user.id}` })).toBe(1);
+  });
+
+  it('leaves an account uninvited and unpaid for an unpaid organization', async () => {
+    await createOrganization(false);
+    const invite = await createInvite();
+    const user = await createUser('new', released);
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    expect((await User.findById(user.id).lean())?.signupInvite).toBeUndefined();
+  });
+
+  it('pays nothing to an account that existed before the invite', async () => {
+    await createOrganization(true);
+    const user = await createUser('old', released);
+    await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date(0) } });
+    const invite = await createInvite();
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
 });

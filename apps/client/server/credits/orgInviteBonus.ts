@@ -1,5 +1,15 @@
 import { InviteType, type SignupInvite } from '@bike4mind/common';
-import { inviteRepository, User, userRepository } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  creditLotRepository,
+  creditTransactionRepository,
+  inviteRepository,
+  User,
+  userRepository,
+} from '@bike4mind/database';
+import { userService } from '@bike4mind/services';
+import { signupProtection } from '@server/auth/signupProtection';
+import { isPayingOrganization } from '@server/entitlements/orgPaidStanding';
 
 /**
  * Marks `userId` as having signed up through organization invite `inviteId`. The caller decides
@@ -30,4 +40,25 @@ export async function recordOrgSignupInvite(userId: string, inviteId: string): P
     { $set: { signupInvite } }
   ).exec();
   return result.modifiedCount === 1;
+}
+
+/**
+ * Marks and pays the invite bonus for a new account that accepted a paying organization's invite.
+ * An unpaid organization's invite leaves the account uninvited. Returns the credits paid.
+ */
+export async function payOrgInviteBonus(userId: string, inviteId: string): Promise<number> {
+  const invite = await inviteRepository.findById(inviteId);
+  if (invite?.type !== InviteType.Organization || !invite.documentId) return 0;
+  if (!(await isPayingOrganization(invite.documentId))) return 0;
+  await recordOrgSignupInvite(userId, inviteId);
+  const result = await userService.payInviteBonus(userId, {
+    db: {
+      users: userRepository,
+      signupProtection,
+      adminSettings: adminSettingsRepository,
+      creditTransactions: creditTransactionRepository,
+      creditLots: creditLotRepository,
+    },
+  });
+  return result.creditsGranted;
 }

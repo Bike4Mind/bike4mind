@@ -38,6 +38,8 @@ const tagMocks = vi.hoisted(() => ({
 }));
 const unlockFromOrgInvite = vi.hoisted(() => vi.fn().mockResolvedValue({ creditsGranted: 0 }));
 vi.mock('@server/credits/orgInviteUnlock', () => ({ unlockSignupGrantFromOrgInvite: unlockFromOrgInvite }));
+const payOrgInviteBonus = vi.hoisted(() => vi.fn().mockResolvedValue(0));
+vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus }));
 vi.mock('@bike4mind/services', () => ({ sharingService: { acceptInvite } }));
 vi.mock('@bike4mind/database', () => ({
   // accept.ts adapters + inviteManager's module-load imports
@@ -184,11 +186,15 @@ describe('POST /api/invites/[id]/accept - signup grant unlock', () => {
     return { req, res, done: mockRefs.postHandler!(req, res) };
   };
 
-  beforeEach(() => unlockFromOrgInvite.mockClear());
+  beforeEach(() => {
+    unlockFromOrgInvite.mockClear();
+    payOrgInviteBonus.mockClear();
+  });
 
-  it('releases the grant for an Organization invite', async () => {
+  it('releases the grant and pays the invite bonus for an Organization invite', async () => {
     await accept('Organization').done;
     expect(unlockFromOrgInvite).toHaveBeenCalledWith('u1', 'inv1');
+    expect(payOrgInviteBonus).toHaveBeenCalledWith('u1', 'inv1');
   });
 
   it('does not release the grant when an API key accepts the invite', async () => {
@@ -196,11 +202,26 @@ describe('POST /api/invites/[id]/accept - signup grant unlock', () => {
     await done;
     expect(res._getStatusCode()).toBe(200);
     expect(unlockFromOrgInvite).not.toHaveBeenCalled();
+    expect(payOrgInviteBonus).not.toHaveBeenCalled();
   });
 
   it('does not release the grant for a Session invite', async () => {
     await accept('Session').done;
     expect(unlockFromOrgInvite).not.toHaveBeenCalled();
+    expect(payOrgInviteBonus).not.toHaveBeenCalled();
+  });
+
+  it('still pays the bonus when the release fails, and accepts and logs when the bonus fails', async () => {
+    unlockFromOrgInvite.mockRejectedValueOnce(new Error('ledger down'));
+    payOrgInviteBonus.mockRejectedValueOnce(new Error('ledger down'));
+    const { req, res, done } = accept('Organization');
+    await done;
+    expect(res._getStatusCode()).toBe(200);
+    expect(payOrgInviteBonus).toHaveBeenCalledWith('u1', 'inv1');
+    expect((req as any).logger.error).toHaveBeenCalledWith(
+      'Organization invite bonus remains unpaid',
+      expect.any(Error)
+    );
   });
 
   it('still accepts the invite and logs when the release fails', async () => {
