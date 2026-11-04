@@ -216,7 +216,8 @@ describe('OrchestratorStage', () => {
 
   it('reports a view change', async () => {
     await renderStage(FIXTURE);
-    act(() => el('orchestrator-view-tab-board').click());
+    act(() => el('orchestrator-view-menu-btn').click());
+    act(() => el('orchestrator-view-option-board').click());
     expect(onViewChange).toHaveBeenCalledWith('board');
   });
 

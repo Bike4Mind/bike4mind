@@ -1,7 +1,6 @@
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Switch from '@mui/joy/Switch';
-import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, type ReactNode, useState } from 'react';
@@ -10,10 +9,11 @@ import { playChime } from './chime';
 import { ExampleQuestButtons } from './exampleQuests';
 import { useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
-import { ORCHESTRATOR_VIEWS, type OrchestratorViewId } from './orchestratorPrefs';
+import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
 import { formatAgentCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
+import { ViewSwitcher } from './ViewSwitcher';
 
 export interface AgentActions {
   open(id: string): void;
@@ -65,8 +65,6 @@ export interface OrchestratorStageProps {
 }
 
 const NO_PARENT: ParentView = {};
-
-const VIEW_LABEL: Record<OrchestratorViewId, string> = { tavern: 'Tavern', board: 'Board', table: 'Table' };
 
 const pulse = keyframes`
   0%, 100% { opacity: 1; }
@@ -157,19 +155,7 @@ export function OrchestratorStage({
       sx={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1, flexWrap: 'wrap' }}>
-        <ToggleButtonGroup
-          size="sm"
-          value={view}
-          onChange={(_event, next) => {
-            if (next) onViewChange(next);
-          }}
-        >
-          {ORCHESTRATOR_VIEWS.map(id => (
-            <Button key={id} value={id} data-testid={`orchestrator-view-tab-${id}`}>
-              {VIEW_LABEL[id]}
-            </Button>
-          ))}
-        </ToggleButtonGroup>
+        <ViewSwitcher view={view} onViewChange={onViewChange} />
         <Typography level="body-sm" data-testid="orchestrator-summary-strip">
           {`${total} ${total === 1 ? 'agent' : 'agents'} \u00B7 ${counts.working} working \u00B7 ${needsYou} need you \u00B7 ${counts.done} done \u00B7 ${counts.failed} failed \u00B7 ${costPartial ? '~' : ''}${cost}`}
         </Typography>
