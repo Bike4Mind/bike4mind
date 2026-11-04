@@ -8,6 +8,7 @@ import {
   type AdminSubscriptionsSortField,
 } from '@client/app/utils/adminSubscriptionsFilter';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
+import { Dash } from '../shared/Dash';
 import type { DataColumn } from '../shared/DataTable';
 import { formatMoney } from '../shared/formatMoney';
 import { InitialsAvatar } from '../shared/InitialsAvatar';
@@ -37,12 +38,6 @@ export function formatRelativeDay(value: string, now: Date): string {
 
 /** The exact time for a hover title, in UTC. */
 export const formatUtc = (value: string) => `${new Date(value).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-
-const Dash = ({ title }: { title?: string }) => (
-  <Typography component="span" sx={{ color: 'admin.inkMuted' }} aria-label={title ?? 'None'} title={title}>
-    {'\u2014'}
-  </Typography>
-);
 
 const Muted = ({ children, title }: { children: string; title?: string }) => (
   <Typography level="body-sm" component="span" title={title} sx={{ color: 'admin.inkMuted', whiteSpace: 'nowrap' }}>

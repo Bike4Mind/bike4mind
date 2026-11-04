@@ -74,14 +74,25 @@ export const invoicePaymentKey = (invoice: PaymentRef & { id: string }): string 
 
 const EXPIRY_WARNING_DAYS = 30;
 
+// A card works through the last day of its expiry month; month index expMonth is the first of the next one.
+const cardExpiryEnd = (paymentMethod: Pick<AdminStripePaymentMethod, 'expMonth' | 'expYear'> | null) =>
+  paymentMethod?.expMonth && paymentMethod.expYear ? Date.UTC(paymentMethod.expYear, paymentMethod.expMonth, 1) : null;
+
+/** True when the card's expiry month has fully passed. */
+export const cardIsExpired = (
+  paymentMethod: Pick<AdminStripePaymentMethod, 'expMonth' | 'expYear'> | null,
+  now: number
+): boolean => {
+  const expiresAt = cardExpiryEnd(paymentMethod);
+  return expiresAt !== null && expiresAt <= now;
+};
+
 /** True when the card is still valid but expires (end of its expiry month) within `days`. */
 export const cardExpiresWithinDays = (
   paymentMethod: Pick<AdminStripePaymentMethod, 'expMonth' | 'expYear'> | null,
   now: number,
   days = EXPIRY_WARNING_DAYS
 ): boolean => {
-  if (!paymentMethod?.expMonth || !paymentMethod.expYear) return false;
-  // A card works through the last day of its expiry month; month index expMonth is the first of the next one.
-  const expiresAt = Date.UTC(paymentMethod.expYear, paymentMethod.expMonth, 1);
-  return expiresAt > now && expiresAt - now <= days * 86_400_000;
+  const expiresAt = cardExpiryEnd(paymentMethod);
+  return expiresAt !== null && expiresAt > now && expiresAt - now <= days * 86_400_000;
 };

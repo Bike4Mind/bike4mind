@@ -3,7 +3,7 @@ import { Link, Typography } from '@mui/joy';
 import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { isCompSubscription, type AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import type { AdminStripeInvoice } from '@client/app/utils/adminSubscriptionStripe';
-import { DataTable, EmptyState, StatusChip, formatMoney, type DataColumn } from '../../../shared';
+import { DataTable, Dash, EmptyState, StatusChip, formatMoney, type DataColumn } from '../../../shared';
 import { formatCredits } from '../../../Users/Profile/actions/creditAdjustment';
 import { formatDate } from '../subscriptionDetailModel';
 import { StripeSection, invoiceStatusTone } from '../stripeSections';
@@ -16,7 +16,7 @@ const columns = (currencies: string[]): DataColumn<AdminStripeInvoice>[] => [
     id: 'date',
     label: 'Date',
     sortValue: invoice => invoice.createdAt,
-    render: invoice => formatDate(invoice.createdAt) ?? '-',
+    render: invoice => formatDate(invoice.createdAt) ?? <Dash />,
   },
   {
     id: 'amount',
@@ -32,10 +32,10 @@ const columns = (currencies: string[]): DataColumn<AdminStripeInvoice>[] => [
       invoice.status ? (
         <StatusChip tone={invoiceStatusTone(invoice.status)} label={capitalize(invoice.status)} dot />
       ) : (
-        '-'
+        <Dash />
       ),
   },
-  { id: 'paidAt', label: 'Paid at', render: invoice => formatDate(invoice.paidAt) ?? '-' },
+  { id: 'paidAt', label: 'Paid at', render: invoice => formatDate(invoice.paidAt) ?? <Dash /> },
   { id: 'attempts', label: 'Attempts', numeric: true, render: invoice => invoice.attempts },
   {
     id: 'credits',
@@ -43,7 +43,11 @@ const columns = (currencies: string[]): DataColumn<AdminStripeInvoice>[] => [
     numeric: true,
     render: invoice => (
       <span data-testid="subscription-invoices-credits-cell">
-        {invoice.creditsGranted === null ? '-' : formatCredits(invoice.creditsGranted)}
+        {invoice.creditsGranted === null ? (
+          <Dash title="No grant found" data-testid="subscription-invoices-no-grant" />
+        ) : (
+          formatCredits(invoice.creditsGranted)
+        )}
       </span>
     ),
   },
@@ -61,7 +65,7 @@ const columns = (currencies: string[]): DataColumn<AdminStripeInvoice>[] => [
           View
         </Link>
       ) : (
-        '-'
+        <Dash />
       ),
   },
 ];

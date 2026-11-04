@@ -34,6 +34,7 @@ const lifetimePaidTile = (detail: AdminSubscriptionDetail, stripe: AdminSubscrip
   const note = [
     others.length > 0 ? `+${others.length} other ${others.length === 1 ? 'currency' : 'currencies'}` : null,
     data.invoicesTruncated ? 'Latest 300 invoices' : null,
+    !first ? 'No paid invoices' : null,
   ].filter(Boolean);
   return {
     value: first ? formatMoney(first.amount, first.currency, { compact: true }) : '-',

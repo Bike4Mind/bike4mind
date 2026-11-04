@@ -1,3 +1,4 @@
+export * from './Dash';
 export * from './AdminPageHeader';
 export * from './EntityHeader';
 export * from './StatStrip';

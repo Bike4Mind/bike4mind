@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
 import { OverviewTab } from './OverviewTab';
@@ -20,6 +20,10 @@ const setup = (detail: AdminSubscriptionDetail, stripe: AdminSubscriptionStripeS
   render(<OverviewTab detail={detail} stripe={stripe} {...handlers} />, { wrapper: SubscriptionTestWrapper });
   return handlers;
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('OverviewTab', () => {
   it('shows a comp with its grant facts and no Payment card', () => {
@@ -115,7 +119,8 @@ describe('OverviewTab Payment card', () => {
   });
 
   it('warns when the card expires within 30 days', () => {
-    const now = new Date();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-04T12:00:00Z'));
     setup(
       stripeDetail(),
       buildStripeState({
@@ -124,13 +129,29 @@ describe('OverviewTab Payment card', () => {
             type: 'card',
             brand: 'visa',
             last4: '4242',
-            expMonth: now.getUTCMonth() + 1,
-            expYear: now.getUTCFullYear(),
+            expMonth: 11,
+            expYear: 2026,
           },
         }),
       })
     );
     expect(screen.getByTestId('subscription-detail-card-expiring-chip')).toHaveTextContent('Expires soon');
+    expect(screen.queryByTestId('subscription-detail-card-expired-chip')).not.toBeInTheDocument();
+  });
+
+  it('flags a card whose expiry month has passed as Expired', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-04T12:00:00Z'));
+    setup(
+      stripeDetail(),
+      buildStripeState({
+        data: buildStripeData({
+          paymentMethod: { type: 'card', brand: 'visa', last4: '4242', expMonth: 9, expYear: 2026 },
+        }),
+      })
+    );
+    expect(screen.getByTestId('subscription-detail-card-expired-chip')).toHaveTextContent('Expired');
+    expect(screen.queryByTestId('subscription-detail-card-expiring-chip')).not.toBeInTheDocument();
   });
 
   it('keeps every Mongo card when Stripe is down, and offers Try again', () => {

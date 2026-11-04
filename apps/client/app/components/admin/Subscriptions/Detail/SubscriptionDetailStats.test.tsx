@@ -48,6 +48,11 @@ describe('SubscriptionDetailStats Lifetime paid', () => {
     expect(tile).toHaveTextContent('+1 other currency, Latest 300 invoices');
   });
 
+  it('says No paid invoices when the read succeeded with nothing paid', () => {
+    const tile = lifetime(buildStripeState({ data: buildStripeData({ lifetimePaid: [] }) }));
+    expect(tile).toHaveTextContent('No paid invoices');
+  });
+
   it('says Comped plan for a comp', () => {
     expect(lifetime(buildStripeState({ data: undefined }), true)).toHaveTextContent('Comped plan');
   });
