@@ -44,10 +44,14 @@ function SortHeader({
       aria-sort={active ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
       data-testid={`orchestrator-table-sort-${sortKey}`}
       onClick={() => onSort(sortKey)}
-      style={{ cursor: 'pointer' }}
     >
-      {label}
-      {active ? (sort.direction === 'asc' ? ' \u25B2' : ' \u25BC') : ''}
+      <button
+        type="button"
+        style={{ all: 'inherit', cursor: 'pointer', padding: 0, width: '100%', textAlign: 'inherit' }}
+      >
+        {label}
+        {active ? (sort.direction === 'asc' ? ' \u25B2' : ' \u25BC') : ''}
+      </button>
     </th>
   );
 }
@@ -108,7 +112,7 @@ export function TableView({ agents, onSelect, selectedId }: OrchestratorViewProp
                 onSelect(agent.id);
               }}
               style={{ cursor: 'pointer' }}
-              aria-selected={agent.id === selectedId}
+              data-selected={agent.id === selectedId}
             >
               <td>
                 <AgentStateChip state={agent.state} preparing={agent.preparing} />

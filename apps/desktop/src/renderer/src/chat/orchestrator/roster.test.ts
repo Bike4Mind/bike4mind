@@ -45,10 +45,10 @@ const noInput = {
 describe('deriveAgentState', () => {
   const outcomes: ReadonlyArray<readonly [ChildOutcome | undefined, AgentState]> = [
     ['finished', 'done'],
-    ['max-tokens', 'failed'],
+    ['max-tokens', 'done'],
     ['failed', 'failed'],
-    ['turn-budget', 'failed'],
-    ['context-limit', 'failed'],
+    ['turn-budget', 'stopped'],
+    ['context-limit', 'stopped'],
     ['aborted', 'stopped'],
     ['no-reply', 'idle'],
     [undefined, 'idle'],

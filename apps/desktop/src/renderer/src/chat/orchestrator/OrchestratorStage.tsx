@@ -6,7 +6,7 @@ import { useEffect, useMemo, type ReactNode, useState } from 'react';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import { playChime } from './chime';
 import { ExampleQuestButtons } from './exampleQuests';
-import { useFinale, type ParentReport } from './finale';
+import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
@@ -119,26 +119,30 @@ export function OrchestratorStage({
   const firstNeedsYou = agents.find(agent => agent.state === 'needs-you');
   const firstFailed = agents.find(agent => agent.state === 'failed');
   const needsYouPill = needsYou > 0 && (firstNeedsYou !== undefined || onParentFocus !== undefined);
-  // Zero counts are noise, and the two that call for action get their own buttons instead.
-  const summary = [
-    `${total} ${total === 1 ? 'agent' : 'agents'}`,
-    counts.working > 0 && `${counts.working} working`,
-    needsYou > 0 && !needsYouPill && `${needsYou} need you`,
-    counts.done > 0 && `${counts.done} done`,
-    counts.failed > 0 && !firstFailed && `${counts.failed} failed`,
-    `${costPartial ? '~' : ''}${cost}`,
-  ]
-    .filter(Boolean)
-    .join(' \u00B7 ');
+  // Zero counts are noise, and the two that call for action get their own buttons instead. An empty
+  // stage says nothing: "0 agents" and a blank cost only repeat what the empty state shows.
+  const summary =
+    total === 0
+      ? ''
+      : [
+          `${total} ${total === 1 ? 'agent' : 'agents'}`,
+          counts.working > 0 && `${counts.working} working`,
+          needsYou > 0 && !needsYouPill && `${needsYou} need you`,
+          counts.done > 0 && `${counts.done} done`,
+          `${costPartial ? '~' : ''}${cost}`,
+        ]
+          .filter(Boolean)
+          .join(' \u00B7 ');
 
-  const finale = useFinale(rootId, agents, parent, report);
+  const quest = useMemo(() => questAgents(agents, report), [agents, report]);
+  const finale = useFinale(rootId, quest, parent, report);
   useEffect(() => {
     if (finale.shown) playChime();
   }, [finale.shown]);
 
   const banner = finale.shown && report && (
     <FinaleBanner
-      agents={agents}
+      agents={quest}
       onRead={() => {
         finale.dismiss();
         onReadReport?.(report.id);

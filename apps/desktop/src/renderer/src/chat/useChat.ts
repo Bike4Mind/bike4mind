@@ -288,11 +288,13 @@ export function useSessionStatusFeed(): SessionStatusFeed {
 
     const unsubscribe = window.b4m.chat.onSessionStatus(event => {
       pushed.add(event.sessionId);
-      setFeed(current => ({
-        ...current,
-        statuses: applyStatusEvents(current.statuses, [event]),
-        preparing: applyPreparingEvents(current.preparing, [event]),
-      }));
+      setFeed(current => {
+        const statuses = applyStatusEvents(current.statuses, [event]);
+        const preparing = applyPreparingEvents(current.preparing, [event]);
+        // Same object for a no-op push, so React skips re-rendering everything that reads the feed.
+        if (statuses === current.statuses && preparing === current.preparing) return current;
+        return { ...current, statuses, preparing };
+      });
     });
 
     void window.b4m.chat.getSessionStatuses().then(snapshot => {
@@ -1281,10 +1283,16 @@ export function useConversation(
   const setOrchestrate = useCallback(
     async (orchestrate: boolean) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate);
+      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate).catch((error: unknown) => {
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not change Orchestrate. ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return null;
+      });
       if (!updated) return;
+      // The reply can land after a switch to another conversation, which must keep its own flag.
       setSession(current => {
-        if (!current) return current;
+        if (current?.id !== sessionId) return current;
         const { orchestrate: _previous, ...rest } = current;
         return updated.orchestrate ? { ...rest, orchestrate: true } : rest;
       });

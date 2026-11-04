@@ -349,8 +349,52 @@ describe('AgentPeekDrawer', () => {
       line => line.textContent ?? ''
     );
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toBe('user: go');
-    expect(lines[1]).toMatch(/^assistant: \S/);
+    expect(lines[0]).toBe('You: go');
+    expect(lines[1]).toMatch(/^Agent: \S/);
     expect(lines[1]).toContain('ls');
+  });
+
+  it('labels the drawer as a region and names the close button', async () => {
+    await renderDrawer(agentFixture('a1'));
+    const drawer = el('orchestrator-peek-drawer');
+    expect(drawer.getAttribute('role')).toBe('region');
+    expect(drawer.getAttribute('aria-label')).toMatch(/^Agent details: /);
+    expect(el('orchestrator-peek-close-btn').getAttribute('aria-label')).toBe('Close agent details');
+  });
+
+  it('moves focus into the drawer on open and back to the opener on close', async () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    await renderDrawer(agentFixture('a1'));
+    expect(document.activeElement).toBe(el('orchestrator-peek-drawer'));
+    themed.unmount();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
+  it('does not restore focus to an opener that left the document', async () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    await renderDrawer(agentFixture('a1'));
+    opener.remove();
+    expect(() => themed.unmount()).not.toThrow();
+    expect(document.activeElement).not.toBe(opener);
+  });
+
+  it('maps message roles to reader-friendly names and capitalises others', async () => {
+    chat.getSession.mockResolvedValue(
+      sessionWithMessages(
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: 'on it' },
+        { role: 'tool' as ChatMessage['role'], content: 'note' }
+      )
+    );
+    await renderDrawer(agentFixture('a1'));
+    const lines = [...document.querySelectorAll('[data-testid="orchestrator-peek-message"]')].map(
+      line => line.textContent ?? ''
+    );
+    expect(lines).toEqual(['You: go', 'Agent: on it', 'Tool: note']);
   });
 });

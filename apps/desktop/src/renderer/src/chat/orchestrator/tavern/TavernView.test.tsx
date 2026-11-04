@@ -364,6 +364,13 @@ describe('TavernView', () => {
       expect(el('orchestrator-tavern-agent-a').getAttribute('data-innkeeper-visit')).toBeNull();
     });
 
+    it('is not interactive when nothing handles its selection', async () => {
+      await renderTavern([agentFixture('a', 'working')]);
+      const button = innkeeper() as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.tabIndex).toBe(-1);
+    });
+
     it('calls onInnkeeperSelect when clicked, never onSelect', async () => {
       const onInnkeeperSelect = vi.fn();
       await renderTavern([agentFixture('a', 'working')], false, null, { onInnkeeperSelect });

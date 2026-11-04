@@ -1,7 +1,7 @@
 import type { ChatMessage, ChatSessionStatus, ChatSessionSummary, ChatToolCall } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { activityLabel, describeToolInput, type AgentActivity } from './activity';
-import { buildRoster } from './roster';
+import { buildRoster, descendantIds } from './roster';
 import { assignPersonas } from './tavern/agentPersona';
 
 const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
@@ -24,14 +24,33 @@ export function enteredNeedsYou(
     .map(([id]) => id);
 }
 
-/** Sessions waiting on the user that the user can see: archived and deleted ones do not count. */
+/**
+ * Sessions whose needs-you entries alert: a parent with agents, and every agent its stage shows.
+ * Plain sessions stay quiet (the alerts and the chime setting are about agents), and so do archived
+ * ones and anything under an archived agent, by the same rule the roster hides them with.
+ */
+export function alertableSessions(sessions: readonly ChatSessionSummary[]): ReadonlySet<string> {
+  const archived = new Set(sessions.filter(session => session.archived).map(session => session.id));
+  const roots = new Set(sessions.filter(session => session.origin).map(session => rootSessionOf(sessions, session.id)));
+  const alertable = new Set<string>();
+  for (const root of roots) {
+    if (archived.has(root)) continue;
+    const agents = descendantIds(sessions, root);
+    if (agents.size === 0) continue;
+    alertable.add(root);
+    for (const id of agents) alertable.add(id);
+  }
+  return alertable;
+}
+
+/** Alertable sessions waiting on the user; deleted ones are not listed, so they never count. */
 export function needsYouCount(
   statuses: ReadonlyMap<string, ChatSessionStatus>,
   sessions: readonly ChatSessionSummary[]
 ): number {
-  const visible = new Set(sessions.filter(session => !session.archived).map(session => session.id));
+  const alertable = alertableSessions(sessions);
   let count = 0;
-  for (const [sessionId, status] of statuses) if (status === 'needs-action' && visible.has(sessionId)) count += 1;
+  for (const [sessionId, status] of statuses) if (status === 'needs-action' && alertable.has(sessionId)) count += 1;
   return count;
 }
 

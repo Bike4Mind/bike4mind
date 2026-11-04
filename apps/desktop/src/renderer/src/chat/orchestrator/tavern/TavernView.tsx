@@ -342,6 +342,8 @@ function Innkeeper({
     <Box
       component="button"
       type="button"
+      disabled={!onSelect}
+      tabIndex={onSelect ? undefined : -1}
       data-testid="orchestrator-tavern-innkeeper"
       data-pose={pose}
       aria-label={`${INNKEEPER_NAME}: ${INNKEEPER_POSE_LABEL[pose]}`}
@@ -357,7 +359,7 @@ function Innkeeper({
         p: 0,
         border: 0,
         bgcolor: 'transparent',
-        cursor: 'pointer',
+        cursor: onSelect ? 'pointer' : 'default',
         transition: `left ${WALK}, top ${WALK}`,
         [NO_MOTION]: { transition: 'none' },
         '&:focus-visible': { outline: '2px solid #f5c542', outlineOffset: 2, borderRadius: '4px' },

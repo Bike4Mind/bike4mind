@@ -98,6 +98,13 @@ describe('useNeedsYouAlerts', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
+  it('stays quiet for a plain session with no agents', async () => {
+    sessions = [...DEFAULT_SESSIONS, { ...DEFAULT_SESSIONS[0], id: 'plain', title: 'Plain' }];
+    await render({ plain: 'processing' });
+    await render({ plain: 'needs-action' });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('does not announce sessions that were already waiting when the window opened', async () => {
     await render({}, false);
     await render({ child: 'needs-action' }, true);
@@ -149,9 +156,21 @@ describe('useNeedsYouAlerts', () => {
   });
 
   it('leaves archived and deleted sessions out of the dock badge', async () => {
-    sessions = [session('root', undefined, 'Audit'), { ...session('child', 'root'), archived: true }];
+    sessions = [
+      session('root', undefined, 'Audit'),
+      { ...session('child', 'root'), archived: true },
+      session('live', 'root'),
+    ];
     await render({ child: 'needs-action', root: 'needs-action', gone: 'needs-action' });
     expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+  });
+
+  it('clears the dock badge when it unmounts, as on sign-out', async () => {
+    await render({ child: 'needs-action' });
+    expect(setBadgeCount).toHaveBeenLastCalledWith(1);
+    act(() => root.unmount());
+    expect(setBadgeCount).toHaveBeenLastCalledWith(0);
+    root = createRoot(container);
   });
 
   it('hands a clicked notice to onOpen', async () => {

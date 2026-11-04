@@ -68,9 +68,14 @@ describe('OrchestrateToggle', () => {
     expect(el('chat-orchestrate-count').dataset.tone).toBe('warning');
   });
 
-  it('describes the agents in the badge label, most urgent first', async () => {
+  it('names the agents segment with the agent states, most urgent first, and hides the badge', async () => {
     await renderToggle(['done', 'working', 'needs-you', 'idle']);
-    expect(el('chat-orchestrate-count').getAttribute('aria-label')).toBe('4 agents: 1 needs you, 1 working, 2 done');
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toBe(
+      'Agents, 4 agents: 1 needs you, 1 working, 2 done'
+    );
+    expect(el('chat-surface-toggle-orchestrate').getAttribute('aria-label')).toContain('1 needs you');
+    expect(el('chat-orchestrate-count').getAttribute('aria-hidden')).toBe('true');
+    expect(el('chat-orchestrate-count').hasAttribute('aria-label')).toBe(false);
     expect(describeAgentStates(['failed'])).toBe('1 agent: 1 failed');
     expect(describeAgentStates([])).toBe('No agents yet');
   });
@@ -107,6 +112,16 @@ describe('OrchestrateToggle', () => {
       await renderToggle(['done'], 'orchestrate');
       press();
       expect(onSurfaceChange).toHaveBeenLastCalledWith('chat');
+    });
+
+    it('ignores a chord another handler already consumed', async () => {
+      await renderToggle(['done'], 'chat');
+      press({ cancelable: true });
+      expect(onSurfaceChange).toHaveBeenCalledTimes(1);
+      const handled = chord({ cancelable: true });
+      handled.preventDefault();
+      act(() => void window.dispatchEvent(handled));
+      expect(onSurfaceChange).toHaveBeenCalledTimes(1);
     });
 
     it('opens the agents view of an agentless code session, and does nothing where the switch is absent', async () => {

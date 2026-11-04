@@ -8,6 +8,7 @@ import {
   finaleStats,
   formatWallTime,
   latestQuestReport,
+  questAgents,
   questSucceeded,
   useFinale,
   type ParentReport,
@@ -76,12 +77,23 @@ describe('latestQuestReport', () => {
         message({ id: 'n', role: 'user', system: true }),
         message({ id: 'later' }),
       ])
-    ).toEqual({ id: 'q2', createdAt: at });
+    ).toEqual({ id: 'q2', createdAt: at, since: at });
+    expect(latestQuestReport([message({ id: 'q1', questComplete: true })])).toEqual({ id: 'q1', createdAt: at });
   });
 
   it('ignores an unmarked reply however final it looks', () => {
     expect(latestQuestReport([message({ id: 'p', role: 'user' }), message({ id: 'waiting' })])).toBeUndefined();
     expect(latestQuestReport([])).toBeUndefined();
+  });
+});
+
+describe('questAgents', () => {
+  it('keeps only the agents created after the previous quest closed', () => {
+    const earlier = agent('old', 'done', { createdAt: '2026-10-01T00:00:00.000Z' });
+    const current = agent('new', 'done', { createdAt: '2026-10-02T00:00:00.000Z' });
+    const report = { id: 'q2', createdAt: '2026-10-02T01:00:00.000Z', since: '2026-10-01T12:00:00.000Z' };
+    expect(questAgents([earlier, current], report)).toEqual([current]);
+    expect(questAgents([earlier, current], { id: 'q1', createdAt: report.createdAt })).toEqual([earlier, current]);
   });
 });
 

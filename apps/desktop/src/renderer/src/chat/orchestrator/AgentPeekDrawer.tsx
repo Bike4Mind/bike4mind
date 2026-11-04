@@ -26,6 +26,12 @@ interface AgentPeekDrawerProps {
   actions: AgentActions;
 }
 
+function roleLabel(role: string): string {
+  if (role === 'assistant') return 'Agent';
+  if (role === 'user') return 'You';
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong';
 }
@@ -246,10 +252,25 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
     .slice(-RECENT_MESSAGES);
   const canStop = agent.state === 'working' || agent.state === 'needs-you';
 
+  const drawerRef = useRef<HTMLDivElement>(null);
+  // Focus moves in on open and back to the opener on close; a drawer swapped to another agent keeps its place.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    drawerRef.current?.focus();
+    return () => {
+      if (opener && opener.isConnected) opener.focus();
+    };
+  }, []);
+
   return (
     <Box
+      ref={drawerRef}
+      role="region"
+      aria-label={`Agent details: ${agent.title}`}
+      tabIndex={-1}
       data-testid="orchestrator-peek-drawer"
       sx={{
+        outline: 'none',
         width: 340,
         flexShrink: 0,
         overflowY: 'auto',
@@ -284,7 +305,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         <IconButton
           size="sm"
           variant="plain"
-          aria-label="Close"
+          aria-label="Close agent details"
           data-testid="orchestrator-peek-close-btn"
           onClick={onClose}
         >
@@ -315,7 +336,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
         )}
         {recent.map(message => (
           <Typography key={message.id} level="body-xs" data-testid="orchestrator-peek-message">
-            <b>{message.role}</b>: {message.line}
+            <b>{roleLabel(message.role)}</b>: {message.line}
           </Typography>
         ))}
       </Box>

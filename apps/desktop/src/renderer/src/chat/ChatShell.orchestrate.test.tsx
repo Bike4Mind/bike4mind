@@ -556,6 +556,18 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-peek-drawer')).not.toBeNull();
   });
 
+  it("opens a session's own notice on the view it was on, never forcing the stage", async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    listed = [...SESSIONS, CODE];
+    await openParent(PARENT_B.title);
+
+    await act(async () => attentionOpen?.({ sessionId: CODE.id, rootId: CODE.id }));
+    await act(async () => undefined);
+    expect(el('chat-session-title').textContent).toBe(CODE.title);
+    expect(query('orchestrator-stage')).toBeNull();
+    expect(window.localStorage.getItem(`b4m.orchestrator.surface.${CODE.id}`)).toBeNull();
+  });
+
   it('ignores a clicked notice whose session has since been deleted, staying on the open conversation', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     await openParent(PARENT_B.title);

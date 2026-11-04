@@ -63,9 +63,20 @@ export function registerAttention(): void {
     shown.show();
   });
 
-  ipcMain.handle(IPC_CHANNELS.attentionSetBadge, (_event, count: unknown) => {
-    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return;
+  const setBadge = (count: number) => {
     if (process.platform !== 'darwin') return;
     app.dock?.setBadge(count > 0 ? String(count) : '');
+  };
+
+  ipcMain.handle(IPC_CHANNELS.attentionSetBadge, (_event, count: unknown) => {
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 0) return;
+    setBadge(count);
+  });
+
+  // macOS keeps the app alive with no window; a badge no window maintains would never clear.
+  app.on('browser-window-created', (_event, created) => {
+    created.once('closed', () => {
+      if (!appWindows().some(window => window !== created && !window.isDestroyed())) setBadge(0);
+    });
   });
 }

@@ -90,6 +90,16 @@ describe('ViewSwitcher', () => {
     expect(onViewChange).toHaveBeenLastCalledWith(stepView('tavern', -1));
   });
 
+  it('ignores a shortcut another handler already consumed', async () => {
+    await themed.render(<ViewSwitcher view="tavern" onViewChange={onViewChange} />);
+    const handled = new KeyboardEvent('keydown', { ...shortcut('BracketRight'), cancelable: true });
+    handled.preventDefault();
+    act(() => {
+      window.dispatchEvent(handled);
+    });
+    expect(onViewChange).not.toHaveBeenCalled();
+  });
+
   it('stops listening once unmounted', async () => {
     await themed.render(<ViewSwitcher view="tavern" onViewChange={onViewChange} />);
     themed.unmount();

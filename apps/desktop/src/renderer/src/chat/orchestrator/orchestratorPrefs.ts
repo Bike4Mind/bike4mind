@@ -30,8 +30,17 @@ export function readSurface(sessionId: string): SessionSurface {
   return readItem(SURFACE_KEY + sessionId) === 'orchestrate' ? 'orchestrate' : 'chat';
 }
 
+/** 'chat' is the default, so it is stored as no key: only sessions left on their agents keep one. */
 export function writeSurface(sessionId: string, surface: SessionSurface): void {
-  writeItem(SURFACE_KEY + sessionId, surface);
+  if (surface === 'orchestrate') {
+    writeItem(SURFACE_KEY + sessionId, surface);
+    return;
+  }
+  try {
+    window.localStorage.removeItem(SURFACE_KEY + sessionId);
+  } catch {
+    // Unwritable storage: readSurface already falls back to 'chat'.
+  }
 }
 
 export function readView(sessionId: string): OrchestratorViewId {

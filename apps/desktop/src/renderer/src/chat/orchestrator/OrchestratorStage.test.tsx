@@ -123,6 +123,11 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-turn-on-btn')).toBeNull();
   });
 
+  it('leaves the summary strip blank on an empty stage', async () => {
+    await renderStage([]);
+    expect(el('orchestrator-summary-strip').textContent).toBe('');
+  });
+
   it('summarises the roster, with ~ when a cost is unknown', async () => {
     await renderStage(FIXTURE);
     expect(query('orchestrator-summary-strip')?.textContent).toBe(

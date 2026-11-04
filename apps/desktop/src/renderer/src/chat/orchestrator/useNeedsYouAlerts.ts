@@ -2,7 +2,14 @@ import { useEffect, useRef } from 'react';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { playChime } from './chime';
-import { enteredNeedsYou, needsYouBody, needsYouCount, needsYouTitle, rootSessionOf } from './needsYou';
+import {
+  alertableSessions,
+  enteredNeedsYou,
+  needsYouBody,
+  needsYouCount,
+  needsYouTitle,
+  rootSessionOf,
+} from './needsYou';
 
 /**
  * Tells the user when any session (an agent or a parent) starts needing them: a chime if the sound
@@ -27,7 +34,8 @@ export function useNeedsYouAlerts(
 
   useEffect(() => {
     if (!loaded) return;
-    const entered = previous.current ? enteredNeedsYou(previous.current, statuses) : [];
+    const alertable = alertableSessions(latestSessions.current);
+    const entered = previous.current ? enteredNeedsYou(previous.current, statuses).filter(id => alertable.has(id)) : [];
     previous.current = statuses;
     if (entered.length === 0) return;
     void announce(entered, latestSessions.current, statuses);
@@ -37,6 +45,8 @@ export function useNeedsYouAlerts(
   useEffect(() => {
     void window.b4m.attention.setBadgeCount(count);
   }, [count]);
+  // Signing out unmounts the chat, and nothing else would take its waiting sessions off the dock.
+  useEffect(() => () => void window.b4m.attention.setBadgeCount(0), []);
 
   useEffect(() => window.b4m.attention.onOpen(event => latestOnOpen.current(event)), []);
 }

@@ -108,7 +108,7 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }
   latest.current = { select, surface, available };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isSurfaceToggleKey(event) || !latest.current.available) return;
+      if (event.defaultPrevented || !isSurfaceToggleKey(event) || !latest.current.available) return;
       event.preventDefault();
       latest.current.select(latest.current.surface === 'chat' ? 'orchestrate' : 'chat');
     };
@@ -151,7 +151,7 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }
       <Segment
         selected={surface === 'orchestrate'}
         raisedBg={raisedBg}
-        label="Agents"
+        label={states.length > 0 ? `Agents, ${describeAgentStates(states)}` : 'Agents'}
         hint={`${states.length > 0 ? describeAgentStates(states) : 'Agents'} \u00B7 ${SHORTCUT_HINT}`}
         icon={<AgentsIcon />}
         testId="chat-surface-toggle-orchestrate"
@@ -169,7 +169,7 @@ export function OrchestrateToggle({ states, surface, onSurfaceChange, canStart }
             component="span"
             data-testid="chat-orchestrate-count"
             data-tone={badgeColor}
-            aria-label={describeAgentStates(states)}
+            aria-hidden
             sx={{
               px: 0.625,
               borderRadius: 'lg',

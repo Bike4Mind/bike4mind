@@ -66,6 +66,7 @@ export function ViewSwitcher({
   latest.current = { view, onViewChange };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
       const step = viewStepFor(event);
       if (step === null) return;
       event.preventDefault();

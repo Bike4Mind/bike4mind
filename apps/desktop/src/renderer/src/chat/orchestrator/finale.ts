@@ -53,6 +53,8 @@ export function formatWallTime(ms: number): string {
 export interface ParentReport {
   id: string;
   createdAt: string;
+  /** The quest_complete reply before this one: agents created by then belong to an earlier quest. */
+  since?: string;
 }
 
 /**
@@ -60,13 +62,20 @@ export interface ParentReport {
  * interim reply ("waiting on the install") looks just like a final one from the transcript's shape.
  */
 export function latestQuestReport(messages: readonly ChatMessage[]): ParentReport | undefined {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message.role === 'assistant' && message.questComplete === true) {
-      return { id: message.id, createdAt: message.createdAt };
-    }
-  }
-  return undefined;
+  const reports = messages.filter(message => message.role === 'assistant' && message.questComplete === true);
+  const latest = reports.at(-1);
+  if (!latest) return undefined;
+  const previous = reports.at(-2);
+  return previous
+    ? { id: latest.id, createdAt: latest.createdAt, since: previous.createdAt }
+    : { id: latest.id, createdAt: latest.createdAt };
+}
+
+/** The agents of the quest `report` closes, so a second quest's finale counts only its own run. */
+export function questAgents(agents: readonly AgentView[], report: ParentReport | undefined): readonly AgentView[] {
+  const since = report?.since;
+  if (since === undefined) return agents;
+  return agents.filter(agent => agent.createdAt > since);
 }
 
 /** Whether every agent ended done, which is what earns "Quest complete" over "Quest ended". */

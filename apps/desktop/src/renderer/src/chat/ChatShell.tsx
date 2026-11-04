@@ -114,11 +114,6 @@ import { prefersReducedMotion } from './orchestrator/motion';
 import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
 import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
 
-/**
- * Where "Read the report" lands: the parent's last reply when it answered after its agents reported,
- * else the first of the agent reports that came in since (spawned agents never resume their parent,
- * so a finished run usually ends on those). Must stay in sync with the data attributes MessageThread sets.
- */
 /** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
 const REPORT_HIGHLIGHT_MS = 2400;
 
@@ -672,8 +667,11 @@ export function ChatShell({
   const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
     // A notice outlives its session in the OS notification centre; a deleted one has nothing to open.
     if (!sessions.some(session => session.id === rootId)) return;
-    if (rootId === activeId) setOrchestratorSurface('orchestrate');
-    else writeSurface(rootId, 'orchestrate');
+    // The session itself asking keeps whichever view it was on; only an agent's notice opens the stage.
+    if (sessionId !== rootId) {
+      if (rootId === activeId) setOrchestratorSurface('orchestrate');
+      else writeSurface(rootId, 'orchestrate');
+    }
     selectSession(rootId);
     if (sessionId === rootId) setDockOpen(true);
     else setNoticeFocus({ rootId, agentId: sessionId });
@@ -682,7 +680,7 @@ export function ChatShell({
   const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
   const pickExampleQuest = useCallback(
     (prompt: string) => {
-      // The composer lives in the dock, so a collapsed dock would hide the prompt it was handed.
+      // The conversation the quest starts plays out in the dock, so a collapsed one would hide the reply.
       setDockOpen(true);
       fillComposer(prompt);
     },

@@ -26,7 +26,13 @@ const electron = vi.hoisted(() => {
     shown,
     handlers: new Map<string, Handler>(),
     Notification,
-    app: { dock: { setBadge: vi.fn() } },
+    appListeners: new Map<string, (event: unknown, created: unknown) => void>(),
+    app: {
+      dock: { setBadge: vi.fn() },
+      on: vi.fn((name: string, listener: (event: unknown, created: unknown) => void) => {
+        electron.appListeners.set(name, listener);
+      }),
+    },
     ipcMain: { handle: vi.fn() },
   };
 });
@@ -34,6 +40,7 @@ const electron = vi.hoisted(() => {
 const window = vi.hoisted(() => ({
   isFocused: vi.fn(() => false),
   isMinimized: vi.fn(() => false),
+  isDestroyed: vi.fn(() => false),
   restore: vi.fn(),
   show: vi.fn(),
   focus: vi.fn(),
@@ -151,6 +158,18 @@ describe('the dock badge', () => {
     call(IPC_CHANNELS.attentionSetBadge, 1.5);
     call(IPC_CHANNELS.attentionSetBadge, '2');
     expect(electron.app.dock.setBadge).not.toHaveBeenCalled();
+  });
+
+  it('clears once the last app window closes, not while another is open', () => {
+    const closing = { once: vi.fn() };
+    electron.appListeners.get('browser-window-created')?.({}, closing);
+    const closed = closing.once.mock.calls[0][1] as () => void;
+    closed();
+    expect(electron.app.dock.setBadge).not.toHaveBeenCalled();
+
+    window.isDestroyed.mockReturnValueOnce(true);
+    closed();
+    expect(electron.app.dock.setBadge).toHaveBeenCalledWith('');
   });
 
   it('does nothing off macOS', () => {

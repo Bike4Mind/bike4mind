@@ -54,12 +54,14 @@ export interface ParentView {
 
 export const isParentBusy = (parent: ParentView) => parent.status === 'processing' || parent.status === 'needs-action';
 
+// Must stay in step with outcomeLabel (main/chat/agentWake.ts), which tells the parent the same thing:
+// a cut-short reply is still done, and a step or context limit stopped it early rather than failing it.
 const OUTCOME_STATE: Record<ChildOutcome, AgentState> = {
   finished: 'done',
-  'max-tokens': 'failed',
+  'max-tokens': 'done',
   failed: 'failed',
-  'turn-budget': 'failed',
-  'context-limit': 'failed',
+  'turn-budget': 'stopped',
+  'context-limit': 'stopped',
   aborted: 'stopped',
   'no-reply': 'idle',
 };

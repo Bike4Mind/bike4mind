@@ -2,7 +2,14 @@ import type { ChatMessage, ChatSessionStatus, ChatSessionSummary } from '@shared
 import { describe, expect, it } from 'vitest';
 import { assignPersonas } from './tavern/agentPersona';
 import { buildRoster } from './roster';
-import { enteredNeedsYou, needsYouBody, needsYouCount, needsYouTitle, rootSessionOf } from './needsYou';
+import {
+  alertableSessions,
+  enteredNeedsYou,
+  needsYouBody,
+  needsYouCount,
+  needsYouTitle,
+  rootSessionOf,
+} from './needsYou';
 
 const session = (id: string, parentId?: string, title = `Session ${id}`): ChatSessionSummary =>
   ({
@@ -33,16 +40,30 @@ describe('enteredNeedsYou', () => {
 });
 
 describe('needsYouCount', () => {
-  const listed = [session('a'), session('b'), session('c')];
+  const listed = [session('a'), session('b'), session('a1', 'a'), session('b1', 'b')];
 
-  it('counts every listed session waiting on the user', () => {
-    expect(needsYouCount(statuses({ a: 'needs-action', b: 'processing', c: 'needs-action' }), listed)).toBe(2);
+  it('counts waiting sessions in an agent tree, parent and agents alike', () => {
+    expect(needsYouCount(statuses({ a: 'needs-action', a1: 'needs-action', b1: 'processing' }), listed)).toBe(2);
     expect(needsYouCount(new Map(), listed)).toBe(0);
   });
 
-  it('skips archived sessions and sessions that are no longer listed', () => {
-    const sessions = [session('a'), { ...session('b'), archived: true }];
-    expect(needsYouCount(statuses({ a: 'needs-action', b: 'needs-action', gone: 'needs-action' }), sessions)).toBe(1);
+  it('skips plain sessions, archived ones, those under an archived agent, and unlisted ones', () => {
+    const sessions = [
+      session('plain'),
+      session('root'),
+      { ...session('shelved', 'root'), archived: true },
+      session('under', 'shelved'),
+      session('live', 'root'),
+    ];
+    const waiting = statuses({
+      plain: 'needs-action',
+      shelved: 'needs-action',
+      under: 'needs-action',
+      live: 'needs-action',
+      gone: 'needs-action',
+    });
+    expect(needsYouCount(waiting, sessions)).toBe(1);
+    expect([...alertableSessions(sessions)].sort()).toEqual(['live', 'root']);
   });
 });
 
