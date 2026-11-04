@@ -152,6 +152,7 @@ describe('a command wsl runs in a distro', () => {
     ['C:\\repo', 'wsl.exe --distribution Debian -e cat notes.txt', ['\\\\wsl.localhost\\Debian\\']],
     ['C:\\repo', 'wsl --distribution=Debian ls', ['\\\\wsl.localhost\\Debian\\']],
     ['C:\\repo', 'timeout 5 WSL.EXE -u root -d Debian ls', ['\\\\wsl.localhost\\Debian\\']],
+    ['C:\\repo', 'wslg.exe -d Debian -e true', ['\\\\wsl.localhost\\Debian\\']],
     [ubuntu, 'wsl.exe -d Debian cat /etc/hosts', ['\\\\wsl.localhost\\Debian\\']],
     [ubuntu, 'wsl.exe -d ubuntu -e ls', []],
     [ubuntu, 'wsl.exe -l -v', []],
@@ -181,6 +182,13 @@ describe('a command wsl runs in a distro', () => {
       expect(scan?.ungranted, option).toEqual([WSL_MANAGEMENT]);
     }
   });
+
+  it.each(['wslconfig.exe -u Ubuntu', 'wslconfig /t Ubuntu', 'timeout 5 WSLCONFIG /u Debian'])(
+    'asks about %s, which manages WSL itself',
+    async command => {
+      expect((await scanShell(command, ubuntu, [ubuntu]))?.ungranted).toEqual([WSL_MANAGEMENT]);
+    }
+  );
 
   it('names the system distro for --system, not an unnamed one', async () => {
     const scan = await scanShell('wsl.exe -d Ubuntu --system ls', ubuntu, [ubuntu]);

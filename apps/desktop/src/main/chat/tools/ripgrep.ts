@@ -190,6 +190,12 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
       // the caller searches again itself rather than report a clean miss: a size-limited or
       // otherwise rejected pattern would look exactly like that.
       if (code === 2 && (reported === 0 || REGEX_REJECTED.test(stderr))) return finish('unsupported');
+      // rg itself exits 0, 1 or 2. Anything else in a WSL folder is the wrapper failing - its cd
+      // (125) or wsl.exe starting the distro (-1) - so the search never ran and is no clean miss.
+      if (wsl && code !== 0 && code !== 1 && code !== 2) {
+        console.warn(`[ripgrep] WSL search in ${wsl.distro} exited ${code}: ${stderr.trim().slice(0, 200)}`);
+        return finish('unsupported');
+      }
       finish('done');
     });
   });

@@ -18,7 +18,7 @@ import {
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
-import { shownPath } from '../../wsl/wslPath';
+import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   capOutputMiddle,
   optionalNumber,
@@ -430,7 +430,7 @@ export async function shellApproval(
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
-  if (!scan) return { detail, key, askInAuto: true };
+  if (!scan) return unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]);
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
@@ -497,6 +497,42 @@ export async function shellApproval(
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],
       ungranted: unreachable,
+    },
+  };
+}
+
+/** What `ungranted` holds for a command the scan could not read that may reach a WSL distro. */
+export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
+
+/**
+ * The prompt for a command the scan could not read. It asks in auto mode, and when the command
+ * may reach a WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it also
+ * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
+ */
+function unreadApproval(
+  tool: string,
+  command: string,
+  detail: string,
+  key: string,
+  ungranted: readonly string[],
+  places: readonly string[]
+): ApprovalPrompt {
+  const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
+  const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
+  if (!mayReachDistro) return { detail, key, askInAuto: true };
+  return {
+    detail: [
+      detail,
+      'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.',
+    ].join('\n\n'),
+    key,
+    askInAuto: true,
+    always: {
+      namespace: tool,
+      commands: [{ text: command, pattern: command, coverable: false, words: command }],
+      directories: [],
+      paths: [],
+      ungranted: [...ungranted, UNREAD_WSL_COMMAND],
     },
   };
 }

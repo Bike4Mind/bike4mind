@@ -466,11 +466,16 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
 
 const NO_OPTIONS: Wrapper = { values: '' };
 
-/** A program's name as the scan looks it up: `/usr/bin/curl`, `curl.exe` and `CURL.EXE` are all `curl`; so is `npx.cmd` `npx`. */
-export const programName = (executable: string): string =>
-  basename(executable)
+/** Launchers that take wsl's own arguments, so the scan reads them as `wsl`. */
+const WSL_ALIASES = new Set(['wslg']);
+
+/** A program's name as the scan looks it up: `/usr/bin/curl`, `curl.exe` and `CURL.EXE` are all `curl`; so is `npx.cmd` `npx`, and `wslg.exe` is `wsl`. */
+export const programName = (executable: string): string => {
+  const name = basename(executable)
     .toLowerCase()
     .replace(/\.(exe|cmd|bat)$/, '');
+  return WSL_ALIASES.has(name) ? 'wsl' : name;
+};
 
 /** Whether a word names a wrapper (`sudo`, `/usr/bin/env`). */
 export const isWrapper = (word: string): boolean => WRAPPERS.has(programName(unquote(word)));
@@ -789,11 +794,21 @@ const POWERSHELL_PARAMETERS: readonly (readonly [
   ['of', 'of', 'value', 'value'],
 ];
 
+/** String.Trim as .NET reads it: JS trim() plus U+0085. A loop, as a two-sided regex is quadratic on a long run of spaces. */
+function trimDotNet(text: string): string {
+  const isSpace = (char: string) => char === '\u0085' || char.trim() === '';
+  let start = 0;
+  let end = text.length;
+  while (start < end && isSpace(text[start])) start += 1;
+  while (end > start && isSpace(text[end - 1])) end -= 1;
+  return text.slice(start, end);
+}
+
 /** The name a PowerShell switch gives after its dash (two for PowerShell 7) or slash, lowercased; undefined for other words. */
 function powershellSwitch(arg: string, seven: boolean): string | undefined {
   const leader = seven ? /^(?:[-\u{2013}-\u{2015}]{1,2}|\/)/u : /^[-\u{2013}-\u{2015}/]/u;
   // .NET's String.Trim also removes U+0085, which JS trim() keeps.
-  const trimmed = arg.replace(/^[\s\u0085]+|[\s\u0085]+$/g, '');
+  const trimmed = trimDotNet(arg);
   const match = leader.exec(trimmed);
   return match ? trimmed.slice(match[0].length).toLowerCase() : undefined;
 }
@@ -1796,6 +1811,8 @@ export async function scanShell(
         const computed = tokens.some(isDynamic);
         sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
       }
+      // wslconfig is the legacy tool for WSL itself (`/u` unregisters a distro, `/t` stops one).
+      if (programName(unquote(withoutWrappers(tokens)[0] ?? '')) === 'wslconfig') ungranted.add(WSL_MANAGEMENT);
       for (const { distros, system, managing } of wslRuns(tokens)) {
         if (managing) {
           ungranted.add(WSL_MANAGEMENT);

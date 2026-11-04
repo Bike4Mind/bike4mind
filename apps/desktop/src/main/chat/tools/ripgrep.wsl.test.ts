@@ -72,6 +72,23 @@ describe('ripgrep in a WSL folder', () => {
     expect(spawned.map(run => run.file)).toEqual([expect.stringMatching(/^[A-Z]:\\.*\\System32\\wsl\.exe$/i), 'rg']);
   });
 
+  it.each([125, 4294967295, -1])(
+    'does not report a clean miss when the WSL wrapper exits %d before rg ran',
+    async code => {
+      exitCode = code;
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      expect(await search(`\\\\wsl.localhost\\Alpine${code}\\srv`, 'x')).toBe('unsupported');
+      expect(warn).toHaveBeenCalledOnce();
+      warn.mockRestore();
+    }
+  );
+
+  it('still reports a clean miss when the distro rg finds nothing', async () => {
+    exitCode = 1;
+    expect(await search('\\\\wsl.localhost\\Arch\\srv', 'x')).toBe('done');
+  });
+
   it('remembers a missing rg for a distro whatever case its name is written in', async () => {
     expect(await search('\\\\wsl.localhost\\Fedora\\home\\me', 'x')).toBe('unavailable');
     expect(await search('\\\\wsl$\\FEDORA\\home\\me', 'x')).toBe('unavailable');
