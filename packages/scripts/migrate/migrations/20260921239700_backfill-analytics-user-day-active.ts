@@ -13,7 +13,7 @@ import { type MigrationFile } from './index';
  * Idempotent: only rows with no `active` field are written, and createIndexes skips existing indexes.
  */
 const migration: MigrationFile = {
-  id: 20260921239600,
+  id: 20260921239700,
   name: 'backfill analytics user day active',
 
   up: async () => {
