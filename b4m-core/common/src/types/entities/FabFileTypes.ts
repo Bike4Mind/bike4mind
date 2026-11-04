@@ -520,9 +520,9 @@ export interface IFabFile {
   storageChargedAt?: Date;
 
   /**
-   * Never charged to the owner's quota: `claimStorageCharge` skips the row, so it stays uncharged
-   * wherever `isStorageCharged` is read. Server-stamped only, via the `storageExempt` adapter of
-   * createFabFile; it is not a field of any request schema.
+   * The S3 upload claim (`claimStorageCharge`) never charges this row, so the bytes the server wrote
+   * stay uncharged. A later user rewrite (`commitContentRewrite`) still charges normally. Server-stamped
+   * only, via the `storageExempt` adapter of createFabFile; it is not a field of any request schema.
    */
   storageExempt?: boolean;
 

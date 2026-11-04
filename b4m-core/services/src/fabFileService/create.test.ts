@@ -888,8 +888,13 @@ describe('createFabFile storageExempt', () => {
   });
 
   it('cannot be set through the request parameters', async () => {
-    await expect(
-      createFabFile(mockUserId, { ...params, storageExempt: true } as typeof params, mockAdapters)
-    ).rejects.toSatisfy(isStorageLimitError);
+    // Under quota, so only the stripped body can make the row exempt.
+    (mockAdapters.db.users.findById as Mock).mockResolvedValue({
+      id: mockUserId,
+      storageLimit: 1000,
+      currentStorageSize: 0,
+    });
+    await createFabFile(mockUserId, { ...params, storageExempt: true } as typeof params, mockAdapters);
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('storageExempt');
   });
 });

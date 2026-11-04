@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto';
 import pLimit from 'p-limit';
 import { Types } from 'mongoose';
 import {
+  FAB_FILE_CONTENT_REWRITE_PATCH,
   FabFileSourceType,
   KnowledgeType,
   questGraphToMarkdown,
@@ -18,6 +20,7 @@ import {
   organizationRepository,
   scopedSettingsRepository,
   Session,
+  User,
   userRepository,
 } from '@bike4mind/database';
 import { fabFilesService } from '@bike4mind/services';
@@ -32,6 +35,8 @@ import { fabFilesService } from '@bike4mind/services';
  * the legacy feature is removed, and this module has to outlive them for the final re-run.
  */
 
+// Under the migrator Lambda's 15-minute timeout, leaving room for the steps that run after `up()`.
+const DEFAULT_RUN_MS = 12 * 60 * 1000;
 const BATCH_SIZE = 200;
 const CONCURRENCY = 8;
 const MAX_SAMPLES = 20;
@@ -85,6 +90,9 @@ interface Item {
   render: (exportedOn: string) => string;
 }
 
+// The date is the only part of the body that changes between runs of an unchanged source.
+const fingerprint = (item: Item): string => createHash('sha256').update(item.render('1970-01-01')).digest('hex');
+
 type RawDoc = Record<string, unknown> & { _id: Types.ObjectId };
 
 // Plain-ASCII file name from the goal; the goal itself is a free-text heading inside the file.
@@ -108,9 +116,12 @@ export async function convertLegacyQuestPlans(deps: {
   logger: ConversionLogger;
   now: Date;
   batchSize?: number;
-}): Promise<{ plans: ConversionCounts; graphs: ConversionCounts }> {
+  /** Stop taking new pages once passed; whatever is left is picked up by the next run. */
+  deadline?: Date;
+}): Promise<{ plans: ConversionCounts; graphs: ConversionCounts; stoppedEarly: boolean }> {
   const { storage, logger, now } = deps;
   const batchSize = deps.batchSize ?? BATCH_SIZE;
+  const deadline = (deps.deadline ?? new Date(Date.now() + DEFAULT_RUN_MS)).getTime();
   const db = mongoose.connection.db;
   if (!db) throw new Error('Database connection not established');
 
@@ -173,6 +184,7 @@ export async function convertLegacyQuestPlans(deps: {
                       sourceId: item.id,
                       sourceUpdatedAt,
                       generatedBytes: fileSize,
+                      contentHash: fingerprint(item),
                     },
                   },
                   storageExempt: true,
@@ -190,9 +202,20 @@ export async function convertLegacyQuestPlans(deps: {
               counts.unchanged++;
               return;
             }
-            // A size that no longer matches what was written means the user rewrote the file.
-            if (file.fileSize !== file.sourceMetadata?.generatedBytes) {
+            // A size that no longer matches what was written, or a charge stamp (only a user rewrite
+            // sets one on an exempt row), means the user rewrote the file.
+            if (file.fileSize !== file.sourceMetadata?.generatedBytes || file.storageChargedAt != null) {
               counts.skippedUserEdited++;
+              return;
+            }
+            // Only `updatedAt` moved (e.g. the plan was opened): keep the file and its derived data.
+            const contentHash = fingerprint(item);
+            if (file.sourceMetadata?.contentHash === contentHash) {
+              await FabFile.updateOne(
+                { _id: file._id },
+                { $set: { 'sourceMetadata.sourceUpdatedAt': sourceUpdatedAt } }
+              );
+              counts.unchanged++;
               return;
             }
             const body = content();
@@ -205,9 +228,11 @@ export async function convertLegacyQuestPlans(deps: {
               { _id: file._id },
               {
                 $set: {
+                  ...FAB_FILE_CONTENT_REWRITE_PATCH,
                   fileSize,
                   'sourceMetadata.sourceUpdatedAt': sourceUpdatedAt,
                   'sourceMetadata.generatedBytes': fileSize,
+                  'sourceMetadata.contentHash': contentHash,
                 },
               }
             );
@@ -222,7 +247,21 @@ export async function convertLegacyQuestPlans(deps: {
     );
   };
 
+  let stoppedEarly = false;
+  // One query per page: ids that name no live account (deleted, or not an ObjectId).
+  const existingUsers = async (ids: string[]): Promise<Set<string>> => {
+    const valid = [...new Set(ids)].filter(id => Types.ObjectId.isValid(id));
+    if (valid.length === 0) return new Set();
+    const found = await db
+      .collection(User.collection.name)
+      .find({ _id: { $in: valid.map(id => new Types.ObjectId(id)) } })
+      .project({ _id: 1 })
+      .toArray();
+    return new Set(found.map(u => String(u._id)));
+  };
+
   const paginate = async (collection: string, handle: (page: RawDoc[]) => Promise<void>) => {
+    if (stoppedEarly) return;
     let lastId: Types.ObjectId | null = null;
     for (;;) {
       const page = (await db
@@ -234,6 +273,12 @@ export async function convertLegacyQuestPlans(deps: {
       if (page.length === 0) return;
       await handle(page);
       lastId = page[page.length - 1]._id;
+      if (Date.now() > deadline) {
+        stoppedEarly = true;
+        const remaining = await db.collection(collection).countDocuments({ deletedAt: null, _id: { $gt: lastId } });
+        logger.warn(`Quest plan conversion ran out of time in ${collection}; ${remaining} sources left unvisited`);
+        return;
+      }
     }
   };
 
@@ -255,6 +300,10 @@ export async function convertLegacyQuestPlans(deps: {
       for (const s of sessions) if (s.userId) notebookOwner.set(String(s._id), String(s.userId));
     }
 
+    const liveOwners = await existingUsers(
+      page.map(p => (p.userId ? String(p.userId) : (notebookOwner.get(String(p.notebookId)) ?? '')))
+    );
+
     const items: Item[] = [];
     for (const raw of page) {
       const id = String(raw._id);
@@ -264,7 +313,7 @@ export async function convertLegacyQuestPlans(deps: {
         continue;
       }
       const ownerId = raw.userId ? String(raw.userId) : notebookOwner.get(String(raw.notebookId));
-      if (!ownerId) {
+      if (!ownerId || !liveOwners.has(ownerId)) {
         plans.skippedNoOwner++;
         if (noOwner.length < MAX_SAMPLES) noOwner.push(id);
         continue;
@@ -297,6 +346,8 @@ export async function convertLegacyQuestPlans(deps: {
       nodesByGraph.set(String(n.graphId), list);
     }
 
+    const liveOwners = await existingUsers(page.map(g => (g.userId ? String(g.userId) : '')));
+
     const items: Item[] = [];
     for (const raw of page) {
       const id = String(raw._id);
@@ -305,7 +356,7 @@ export async function convertLegacyQuestPlans(deps: {
         graphs.skippedEmpty++;
         continue;
       }
-      if (!raw.userId) {
+      if (!raw.userId || !liveOwners.has(String(raw.userId))) {
         graphs.skippedNoOwner++;
         continue;
       }
@@ -328,5 +379,5 @@ export async function convertLegacyQuestPlans(deps: {
   logger.info(`Quest plan conversion (v4 plans): ${JSON.stringify(plans)}`);
   if (noOwner.length) logger.warn(`Plans with no resolvable owner (sample): ${noOwner.join(', ')}`);
   logger.info(`Quest plan conversion (v5 graphs): ${JSON.stringify(graphs)}`);
-  return { plans, graphs };
+  return { plans, graphs, stoppedEarly };
 }

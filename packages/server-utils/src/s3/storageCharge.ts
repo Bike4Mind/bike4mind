@@ -12,7 +12,8 @@ import type { ClientSession, Types } from 'mongoose';
  * b4m-core/services/src/fabFileService/rewriteStorage.ts), so a rewrite's event and its commit add up
  * to the new size in either order. Returns null when the claim lost, else the delta and the row's
  * owner as of the claim (storageOwnerOf), so the bytes land on the counter the refund will later debit.
- * A `storageExempt` row is never claimed: it stays uncharged everywhere `isStorageCharged` reads it.
+ * A `storageExempt` row is never claimed, so bytes the server wrote stay uncharged; a later user rewrite
+ * (commitContentRewrite) charges normally.
  *
  * `statusBeforeUpload` is the row's status as the event handler read it, before it marked the row
  * `complete`: the charge rule reads `status`, so judging the pre-image by the handler's own flip would

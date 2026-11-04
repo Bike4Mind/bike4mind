@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import mongoose, { Types } from 'mongoose';
 import { FabFile, Session, User, fabFileRepository } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
+import { claimStorageCharge } from '@bike4mind/server-utils/s3/storageCharge';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -22,6 +23,7 @@ afterAll(async () => {
 
 let objects: Map<string, string>;
 let failOn: string | null;
+let overwrites: number;
 const storage = (): ArchiveStorage => ({
   upload: async (path, content) => {
     if (failOn && String(content).includes(failOn)) throw new Error('boom');
@@ -30,13 +32,14 @@ const storage = (): ArchiveStorage => ({
   },
   generateSignedUrl: async path => `https://s3.test/${path}`,
   overwrite: async (path, content) => {
+    overwrites++;
     objects.set(path, content);
   },
 });
 
 const logger = { info: () => {}, warn: () => {} };
-const run = (batchSize?: number) =>
-  convertLegacyQuestPlans({ storage: storage(), logger, now: new Date('2026-11-04'), batchSize });
+const run = (batchSize?: number, deadline?: Date) =>
+  convertLegacyQuestPlans({ storage: storage(), logger, now: new Date('2026-11-04'), batchSize, deadline });
 
 const plans = () => mongoose.connection.db!.collection('questmasterplans');
 const graphs = () => mongoose.connection.db!.collection('questgraphs');
@@ -127,6 +130,7 @@ beforeEach(async () => {
   await mongoose.connection.dropDatabase();
   objects = new Map();
   failOn = null;
+  overwrites = 0;
 });
 
 describe('convertLegacyQuestPlans', () => {
@@ -183,6 +187,7 @@ describe('convertLegacyQuestPlans', () => {
     const owner = await insertUser();
     const id = await insertPlan({ userId: owner });
     await run();
+    await FabFile.collection.updateMany({}, { $set: { serverTextHash: 'old-hash', extractedCharCount: 99 } });
     const [before] = await archives();
 
     await plans().updateOne({ _id: new Types.ObjectId(id) }, { $set: { goal: 'A brand new goal', updatedAt: T1 } });
@@ -196,6 +201,76 @@ describe('convertLegacyQuestPlans', () => {
     expect(content).toContain('A brand new goal');
     expect(after.sourceMetadata?.sourceUpdatedAt).toBe(T1.toISOString());
     expect(after.fileSize).toBe(Buffer.byteLength(content));
+    expect(after.serverTextHash).toBeNull();
+    expect(after.extractedCharCount).toBeNull();
+  });
+
+  it('refreshes a v5 file when only a node changed', async () => {
+    const owner = await insertUser();
+    const id = await insertGraph(owner);
+    await run();
+    const [before] = await archives();
+
+    await nodes().updateOne({ graphId: id, deletedAt: null }, { $set: { title: 'Renamed node', updatedAt: T1 } });
+    const { graphs: counts } = await run();
+
+    const [after] = await archives();
+    expect(counts).toMatchObject({ refreshed: 1, created: 0 });
+    expect(String(after._id)).toBe(String(before._id));
+    expect(objects.get(after.filePath as string)).toContain('Renamed node');
+  });
+
+  it('skips a graph with no owner, and a plan whose owner account is gone', async () => {
+    const owner = await insertUser();
+    await insertGraph(owner, { userId: null });
+    await insertPlan({ userId: String(new Types.ObjectId()) });
+
+    const { plans: p, graphs: g } = await run();
+
+    expect(g).toMatchObject({ skippedNoOwner: 1, created: 0, failed: 0 });
+    expect(p).toMatchObject({ skippedNoOwner: 1, created: 0, failed: 0 });
+    expect(await archives()).toHaveLength(0);
+  });
+
+  it('does not rewrite a file when only the source updatedAt moved', async () => {
+    const owner = await insertUser();
+    const id = await insertPlan({ userId: owner });
+    await run();
+
+    await plans().updateOne({ _id: new Types.ObjectId(id) }, { $set: { updatedAt: T1 } });
+    const { plans: counts } = await run();
+
+    expect(counts).toMatchObject({ unchanged: 1, refreshed: 0 });
+    expect(overwrites).toBe(0);
+    expect((await archives())[0].sourceMetadata?.sourceUpdatedAt).toBe(T1.toISOString());
+  });
+
+  it('leaves a user-charged archive alone even if its size is unchanged', async () => {
+    const owner = await insertUser();
+    const id = await insertPlan({ userId: owner });
+    await run();
+    await FabFile.collection.updateMany({}, { $set: { storageChargedAt: new Date() } });
+
+    await plans().updateOne({ _id: new Types.ObjectId(id) }, { $set: { goal: 'Changed', updatedAt: T1 } });
+    const { plans: counts } = await run();
+
+    expect(counts).toMatchObject({ refreshed: 0, skippedUserEdited: 1 });
+    expect(overwrites).toBe(0);
+  });
+
+  it('stops taking pages once the deadline has passed and reports it', async () => {
+    const owner = await insertUser();
+    for (let i = 0; i < 5; i++) await insertPlan({ userId: owner, goal: `Plan ${i}` });
+
+    const first = await run(2, new Date(0));
+
+    expect(first.stoppedEarly).toBe(true);
+    expect(first.plans.created).toBe(2);
+    expect(first.graphs.live).toBe(0);
+
+    const rest = await run();
+    expect(rest.stoppedEarly).toBe(false);
+    expect(await archives()).toHaveLength(5);
   });
 
   it('leaves a file the user rewrote alone', async () => {
@@ -245,12 +320,16 @@ describe('convertLegacyQuestPlans', () => {
     const owner = await insertUser();
     await insertPlan({ userId: owner });
     await run();
+    const [deleted] = await archives();
     await FabFile.collection.updateMany({}, { $set: { deletedAt: new Date() } });
 
     const { plans: counts } = await run();
 
     expect(counts).toMatchObject({ created: 0, skippedUserDeleted: 1 });
-    expect(await archives()).toHaveLength(1);
+    const after = await archives();
+    expect(after).toHaveLength(1);
+    expect(String(after[0]._id)).toBe(String(deleted._id));
+    expect(after[0].deletedAt).toBeTruthy();
   });
 
   it('gives an over-quota owner a file without charging them', async () => {
@@ -260,7 +339,11 @@ describe('convertLegacyQuestPlans', () => {
     const { plans: counts } = await run();
 
     expect(counts.created).toBe(1);
+    const [file] = await archives(owner);
+    // The S3 upload event is what charges; an exempt row must not be claimable.
+    expect(await claimStorageCharge(file._id, new Date(), file.fileSize as number, 'pending')).toBeNull();
     expect((await User.collection.findOne({ _id: new Types.ObjectId(owner) }))?.currentStorageSize).toBe(5_000_000);
+    expect((await FabFile.collection.findOne({ _id: file._id }))?.storageChargedAt ?? null).toBeNull();
     expect(await fabFileRepository.sumFileSizeByUserId(owner)).toBe(0);
   });
 
@@ -291,13 +374,14 @@ describe('convertLegacyQuestPlans', () => {
 
   it('isolates one failing item', async () => {
     const owner = await insertUser();
-    await insertPlan({ userId: owner, goal: 'Poison pill' });
-    await insertPlan({ userId: owner, goal: 'Fine' });
+    const poisonId = await insertPlan({ userId: owner, goal: 'Poison pill' });
+    const fineId = await insertPlan({ userId: owner, goal: 'Fine' });
     failOn = 'Poison pill';
 
     const { plans: counts } = await run();
 
     expect(counts).toMatchObject({ created: 1, failed: 1 });
-    expect(counts.failedSamples).toHaveLength(1);
+    expect(counts.failedSamples).toEqual([poisonId]);
+    expect((await archives())[0].sourceMetadata?.sourceId).toBe(fineId);
   });
 });
