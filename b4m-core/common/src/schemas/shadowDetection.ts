@@ -51,15 +51,18 @@ export const shadowDetectionNetworkSchema = z.object({
 });
 export type ShadowDetectionNetwork = z.infer<typeof shadowDetectionNetworkSchema>;
 
+export const SHADOW_DETECTION_PAYMENT_KINDS = ['credits', 'subscription'] as const;
+export const SHADOW_DETECTION_PAYMENT_OUTCOMES = ['succeeded', 'failed'] as const;
+
 /**
- * The Stripe payment a paymentRisk detection screened. Ids only: no card details. `livemode` says
- * which Stripe Dashboard (live or /test) the ids resolve in.
+ * The Stripe payment a paymentRisk detection screened. Ids only: no card details. `livemode` is
+ * Stripe's own flag, so it says which Stripe Dashboard (live or /test) the ids resolve in.
  */
 export const shadowDetectionPaymentSchema = z.object({
   paymentIntentId: z.string(),
   chargeId: z.string().nullable(),
-  kind: z.enum(['credits', 'subscription']),
-  outcome: z.enum(['succeeded', 'failed']),
+  kind: z.enum(SHADOW_DETECTION_PAYMENT_KINDS),
+  outcome: z.enum(SHADOW_DETECTION_PAYMENT_OUTCOMES),
   /** Minor currency units (cents). */
   amount: z.number().nullable(),
   currency: z.string().nullable(),

@@ -126,6 +126,21 @@ const formatPaymentAmount = (payment: ShadowDetectionPayment): string =>
     ? 'Unknown amount'
     : `${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}`;
 
+const StripePaymentLink: React.FC<{ payment: ShadowDetectionPayment; testId: string }> = ({ payment, testId }) => (
+  <Typography
+    component="a"
+    href={stripePaymentUrl(payment)}
+    target="_blank"
+    rel="noopener noreferrer"
+    level="body-xs"
+    fontFamily="code"
+    data-testid={testId}
+    sx={{ color: 'admin.link', textDecoration: 'none', overflowWrap: 'anywhere' }}
+  >
+    {payment.paymentIntentId}
+  </Typography>
+);
+
 const PaymentEvidence: React.FC<{ payment: ShadowDetectionPayment }> = ({ payment }) => (
   <Stack gap={0.25} data-testid="shadow-detection-dialog-payment" sx={{ minWidth: 0 }}>
     <Typography level="body-xs" sx={muted}>
@@ -135,18 +150,7 @@ const PaymentEvidence: React.FC<{ payment: ShadowDetectionPayment }> = ({ paymen
       {`${payment.kind} payment ${payment.outcome}, ${formatPaymentAmount(payment)}`}
       {payment.riskLevel ? `, Radar risk ${payment.riskLevel}` : ''}
     </Typography>
-    <Typography
-      component="a"
-      href={stripePaymentUrl(payment)}
-      target="_blank"
-      rel="noopener noreferrer"
-      level="body-xs"
-      fontFamily="code"
-      data-testid="shadow-detection-dialog-stripe-link"
-      sx={{ color: 'admin.link', textDecoration: 'none', overflowWrap: 'anywhere' }}
-    >
-      {payment.paymentIntentId}
-    </Typography>
+    <StripePaymentLink payment={payment} testId="shadow-detection-dialog-stripe-link" />
     {!payment.livemode && (
       <Typography level="body-xs" sx={muted}>
         Stripe test mode
@@ -182,7 +186,8 @@ const Actor: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => {
           {formatNetwork(row.network)}
         </Typography>
       )}
-      {row.userIds.length === 0 && !row.network && <Dash />}
+      {row.payment && <StripePaymentLink payment={row.payment} testId={`shadow-detection-stripe-link-${row.id}`} />}
+      {row.userIds.length === 0 && !row.network && !row.payment && <Dash />}
     </Stack>
   );
 };

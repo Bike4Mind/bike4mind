@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Stripe from 'stripe';
-import { Resource } from 'sst';
 
 const mocks = vi.hoisted(() => ({
   settings: {} as Record<string, string>,
@@ -14,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   postMessageToSlack: vi.fn(),
   lockIfPaidWithBlockedCard: vi.fn(),
   recordShadowDetection: vi.fn(),
+  claimStep: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -26,6 +26,7 @@ vi.mock('@bike4mind/database', () => ({
     countRecentCards: mocks.countRecentCards,
   },
   shadowDetectionRepository: { record: mocks.recordShadowDetection },
+  paymentRiskActionRepository: { claimStep: mocks.claimStep },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -52,11 +53,6 @@ import {
   screenPaymentOutcome,
   type PaymentRiskThresholds,
 } from './paymentRisk';
-
-// The global sst mock (vitest.setup.ts) is a plain object, so the stage can be set per test.
-const setStage = (stage: string) => {
-  (Resource.App as { stage: string }).stage = stage;
-};
 
 const thresholds: PaymentRiskThresholds = {
   enabled: true,
@@ -89,7 +85,7 @@ const charge = (overrides: Partial<Stripe.Charge> = {}): Stripe.Charge =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.settings = {};
-  setStage('production');
+  mocks.claimStep.mockResolvedValue(true);
 });
 
 describe('readPaymentRiskThresholds', () => {
@@ -213,6 +209,7 @@ describe('screenPaymentOutcome', () => {
     currency: 'usd',
     outcome: 'succeeded' as const,
     chargeRef: 'ch_1',
+    livemode: true,
   };
   const recorded = {
     ...input,
@@ -255,7 +252,7 @@ describe('screenPaymentOutcome', () => {
     expect(detection).toMatchObject({
       detector: 'paymentRisk',
       policyVersion: 1,
-      wouldAction: 'restrict',
+      wouldAction: 'contain',
       userIds: ['u1'],
       network: { ip: null, hosting: false },
       windowMinutes: 60,
@@ -282,12 +279,28 @@ describe('screenPaymentOutcome', () => {
     expect(JSON.stringify(detection)).not.toContain('fp_1');
   });
 
-  it('marks a non-production detection as Stripe test mode', async () => {
-    setStage('dev-alice');
+  it('carries Stripe test mode through to the detection', async () => {
+    await screenPaymentOutcome({ ...input, livemode: false }, logger, now);
+
+    expect(mocks.recordShadowDetection.mock.calls[0][0].payment.livemode).toBe(false);
+  });
+
+  it('claims each payment, outcome and card once, and skips a detection already recorded', async () => {
+    mocks.claimStep.mockResolvedValue(false);
 
     await screenPaymentOutcome(input, logger, now);
 
-    expect(mocks.recordShadowDetection.mock.calls[0][0].payment.livemode).toBe(false);
+    expect(mocks.claimStep).toHaveBeenCalledWith('payment-risk-detection:pi_1:succeeded:fp_1', 'detection', 'u1');
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the network out when the hosting flag is unknown', async () => {
+    mocks.recordOutcome.mockResolvedValue({ attempt: { ...recorded, hostingNetwork: null }, changed: true });
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordShadowDetection.mock.calls[0][0].network).toBeNull();
   });
 
   it('still alerts when the shadow detection write fails', async () => {
@@ -330,6 +343,7 @@ describe('screenPaymentOutcome', () => {
     expect(mocks.countAccountsForCard).not.toHaveBeenCalled();
     expect(mocks.countRecentCards).not.toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
   it('uses the failing payment method when the attempt has no charge', async () => {
@@ -350,6 +364,7 @@ describe('screenPaymentOutcome', () => {
 
     expect(mocks.recordOutcome).toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
   it('marks a Radar-blocked attempt so the checkout gate can count it', async () => {

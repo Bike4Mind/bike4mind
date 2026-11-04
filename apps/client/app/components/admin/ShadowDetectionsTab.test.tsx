@@ -261,13 +261,17 @@ describe('ShadowDetectionsTab', () => {
     m.useShadowDetections.mockReturnValue(
       queryResult(
         list({
-          data: [detection({ detector: 'paymentRisk', wouldAction: 'restrict', network: null, payment })],
+          data: [detection({ detector: 'paymentRisk', wouldAction: 'contain', network: null, payment })],
           summary: [summaryRow({ detector: 'paymentRisk' })],
         })
       )
     );
     renderTab();
-    expect(within(screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`)).getByText('Payment risk')).toBeTruthy();
+    const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+    expect(within(row).getByText('Payment risk')).toBeTruthy();
+    expect(within(row).getByTestId(`shadow-detection-stripe-link-${DETECTION_ID}`).getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/test/payments/pi_123'
+    );
 
     fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
     const evidence = await screen.findByTestId('shadow-detection-dialog-payment');

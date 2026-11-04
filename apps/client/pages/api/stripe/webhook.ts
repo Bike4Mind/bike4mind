@@ -138,6 +138,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
               currency: intent.currency,
               outcome: 'succeeded',
               chargeRef: intent.latest_charge,
+              livemode: intent.livemode,
             },
             req.logger
           );
@@ -237,6 +238,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           currency: intent.currency,
           outcome: 'succeeded',
           chargeRef: intent.latest_charge,
+          livemode: intent.livemode,
         },
         req.logger
       );
@@ -792,6 +794,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             currency: intent.currency,
             outcome: 'failed',
             chargeRef: failedCharge ?? intent.last_payment_error?.charge,
+            livemode: intent.livemode,
             fallbackCardFingerprint: intent.last_payment_error?.payment_method?.card?.fingerprint ?? null,
           },
           req.logger
