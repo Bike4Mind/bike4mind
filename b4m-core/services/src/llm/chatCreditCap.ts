@@ -48,7 +48,15 @@ export function completionOverdraftAllowance(params: {
 export function conservativeRoundInputUsd(modelInfo: ModelInfo, inputTokens: number, cacheTtl: PromptCacheTtl): number {
   if (!(inputTokens > 0)) return 0;
   const uncached = getTextModelCost(modelInfo, inputTokens, 0);
-  const cacheWrite = getTextModelCost(modelInfo, 0, 0, 0, inputTokens, inputTokens, cacheTtl === '1h' ? inputTokens : 0);
+  const cacheWrite = getTextModelCost(
+    modelInfo,
+    0,
+    0,
+    0,
+    inputTokens,
+    inputTokens,
+    cacheTtl === '1h' ? inputTokens : 0
+  );
   return Math.max(uncached, cacheWrite);
 }
 
@@ -195,6 +203,8 @@ export class TurnCreditLimiter {
    * The lowest balance settlement may leave: -allowance. A charge that would go below it (the
    * estimates above drift from the provider's counts) is floored there and reported as written off,
    * so the cap holds even then. Never raises a charge: actual usage below the floor is billed in full.
+   * Per turn only: the floor is applied to the hold-time balance snapshot, so concurrent turns of one
+   * payer can together leave it lower.
    */
   settlementFloorCredits(): number {
     return -this.allowanceCredits;

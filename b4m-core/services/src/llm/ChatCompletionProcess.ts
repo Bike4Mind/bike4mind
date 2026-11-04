@@ -2034,6 +2034,8 @@ export class ChatCompletionProcess {
   /**
    * computeHolderSettlement, except that a credit-capped turn may not leave the balance below
    * -allowance (TurnCreditLimiter.settlementFloorCredits); what would go further is written off.
+   * The floor and the turn's limit come from the hold-time balance snapshot, not the live one, so
+   * concurrent turns of one payer can each spend to it and together end below -allowance.
    */
   private holderSettlement(
     ownerType: CreditHolderType,
@@ -4976,6 +4978,7 @@ export class ChatCompletionProcess {
         // The hold is a realistic estimate, not a bound: cap the turn at what this payer can pay
         // (chatCreditCap.ts), and refuse it now if that cannot buy even a short answer. Research
         // mode runs several configurations in parallel off one hold and is left to the hold alone.
+        // The limit is priced off this hold-time snapshot, so it bounds one turn, not concurrent ones.
         if (!isResearchMode) {
           const hasPaidPlan =
             !organization &&
