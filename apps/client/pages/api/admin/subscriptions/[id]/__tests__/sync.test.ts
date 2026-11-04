@@ -115,6 +115,13 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   periodEndsAt: new Date(PERIOD_END * 1000),
   canceledAt: null,
   cancelAtPeriodEnd: false,
+  unitAmount: 2000,
+  currency: 'usd',
+  interval: 'month',
+  intervalCount: 1,
+  stripeCustomerId: 'cus_1',
+  cancelAt: null,
+  trialEndsAt: null,
   updatedAt: UPDATED_AT,
   ...overrides,
 });
@@ -181,10 +188,18 @@ describe('GET /api/admin/subscriptions/[id]/sync', () => {
     const body = res._getJSONData();
     expect(body.updatedAt).toBe(UPDATED_AT.toISOString());
     expect(body.stripeMissing).toBe(false);
-    expect(body.changes).toContainEqual({ field: 'quantity', before: '1', after: '3' });
+    expect(body.changes).toEqual([{ field: 'quantity', before: '1', after: '3' }]);
     expect(mocks.retrieve).toHaveBeenCalledWith('sub_1');
     expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
     expect(mocks.audit).not.toHaveBeenCalled();
+  });
+
+  it('previews no changes for a row that already matches Stripe', async () => {
+    mocks.rowFindById.mockResolvedValue(row({ quantity: 3 }));
+    const { res, run } = call('GET');
+    await run();
+
+    expect(res._getJSONData().changes).toEqual([]);
   });
 
   it('previews a subscription Stripe no longer has as canceled', async () => {
@@ -193,7 +208,10 @@ describe('GET /api/admin/subscriptions/[id]/sync', () => {
     await run();
 
     expect(res._getJSONData()).toMatchObject({ stripeMissing: true, stripeStatus: null });
-    expect(res._getJSONData().changes[0]).toEqual({ field: 'status', before: 'active', after: 'canceled' });
+    expect(res._getJSONData().changes).toEqual([
+      { field: 'status', before: 'active', after: 'canceled' },
+      { field: 'canceledAt', before: null, after: expect.any(String) },
+    ]);
   });
 
   it('rejects a comp: there is nothing in Stripe to sync from', async () => {
@@ -217,18 +235,17 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateReturningBefore).toHaveBeenCalledWith(
       'sub_1',
-      expect.objectContaining({ status: 'active', quantity: 3, priceId: 'price_1', unitAmount: 2000 })
+      expect.objectContaining({ status: 'active', quantity: 3, priceId: 'price_1', unitAmount: 2000 }),
+      UPDATED_AT
     );
     expect(mocks.setSeats).toHaveBeenCalledWith('org_1', 3, { type: 'stripe' });
     const audit = mocks.audit.mock.calls[0][1];
     expect(audit.action).toBe('billing.subscription.synced');
     expect(audit.reason).toBe(REASON);
-    expect(audit.changes).toEqual(
-      expect.arrayContaining([
-        { field: 'quantity', before: '1', after: '3' },
-        { field: 'seats', before: '5', after: '3' },
-      ])
-    );
+    expect(audit.changes).toEqual([
+      { field: 'quantity', before: '1', after: '3' },
+      { field: 'seats', before: '5', after: '3' },
+    ]);
     expect(mocks.state.auditInTransaction).toBe(true);
     expect(mocks.resolveForSubscription).toHaveBeenCalledWith(ID, 'sync', expect.any(Date));
     expect(mocks.retrieve).toHaveBeenCalledTimes(1);
@@ -263,14 +280,39 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.updateReturningBefore).toHaveBeenCalledWith(
       'sub_1',
-      expect.objectContaining({ status: 'canceled', canceledAt: expect.any(Date) })
+      expect.objectContaining({ status: 'canceled', canceledAt: expect.any(Date) }),
+      UPDATED_AT
     );
-    expect(mocks.audit.mock.calls[0][1].changes).toContainEqual({
-      field: 'status',
-      before: 'active',
-      after: 'canceled',
-    });
+    expect(mocks.audit.mock.calls[0][1].changes).toEqual([
+      { field: 'status', before: 'active', after: 'canceled' },
+      { field: 'canceledAt', before: null, after: expect.any(String) },
+    ]);
     expect(mocks.audit.mock.calls[0][1].details).toMatchObject({ stripeMissing: true });
+  });
+
+  it('leaves an already-canceled row untouched when Stripe has no such subscription', async () => {
+    mocks.rowFindById.mockResolvedValue(row({ status: 'canceled', canceledAt: new Date('2025-03-01T00:00:00Z') }));
+    mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
+    const { res, run } = call('POST');
+    await run();
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
+    expect(mocks.audit.mock.calls[0][1].changes).toEqual([]);
+  });
+
+  it('is a 409, with no seat write or audit, when the row changed after the precheck', async () => {
+    mocks.rowFindById.mockResolvedValue(row({ ownerType: 'Organization', ownerId: 'org_1' }));
+    mocks.orgFindById.mockResolvedValue({ id: 'org_1', name: 'Acme', userId: 'boss-1' });
+    mocks.orgFindByCustomer.mockResolvedValue({ id: 'org_1', seats: 5 });
+    mocks.updateReturningBefore.mockResolvedValue(null);
+    const { run } = call('POST');
+
+    await expect(run()).rejects.toMatchObject({ statusCode: 409 });
+    expect(mocks.updateReturningBefore).toHaveBeenCalledWith('sub_1', expect.anything(), UPDATED_AT);
+    expect(mocks.setSeats).not.toHaveBeenCalled();
+    expect(mocks.audit).not.toHaveBeenCalled();
+    expect(mocks.resolveForSubscription).not.toHaveBeenCalled();
   });
 
   it('rejects a comp', async () => {

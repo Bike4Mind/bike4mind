@@ -150,15 +150,21 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           const applied = await applyStripeSubscriptionState(stripeSub, {
             ownerType: row.ownerType,
             logger: req.logger,
+            expectedUpdatedAt: row.updatedAt,
           });
           before = applied.before;
           diff = stripeSyncChanges(applied);
         } else {
-          // Stripe has no such subscription: the same write as customer.subscription.deleted.
-          before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(subscriptionId, {
-            status: 'canceled',
-            canceledAt: now,
-          });
+          // Stripe has no such subscription: the same write as customer.subscription.deleted. A row that is
+          // already canceled keeps its canceledAt, so nothing is written.
+          before =
+            row.status === 'canceled'
+              ? row
+              : await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+                  subscriptionId,
+                  { status: 'canceled', canceledAt: now },
+                  row.updatedAt
+                );
           diff = before ? canceledChanges(before, now) : [];
         }
         if (!before) throw new ConflictError('This subscription changed; reload and try again.');

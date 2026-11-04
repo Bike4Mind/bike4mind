@@ -23,10 +23,24 @@ export interface ApplyStripeSubscriptionStateResult {
  */
 export async function applyStripeSubscriptionState(
   subscription: StripeSubscriptionRowSource & { id: string; customer: string | { id: string } },
-  { ownerType, logger }: { ownerType: SubscriptionOwnerType | undefined; logger: { warn: (message: string) => void } }
+  {
+    ownerType,
+    logger,
+    expectedUpdatedAt,
+  }: {
+    ownerType: SubscriptionOwnerType | undefined;
+    logger: { warn: (message: string) => void };
+    /** Write only if the row still has this `updatedAt`; otherwise `before` is null and nothing is written. */
+    expectedUpdatedAt?: Date;
+  }
 ): Promise<ApplyStripeSubscriptionStateResult> {
   const after = stripeSubscriptionRowFields(subscription);
-  const before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(subscription.id, after);
+  const before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+    subscription.id,
+    after,
+    expectedUpdatedAt
+  );
+  if (!before && expectedUpdatedAt) return { before, after };
 
   if (ownerType !== SubscriptionOwnerType.Organization) return { before, after };
 
