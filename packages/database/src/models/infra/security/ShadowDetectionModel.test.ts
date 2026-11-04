@@ -56,7 +56,7 @@ describe('shadowDetectionRepository', () => {
   it('round-trips the payment evidence of a paymentRisk detection', async () => {
     const paymentDetection = detection({
       detector: 'paymentRisk',
-      wouldAction: 'restrict',
+      wouldAction: 'contain',
       network: null,
       payment: {
         paymentIntentId: 'pi_1',
