@@ -7,12 +7,19 @@ import IconButton from '@mui/joy/IconButton';
 import Slider from '@mui/joy/Slider';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { useState } from 'react';
+import { useCallback, useLayoutEffect, useState, type RefObject } from 'react';
 import { CloseIcon, CubeIcon } from './icons';
 import type { ModelEngine } from './model3d/useModelEngine';
 import { ModelViewport } from './model3d/ModelViewport';
-
-export const MODEL_PANE_WIDTH = 420;
+import {
+  clampModelPaneWidth,
+  MODEL_PANE_MIN_WIDTH,
+  MODEL_PANE_WIDTH,
+  modelPaneMaxWidth,
+  readModelPaneWidth,
+  writeModelPaneWidth,
+} from './model3d/modelPaneWidth';
+import { ResizeHandle } from './ResizeHandle';
 
 /** First-run prompts: game-asset shaped, since that is who this pane is for first. */
 export const MODEL_EXAMPLE_PROMPTS = [
@@ -27,6 +34,8 @@ type Props = {
   onClose: () => void;
   /** Puts an example prompt in the composer. */
   onExamplePrompt: (text: string) => void;
+  /** The column the pane trades width with; it bounds how wide a drag may take the pane. */
+  conversation?: RefObject<HTMLElement | null>;
 };
 
 const STATUS_LABEL = { idle: 'No model', building: 'Building', ok: 'Ready', error: 'Error' } as const;
@@ -36,7 +45,32 @@ function formatSize(size: [number, number, number], units: string): string {
   return `${size.map(value => Number(value.toFixed(value < 10 ? 2 : 1))).join(' x ')} ${units}`;
 }
 
-export function ModelPane({ engine, dark, onClose, onExamplePrompt }: Props) {
+export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation }: Props) {
+  const [width, setWidth] = useState(readModelPaneWidth);
+  const [dragging, setDragging] = useState(false);
+  const [limit, setLimit] = useState(() => modelPaneMaxWidth(window.innerWidth, Number.POSITIVE_INFINITY));
+  const [pane, setPane] = useState<HTMLDivElement | null>(null);
+  const clamp = useCallback((next: number) => clampModelPaneWidth(next, limit), [limit]);
+  const commitWidth = useCallback((next: number) => writeModelPaneWidth(next), []);
+
+  // The pane and the conversation split what the sidebar and other panes leave, so the ceiling is
+  // measured from both; a drag moves width between them and does not move the ceiling.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const other = conversation?.current?.getBoundingClientRect().width;
+      const own = pane?.getBoundingClientRect().width ?? 0;
+      setLimit(modelPaneMaxWidth(window.innerWidth, other === undefined ? Number.POSITIVE_INFINITY : own + other));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (conversation?.current) observer.observe(conversation.current);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [conversation, pane]);
+
   const { state, status, error, object, summary, params, unsaved } = engine;
   const [wireframe, setWireframe] = useState(false);
   const [exportNote, setExportNote] = useState('');
@@ -55,8 +89,10 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt }: Props) {
 
   return (
     <Stack
+      ref={setPane}
+      style={{ width: Math.min(width, limit) }}
       sx={{
-        width: MODEL_PANE_WIDTH,
+        position: 'relative',
         flexShrink: 0,
         borderLeft: '1px solid',
         borderColor: 'divider',
@@ -67,6 +103,21 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt }: Props) {
       data-testid="model-pane"
       data-status={status}
     >
+      <ResizeHandle
+        edge="left"
+        label="Resize 3D model pane"
+        testId="model-pane-resize-handle"
+        width={Math.min(width, limit)}
+        min={Math.min(MODEL_PANE_MIN_WIDTH, limit)}
+        max={limit}
+        defaultWidth={MODEL_PANE_WIDTH}
+        clamp={clamp}
+        dragging={dragging}
+        onWidth={setWidth}
+        onCommit={commitWidth}
+        onDraggingChange={setDragging}
+        sx={{ left: -5 }}
+      />
       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 1.5, pt: 1.5, pb: 1 }}>
         <Typography
           level="title-sm"

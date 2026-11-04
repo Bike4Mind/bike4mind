@@ -28,6 +28,12 @@ window.matchMedia ??= ((query: string) => ({
   dispatchEvent: () => false,
 })) as typeof window.matchMedia;
 
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
+
 function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
   return {
     state: EMPTY_MODEL_STATE,
@@ -127,5 +133,20 @@ describe('ModelPane', () => {
     render(engine({ ...BUILT, state: { ...BUILT.state!, path: '/project/chest.glb', kind: 'glb' }, params: {} }));
     expect(byTestId('model-pane-export-stl-btn')?.hasAttribute('disabled')).toBe(true);
     expect(byTestId('model-pane-params')).toBeNull();
+  });
+
+  it('resizes from its left edge and remembers the width', () => {
+    window.localStorage.removeItem('b4m.modelPane.width');
+    // A desktop-sized window, so the pane's ceiling is above the drag.
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2000 });
+    render(engine(BUILT));
+    const pane = byTestId('model-pane')!;
+    const handle = byTestId('model-pane-resize-handle')!;
+    expect(pane.style.width).toBe('420px');
+    act(() => handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 600 })));
+    act(() => window.dispatchEvent(new PointerEvent('pointermove', { clientX: 500 })));
+    act(() => window.dispatchEvent(new PointerEvent('pointerup', { clientX: 500 })));
+    expect(pane.style.width).toBe('520px');
+    expect(window.localStorage.getItem('b4m.modelPane.width')).toBe('520');
   });
 });

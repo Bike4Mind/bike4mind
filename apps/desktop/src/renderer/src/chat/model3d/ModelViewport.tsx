@@ -21,6 +21,8 @@ type Viewer = {
   controls: OrbitControls;
   content: THREE.Group;
   render: () => void;
+  /** Frames the current model again, unless the user has moved the camera since it was framed. */
+  reframe: () => void;
 };
 
 function gridFor(object: THREE.Object3D, dark: boolean): THREE.GridHelper {
@@ -45,6 +47,10 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Pro
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
   const framedFor = useRef<string | null>(null);
+  const shownObject = useRef<THREE.Group | null>(null);
+  // Set by the user orbiting, zooming or panning; until then a resize re-frames, because the first
+  // frame is often taken before the pane has its size and a tall pane would crop the model.
+  const userMoved = useRef(false);
 
   useEffect(() => {
     const element = host.current;
@@ -62,17 +68,26 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Pro
     controls.enableDamping = false;
     const render = () => renderer.render(scene, camera);
     controls.addEventListener('change', render);
+    controls.addEventListener('start', () => {
+      userMoved.current = true;
+    });
+    const reframe = () => {
+      if (userMoved.current || !shownObject.current) return;
+      controls.target.copy(frameCamera(camera, shownObject.current));
+      controls.update();
+    };
     const resize = () => {
       const { clientWidth, clientHeight } = element;
       if (!clientWidth || !clientHeight) return;
       renderer.setSize(clientWidth, clientHeight);
       camera.aspect = clientWidth / clientHeight;
       camera.updateProjectionMatrix();
+      reframe();
       render();
     };
     const observer = new ResizeObserver(resize);
     observer.observe(element);
-    viewer.current = { renderer, scene, camera, controls, content, render };
+    viewer.current = { renderer, scene, camera, controls, content, render, reframe };
     resize();
     return () => {
       observer.disconnect();
@@ -89,6 +104,7 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Pro
     if (!current) return;
     current.scene.background = new THREE.Color(dark ? '#1b1e23' : '#f4f5f7');
     current.content.clear();
+    shownObject.current = object;
     if (object) {
       const shown = object.clone(true);
       shown.traverse(child => {
@@ -103,8 +119,9 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey }: Pro
       current.content.add(shown, gridFor(object, dark));
       // Re-frame only when a different model opens, so a rebuild keeps the user's camera.
       if (framedFor.current !== frameKey) {
-        current.controls.target.copy(frameCamera(current.camera, object));
         framedFor.current = frameKey;
+        userMoved.current = false;
+        current.reframe();
       }
       current.controls.update();
     }

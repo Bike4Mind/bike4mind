@@ -171,7 +171,10 @@ export function frameCamera(
   const box = new THREE.Box3().setFromObject(root);
   const sphere = box.isEmpty() ? new THREE.Sphere(new THREE.Vector3(), 1) : box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 1e-3);
-  const distance = (radius / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.1;
+  // The narrower of the two fields of view decides, or a tall pane crops the model's sides.
+  const vertical = THREE.MathUtils.degToRad(camera.fov / 2);
+  const horizontal = Math.atan(Math.tan(vertical) * camera.aspect);
+  const distance = (radius / Math.sin(Math.min(vertical, horizontal))) * 1.1;
   const offset = new THREE.Vector3(...direction).normalize().multiplyScalar(distance);
   camera.position.copy(sphere.center).add(offset);
   camera.near = distance / 100;

@@ -1972,7 +1972,13 @@ export function ChatShell({
       )}
 
       {modelOpen && modelAvailable && (
-        <ModelPane engine={modelEngine} dark={darkMode} onClose={toggleModel} onExamplePrompt={fillComposer} />
+        <ModelPane
+          engine={modelEngine}
+          dark={darkMode}
+          onClose={toggleModel}
+          onExamplePrompt={fillComposer}
+          conversation={conversationColumn}
+        />
       )}
 
       {/* Last in the row, so the web page is at the window's own right edge.
