@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findRows: vi.fn(),
+  findBySubIds: vi.fn(),
+  openIds: vi.fn(),
   findOrg: vi.fn(),
   upsertOpen: vi.fn(),
   resolveMissing: vi.fn(),
@@ -29,11 +31,18 @@ const { strict } = vi.hoisted(() => {
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: mocks.connect,
-  organizationRepository: { findById: mocks.findOrg },
-  billingMismatchRepository: { upsertOpen: mocks.upsertOpen, resolveMissing: mocks.resolveMissing },
+  organizationRepository: { findByStripeCustomerId: mocks.findOrg },
+  billingMismatchRepository: {
+    upsertOpen: mocks.upsertOpen,
+    resolveMissing: mocks.resolveMissing,
+    listOpenRowFindingIds: mocks.openIds,
+  },
 }));
 vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
-  subscriptionRepository: { findNonTerminalStripeRows: mocks.findRows },
+  subscriptionRepository: {
+    findNonTerminalStripeRows: mocks.findRows,
+    findBySubscriptionIds: mocks.findBySubIds,
+  },
 }));
 
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
@@ -121,6 +130,8 @@ beforeEach(() => {
   mocks.upsertOpen.mockResolvedValue(true);
   mocks.resolveMissing.mockResolvedValue(0);
   mocks.findRows.mockResolvedValue([]);
+  mocks.findBySubIds.mockResolvedValue([]);
+  mocks.openIds.mockResolvedValue([]);
 });
 
 describe('runSubscriptionReconciliation', () => {
@@ -154,6 +165,65 @@ describe('runSubscriptionReconciliation', () => {
     expect(mocks.slack.mock.calls[0][0]).not.toMatch(/@/);
   });
 
+  it('records a live Stripe sub whose row is terminal as drift against that row, not an orphan', async () => {
+    mocks.list.mockReturnValue(listing([stripeSub('sub_wrong')]));
+    mocks.findBySubIds.mockImplementation(async (ids: string[]) =>
+      ids.includes('sub_wrong') ? [row('sub_wrong', { status: 'canceled' })] : []
+    );
+
+    const { findings } = await runSubscriptionReconciliation(undefined, NOW);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ kind: 'drift', subscriptionRowId: 'row_sub_wrong', stripeStatus: 'active' });
+    expect(findings[0].fields).toContainEqual({ field: 'status', mongo: 'canceled', stripe: 'active' });
+  });
+
+  describe('open findings whose row turned terminal', () => {
+    beforeEach(() => {
+      mocks.list.mockReturnValue(listing([]));
+      mocks.openIds.mockResolvedValue(['sub_late']);
+      mocks.findBySubIds.mockResolvedValue([row('sub_late', { status: 'canceled' })]);
+    });
+
+    it('covers the id when Stripe is canceled too, so resolveMissing closes it', async () => {
+      mocks.retrieve.mockResolvedValue(stripeSub('sub_late', { status: 'canceled', canceled_at: OLD }));
+
+      const { findings } = await runSubscriptionReconciliation(undefined, NOW);
+
+      expect(findings).toEqual([]);
+      expect(mocks.openIds).toHaveBeenCalledTimes(1);
+      expect(mocks.resolveMissing).toHaveBeenCalledWith(
+        expect.objectContaining({ coveredIds: ['sub_late'], seenIds: [], completeListing: true })
+      );
+    });
+
+    it('covers the id when Stripe no longer has the subscription', async () => {
+      mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
+
+      await runSubscriptionReconciliation(undefined, NOW);
+
+      expect(mocks.resolveMissing).toHaveBeenCalledWith(expect.objectContaining({ coveredIds: ['sub_late'] }));
+    });
+
+    it('keeps the finding when Stripe still bills the subscription', async () => {
+      mocks.retrieve.mockResolvedValue(stripeSub('sub_late'));
+
+      const { findings } = await runSubscriptionReconciliation(undefined, NOW);
+
+      expect(findings.map(f => [f.stripeSubscriptionId, f.kind])).toEqual([['sub_late', 'drift']]);
+    });
+
+    it('leaves it alone on a truncated run', async () => {
+      mocks.list.mockReturnValue(listing([stripeSub('sub_x')]));
+      await runSubscriptionReconciliation(undefined, NOW, Date.now() - 1);
+
+      expect(mocks.openIds).not.toHaveBeenCalled();
+      expect(mocks.resolveMissing).toHaveBeenCalledWith(
+        expect.objectContaining({ coveredIds: [], completeListing: false })
+      );
+    });
+  });
+
   it('flags a row Stripe now reports canceled as status drift', async () => {
     mocks.findRows.mockResolvedValue([row('sub_ended')]);
     mocks.list.mockReturnValue(listing([]));
@@ -173,6 +243,7 @@ describe('runSubscriptionReconciliation', () => {
 
     const { findings } = await runSubscriptionReconciliation(undefined, NOW);
 
+    expect(mocks.findOrg).toHaveBeenCalledWith('cus_1');
     expect(findings[0].fields).toEqual([{ field: 'seats', mongo: '5', stripe: '3' }]);
   });
 

@@ -280,6 +280,12 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
     return rows.filter(row => row.subscriptionId && resolveSubscriptionSource(row) === SubscriptionSource.Stripe);
   }
 
+  /** Rows for the given Stripe subscription ids in any status, so the reconciliation can tell a terminal row from no row. */
+  async findBySubscriptionIds(subscriptionIds: string[]): Promise<(ISubscription & IMongoDocument)[]> {
+    if (subscriptionIds.length === 0) return [];
+    return this.model.find({ subscriptionId: { $in: subscriptionIds } }).lean({ virtuals: true });
+  }
+
   markPastDue(subscriptionId: string): Promise<ISubscription | null> {
     if (!subscriptionId) return Promise.resolve(null);
     return this.model

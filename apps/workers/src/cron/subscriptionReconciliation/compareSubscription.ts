@@ -18,6 +18,8 @@ export type ComparableRow = Pick<
   'status' | 'priceId' | 'quantity' | 'periodEndsAt' | 'cancelAtPeriodEnd' | 'unitAmount'
 > & { updatedAt?: Date };
 
+const SEAT_BILLING_STATUSES = new Set(['active', 'trialing', 'past_due']);
+
 type Value = string | number | boolean | Date | null | undefined;
 
 // Dates compare to the second: Stripe's have no sub-second part, Mongo's might.
@@ -52,7 +54,8 @@ export function diffSubscription(
   check('periodEndsAt', row.periodEndsAt, stripe.periodEndsAt);
   check('cancelAtPeriodEnd', row.cancelAtPeriodEnd, stripe.cancelAtPeriodEnd);
   check('unitAmount', row.unitAmount, stripe.unitAmount);
-  check('seats', orgSeats, stripe.quantity);
+  // A subscription that is not billing (incomplete, unpaid, paused) does not set the organization's seats.
+  if (SEAT_BILLING_STATUSES.has(stripe.status)) check('seats', orgSeats, stripe.quantity);
   return fields;
 }
 

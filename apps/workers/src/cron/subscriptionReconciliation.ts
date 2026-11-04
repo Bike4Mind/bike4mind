@@ -8,8 +8,10 @@
  * Reads this stage's non-canceled Stripe subscriptions and matches them to the non-terminal
  * Stripe-sourced rows by subscription id. Rows the listing never showed are retrieved one by one:
  * canceled at Stripe is status drift, deleted at Stripe is an orphan. A live Stripe subscription with
- * no row is the other orphan. Every comparison goes through the projection Sync writes
- * (stripeSubscriptionRowFields), so what is flagged is exactly what Sync would change.
+ * no row is the other orphan. Open findings whose row has since turned terminal are re-checked so they
+ * resolve. The comparison covers status, price, quantity, period end, the cancel flag, amount and the
+ * organization's seats, all read through the projection Sync writes (stripeSubscriptionRowFields); Sync
+ * applies that whole projection, which includes fields the comparison does not look at.
  *
  * Read-only against Stripe (subscriptions.list and subscriptions.retrieve only) and it never repairs:
  * it only upserts findings. A run that hits the time budget resolves nothing it did not cover.
@@ -29,7 +31,12 @@ import {
 } from '@bike4mind/database';
 import { isStripeConfigured, stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
 import { postMessageToSlack } from '@bike4mind/server-utils/integrations/slack/slack';
-import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
+import {
+  SubscriptionOwnerType,
+  SubscriptionSource,
+  TERMINAL_SUBSCRIPTION_STATUSES,
+  resolveSubscriptionSource,
+} from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { emitMetric } from '@bike4mind/server-utils/utils/cloudwatch';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -40,6 +47,7 @@ const CLOUDWATCH_NAMESPACE = 'Lumina5/Billing';
 const MAX_ALERT_LINES = 20;
 // Left in the Lambda for the findings write and the Slack post after the Stripe calls stop.
 const BUDGET_MARGIN_MS = 60 * 1000;
+const TERMINAL_STATUSES = new Set<string>(TERMINAL_SUBSCRIPTION_STATUSES);
 const ORPHAN_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
 // Derived rather than imported: the stripe package is a dependency of apps/client, not of workers.
@@ -94,16 +102,18 @@ export async function runSubscriptionReconciliation(
   let checked = 0;
   let truncated = false;
 
-  const orgSeatsFor = async (row: (typeof rows)[number]) =>
-    row.ownerType === SubscriptionOwnerType.Organization
-      ? (await organizationRepository.findById(row.ownerId))?.seats
-      : undefined;
+  // Same lookup Sync's seat write uses (the Stripe customer id), so a flagged seat count is one Sync can change.
+  const orgSeatsFor = async (row: (typeof rows)[number], sub: StripeSubscription) => {
+    if (row.ownerType !== SubscriptionOwnerType.Organization) return undefined;
+    const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer.id;
+    return (await organizationRepository.findByStripeCustomerId(customerId))?.seats;
+  };
 
   const driftFinding = async (
     row: (typeof rows)[number],
     sub: StripeSubscription
   ): Promise<BillingMismatchFinding | null> => {
-    const fields = diffSubscription(row, sub, await orgSeatsFor(row));
+    const fields = diffSubscription(row, sub, await orgSeatsFor(row, sub));
     if (fields.length === 0) return null;
     return {
       stripeSubscriptionId: sub.id,
@@ -116,6 +126,7 @@ export async function runSubscriptionReconciliation(
     };
   };
 
+  const unmatched: StripeSubscription[] = [];
   await stripe.subscriptions.list({ limit: 100 }).autoPagingEach(async sub => {
     if (Date.now() > deadline) {
       truncated = true;
@@ -125,7 +136,27 @@ export async function runSubscriptionReconciliation(
     checked++;
     const row = unseen.get(sub.id);
     unseen.delete(sub.id);
-    if (withinGrace(row ?? null, sub, now)) return;
+    if (!row) {
+      unmatched.push(sub);
+      return;
+    }
+    if (withinGrace(row, sub, now)) return;
+    covered.add(sub.id);
+    const finding = await driftFinding(row, sub);
+    if (finding) findings.push(finding);
+  });
+
+  // A listed subscription with no non-terminal row may still have a terminal one (a wrongly canceled row
+  // is drift, not an orphan), so look the rows up in any status before calling it an orphan.
+  const unmatchedRows = new Map(
+    (await subscriptionRepository.findBySubscriptionIds(unmatched.map(sub => sub.id))).map(r => [
+      r.subscriptionId as string,
+      r,
+    ])
+  );
+  for (const sub of unmatched) {
+    const row = unmatchedRows.get(sub.id);
+    if (withinGrace(row ?? null, sub, now)) continue;
     covered.add(sub.id);
     if (row) {
       const finding = await driftFinding(row, sub);
@@ -141,7 +172,20 @@ export async function runSubscriptionReconciliation(
         stripeStatus: sub.status,
       });
     }
-  });
+  }
+
+  const retrieveOrMissing = async (subscriptionId: string): Promise<StripeSubscription | 'missing' | 'error'> => {
+    try {
+      return await stripe.subscriptions.retrieve(subscriptionId);
+    } catch (error) {
+      if (isResourceMissing(error)) return 'missing';
+      logger.warn('[SubscriptionReconciliation] Could not retrieve subscription; left uncovered', {
+        subscriptionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 'error';
+    }
+  };
 
   const completeListing = !truncated;
   if (completeListing) {
@@ -152,20 +196,10 @@ export async function runSubscriptionReconciliation(
       }
       checked++;
       if (withinGrace(row, { created: 0 }, now)) continue;
-      try {
-        const sub = await stripe.subscriptions.retrieve(subscriptionId);
-        covered.add(subscriptionId);
-        const finding = await driftFinding(row, sub);
-        if (finding) findings.push(finding);
-      } catch (error) {
-        if (!isResourceMissing(error)) {
-          logger.warn('[SubscriptionReconciliation] Could not retrieve subscription; left uncovered', {
-            subscriptionId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          continue;
-        }
-        covered.add(subscriptionId);
+      const sub = await retrieveOrMissing(subscriptionId);
+      if (sub === 'error') continue;
+      covered.add(subscriptionId);
+      if (sub === 'missing') {
         findings.push({
           stripeSubscriptionId: subscriptionId,
           kind: 'orphan_mongo',
@@ -175,7 +209,39 @@ export async function runSubscriptionReconciliation(
           fields: [],
           stripeStatus: null,
         });
+        continue;
       }
+      const finding = await driftFinding(row, sub);
+      if (finding) findings.push(finding);
+    }
+
+    // An open finding whose subscription no phase above visited: its row turned terminal since, so it is
+    // never listed or retrieved above. Re-check it so it resolves once the two agree, instead of staying open for good.
+    const visited = [...covered, ...rows.map(r => r.subscriptionId as string)];
+    const staleIds = await billingMismatchRepository.listOpenRowFindingIds(visited);
+    const staleRows = new Map(
+      (await subscriptionRepository.findBySubscriptionIds(staleIds)).map(r => [r.subscriptionId as string, r])
+    );
+    for (const subscriptionId of staleIds) {
+      if (Date.now() > deadline) {
+        truncated = true;
+        break;
+      }
+      const row = staleRows.get(subscriptionId);
+      if (!row || resolveSubscriptionSource(row) !== SubscriptionSource.Stripe) {
+        covered.add(subscriptionId);
+        continue;
+      }
+      if (withinGrace(row, { created: 0 }, now)) continue;
+      checked++;
+      const sub = await retrieveOrMissing(subscriptionId);
+      if (sub === 'error') continue;
+      if (sub !== 'missing' && !isStageSubscription(sub, stage)) continue;
+      covered.add(subscriptionId);
+      // Gone from Stripe, or finished there too: both sides agree the subscription is over.
+      if (sub === 'missing' || TERMINAL_STATUSES.has(sub.status)) continue;
+      const finding = await driftFinding(row, sub);
+      if (finding) findings.push(finding);
     }
   }
 

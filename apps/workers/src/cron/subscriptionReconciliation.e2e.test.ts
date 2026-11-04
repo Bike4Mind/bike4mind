@@ -106,4 +106,43 @@ describe('subscription reconciliation findings lifecycle', () => {
       resolvedBy: 'reconciliation',
     });
   });
+
+  it('resolves a drift finding on the run after its row and the Stripe subscription both turn canceled', async () => {
+    const row = await Subscription.create({
+      ownerType: 'User',
+      ownerId: 'user_1',
+      subscriptionId: 'sub_e2e',
+      priceId: 'price_1',
+      status: 'active',
+      source: 'stripe',
+      periodStartsAt: new Date(1_800_000_000_000),
+      periodEndsAt: new Date(PERIOD_END * 1000),
+      quantity: 1,
+      unitAmount: 2000,
+      cancelAtPeriodEnd: false,
+    });
+    await Subscription.collection.updateOne({ _id: row._id }, { $set: { updatedAt: new Date(T1.getTime() - DAY) } });
+    mocks.list.mockReturnValue(listing([stripeSub(3)]));
+    await runSubscriptionReconciliation(undefined, T1);
+    expect(await BillingMismatchModel.countDocuments({ status: 'open' })).toBe(1);
+
+    // A late webhook cancels the row; Stripe no longer lists the subscription.
+    await Subscription.collection.updateOne(
+      { _id: row._id },
+      { $set: { status: 'canceled', updatedAt: new Date(T1.getTime() - DAY) } }
+    );
+    mocks.list.mockReturnValue(listing([]));
+    mocks.retrieve.mockResolvedValue({ ...stripeSub(3), status: 'canceled', canceled_at: 1_800_000_000 });
+
+    // A truncated run leaves the finding alone.
+    await runSubscriptionReconciliation(undefined, T2, Date.now() - 1);
+    expect(await BillingMismatchModel.countDocuments({ status: 'open' })).toBe(1);
+
+    const result = await runSubscriptionReconciliation(undefined, T2);
+    expect(result.resolved).toBe(1);
+    expect(await BillingMismatchModel.findOne({ stripeSubscriptionId: 'sub_e2e' }).lean()).toMatchObject({
+      status: 'resolved',
+      resolvedBy: 'reconciliation',
+    });
+  });
 });

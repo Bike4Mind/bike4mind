@@ -50,6 +50,11 @@ const row = (overrides: Partial<ComparableRow> = {}): ComparableRow => ({
 });
 
 describe('diffSubscription', () => {
+  it('compares seats only for a subscription that bills them', () => {
+    expect(diffSubscription(row(), stripeSub(), 10)).toEqual([{ field: 'seats', mongo: '10', stripe: '3' }]);
+    expect(diffSubscription(row({ status: 'incomplete' }), stripeSub({ status: 'incomplete' }), 10)).toEqual([]);
+  });
+
   it('returns nothing for equal rows', () => {
     expect(diffSubscription(row(), stripeSub())).toEqual([]);
   });
