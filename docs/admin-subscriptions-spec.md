@@ -47,7 +47,7 @@ There is no admin page for invoices, refunds, coupons, MRR/revenue, past due, tr
 | `subscriptions/[id]/remove` | **none** | strict | - | no Stripe cancel |
 | `organizations/[id]/revoke` | **optional** | yes | - | |
 | `organizations/[id]/seats` | **none** | yes | - | refuses Stripe-billed orgs |
-| `organizations/[id]/reconcile-seats` | **none** | when changed | - | trusts Mongo quantity |
+| `organizations/[id]/reconcile-seats` | removed | - | - | replaced by `subscriptions/[id]/sync` (Stripe-wins, audited with a reason) |
 | `organizations/[id]/convert-to-paid` | **none** | yes | - | creates Stripe customer + Checkout |
 
   No admin money route is rate-limited.
