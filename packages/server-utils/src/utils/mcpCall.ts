@@ -139,12 +139,9 @@ export const handler = async (params: any) => {
       const isExpectedConnectionError = /Connection closed|\bEPIPE\b|\bECONNRESET\b/.test(errorMessage);
       const FailureError = isExpectedConnectionError ? ExpectedToolError : Error;
       const enhancedError = new FailureError(`MCP Handler failed for ${name} (action: ${action}): ${errorMessage}`);
-      // Adapters own the warning for tool calls; discovery has no adapter to report it.
-      const logFailure = isExpectedConnectionError
-        ? action === 'callTool'
-          ? console.debug
-          : console.warn
-        : console.error;
+      // Warn for every action: callTool has callers outside the chat adapters (confirm, Slack,
+      // attachment routes) that would otherwise leave a server that keeps failing unlogged.
+      const logFailure = isExpectedConnectionError ? console.warn : console.error;
       logFailure(
         `MCP Handler Error for ${name}:`,
         enhancedError,

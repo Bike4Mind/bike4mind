@@ -43,7 +43,7 @@ import { NoExtractableContentError, plainFetchScrape } from './plainFetch';
 const mockCreateApp = vi.mocked(createFirecrawlApp);
 const mockPlainFetch = vi.mocked(plainFetchScrape);
 import type { ToolContext } from '../../base/types';
-import type { CitableSource } from '@bike4mind/common';
+import { isExpectedToolError, type CitableSource } from '@bike4mind/common';
 import { aggregateWebFetchContentTelemetry } from '../../../../telemetry';
 
 const CAP = 50_000;
@@ -936,11 +936,16 @@ describe('web_fetch expected upstream failures', () => {
   it.each([
     new FirecrawlError('Upstream scraper failure', 500),
     new RefusedFetchTargetError('Refusing to fetch target'),
-  ])('returns a recoverable result without error logging: %s', async error => {
+  ])('still fails the tool call, as an expected error without error logging: %s', async error => {
     scrapeUrl.mockRejectedValueOnce(error);
     const context = makeContext(vi.fn(async () => {}));
-    const result = await webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
-    expect(result).toContain('web_search');
+    const call = webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/doc' });
+    const thrown = await call.then(
+      () => undefined,
+      (reason: unknown) => reason
+    );
+    expect(isExpectedToolError(thrown)).toBe(true);
+    expect((thrown as Error).message).toBe(error.message);
     expect(context.logger.warn).toHaveBeenCalledTimes(error instanceof RefusedFetchTargetError ? 0 : 1);
     expect(context.logger.error).not.toHaveBeenCalled();
   });

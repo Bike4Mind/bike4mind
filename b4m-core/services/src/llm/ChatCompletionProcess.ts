@@ -5756,6 +5756,9 @@ export class ChatCompletionProcess {
             }
             // Same gate; the real typed timeout the backend raises, so the loop takes the slow path.
             if (previewTestMarkerActive(FORCE_STREAM_STALL_TEST_MARKER)) {
+              // A typed timeout's attempt summary logs at debug, leaving the warning to whoever
+              // raised it; this one is raised here, not by a backend.
+              logger.warn(`Simulated ${currentModel.backend} stream stall (preview only)`, { model: currentModel.id });
               throw new LlmTimeoutError(
                 'stream_idle',
                 idleTimeoutSeconds * 1000,

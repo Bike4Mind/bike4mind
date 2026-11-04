@@ -123,24 +123,27 @@ describe('mcpCall connect failures', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('GITHUB_ACCESS_TOKEN'));
   });
 
-  it("logs the child's own stderr when it closes the connection on every attempt", async () => {
-    h.connect = async onStderrLine => {
-      onStderrLine(h.rateLimitLine);
-      onStderrLine('Error: something the server could not survive');
-      throw new Error('MCP error -32000: Connection closed');
-    };
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it.each(['getTools', 'callTool'])(
+    "logs the child's own stderr at warn when it closes the connection on every attempt (%s)",
+    async action => {
+      h.connect = async onStderrLine => {
+        onStderrLine(h.rateLimitLine);
+        onStderrLine('Error: something the server could not survive');
+        throw new Error('MCP error -32000: Connection closed');
+      };
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const failure = handler({ name: 'github', action: 'getTools', envVariables: [] });
-    await expect(failure).rejects.toBeInstanceOf(ExpectedToolError);
-    await expect(failure).rejects.toThrow('Connection closed');
+      const failure = handler({ name: 'github', action, toolName: 'get_issue', envVariables: [] });
+      await expect(failure).rejects.toBeInstanceOf(ExpectedToolError);
+      await expect(failure).rejects.toThrow('Connection closed');
 
-    expect(error).not.toHaveBeenCalled();
-    const logged = warn.mock.calls.flat().map(String).join(' ');
-    expect(logged).toContain('something the server could not survive');
-    expect(logged).not.toContain('RATE_LIMIT_WARNING');
-  });
+      expect(error).not.toHaveBeenCalled();
+      const logged = warn.mock.calls.flat().map(String).join(' ');
+      expect(logged).toContain('something the server could not survive');
+      expect(logged).not.toContain('RATE_LIMIT_WARNING');
+    }
+  );
   it('retains error severity for a generic JSON-RPC server error', async () => {
     h.connect = async () => {
       throw new Error('MCP error -32000: database write failed');

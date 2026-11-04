@@ -56,6 +56,20 @@ function formatResult(math: MathJsInstance, value: unknown, precision?: number):
  */
 class MathEvaluationError extends ExpectedToolError {}
 
+/**
+ * mathjs rejected the expression itself. Only this becomes a MathEvaluationError: a throw from the
+ * tool's own code is a defect and must keep its error-level log.
+ */
+class MathInputError extends Error {}
+
+function evaluateInput<T>(evaluate: () => T): T {
+  try {
+    return evaluate();
+  } catch (error: unknown) {
+    throw new MathInputError(error instanceof Error ? error.message : 'Unknown error');
+  }
+}
+
 async function evaluateMath(params: MathParams): Promise<string> {
   Logger.globalInstance.log('🔢 Math Tool: Starting evaluation of expression:', params.expression);
 
@@ -92,7 +106,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
     // mathjs natively supports these and returns a ResultSet - we extract the last result
     if (expression.includes(';')) {
       Logger.globalInstance.log('🔢 Math Tool: Detected multi-statement expression, evaluating with shared scope...');
-      const result = math.evaluate(expression);
+      const result = evaluateInput(() => math.evaluate(expression));
 
       // math.evaluate returns a ResultSet for semicolon-separated expressions
       if (math.typeOf(result) === 'ResultSet') {
@@ -179,7 +193,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
             : `Solution: ${variable} = ${math.format(solutions, { precision: params.precision })}`;
         } catch (solveError) {
           Logger.globalInstance.debug('❌ Math Tool: Solve error:', solveError);
-          throw new Error(
+          throw new MathInputError(
             `Could not solve equation "${expression}". The equation format may not be supported or may have no real solutions.`
           );
         }
@@ -188,7 +202,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
 
     // Regular expression evaluation
     Logger.globalInstance.log('🔢 Math Tool: Evaluating expression...');
-    const result = math.evaluate(expression);
+    const result = evaluateInput(() => math.evaluate(expression));
     Logger.globalInstance.log('🔢 Math Tool: Raw result:', result);
 
     if (math.typeOf(result) === 'Matrix') {
@@ -202,6 +216,8 @@ async function evaluateMath(params: MathParams): Promise<string> {
   } catch (error: unknown) {
     if (error instanceof MathEvaluationError) throw error;
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    // Same message either way, so the model sees no difference; only the log level does.
+    const FailureError = error instanceof MathInputError ? MathEvaluationError : Error;
 
     // Undefined symbol = the expression uses a variable that was never assigned a value
     // (e.g. "currentRatio = (cashPrior + 100) / debt" without a prior "cashPrior = ..." statement).
@@ -210,12 +226,12 @@ async function evaluateMath(params: MathParams): Promise<string> {
     const undefinedSymbol = errorMessage.match(/Undefined symbol (\w+)/);
     if (undefinedSymbol) {
       const symbol = undefinedSymbol[1];
-      throw new MathEvaluationError(
+      throw new FailureError(
         `Failed to evaluate math expression "${params.expression}". Reason: the symbol "${symbol}" is used but never assigned a value. Assign it first with a semicolon-separated statement (e.g. "${symbol} = <value>; ...") before referencing it, then try again.`
       );
     }
 
-    throw new MathEvaluationError(
+    throw new FailureError(
       `Failed to evaluate math expression "${params.expression}". Reason: ${errorMessage}. Please provide a valid mathjs expression (no natural language or JavaScript syntax).`
     );
   }
