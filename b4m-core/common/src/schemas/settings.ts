@@ -513,6 +513,7 @@ export const SettingKeySchema = z.enum([
   'newAccountSpendCapDays',
   'newAccountHourlySpendCapCredits',
   'newAccountDailySpendCapCredits',
+  'paidCompletionOverdraftCredits',
   'spendMonitorEnabled',
   'spendMonitorSlackEnabled',
   'spendMonitorPlatformSpikeRatio',
@@ -2355,6 +2356,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'newAccountSpendCapDays', order: 19.1 },
       { key: 'newAccountHourlySpendCapCredits', order: 19.2 },
       { key: 'newAccountDailySpendCapCredits', order: 19.3 },
+      { key: 'paidCompletionOverdraftCredits', order: 19.35 },
       { key: 'spendMonitorEnabled', order: 19.41 },
       { key: 'spendMonitorSlackEnabled', order: 19.42 },
       { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
@@ -5249,6 +5251,19 @@ export const settingsMap = {
     min: 0,
     description:
       'Most credits a new account may spend in any rolling 24 hours, counted the same way as the hourly cap. Set to 0 to drop the daily cap.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  // Read by ChatCompletionProcess when it caps a chat turn's output at what the payer can afford
+  // (b4m-core/services/src/llm/chatCreditCap.ts).
+  paidCompletionOverdraftCredits: makeNumberSetting({
+    key: 'paidCompletionOverdraftCredits',
+    name: 'Paid Completion Overdraft Allowance (credits)',
+    defaultValue: 500,
+    int: true,
+    min: 0,
+    description:
+      'How far past its balance one chat answer may run for a personal account on a paid plan. Each answer is capped so its worst-case cost fits the balance plus this allowance, and it stops once it reaches that limit. Accounts without a paid plan get no allowance, and organizations always stop at their balance. Applies to chat turns only; agent runs ignore it. Set to 0 to give paid accounts no allowance either.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
