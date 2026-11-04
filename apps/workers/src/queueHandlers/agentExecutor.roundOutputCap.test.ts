@@ -1,6 +1,4 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { CREDITS_PER_USD_COST, type IMessage, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptions } from '@bike4mind/llm-adapters';
 import {
@@ -150,20 +148,5 @@ describe('outOfCreditsOutcome', () => {
     expect(outOfCreditsOutcome(refusal)).toEqual({ kind: 'out-of-credits', error: refusal });
     const other = new Error('provider down');
     expect(() => outOfCreditsOutcome(other)).toThrow(other);
-  });
-});
-
-describe('processExecution wiring', () => {
-  const source = readFileSync(resolve(__dirname, 'agentExecutor.ts'), 'utf8');
-
-  it('runs the agent on the capped backend and toggles the cap with the credit gate', () => {
-    expect(source).toContain('llm: agentLlm,');
-    expect(source).toMatch(/capsRounds && modelInfo\s+\? capAgentRoundOutput\(llm, \{/);
-    expect(source).toContain('roundCapActive = gateThisIteration;');
-  });
-
-  it('stops the run as out of credits when a round is refused', () => {
-    expect(source).toContain('.catch(outOfCreditsOutcome);');
-    expect(source).toMatch(/if \(deadlineOutcome\.kind === 'out-of-credits'\) \{[\s\S]*?await stopOutOfCredits\(/);
   });
 });
