@@ -271,10 +271,10 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   // A refusal covers personal keys; an org-billed key still passes unless the access switch refuses that org.
   const refusedOrgIds = eligibility?.refusedOrgIds ?? [];
-  const blockedByTrust =
+  const blockedByGate =
     eligibility?.canCreate === false && (!formData.organizationId || refusedOrgIds.includes(formData.organizationId));
   const someOrgAdmitted = (billingOrgs ?? []).some(org => !refusedOrgIds.includes(org.id));
-  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByTrust;
+  const canSubmit = !!formData.name.trim() && formData.scopes.length > 0 && !blockedByGate;
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-modal">
@@ -291,8 +291,8 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
         </Typography>
 
         <Stack spacing={2.5} className="project-api-keys-modal-content">
-          {blockedByTrust && (
-            <Alert color="warning" variant="soft" data-testid="api-key-trust-alert">
+          {blockedByGate && (
+            <Alert color="warning" variant="soft" data-testid="api-key-gate-alert">
               {canBillOrg && someOrgAdmitted
                 ? `${eligibility?.message} You can still create a key billed to an organization you manage.`
                 : eligibility?.message}
@@ -1938,7 +1938,7 @@ export default function UserApiKeysTab() {
   const { data: billingOrgs } = useBillingOrganizations();
   const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
   const { data: eligibility } = useApiKeyEligibility();
-  const createBlockedByTrust =
+  const createBlockedByGate =
     eligibility?.canCreate === false &&
     !(billingOrgs ?? []).some(org => !(eligibility.refusedOrgIds ?? []).includes(org.id));
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
@@ -2078,7 +2078,7 @@ export default function UserApiKeysTab() {
                 startDecorator={<AddIcon />}
                 onClick={() => setShowNewKeyModal(true)}
                 variant="solid"
-                disabled={createBlockedByTrust}
+                disabled={createBlockedByGate}
                 data-testid="api-keys-create-btn"
               >
                 Create API Key
@@ -2086,8 +2086,8 @@ export default function UserApiKeysTab() {
             </Box>
           </Box>
 
-          {createBlockedByTrust && (
-            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-trust-notice">
+          {createBlockedByGate && (
+            <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-keys-gate-notice">
               {eligibility?.message}
             </Alert>
           )}

@@ -601,7 +601,7 @@ describe('UserApiKeysTab - API key trust gate', () => {
   it('shows no alert and enables submit when the user can create keys', () => {
     openModalAndName();
 
-    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-key-gate-alert')).not.toBeInTheDocument();
     expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
   });
 
@@ -610,13 +610,13 @@ describe('UserApiKeysTab - API key trust gate', () => {
     renderTab();
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
-    expect(screen.getByTestId('api-keys-trust-notice')).toHaveTextContent(blocked.message);
+    expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(blocked.message);
   });
 
   it('shows no tab notice when the user can create keys', () => {
     renderTab();
 
-    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-gate-notice')).not.toBeInTheDocument();
     expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
   });
 
@@ -626,7 +626,7 @@ describe('UserApiKeysTab - API key trust gate', () => {
     renderTab();
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeEnabled();
-    expect(screen.queryByTestId('api-keys-trust-notice')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-keys-gate-notice')).not.toBeInTheDocument();
   });
 
   it('disables create on the tab when the access switch refuses org billing too, even with an organization', () => {
@@ -635,7 +635,7 @@ describe('UserApiKeysTab - API key trust gate', () => {
     renderTab();
 
     expect(screen.getByTestId('api-keys-create-btn')).toBeDisabled();
-    expect(screen.getByTestId('api-keys-trust-notice')).toHaveTextContent(accessDenied.message);
+    expect(screen.getByTestId('api-keys-gate-notice')).toHaveTextContent(accessDenied.message);
   });
 
   it('shows the alert with the org hint and disables submit while billing a personal account, then clears both on picking an org', async () => {
@@ -643,7 +643,7 @@ describe('UserApiKeysTab - API key trust gate', () => {
     h.billingOrgs = [{ id: 'org-1', name: 'Acme' }];
     openModalAndName();
 
-    const alert = screen.getByTestId('api-key-trust-alert');
+    const alert = screen.getByTestId('api-key-gate-alert');
     expect(alert).toHaveTextContent(blocked.message);
     expect(alert).toHaveTextContent('You can still create a key billed to an organization you manage.');
     expect(screen.getByTestId('api-key-create-btn')).toBeDisabled();
@@ -651,7 +651,7 @@ describe('UserApiKeysTab - API key trust gate', () => {
     fireEvent.click(within(screen.getByTestId('api-key-billing-select')).getByRole('combobox'));
     fireEvent.click(await screen.findByRole('option', { name: /Acme/ }));
 
-    expect(screen.queryByTestId('api-key-trust-alert')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('api-key-gate-alert')).not.toBeInTheDocument();
     expect(screen.getByTestId('api-key-create-btn')).toBeEnabled();
   });
 });
