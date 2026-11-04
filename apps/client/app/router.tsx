@@ -21,6 +21,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
+import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -1280,7 +1281,11 @@ const desktopDownloadRoute = createRoute({
 const bedrockNewsClaimRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/partners/bedrocknews/claim',
-  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  // The ticket is moved out of the URL first so a consent redirect never carries it in its return path.
+  beforeLoad: ({ location, search }) => {
+    takeTicket(search.ticket);
+    return enforceConsentRedirect({ pathname: location.pathname, searchStr: '', hash: '' });
+  },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <BedrockNewsClaimPage />
