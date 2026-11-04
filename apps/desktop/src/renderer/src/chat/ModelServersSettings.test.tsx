@@ -458,10 +458,13 @@ describe('ModelServersSettings hardware', () => {
     await act(async () => root?.unmount());
     host.remove();
 
-    await show(saved('openai-compatible', 'chat'));
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    await show({ ...saved('openai-compatible', 'chat'), specs: { ...specs, kvCacheType: 'q8_0' } });
     await click('model-servers-specs-btn');
     expect(byTestId('model-servers-specs-form')).not.toBeNull();
     expect(byTestId('model-servers-specs-kv-select')).toBeNull();
+    await click('model-servers-specs-save-btn');
+    expect(update).toHaveBeenLastCalledWith('gpu', { specs });
   });
 });
 
