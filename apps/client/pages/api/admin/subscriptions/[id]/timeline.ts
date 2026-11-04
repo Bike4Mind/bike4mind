@@ -1,14 +1,12 @@
 import { z } from 'zod';
 import {
-  ApiKeyScope,
   SUBSCRIPTION_TIMELINE_KINDS,
   SubscriptionTimelineKindSchema,
   type SubscriptionTimelinePage,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { decodeAuditCursor, encodeAuditCursor } from '@server/utils/adminAuditQuery';
 import { listSubscriptionTimeline } from '@server/utils/subscriptionTimeline';
@@ -26,10 +24,8 @@ const TimelineQuerySchema = z.object({
 });
 
 /** One subscription's merged feed: Stripe billing events, admin actions and plan credit moves, newest first. */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { GET: 'support:read' } }).get(
   asyncHandler<{}, unknown, unknown, Record<string, unknown>>(async (req, res) => {
-    if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
-
     const parsed = TimelineQuerySchema.safeParse(req.query);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid query parameters');
     const { id, kind, limit, cursor: rawCursor } = parsed.data;

@@ -1,15 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { Types } from 'mongoose';
-import { ApiKeyScope } from '@bike4mind/common';
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
-      get: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.GET = fn), chain),
-      _config: config,
-    });
+    const guards: Array<(req: unknown, res: unknown, next: () => void) => void> = [];
+    const chain = Object.assign(
+      (req: { method?: string }, res: unknown) => {
+        for (const guard of guards) guard(req, res, () => {});
+        return handlers[req.method ?? 'GET']?.(req, res);
+      },
+      {
+        use: (fn: (req: unknown, res: unknown, next: () => void) => void) => (guards.push(fn), chain),
+        get: (fn: (req: unknown, res: unknown) => unknown) => ((handlers.GET = fn), chain),
+        _config: config,
+      }
+    );
     return chain;
   },
 }));
@@ -95,15 +102,20 @@ describe('GET /api/admin/subscriptions/[id]/timeline', () => {
     mocks.creditRows = [creditRow];
   });
 
-  it('requires JWT auth with admin scope', () => {
+  it('requires JWT auth and allows only GET', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
-      requiredScopes: [ApiKeyScope.ADMIN],
+      allowedMethods: ['GET'],
     });
   });
 
+  it('admits a delegated admin holding support:read', async () => {
+    const res = await call({}, { id: ADMIN.id, isAdmin: false, adminPermissions: ['support:read'] });
+    expect(res._getStatusCode()).toBe(200);
+  });
+
   it('refuses a non-admin before reading anything', async () => {
-    await expect(call({}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Admin access required');
+    await expect(call({}, { ...ADMIN, isAdmin: false })).rejects.toThrow('Missing permission: support:read');
     expect(mocks.findById).not.toHaveBeenCalled();
     expect(mocks.listBilling).not.toHaveBeenCalled();
   });
