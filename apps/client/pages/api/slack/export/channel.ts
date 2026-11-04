@@ -632,7 +632,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
         phase: currentPhase,
         suggestion: 'Try using a narrower date range to export smaller batches.',
       };
-      return buildAndSendExport();
+      return await buildAndSendExport();
     }
 
     Logger.info('✅ Fetched all messages', { count: messages.length });
@@ -698,7 +698,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
           phase: currentPhase,
           suggestion: 'Messages were exported but some thread replies may be missing.',
         };
-        return buildAndSendExport();
+        return await buildAndSendExport();
       }
     }
 
@@ -783,7 +783,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
       if (isTimedOut()) {
         addWarning('resolving_users', 'Export timed out while resolving user names', 'Some users may show as IDs');
         exportStatus = 'partial';
-        return buildAndSendExport();
+        return await buildAndSendExport();
       }
     }
 
@@ -810,7 +810,7 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage' } }).post
     }
 
     // Success - send complete export
-    return buildAndSendExport();
+    return await buildAndSendExport();
   } catch (error: any) {
     clearTimeout(requestTimeoutId);
 
