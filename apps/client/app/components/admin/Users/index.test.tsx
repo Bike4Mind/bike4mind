@@ -117,6 +117,41 @@ describe('UsersTab', () => {
     expect(useUsersTab.getState().params.search).toBe('');
   });
 
+  it('clears a stored search at once when the anomaly banner review applies its filter', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data:
+        url === '/api/admin/signup-anomaly'
+          ? {
+              since: '2026-10-27T11:00:00.000Z',
+              until: '2026-10-27T12:00:00.000Z',
+              signupCount: 212,
+              apiKeyCount: 3,
+              signupSpike: true,
+              apiKeySpike: false,
+              truncated: false,
+              topDomain: 'example.test',
+            }
+          : respond(url),
+    }));
+    act(() => useUsersTab.setState({ params: { ...DEFAULT_USERS_PARAMS, search: 'ada' } }));
+    renderTab();
+    const reviewButton = await screen.findByTestId('users-review-cluster-btn');
+
+    const searches: string[] = [];
+    const unsubscribe = useUsersTab.subscribe(state => searches.push(state.params.search));
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(reviewButton);
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+      unsubscribe();
+    }
+
+    expect(searches).not.toContain('ada');
+    expect(useUsersTab.getState().params).toMatchObject({ search: '', signedUp: 'hour', groupBy: 'emailDomain' });
+  });
+
   it('renders the summary, the rows and one footer pager', async () => {
     renderTab();
     expect(await screen.findByTestId('admin-users-row-u1')).toBeTruthy();
