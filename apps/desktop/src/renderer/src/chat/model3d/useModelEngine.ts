@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type * as THREE from 'three';
 import {
   EMPTY_MODEL_STATE,
+  partTreeError,
   type ModelBuildOutcome,
   type ModelParam,
   type ModelPartMesh,
@@ -128,8 +129,10 @@ export function useModelEngine(dark: boolean): ModelEngine {
     []
   );
 
-  const showOutcome = useCallback(async (generation: number, outcome: ModelBuildOutcome, writeGlb: boolean) => {
+  const showOutcome = useCallback(async (generation: number, built: ModelBuildOutcome, writeGlb: boolean) => {
     if (stateRef.current.generation !== generation) return;
+    const treeError = built.ok ? partTreeError(built.parts) : null;
+    const outcome: ModelBuildOutcome = treeError ? { ok: false, error: treeError } : built;
     if (!outcome.ok) {
       setStatus('error');
       setError({ message: outcome.error, line: outcome.line });

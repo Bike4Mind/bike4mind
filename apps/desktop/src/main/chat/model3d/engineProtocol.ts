@@ -132,7 +132,13 @@ function partsOf(result, Manifold) {
     }
     const name = entry instanceof Manifold || typeof entry.name !== 'string' ? 'part' + (index + 1) : entry.name;
     const color = entry instanceof Manifold || typeof entry.color !== 'string' ? PALETTE[index % PALETTE.length] : entry.color;
-    return { name, color, ...meshOf(shape) };
+    const part = { name, color, ...meshOf(shape) };
+    // Checked as a tree in the renderer (partTreeError); here only passed through in plain form.
+    if (!(entry instanceof Manifold)) {
+      if (Array.isArray(entry.pivot)) part.pivot = entry.pivot.map(Number);
+      if (typeof entry.parent === 'string') part.parent = entry.parent;
+    }
+    return part;
   });
 }
 

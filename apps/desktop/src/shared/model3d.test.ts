@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { formatModelSummary, modelKindFor, siblingGlbPath, writeParamValue } from './model3d';
+import {
+  describeJoints,
+  formatModelSummary,
+  modelKindFor,
+  partTreeError,
+  siblingGlbPath,
+  writeParamValue,
+  type ModelPartMesh,
+} from './model3d';
 
 const SOURCE = `export const units = 'mm';
 
@@ -78,5 +86,49 @@ describe('formatModelSummary', () => {
   it('describes a failure with its line', () => {
     const text = formatModelSummary({ generation: 2, ok: false, error: 'boom is not defined', line: 7 });
     expect(text).toContain('Build failed (line 7): boom is not defined');
+  });
+});
+
+function part(name: string, extra: Partial<ModelPartMesh> = {}): ModelPartMesh {
+  return { name, color: '#fff', positions: new Float32Array(), indices: new Uint32Array(), ...extra };
+}
+
+describe('partTreeError', () => {
+  it('accepts a lid pivoted inside its body, whatever the order', () => {
+    expect(partTreeError([part('lid', { parent: 'body', pivot: [0, 20, 30] }), part('body')])).toBeNull();
+  });
+
+  it.each([
+    [[part('lid', { parent: 'chest' })], 'names a parent "chest" that no part is called'],
+    [[part('lid', { parent: 'lid' })], 'cannot be its own parent'],
+    [[part('a', { parent: 'b' }), part('b', { parent: 'a' })], 'form a loop'],
+    [[part('body'), part('body'), part('lid', { parent: 'body' })], 'that 2 parts are called'],
+    [[part('lid', { pivot: [0, Number.NaN, 1] as [number, number, number] })], 'not three numbers'],
+  ])('refuses %#', (parts, message) => {
+    expect(partTreeError(parts)).toContain(message);
+  });
+});
+
+describe('describeJoints', () => {
+  it('lists only parts with a pivot or parent', () => {
+    expect(describeJoints([part('body'), part('lid', { pivot: [0, 24.5, 38], parent: 'body' })])).toEqual([
+      'lid: pivot (0, 24.5, 38), in body',
+    ]);
+  });
+
+  it('shows in the tool summary', () => {
+    const text = formatModelSummary({
+      generation: 1,
+      ok: true,
+      summary: {
+        parts: ['body', 'lid'],
+        size: [1, 1, 1],
+        units: 'mm',
+        triangles: 2,
+        params: {},
+        joints: ['lid: pivot (0, 1, 2), in body'],
+      },
+    });
+    expect(text).toContain('Joints: lid: pivot (0, 1, 2), in body');
   });
 });

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
+import * as THREE from 'three';
 import type { ModelPartMesh } from '@shared/model3d';
 import { buildModelObject, exportGlb, loadAsset, partsToStl, summarizeObject, summarizeParts } from './modelScene';
 
@@ -64,5 +65,61 @@ describe('loadAsset (stl)', () => {
     expect(summary.units).toBe('mm');
     expect(summary.size[0]).toBeCloseTo(10);
     expect(summary.size[2]).toBeCloseTo(30);
+  });
+});
+
+describe('part pivots and parents', () => {
+  /** A body 0..60 x 0..40 x 0..30 and a lid on top of it, hinged along its back top edge. */
+  const parts = () => {
+    const lid = box('lid', 60, 40, 10);
+    for (let index = 2; index < lid.positions.length; index += 3) lid.positions[index] += 30;
+    return [{ ...lid, pivot: [0, 40, 30] as [number, number, number], parent: 'body' }, box('body', 60, 40, 30)];
+  };
+
+  it('nests the lid under the body with its origin at the hinge, without moving it', () => {
+    const input = parts();
+    const root = buildModelObject(input, 'mm');
+    const lid = root.getObjectByName('lid') as THREE.Mesh;
+    expect(lid.parent?.name).toBe('body');
+    expect(lid.position.toArray()).toEqual([0, 40, 30]);
+    // Where the lid sits in model space is unchanged, and the parts themselves are untouched.
+    root.getObjectByName('model')!.rotation.set(0, 0, 0);
+    root.updateMatrixWorld(true);
+    const box3 = new THREE.Box3().setFromObject(lid);
+    expect(box3.min.toArray()).toEqual([0, 0, 30]);
+    expect(box3.max.toArray()).toEqual([60, 40, 40]);
+    expect(input[0].positions[2]).toBe(30);
+  });
+
+  it('turns the lid about its hinge when the node rotates', () => {
+    const root = buildModelObject(parts(), 'mm');
+    root.getObjectByName('model')!.rotation.set(0, 0, 0);
+    const lid = root.getObjectByName('lid')!;
+    lid.rotation.x = -Math.PI / 2;
+    root.updateMatrixWorld(true);
+    const box3 = new THREE.Box3().setFromObject(lid);
+    // Opened backwards: the front edge swings up over the hinge line at y = 40.
+    expect(box3.min.y).toBeCloseTo(40);
+    expect(box3.max.z).toBeCloseTo(70);
+  });
+
+  it('keeps the hierarchy and pivot in the GLB', async () => {
+    const loaded = await loadAsset('glb', await exportGlb(buildModelObject(parts(), 'mm')));
+    const lid = loaded.getObjectByName('lid')!;
+    expect(lid.parent?.name).toBe('body');
+    // Metres, and Y-up: the hinge at model (0, 40, 30) mm is glTF (0, 0.03, -0.04) relative to the body.
+    expect(lid.position.x).toBeCloseTo(0);
+    expect(lid.position.y).toBeCloseTo(0.03);
+    expect(lid.position.z).toBeCloseTo(-0.04);
+    // No scale or axis turn left on any node: the units and Y-up live in the vertices.
+    loaded.traverse(node => {
+      if (node === loaded) return;
+      expect(node.scale.toArray().map(value => Number(value.toFixed(6)))).toEqual([1, 1, 1]);
+      expect(Math.abs(node.quaternion.w)).toBeCloseTo(1);
+    });
+  });
+
+  it('reports joints in the summary', () => {
+    expect(summarizeParts(parts(), {}, 'mm').joints).toEqual(['lid: pivot (0, 40, 30), in body']);
   });
 });

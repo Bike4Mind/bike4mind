@@ -34,6 +34,10 @@ export function parseBuildReport(value: unknown): ModelBuildReport | null {
       triangles: summary.triangles,
       params,
     };
+    if (Array.isArray(summary.joints)) {
+      const joints = summary.joints.filter((joint): joint is string => typeof joint === 'string');
+      if (joints.length) report.summary.joints = joints;
+    }
   }
   return report;
 }

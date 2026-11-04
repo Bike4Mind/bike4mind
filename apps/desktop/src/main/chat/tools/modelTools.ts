@@ -20,6 +20,9 @@ const MODEL_FILE_CONTRACT = [
   'Manifold.hull([..]), CrossSection.square/circle/ofPolygons(..).extrude(height) and .revolve(segments).',
   'Example: export default function model({ m, p }) { const { Manifold } = m; return [{ name: "box", color: "#8b5a2b", shape: Manifold.cube([p.width, 40, 30], true) }]; }',
   'For low-poly game assets keep segment counts low (6-12) and give each part its own color; the GLB keeps them as materials.',
+  'Moving parts: give a part `pivot: [x, y, z]` (the point it turns about, e.g. a lid hinge, in model coordinates) and',
+  '`parent: "body"` to nest it under another part. Each part becomes its own GLB node with its origin at the pivot, so a game',
+  'engine can rotate it (open the lid) without touching the mesh. Model the rest pose (lid closed); names must be unique.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {

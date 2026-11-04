@@ -18,6 +18,13 @@ export type ModelPartMesh = {
   /** xyz triples, in model units. */
   positions: Float32Array;
   indices: Uint32Array;
+  /**
+   * Where this part's node has its origin, in model units and model axes: the point it rotates
+   * about when an engine animates it (a lid's hinge). Absent means the model origin.
+   */
+  pivot?: [number, number, number];
+  /** The name of the part this one is nested under in the GLB, so it moves with it. */
+  parent?: string;
 };
 
 export type ModelBuildOutcome =
@@ -40,6 +47,8 @@ export type ModelSummary = {
   units: string;
   triangles: number;
   params: Record<string, number>;
+  /** One line per part that has a pivot or a parent, e.g. `lid: pivot (0, 24, 38), in body`. */
+  joints?: string[];
 };
 
 export type ModelBuildReport = {
@@ -139,6 +148,48 @@ export function formatModelSummary(report: ModelBuildReport, glbPath?: string): 
   ];
   const params = Object.entries(summary.params);
   if (params.length) lines.push(`Params: ${params.map(([key, value]) => `${key}=${formatNumber(value)}`).join(', ')}`);
+  if (summary.joints?.length) lines.push(`Joints: ${summary.joints.join('; ')}`);
   if (glbPath) lines.push(`GLB written: ${glbPath}`);
   return lines.join('\n');
+}
+
+/**
+ * Why a set of parts cannot become a node tree, or null when it can. A part named as a parent has
+ * to exist exactly once, and following parents must never come back to where it started.
+ */
+export function partTreeError(parts: ModelPartMesh[]): string | null {
+  const counts = new Map<string, number>();
+  for (const part of parts) counts.set(part.name, (counts.get(part.name) ?? 0) + 1);
+  const byName = new Map(parts.map(part => [part.name, part]));
+  for (const part of parts) {
+    if (part.pivot && !(part.pivot.length === 3 && part.pivot.every(Number.isFinite))) {
+      return `Part "${part.name}" has a pivot that is not three numbers [x, y, z].`;
+    }
+    if (part.parent === undefined) continue;
+    if (part.parent === part.name) return `Part "${part.name}" cannot be its own parent.`;
+    const count = counts.get(part.parent) ?? 0;
+    if (count === 0) return `Part "${part.name}" names a parent "${part.parent}" that no part is called.`;
+    if (count > 1)
+      return `Part "${part.name}" names a parent "${part.parent}" that ${count} parts are called; parent names must be unique.`;
+  }
+  for (const part of parts) {
+    const seen = new Set<string>([part.name]);
+    let current = part.parent;
+    while (current !== undefined) {
+      if (seen.has(current)) return `Parts form a loop through "${current}"; a part cannot be nested inside itself.`;
+      seen.add(current);
+      current = byName.get(current)?.parent;
+    }
+  }
+  return null;
+}
+
+/** The joint lines for ModelSummary: parts with a pivot or a parent, in model units. */
+export function describeJoints(parts: ModelPartMesh[]): string[] {
+  return parts
+    .filter(part => part.pivot || part.parent)
+    .map(part => {
+      const pivot = part.pivot ? `pivot (${part.pivot.map(formatNumber).join(', ')})` : 'pivot at origin';
+      return `${part.name}: ${pivot}${part.parent ? `, in ${part.parent}` : ''}`;
+    });
 }

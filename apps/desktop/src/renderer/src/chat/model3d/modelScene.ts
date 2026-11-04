@@ -2,7 +2,15 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import type { ModelKind, ModelParam, ModelPartMesh, ModelSummary, ModelUnits, ModelView } from '@shared/model3d';
+import {
+  describeJoints,
+  type ModelKind,
+  type ModelParam,
+  type ModelPartMesh,
+  type ModelSummary,
+  type ModelUnits,
+  type ModelView,
+} from '@shared/model3d';
 
 /**
  * three.js side of the model pane: meshes from the sandboxed engine become a scene, exports and
@@ -12,14 +20,24 @@ import type { ModelKind, ModelParam, ModelPartMesh, ModelSummary, ModelUnits, Mo
 
 export const DEFAULT_PART_COLOR = '#b0b7c3';
 
-/** The object the viewer, exports and screenshots share. `userData.units` records the model units. */
+/**
+ * The object the viewer, exports and screenshots share. `userData.units` records the model units.
+ *
+ * Each part is one mesh node with its origin at the part's pivot (its geometry shifted to match)
+ * and nested under its parent's node, so the GLB carries a hierarchy an engine can animate.
+ * Expects a tree that passed partTreeError.
+ */
 export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THREE.Group {
   const model = new THREE.Group();
   model.name = 'model';
-  for (const part of parts) {
+  const origin: [number, number, number] = [0, 0, 0];
+  const meshes = parts.map(part => {
+    const pivot = part.pivot ?? origin;
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(part.positions, 3));
+    // A copy: translate() moves vertices in place, and the parts stay in model space for STL and the summary.
+    geometry.setAttribute('position', new THREE.BufferAttribute(part.positions.slice(), 3));
     geometry.setIndex(new THREE.BufferAttribute(part.indices, 1));
+    geometry.translate(-pivot[0], -pivot[1], -pivot[2]);
     geometry.computeVertexNormals();
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(part.color || DEFAULT_PART_COLOR),
@@ -30,8 +48,17 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
     material.name = part.name;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = part.name;
-    model.add(mesh);
-  }
+    return mesh;
+  });
+  const byName = new Map(parts.map((part, index) => [part.name, { mesh: meshes[index], pivot: part.pivot ?? origin }]));
+  // A node's position is relative to its parent, whose own origin sits at the parent's pivot.
+  parts.forEach((part, index) => {
+    const pivot = part.pivot ?? origin;
+    const parent = part.parent === undefined ? undefined : byName.get(part.parent);
+    const offset = parent?.pivot ?? origin;
+    meshes[index].position.set(pivot[0] - offset[0], pivot[1] - offset[1], pivot[2] - offset[2]);
+    (parent?.mesh ?? model).add(meshes[index]);
+  });
   model.rotation.x = -Math.PI / 2;
   const root = new THREE.Group();
   root.name = 'root';
@@ -60,12 +87,14 @@ export function summarizeParts(
     }
   }
   const size = min.map((low, axis) => (Number.isFinite(low) ? max[axis] - low : 0)) as [number, number, number];
+  const joints = describeJoints(parts);
   return {
     parts: parts.map(part => part.name),
     size,
     units,
     triangles,
     params: Object.fromEntries(Object.entries(params).map(([key, param]) => [key, param.value])),
+    ...(joints.length ? { joints } : {}),
   };
 }
 
@@ -99,11 +128,40 @@ export function partsToStl(parts: ModelPartMesh[]): Uint8Array {
   return new Uint8Array(buffer);
 }
 
-/** GLB in metres (glTF's unit), keeping one material per part. */
+/**
+ * Moves the unit scale and axis turn held by the root and its direct children into the geometry and
+ * node positions below them, so every node in the file is in metres, Y-up and unscaled: what an
+ * engine shows as an asset's transform. A node's local matrix L becomes M L M^-1 and its vertices
+ * M v, which leaves every world position where it was.
+ */
+function bakeTopTransforms(root: THREE.Object3D): void {
+  root.updateMatrix();
+  for (const top of root.children) {
+    top.updateMatrix();
+    const bake = root.matrix.clone().multiply(top.matrix);
+    const unbake = bake.clone().invert();
+    top.traverse(node => {
+      if (node instanceof THREE.Mesh)
+        node.geometry = (node.geometry as THREE.BufferGeometry).clone().applyMatrix4(bake);
+      if (node === top) return;
+      node.updateMatrix();
+      bake.clone().multiply(node.matrix).multiply(unbake).decompose(node.position, node.quaternion, node.scale);
+    });
+    top.position.set(0, 0, 0);
+    top.quaternion.identity();
+    top.scale.set(1, 1, 1);
+  }
+  root.position.set(0, 0, 0);
+  root.quaternion.identity();
+  root.scale.set(1, 1, 1);
+}
+
+/** GLB in metres and Y-up (glTF's convention), one node and material per part, pivots kept. */
 export async function exportGlb(root: THREE.Object3D): Promise<Uint8Array> {
   const scene = new THREE.Scene();
   const copy = root.clone(true);
   if (copy.userData.units === 'mm') copy.scale.setScalar(0.001);
+  bakeTopTransforms(copy);
   scene.add(copy);
   const result = await new GLTFExporter().parseAsync(scene, { binary: true });
   if (!(result instanceof ArrayBuffer)) throw new Error('The GLB exporter returned JSON instead of binary.');
