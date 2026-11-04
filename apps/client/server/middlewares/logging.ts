@@ -17,6 +17,6 @@ export const logging: RequestHandler = (req, res, next) => {
   );
   res.setHeader(REQUEST_ID_HEADER, req.requestId);
 
-  req.logger = createRequestLogger(req, { requestId: req.requestId, path: req.baseUrl });
+  req.logger = createRequestLogger(req, { requestId: req.requestId, path: req.baseUrl.split('?')[0] });
   runWithRequestLogger(req.logger, next);
 };
