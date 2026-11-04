@@ -941,6 +941,7 @@ function staleCallbackDispatchFilter({
 /**
  * The filter findPageAfterBySessionId runs. Exported so its index test explains this filter
  * rather than a hand-written copy that could drift from it.
+ * @internal
  */
 export function sessionKeysetFilter(sessionId: string, after?: { timestamp: Date; id: string }) {
   const filter: Record<string, unknown> = { sessionId, deletedAt: null };
