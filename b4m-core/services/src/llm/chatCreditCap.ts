@@ -18,8 +18,8 @@ import { MIN_AFFORDABLE_OUTPUT_TOKENS, affordableRoundBudget, type RoundBudget }
  * places enforce it: each provider round's output budget is lowered to what is left (beginRound,
  * applied through gateEveryRound so tool-loop rounds are covered too), the stream is stopped once
  * its streamed output alone has crossed the limit (recordStreamed), and settlement floors the
- * charge at -allowance (settlementFloorCredits). The CLI/API wire path does the same in
- * cliCompletions.ts with the helpers in completionCreditBudget.ts.
+ * text charge at -allowance (settlementFloorCredits). Tool charges are billed in full. The CLI/API
+ * wire path does the same in cliCompletions.ts with the helpers in completionCreditBudget.ts.
  */
 
 /**
@@ -206,9 +206,10 @@ export class TurnCreditLimiter {
   }
 
   /**
-   * The lowest balance settlement may leave: -allowance. A charge that would go below it (the
+   * The lowest balance settlement may leave: -allowance. A text charge that would go below it (the
    * estimates above drift from the provider's counts) is floored there and reported as written off,
-   * so the cap holds even then. Never raises a charge: actual usage below the floor is billed in full.
+   * so the cap holds even then. Never raises a charge: actual usage below the floor is billed in full,
+   * and tool charges are never floored.
    * Per turn only: the floor is applied to the hold-time balance snapshot, so concurrent turns of one
    * payer can together leave it lower.
    */
@@ -219,18 +220,20 @@ export class TurnCreditLimiter {
 
 /**
  * The reconciliation delta for a capped turn: the full difference between hold and actual usage,
- * except that the balance may not end below `floorCredits` (see settlementFloorCredits). Mirrors
- * computeSettlementDelta, which is this with a floor of zero.
+ * except that `cappedCredits` may not take the balance below `floorCredits` (see
+ * settlementFloorCredits). `uncappedCredits` (tool charges) are billed in full on top and never
+ * written off. Mirrors computeSettlementDelta, which is this with a floor of zero and no uncapped part.
  */
 export function cappedSettlementDelta(
   reservedCredits: number,
-  totalCreditsUsed: number,
+  cappedCredits: number,
   balanceAfterHold: number,
-  floorCredits: number
+  floorCredits: number,
+  uncappedCredits = 0
 ): { delta: number; writtenOffCredits: number } {
-  const delta = reservedCredits - totalCreditsUsed;
-  if (delta >= 0) return { delta, writtenOffCredits: 0 };
+  const delta = reservedCredits - cappedCredits;
+  if (delta >= 0) return { delta: delta - uncappedCredits, writtenOffCredits: 0 };
   const collectable = Math.max(0, balanceAfterHold - floorCredits);
-  if (-delta <= collectable) return { delta, writtenOffCredits: 0 };
-  return { delta: collectable > 0 ? -collectable : 0, writtenOffCredits: -delta - collectable };
+  if (-delta <= collectable) return { delta: delta - uncappedCredits, writtenOffCredits: 0 };
+  return { delta: (collectable > 0 ? -collectable : 0) - uncappedCredits, writtenOffCredits: -delta - collectable };
 }

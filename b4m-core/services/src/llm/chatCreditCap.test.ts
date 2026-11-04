@@ -257,6 +257,18 @@ describe('cappedSettlementDelta', () => {
   it('collects nothing more from a balance already at the floor', () => {
     expect(cappedSettlementDelta(100, 300, -10, 0)).toEqual({ delta: 0, writtenOffCredits: 200 });
   });
+
+  it('charges uncapped tool credits in full past the floor and writes off only text', () => {
+    const balanceAfterHold = 27;
+    const { delta, writtenOffCredits } = cappedSettlementDelta(1_400, 4_600, balanceAfterHold, 0, 300);
+    expect(balanceAfterHold + delta).toBe(-300);
+    expect(writtenOffCredits).toBe(4_600 - 1_400 - 27);
+  });
+
+  it('charges tool credits a refunded hold does not cover, with nothing written off', () => {
+    expect(cappedSettlementDelta(100, 10, 0, 0, 90)).toEqual({ delta: 0, writtenOffCredits: 0 });
+    expect(cappedSettlementDelta(100, 10, 0, 0, 500)).toEqual({ delta: -410, writtenOffCredits: 0 });
+  });
 });
 
 describe('the cap end to end', () => {

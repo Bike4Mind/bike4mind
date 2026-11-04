@@ -7610,8 +7610,8 @@ describe('ChatCompletionProcess', () => {
         expect(state.balance).toBe(BALANCE - used);
       });
 
-      // The thrown-abort settlement (settleReservation) floors the same way.
-      it('floors a stopped turn past the balance at zero too', async () => {
+      // The thrown-abort settlement (settleReservation) floors text the same way; tools are never floored.
+      it("charges a stopped turn's tool credits in full past the balance", async () => {
         const { state, incrementCredits } = fakeBalance(BALANCE);
         const TOOL_CHARGE = BALANCE * 3;
         const complete = vi.fn().mockImplementation(async () => {
@@ -7627,8 +7627,41 @@ describe('ChatCompletionProcess', () => {
 
         const hold = -incrementCredits.mock.calls[0][1];
         expect(incrementCredits).toHaveBeenCalledTimes(2);
-        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - BALANCE);
-        expect(state.balance).toBe(0);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - TOOL_CHARGE);
+        expect(state.balance).toBe(BALANCE - TOOL_CHARGE);
+      });
+
+      it('charges tool credits in full and floors only the text past the balance', async () => {
+        expect(actual).toBeGreaterThan(BALANCE);
+        const TOOL_CHARGE = 300;
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          (service as any).toolCreditsMap.set('image_generation', [TOOL_CHARGE]);
+          await cb(['A long answer'], {
+            inputTokens: 10,
+            outputTokens: OVERSHOOT_OUTPUT_TOKENS,
+            toolsUsed: [{ name: 'image_generation', arguments: '{}' }],
+          });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockQuest.sessionId = 'session1';
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(state.balance).toBe(-TOOL_CHARGE);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE })
+        );
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.objectContaining({ writtenOff: actual - BALANCE })
+        );
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'tool_usage',
+          expect.objectContaining({ credits: -TOOL_CHARGE })
+        );
       });
 
       it('sends the provider an output ceiling the balance can pay for', async () => {

@@ -1006,8 +1006,9 @@ export function computeSettlementDelta(
 }
 
 /**
- * The settlement a holder gets. Only a personal account is charged into debt; any other holder keeps
- * computeSettlementDelta's zero floor (an organization's balance is a hard stop by design, #1238).
+ * The settlement a holder gets, on `totalCreditsUsed` (text and tool credits together). Only a
+ * personal account is charged into debt; any other holder keeps computeSettlementDelta's zero floor
+ * on the whole total, tools included (an organization's balance is a hard stop by design, #1238).
  * A personal account is charged the shortfall in full,
  * with one atomic $inc that may take the balance below zero: nothing is written off, turns settling
  * concurrently each debit the live balance so the debt is exact however many were in flight, and
@@ -2032,20 +2033,49 @@ export class ChatCompletionProcess {
   public systemPromptText: SystemPromptTextDisclosure | undefined;
 
   /**
-   * computeHolderSettlement, except that a credit-capped turn may not leave the balance below
-   * -allowance (TurnCreditLimiter.settlementFloorCredits); what would go further is written off.
-   * The floor and the turn's limit come from the hold-time balance snapshot, not the live one, so
-   * concurrent turns of one payer can each spend to it and together end below -allowance.
+   * computeHolderSettlement, except that on a credit-capped turn the text charge may not leave a
+   * personal balance below -allowance (TurnCreditLimiter.settlementFloorCredits); what would go
+   * further is written off. Tool credits are charged in full, as computeHolderSettlement does, so a
+   * write-off is only ever text. An organization keeps its zero floor on the whole total.
+   * `flooredCredits` is the part the floor applied to. The floor and the turn's limit come from the
+   * hold-time balance snapshot, not the live one, so concurrent turns of one payer can each spend to
+   * it and together end below -allowance.
    */
   private holderSettlement(
     ownerType: CreditHolderType,
     reservedCredits: number,
-    totalCreditsUsed: number,
+    textCredits: number,
+    toolCredits: number,
     balanceAfterHold: number
-  ): { delta: number; writtenOffCredits: number } {
+  ): { delta: number; writtenOffCredits: number; flooredCredits: number } {
     const limiter = this.turnCreditLimiter;
-    if (!limiter) return computeHolderSettlement(ownerType, reservedCredits, totalCreditsUsed, balanceAfterHold);
-    return cappedSettlementDelta(reservedCredits, totalCreditsUsed, balanceAfterHold, limiter.settlementFloorCredits());
+    const totalCredits = textCredits + toolCredits;
+    if (!limiter) {
+      return {
+        ...computeHolderSettlement(ownerType, reservedCredits, totalCredits, balanceAfterHold),
+        flooredCredits: totalCredits,
+      };
+    }
+    const floor = limiter.settlementFloorCredits();
+    if (ownerType !== CreditHolderType.User) {
+      return {
+        ...cappedSettlementDelta(reservedCredits, totalCredits, balanceAfterHold, floor),
+        flooredCredits: totalCredits,
+      };
+    }
+    return {
+      ...cappedSettlementDelta(reservedCredits, textCredits, balanceAfterHold, floor, toolCredits),
+      flooredCredits: textCredits,
+    };
+  }
+
+  /** Credits this attempt's tool calls have charged so far (the charges settlement bills). */
+  private chargedToolCredits(): number {
+    let total = 0;
+    for (const charges of this.toolCreditsMap.values()) {
+      for (const credits of charges) total += credits;
+    }
+    return total;
   }
 
   /**
@@ -7021,21 +7051,26 @@ export class ChatCompletionProcess {
           const reservedAtSettlement = this.reservedCredits;
           this.reservedCredits = 0;
           this.reservationBasis = null;
-          const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
+          const {
+            delta: settlementDelta,
+            writtenOffCredits,
+            flooredCredits,
+          } = this.reservedCreditsOwnerId
             ? this.holderSettlement(
                 this.reservedCreditsOwnerType,
                 reservedAtSettlement,
-                totalCreditsUsed,
+                textCreditsUsed,
+                toolCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
               )
-            : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0 };
+            : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0, flooredCredits: 0 };
           if (writtenOffCredits > 0) {
             const floorCredits = this.turnCreditLimiter?.settlementFloorCredits() ?? 0;
             logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at the settlement floor', {
               questId: quest.id,
               ownerId: this.reservedCreditsOwnerId,
               ownerType: this.reservedCreditsOwnerType,
-              shortfall: totalCreditsUsed - reservedAtSettlement,
+              shortfall: flooredCredits - reservedAtSettlement,
               floor: floorCredits,
               available: Math.max(0, (this.reservedCreditHolder?.currentCredits ?? 0) - floorCredits),
               writtenOff: writtenOffCredits,
@@ -7083,8 +7118,8 @@ export class ChatCompletionProcess {
               costUsd: estimatedCost,
               creditsCharged: textCreditsUsed,
               ...priceStamp,
-              // Quest-level write-off (uncollected part of the whole settlement,
-              // tools included), recorded on the chat settlement event so
+              // Quest-level write-off (uncollected part of the settlement; text only on a
+              // credit-capped personal turn), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
               // Not always 'ok': a turn we aborted as degenerate is priced like any other
@@ -7918,11 +7953,13 @@ export class ChatCompletionProcess {
       const chargedUsd = costOn(ledgerModelInfo);
       return { ...usage, ledgerModelInfo, costUsd, credits: usdToCreditsStochastic(chargedUsd) };
     });
-    const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
+    const textCredits = priced.reduce((sum, usage) => sum + usage.credits, 0);
+    const totalCredits = textCredits + toolCredits;
     const { delta, writtenOffCredits } = this.holderSettlement(
       ownerType,
       reserved,
-      totalCredits,
+      textCredits,
+      toolCredits,
       this.reservedCreditHolder?.currentCredits ?? 0
     );
     const holderMethods = ownerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
@@ -8066,10 +8103,7 @@ export class ChatCompletionProcess {
       reported.outputTokens ?? 0,
       streamedChars > 0 ? estimateStreamedOutputTokens(streamedChars, basis.modelInfo.id) : 0
     );
-    let toolCredits = 0;
-    for (const charges of this.toolCreditsMap.values()) {
-      toolCredits += charges.reduce((sum, credits) => sum + credits, 0);
-    }
+    const toolCredits = this.chargedToolCredits();
     if (outputTokens === 0 && toolCredits === 0) return;
     const usage: ReservationUsage =
       reportedInput > basis.inputTokens
