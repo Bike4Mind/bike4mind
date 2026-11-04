@@ -66,7 +66,9 @@ export function buildLoopQuery(
     /** The owner's instructions for the ticket's stage; trusted, so they sit with the goal, above `---`. */
     instructions?: string;
   },
-  oversight?: LoopOversight
+  oversight?: LoopOversight,
+  /** Set on a cloud run only: its loop's desktop stages, whose tickets it must leave alone. */
+  desktopStages: string[] = []
 ): string {
   const ticketBlock = ticket
     ? [
@@ -118,6 +120,14 @@ export function buildLoopQuery(
           'If one is idle with ready tickets, use loop_run_now; if it stopped in needs_you or error and you believe the cause is fixed, use loop_resume. Those are the only actions you can take on it.',
         ]
       : [];
+  const desktopBlock =
+    desktopStages.length > 0
+      ? [
+          '',
+          `Tickets in the ${desktopStages.map(stage => JSON.stringify(stage)).join(', ')} stage(s) are worked by the`,
+          "owner's desktop app, not by this run: do not do their work, and do not edit or move them.",
+        ]
+      : [];
   return [
     goal,
     ...(ticket?.instructions ? ['', `Instructions for the "${ticket.item.stage}" stage:`, ticket.instructions] : []),
@@ -129,6 +139,7 @@ export function buildLoopQuery(
     `Notes: ${memory.notes || '(none - this is the first run)'}`,
     `Next action: ${memory.nextAction || '(none)'}`,
     ...ticketBlock,
+    ...desktopBlock,
     ...directiveBlock,
     ...overseerBlock,
     '',

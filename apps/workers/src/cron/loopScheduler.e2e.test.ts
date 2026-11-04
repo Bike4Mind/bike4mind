@@ -1228,7 +1228,9 @@ describe('runLoopSchedulerTick - stage config', () => {
 
     await runLoopSchedulerTick(NOW, logger);
 
-    expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain('Ticket id:');
+    const { query } = h.startAgentExecution.mock.calls[0][0];
+    expect(query).not.toContain('Ticket id:');
+    expect(query).toContain(`Tickets in the "review" stage(s) are worked by the\nowner's desktop app`);
     expect(await ticketOf(desktop.id)).toMatchObject({ status: 'open' });
 
     const live = await createLoop({

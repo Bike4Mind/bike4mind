@@ -260,6 +260,25 @@ describe('claimRunnerTicket', () => {
     expect(await AgentExecution.countDocuments({ runner: 'desktop' })).toBe(0);
   });
 
+  it("refuses once the user's loops have spent their daily cap", async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+    vi.spyOn(userRepository, 'findById').mockResolvedValue({ currentCredits: 1000, loopsDailyCredits: 5 } as never);
+    await AgentExecution.create({
+      userId: USER,
+      sessionId: 'session-1',
+      questId: 'session-1',
+      query: 'q',
+      model: 'm',
+      status: 'completed',
+      loopId: loop.id,
+      totalCreditsUsed: 5,
+    });
+
+    expect(await claimRunnerTicket(USER, ticket.id, NOW, logger)).toMatchObject({ status: 409, reason: 'user_budget' });
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open' });
+  });
+
   it("reserves an in-flight desktop run's cap against the loop budget", async () => {
     const loop = await createLoop({ budgetCreditsPerDay: 10 });
     const first = await claim((await createTicket(loop.id)).id);

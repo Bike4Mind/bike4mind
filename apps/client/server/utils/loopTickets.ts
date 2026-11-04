@@ -38,7 +38,7 @@ export function resolveTicketStage(loop: Pick<ILoop, 'stages'>, requested?: unkn
   return requested;
 }
 
-export const WAITING_ON_DEPENDENCIES = 'Waiting on dependencies';
+const WAITING_ON_DEPENDENCIES = 'Waiting on dependencies';
 
 /**
  * The stage/status/closedAt/statusReason/blockedOn patch for moving a ticket. `current` is the ticket as stored
@@ -74,7 +74,7 @@ export function ticketMovePatch(
         : (current?.status ?? 'open'));
   const blockedOn = validateWorkItemBlocker(move.blockedOn);
   if (blockedOn && status !== 'blocked') throw new BadRequestError('blockedOn is only valid with status blocked');
-  const reason = move.reason ?? (blockedOn && WAITING_ON_DEPENDENCIES);
+  const reason = blockedOn && !move.reason ? WAITING_ON_DEPENDENCIES : move.reason;
   const keepsReason = status === 'blocked' && current?.status === 'blocked' && reason === undefined;
 
   if (status === 'closed') stage = last;
@@ -103,6 +103,18 @@ export async function assertBlockedOnSatisfiable(
   const deps = await workItemRepository.findManyByIdsForUser(dependencies, userId);
   if (!deps.some(dep => dep.status !== 'closed')) {
     throw new BadRequestError('blockedOn dependencies needs an open dependency');
+  }
+}
+
+/**
+ * A cloud loop run (its `loop_ticket_*` tools) never changes a ticket in a desktop stage: only the desktop
+ * runner (`loopRunner.ts` claim/complete) and the owner (work-items routes) do. Moving a ticket into one is fine.
+ */
+export function assertCloudRunMayChange(loop: Pick<ILoop, 'stageConfig'>, ticket: Pick<IWorkItem, 'stage'>): void {
+  if (ticket.stage && desktopStagesOf(loop).includes(ticket.stage)) {
+    throw new BadRequestError(
+      `this ticket is in the "${ticket.stage}" stage, which the owner's desktop app works; do not work, edit or move it`
+    );
   }
 }
 

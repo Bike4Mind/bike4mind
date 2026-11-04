@@ -343,3 +343,47 @@ describe('loop_ticket_unsure', () => {
     expect(items.updateForUser).not.toHaveBeenCalled();
   });
 });
+
+describe('desktop-stage tickets', () => {
+  const desktopLoop = { ...loop(OWN), stageConfig: [{ stage: 'doing', runner: 'desktop' }] };
+  const ticket = { id: 't1', loopId: OWN, title: 'Ship it', stage: 'doing', status: 'open', dependencies: [] };
+
+  beforeEach(() => {
+    loops.findByIdAndUserId.mockImplementation(async (id: string) =>
+      id === OWN ? desktopLoop : id === SIBLING ? loop(SIBLING) : null
+    );
+    items.findByIdForUser.mockResolvedValue(ticket);
+  });
+
+  it('refuses to move, edit, block or park a ticket in a desktop stage, writing nothing', async () => {
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    for (const params of [
+      { id: 't1', stage: 'todo' },
+      { id: 't1', title: 'Renamed' },
+      { id: 't1', status: 'closed' },
+      { id: 't1', status: 'blocked', reason: 'x' },
+      { id: 't1', loopId: SIBLING },
+    ]) {
+      expect(await run(tools, 'loop_ticket_update', params)).toMatch(/^Error: .*desktop/);
+    }
+    expect(await run(tools, 'loop_ticket_unsure', { id: 't1', question: 'Which?' })).toMatch(/^Error: .*desktop/);
+    expect(items.updateForUser).not.toHaveBeenCalled();
+    expect(events.recordUnsure).not.toHaveBeenCalled();
+  });
+
+  it('still moves a cloud-stage ticket into a desktop stage, and marks desktop tickets in the list', async () => {
+    items.findByIdForUser.mockResolvedValue({ ...ticket, stage: 'todo' });
+    items.listForUser.mockResolvedValue({ data: [ticket, { ...ticket, id: 't2', stage: 'todo' }], hasMore: false });
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+
+    await run(tools, 'loop_ticket_update', { id: 't1', stage: 'doing' });
+    expect(items.updateForUser).toHaveBeenCalledWith('t1', 'u1', expect.objectContaining({ stage: 'doing' }), 'open');
+
+    const listed = JSON.parse(await run(tools, 'loop_ticket_list', {}));
+    expect(listed.desktopStages).toEqual(['doing']);
+    expect(listed.tickets.map((t: { id: string; desktopRunner?: boolean }) => [t.id, t.desktopRunner])).toEqual([
+      ['t1', true],
+      ['t2', undefined],
+    ]);
+  });
+});
