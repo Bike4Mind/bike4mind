@@ -103,7 +103,7 @@ The GitHub OAuth integration requests the following scopes:
 | `read:org` | Read organization membership and teams |
 | `read:user` | Read user profile information |
 | `project` | Access to GitHub Projects v2 |
-| `user:email` | Read verified email addresses, used for the no-card credit unlock |
+| `user:email` | Read verified email addresses |
 
 :::warning Scope Requirements
 All five scopes are required for full functionality. If you deny any scope, some features may not work. For example, without `project` scope, GitHub Projects v2 tools will fail.
