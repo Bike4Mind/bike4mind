@@ -18,7 +18,9 @@ export const AuditEntryReviewSection: React.FC<AuditEntryReviewSectionProps> = (
   if (isLoading) return <Skeleton variant="text" level="body-sm" width="60%" data-testid="audit-review-loading" />;
 
   if (review) {
-    const isMine = review.reviewer.userId !== null && review.reviewer.userId === currentUser?.id;
+    // Case-insensitive, like the server's undo check.
+    const reviewerId = review.reviewer.userId?.toLowerCase();
+    const isMine = !!reviewerId && reviewerId === currentUser?.id.toLowerCase();
     return (
       <Stack spacing={1} data-testid="audit-review-reviewed">
         <Typography level="body-sm">
