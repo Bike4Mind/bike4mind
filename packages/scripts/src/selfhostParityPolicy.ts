@@ -511,7 +511,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   broker('queue:infra/queues.ts:imageEditDLQ', '10c1a0580567d9b39e1c9547b6edccdbf9e9e6a71ea74c050e73f8da63190074'),
   wired(
     'queue:infra/queues.ts:imageEditQueue',
-    '93e9f204fbca1243e14c928c84d8f42e1e9ab4e97e80ec4ca0d93518e18e1065',
+    '70cd4ff4519c07cdfd9cb629f2855bf11ea73df2148b1a5e11725ef1fea91b49',
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:imageEditQueue',
