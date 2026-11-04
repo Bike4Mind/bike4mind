@@ -285,6 +285,9 @@ describe('OrchestratorStage', () => {
       expect(banner.textContent).toContain('Quest complete');
       expect(banner.getAttribute('aria-label')).toBe('Quest complete');
       expect(banner.getAttribute('data-outcome')).toBe('complete');
+      const chips = [...el('orchestrator-finale-stats').querySelectorAll('li')].map(chip => chip.textContent);
+      expect(chips[0]).toBe('All 2 agents done');
+      expect(chips.some(chip => chip?.includes('failed'))).toBe(false);
     });
 
     it('says "Quest ended" when an agent never finished', async () => {

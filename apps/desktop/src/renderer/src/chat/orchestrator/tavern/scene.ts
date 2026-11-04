@@ -28,11 +28,12 @@ export const TAVERN_SLOTS: Record<SeatZone, readonly SlotPoint[]> = {
     { x: 65, y: 45 },
     { x: 71, y: 45 },
   ],
+  // A sprite is about 5% of the scene wide, so neighbours sit at least 7% apart or a row lower.
   hearth: [
-    { x: 75, y: 50 },
-    { x: 79, y: 58 },
-    { x: 87, y: 60 },
-    { x: 94, y: 66 },
+    { x: 70, y: 52 },
+    { x: 78, y: 60 },
+    { x: 87, y: 62 },
+    { x: 94, y: 68 },
   ],
   benches: [
     { x: 20, y: 64 },

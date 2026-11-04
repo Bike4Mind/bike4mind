@@ -22,6 +22,12 @@ const SERIF = 'Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", 
 
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 
+interface FinaleChip {
+  key: string;
+  label: string;
+  alert?: boolean;
+}
+
 function StatChip({ label, alert = false, testId }: { label: string; alert?: boolean; testId?: string }) {
   return (
     <Box
@@ -60,13 +66,19 @@ export function FinaleBanner({
   const succeeded = questSucceeded(stats);
   const title = succeeded ? 'Quest complete' : 'Quest ended';
   const rule = succeeded ? GOLD : DUSK;
-  const chips = [
-    { key: 'agents', label: plural(stats.agents, 'agent', 'agents') },
+  const timing: FinaleChip[] = [
     { key: 'time', label: formatWallTime(stats.wallMs) },
     { key: 'cost', label: stats.cost },
-    { key: 'done', label: `${stats.done} done` },
-    { key: 'failed', label: `${stats.failed} failed`, alert: stats.failed > 0 },
   ];
+  // A clean run says so once; the per-outcome counts only earn their chips when they differ.
+  const chips: FinaleChip[] = succeeded
+    ? [{ key: 'agents', label: stats.agents === 1 ? '1 agent done' : `All ${stats.agents} agents done` }, ...timing]
+    : [
+        { key: 'agents', label: plural(stats.agents, 'agent', 'agents') },
+        ...timing,
+        { key: 'done', label: `${stats.done} done` },
+        ...(stats.failed > 0 ? [{ key: 'failed', label: `${stats.failed} failed`, alert: true }] : []),
+      ];
   return (
     <Box
       role="status"

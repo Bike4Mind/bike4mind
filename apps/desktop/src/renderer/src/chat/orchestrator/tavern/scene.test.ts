@@ -45,6 +45,15 @@ describe('zoneFor / poseFor', () => {
 });
 
 describe('TAVERN_SLOTS', () => {
+  it('keeps fireside agents from standing on each other', () => {
+    const hearth = TAVERN_SLOTS.hearth;
+    for (const [i, a] of hearth.entries()) {
+      for (const b of hearth.slice(i + 1)) {
+        expect(Math.abs(a.x - b.x) >= 7 || Math.abs(a.y - b.y) >= 12).toBe(true);
+      }
+    }
+  });
+
   it('has 6 workbench, 4 bar, 4 hearth and 6 bench slots inside the scene', () => {
     expect(TAVERN_SLOTS.workbench).toHaveLength(6);
     expect(TAVERN_SLOTS.bar).toHaveLength(4);
