@@ -420,6 +420,23 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(expect.objectContaining({ visitId }));
   });
 
+  it("carries a new account's verified hop, read from its own cookies, to the signup funnel", async () => {
+    const hopId = 'c'.repeat(32);
+    const verifiedTouch = { srcProductId: 'source-product', hopId, redeemedAt: new Date() };
+    const acquisition = { verifiedTouch, signupMethod: 'github', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: `${touchCookie}; b4m_vid=${'d'.repeat(32)}; b4m_hop=${hopId}`,
+    });
+
+    // The provider returns the browser by a top-level GET, so the Lax hop cookie is on this request.
+    expect(mockRecordSignupAcquisition.mock.calls[0][0].req.headers.cookie).toContain(`b4m_hop=${hopId}`);
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new', acquisition }) })
+    );
+  });
+
   it("persists a new account's acquisition with the provider as the signup method", async () => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
 

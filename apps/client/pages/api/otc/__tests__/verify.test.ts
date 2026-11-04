@@ -734,6 +734,22 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
   });
 
+  it("carries a verified hop, read from the verify request's cookies, to signup_completed", async () => {
+    const hopId = 'c'.repeat(32);
+    const verifiedTouch = { srcProductId: 'source-product', hopId, redeemedAt: new Date() };
+    const acquisition = { verifiedTouch, signupMethod: 'otc', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    // Verify is a same-origin request, so the browser's hop and visit cookies arrive on it.
+    (req as any).headers.cookie = `b4m_vid=${'d'.repeat(32)}; b4m_hop=${hopId}`;
+
+    await handler(req, res);
+
+    expect(mockRecordSignupAcquisition.mock.calls[0][0].req.headers.cookie).toContain(`b4m_hop=${hopId}`);
+    const signup = mockEmitFunnelEvent.mock.calls.find(([c]) => c.event === 'signup_completed')?.[0];
+    expect(signup.user).toEqual(expect.objectContaining({ id: 'user-1', acquisition }));
+  });
+
   it('ties every signup stage to the visit the code was entered in', async () => {
     const visitId = 'c'.repeat(32);
     const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
