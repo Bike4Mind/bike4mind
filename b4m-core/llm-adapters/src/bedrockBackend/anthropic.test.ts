@@ -14,8 +14,9 @@
  * still receive the markers (otherwise we silently regress caching).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ChatModels, type ICacheStrategy } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import AnthropicBedrockBackend from './anthropic';
 import type { IMessage } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '../backend';
@@ -405,6 +406,20 @@ describe('AnthropicBedrockBackend safety-classifier refusal fallback', () => {
     expect(() => backend.translateChunk(ChatModels.CLAUDE_FABLE_5_1_BEDROCK, refusalResponse)).toThrow(
       /safety classifier refusal/
     );
+  });
+
+  it('warns before throwing the refusal, naming the model', () => {
+    const warn = vi.spyOn(Logger.globalInstance, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(() => backend.translateStreamChunk(ChatModels.CLAUDE_FABLE_5_BEDROCK, refusalDelta)).toThrow(
+        /safety classifier refusal/
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Safety classifier refusal'), {
+        model: ChatModels.CLAUDE_FABLE_5_BEDROCK,
+      });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('does not throw for a refusal from a model outside the fallback set', () => {
