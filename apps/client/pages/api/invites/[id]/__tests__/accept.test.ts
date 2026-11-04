@@ -211,6 +211,19 @@ describe('POST /api/invites/[id]/accept - signup grant unlock', () => {
     expect(payOrgInviteBonus).not.toHaveBeenCalled();
   });
 
+  it('does not release the grant or pay a bonus when invite acceptance fails', async () => {
+    const acceptanceError = new Error('invite acceptance failed');
+    acceptInvite.mockRejectedValueOnce(acceptanceError);
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv1' } });
+    Object.assign(req, { user: { id: 'u1', email: 'me@x.com' }, ability: {}, logger: { error: vi.fn() } });
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toBe(acceptanceError);
+
+    expect(unlockFromOrgInvite).not.toHaveBeenCalled();
+    expect(payOrgInviteBonus).not.toHaveBeenCalled();
+    expect(res._isEndCalled()).toBe(false);
+  });
+
   it('still pays the bonus when the release fails, and accepts and logs when the bonus fails', async () => {
     unlockFromOrgInvite.mockRejectedValueOnce(new Error('ledger down'));
     payOrgInviteBonus.mockRejectedValueOnce(new Error('ledger down'));

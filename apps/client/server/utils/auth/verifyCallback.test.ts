@@ -1820,9 +1820,12 @@ describe('OAuth signup with an invite code carried through state', () => {
     mockCreate.mockRejectedValue(new Error('db down'));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await runSelfServe();
+    const { user } = await runSelfServe();
 
     const [claimedId, claimedAt] = mockClaimInvite.mock.calls[0];
+    expect(user).toBeUndefined();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    expect(mockReleasePending).not.toHaveBeenCalled();
     expect(mockReleaseInviteClaim).toHaveBeenCalledWith(claimedId, claimedAt, expect.any(String));
     expect(mockUpdateInvite).not.toHaveBeenCalled();
   });

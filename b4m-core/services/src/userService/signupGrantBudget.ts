@@ -35,6 +35,7 @@ const scopeDraws = new WeakMap<ScopeDraw[], Map<string, ScopeDraw>>();
 const ambientTransaction = () => callerTransactionSession()?.transaction;
 // The driver's public isCommitted is also true for an aborted transaction, so read its internal state.
 // A transaction still open when the scope returns is the caller's to settle.
+// apps/client/server/credits/signupGrantBudget.e2e.test.ts pins aborted and reused attempts against the driver.
 const attemptAborted = (txn?: mongoose.mongo.Transaction) =>
   (txn as { state?: string } | undefined)?.state === 'TRANSACTION_ABORTED';
 

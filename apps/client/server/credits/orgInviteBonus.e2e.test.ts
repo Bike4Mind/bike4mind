@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { InviteType } from '@bike4mind/common';
+import { userService } from '@bike4mind/services';
 import { AdminSettings, CreditTransaction, Invite, mongoose, Organization, User } from '@bike4mind/database';
 import {
   createMongoReplSet,
@@ -7,6 +8,11 @@ import {
   settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { retryOrgInviteBonus, payOrgInviteBonus, recordOrgSignupInvite } from './orgInviteBonus';
+
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return { ...actual, userService: { ...actual.userService } };
+});
 
 // Without the signup protection wiring the budget is unmetered; signupGrantBudget covers the pools.
 vi.mock('@server/auth/signupProtection', () => ({ signupProtection: undefined }));
@@ -29,6 +35,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await mongoose.disconnect();
   await server?.stop();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 beforeEach(async () => {
@@ -195,7 +205,7 @@ describe('payOrgInviteBonus', () => {
     expect(organization?.signupInviteBonusCount).toBeUndefined();
   });
 
-  it('pays no more bonuses than the organization has seats and hands back an unpaid hold', async () => {
+  it('caps bonuses at the organization seats without reserving a seat for an ineligible account', async () => {
     await createOrganization(true);
     await Organization.collection.updateOne(
       { _id: new mongoose.Types.ObjectId(organizationId) },
@@ -210,6 +220,29 @@ describe('payOrgInviteBonus', () => {
     expect(await payOrgInviteBonus(second.id, invite.id)).toBe(0);
     const org = await Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(organizationId) });
     expect(org?.signupInviteBonusCount).toBe(1);
+  });
+
+  it.each(['exhausted', 'failed'] as const)('hands a reserved seat back when the bonus payout is %s', async outcome => {
+    await createOrganization(true);
+    const organizationFilter = { _id: new mongoose.Types.ObjectId(organizationId) };
+    await Organization.collection.updateOne(organizationFilter, { $set: { seats: 1 } });
+    const invite = await createInvite();
+    const user = await createUser('unpaid', released);
+    const payBonus = vi.spyOn(userService, 'payInviteBonus');
+    if (outcome === 'exhausted') {
+      payBonus.mockResolvedValueOnce({ creditsGranted: 0, budgetExhausted: true });
+      expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    } else {
+      payBonus.mockRejectedValueOnce(new Error('payout failed'));
+      await expect(payOrgInviteBonus(user.id, invite.id)).rejects.toThrow('payout failed');
+    }
+
+    expect(payBonus).toHaveBeenCalledOnce();
+    expect((await Organization.collection.findOne(organizationFilter))?.signupInviteBonusCount).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+    const nextUser = await createUser('next', released);
+    expect(await payOrgInviteBonus(nextUser.id, invite.id)).toBe(2000);
+    expect((await Organization.collection.findOne(organizationFilter))?.signupInviteBonusCount).toBe(1);
   });
 
   it('retries a bonus left unpaid at acceptance only while the organization still pays', async () => {

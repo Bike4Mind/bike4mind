@@ -106,6 +106,17 @@ describe('PassportOAuthStateStore', () => {
       expect(readOAuthInviteCode(callback)).toBeNull();
     });
 
+    it('clears an earlier code when valid state without a code verifies on the same request', async () => {
+      const withCode = await callStore(store, nonceStoreReq({ query: { inviteCode: 'REF-123' } }));
+      const withoutCode = await callStore(store, nonceStoreReq({ query: {} }));
+      const callback = { ...nonceVerifyReq };
+
+      expect((await callVerify(store, callback, withCode.token!)).ok).toBe(true);
+      expect(readOAuthInviteCode(callback)).toBe('REF-123');
+      expect((await callVerify(store, callback, withoutCode.token!)).ok).toBe(true);
+      expect(readOAuthInviteCode(callback)).toBeNull();
+    });
+
     it.each([[['A', 'B']], [42], [''], ['   '], ['x'.repeat(65)]])('drops a non-usable inviteCode %j', async raw => {
       const { token } = await callStore(store, nonceStoreReq({ query: { inviteCode: raw } }));
       expect(jwt.decode(token!) as Record<string, unknown>).not.toHaveProperty('inviteCode');
