@@ -32,8 +32,13 @@ const statusOf = async (id: string) => (await BillingMismatchModel.findOne({ str
 
 describe('BillingMismatchRepository', () => {
   it('keeps one row per Stripe subscription and the first-seen time while it stays open', async () => {
-    await repo.upsertOpen(finding('sub_1'), T0);
-    await repo.upsertOpen(finding('sub_1', { fields: [{ field: 'status', mongo: 'active', stripe: 'canceled' }] }), T1);
+    expect(await repo.upsertOpen(finding('sub_1'), T0)).toBe(true);
+    expect(
+      await repo.upsertOpen(
+        finding('sub_1', { fields: [{ field: 'status', mongo: 'active', stripe: 'canceled' }] }),
+        T1
+      )
+    ).toBe(false);
 
     expect(await BillingMismatchModel.countDocuments({ stripeSubscriptionId: 'sub_1' })).toBe(1);
     const row = await statusOf('sub_1');
@@ -55,7 +60,11 @@ describe('BillingMismatchRepository', () => {
     });
 
     expect(resolved).toBe(1);
-    expect(await statusOf('sub_covered')).toMatchObject({ status: 'resolved', resolvedAt: T1, resolvedBy: 'reconciliation' });
+    expect(await statusOf('sub_covered')).toMatchObject({
+      status: 'resolved',
+      resolvedAt: T1,
+      resolvedBy: 'reconciliation',
+    });
     expect((await statusOf('sub_seen')).status).toBe('open');
     expect((await statusOf('sub_uncovered')).status).toBe('open');
   });
@@ -74,7 +83,12 @@ describe('BillingMismatchRepository', () => {
     await repo.resolveMissing({ coveredIds: ['sub_1'], seenIds: [], completeListing: true, now: T0 });
     await repo.upsertOpen(finding('sub_1'), T1);
 
-    expect(await statusOf('sub_1')).toMatchObject({ status: 'open', firstSeenAt: T1, resolvedAt: null, resolvedBy: null });
+    expect(await statusOf('sub_1')).toMatchObject({
+      status: 'open',
+      firstSeenAt: T1,
+      resolvedAt: null,
+      resolvedBy: null,
+    });
   });
 
   it('resolves by row id for Sync and reads the open finding back', async () => {

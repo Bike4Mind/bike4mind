@@ -87,19 +87,23 @@ export class BillingMismatchRepository extends BaseRepository<IBillingMismatchDo
     super(mismatchModel);
   }
 
-  /** Records a finding as open. A finding already open keeps its `firstSeenAt`; a resolved one reopens fresh. */
-  async upsertOpen(finding: BillingMismatchFinding, now: Date): Promise<void> {
+  /**
+   * Records a finding as open. A finding already open keeps its `firstSeenAt`; a resolved one reopens
+   * fresh. Returns true when this call opened it (new or reopened), false when it was already open.
+   */
+  async upsertOpen(finding: BillingMismatchFinding, now: Date): Promise<boolean> {
     const seen = { ...finding, status: 'open' as const, lastSeenAt: now, resolvedAt: null, resolvedBy: null };
     const updated = await this.mismatchModel.updateOne(
       { stripeSubscriptionId: finding.stripeSubscriptionId, status: 'open' },
       { $set: seen }
     );
-    if (updated.matchedCount > 0) return;
+    if (updated.matchedCount > 0) return false;
     await this.mismatchModel.updateOne(
       { stripeSubscriptionId: finding.stripeSubscriptionId },
       { $set: { ...seen, firstSeenAt: now } },
       { upsert: true }
     );
+    return true;
   }
 
   /**
