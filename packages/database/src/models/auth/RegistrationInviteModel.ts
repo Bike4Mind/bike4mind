@@ -187,6 +187,8 @@ const RegistrationInviteSchema = new mongoose.Schema<IRegInviteDocument>(
 // No index on email field - DocumentDB doesn't properly support sparse unique indexes.
 // The 'code' field ensures uniqueness for each invite.
 
+RegistrationInviteSchema.index({ grantPackageId: 1 });
+
 export const RegistrationInvite =
   (mongoose.models.RegistrationInvite as IRegistrationInviteModel) ??
   mongoose.model<IRegInviteDocument, IRegistrationInviteModel>('RegistrationInvite', RegistrationInviteSchema);

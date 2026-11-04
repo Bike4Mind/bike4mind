@@ -111,6 +111,7 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
 PartnerSignupRuleSchema.index({ enabled: 1 });
 // Backs the org-delete cleanup sweep (updateMany by organizationId) and backfill lookups.
 PartnerSignupRuleSchema.index({ organizationId: 1 });
+PartnerSignupRuleSchema.index({ grantPackageId: 1 });
 
 export const PartnerSignupRule =
   (mongoose.models.PartnerSignupRule as unknown as IPartnerSignupRuleModel) ??
