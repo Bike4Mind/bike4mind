@@ -177,6 +177,14 @@ describe('unblockSignupGrant', () => {
     expect(audit).toHaveBeenCalledTimes(1);
   });
 
+  it('audits inside the change and fails without resuming rewards when the audit write fails', async () => {
+    const { heldRewards, adapters } = blockAdapters({ id: 'u1', signupGrant: grant({ blocked: { at: new Date() } }) });
+    const audit = vi.fn().mockRejectedValue(new Error('audit down'));
+
+    await expect(unblockSignupGrant('u1', { ...adapters, audit })).rejects.toThrow('audit down');
+    expect(heldRewards.resumeForUser).not.toHaveBeenCalled();
+  });
+
   it('is a no-op with a reason for an account that is not blocked, but still resumes stranded rewards', async () => {
     const { users, heldRewards, adapters } = blockAdapters({ id: 'u1', signupGrant: grant() });
 
