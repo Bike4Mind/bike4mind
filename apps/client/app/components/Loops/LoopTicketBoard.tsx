@@ -20,7 +20,15 @@ import {
   Typography,
   type ColorPaletteProp,
 } from '@mui/joy';
-import { desktopStagesOf, type ILoop, type WorkItemStatus } from '@bike4mind/common';
+import {
+  DEFAULT_WORK_ITEM_PRIORITY,
+  desktopStagesOf,
+  WORK_ITEM_PRIORITIES,
+  workItemPriorityRank,
+  type ILoop,
+  type WorkItemPriority,
+  type WorkItemStatus,
+} from '@bike4mind/common';
 import {
   useCreateLoopTicket,
   useMoveLoopTicket,
@@ -46,6 +54,16 @@ const STATUS_LABEL: Record<WorkItemStatus, string> = {
   closed: 'Done',
 };
 
+const PRIORITY_CHIP: Record<WorkItemPriority, { color: ColorPaletteProp; variant: 'soft' | 'outlined' }> = {
+  p0: { color: 'danger', variant: 'soft' },
+  p1: { color: 'warning', variant: 'soft' },
+  p2: { color: 'neutral', variant: 'soft' },
+  p3: { color: 'neutral', variant: 'outlined' },
+};
+
+const byPriorityThenAge = (a: ILoopTicket, b: ILoopTicket) =>
+  workItemPriorityRank(a.priority) - workItemPriorityRank(b.priority) || a.createdAt.localeCompare(b.createdAt);
+
 function TicketCard({
   ticket,
   stages,
@@ -67,9 +85,17 @@ function TicketCard({
     <Card size="sm" variant="outlined" data-testid={`loop-ticket-${ticket.id}`}>
       <Typography level="title-sm">{ticket.title}</Typography>
       <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+        <Chip size="sm" {...PRIORITY_CHIP[ticket.priority]} data-testid="loop-ticket-priority-chip">
+          {ticket.priority.toUpperCase()}
+        </Chip>
         <Chip size="sm" variant="soft" color={STATUS_COLOR[ticket.status]}>
           {STATUS_LABEL[ticket.status]}
         </Chip>
+        {ticket.status === 'blocked' && ticket.blockedOn === 'dependencies' && (
+          <Chip size="sm" variant="outlined" color="neutral" data-testid="loop-ticket-waiting-deps">
+            Waiting on dependencies
+          </Chip>
+        )}
         {desktop && ticket.status === 'open' && (
           <Chip
             size="sm"
@@ -102,32 +128,50 @@ function TicketCard({
           </Link>
         )}
       </Stack>
-      {ticket.status === 'blocked' && ticket.statusReason && (
+      {ticket.status === 'blocked' && !ticket.blockedOn && ticket.statusReason && (
         <Typography level="body-xs" color="danger" component="div">
           <LoopMarkdown level="body-xs" testId="loop-ticket-blocked-reason">
             {ticket.statusReason}
           </LoopMarkdown>
         </Typography>
       )}
-      <Select
-        size="sm"
-        value={ticket.stage ?? null}
-        disabled={moveTicket.isPending || ticket.status === 'in_progress'}
-        onChange={(_, stage) => stage && stage !== ticket.stage && moveTicket.mutate({ id: ticket.id, stage })}
-        data-testid="loop-ticket-stage-select"
-      >
-        {/* A stage removed from the loop still labels its tickets; the API groups them under the first stage. */}
-        {ticket.stage && !stages.includes(ticket.stage) && (
-          <Option value={ticket.stage} disabled>
-            {ticket.stage} (removed)
-          </Option>
-        )}
-        {stages.map(stage => (
-          <Option key={stage} value={stage}>
-            {stage}
-          </Option>
-        ))}
-      </Select>
+      <Stack direction="row" gap={1}>
+        <Select
+          size="sm"
+          value={ticket.stage ?? null}
+          disabled={moveTicket.isPending || ticket.status === 'in_progress'}
+          onChange={(_, stage) => stage && stage !== ticket.stage && moveTicket.mutate({ id: ticket.id, stage })}
+          sx={{ flex: 1 }}
+          data-testid="loop-ticket-stage-select"
+        >
+          {/* A stage removed from the loop still labels its tickets; the API groups them under the first stage. */}
+          {ticket.stage && !stages.includes(ticket.stage) && (
+            <Option value={ticket.stage} disabled>
+              {ticket.stage} (removed)
+            </Option>
+          )}
+          {stages.map(stage => (
+            <Option key={stage} value={stage}>
+              {stage}
+            </Option>
+          ))}
+        </Select>
+        <Select
+          size="sm"
+          value={ticket.priority}
+          disabled={moveTicket.isPending || ticket.status === 'in_progress'}
+          onChange={(_, priority) =>
+            priority && priority !== ticket.priority && moveTicket.mutate({ id: ticket.id, priority })
+          }
+          data-testid="loop-ticket-priority-select"
+        >
+          {WORK_ITEM_PRIORITIES.map(priority => (
+            <Option key={priority} value={priority}>
+              {priority.toUpperCase()}
+            </Option>
+          ))}
+        </Select>
+      </Stack>
     </Card>
   );
 }
@@ -137,6 +181,7 @@ function AddTicketModal({ loop, onClose }: { loop: ILoop; onClose: () => void })
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [stage, setStage] = useState(loop.stages[0]);
+  const [priority, setPriority] = useState<WorkItemPriority>(DEFAULT_WORK_ITEM_PRIORITY);
   const [error, setError] = useState<string>();
 
   const submit = () => {
@@ -147,7 +192,13 @@ function AddTicketModal({ loop, onClose }: { loop: ILoop; onClose: () => void })
     }
     setError(undefined);
     createTicket.mutate(
-      { loopId: loop.id, title: trimmed, ...(description.trim() && { description: description.trim() }), stage },
+      {
+        loopId: loop.id,
+        title: trimmed,
+        ...(description.trim() && { description: description.trim() }),
+        stage,
+        priority,
+      },
       { onSuccess: onClose }
     );
   };
@@ -181,6 +232,20 @@ function AddTicketModal({ loop, onClose }: { loop: ILoop; onClose: () => void })
               {loop.stages.map(s => (
                 <Option key={s} value={s}>
                   {s}
+                </Option>
+              ))}
+            </Select>
+          </FormControl>
+          <FormControl>
+            <FormLabel>Priority</FormLabel>
+            <Select
+              value={priority}
+              onChange={(_, p) => p && setPriority(p)}
+              data-testid="loop-ticket-priority-select-new"
+            >
+              {WORK_ITEM_PRIORITIES.map(p => (
+                <Option key={p} value={p}>
+                  {p.toUpperCase()}
                 </Option>
               ))}
             </Select>
@@ -231,11 +296,16 @@ export default function LoopTicketBoard({
   const [adding, setAdding] = useState(false);
   const desktopStages = new Set(desktopStagesOf(loop));
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
-  // Same order the scheduler picks in (WorkItemModel.listReadyForLoop): furthest stage first, then oldest.
+  // Same order the scheduler picks in (WorkItemModel.listReadyForLoop): priority, furthest stage, then oldest.
   const stageIndex = (t: ILoopTicket) => loop.stages.indexOf(t.stage ?? '');
   const ready = all
     .filter(t => t.ready)
-    .sort((a, b) => stageIndex(b) - stageIndex(a) || a.createdAt.localeCompare(b.createdAt));
+    .sort(
+      (a, b) =>
+        workItemPriorityRank(a.priority) - workItemPriorityRank(b.priority) ||
+        stageIndex(b) - stageIndex(a) ||
+        a.createdAt.localeCompare(b.createdAt)
+    );
 
   return (
     <Stack gap={2}>
@@ -272,7 +342,10 @@ export default function LoopTicketBoard({
                 </Chip>
               )}
             </Stack>
-            {group.tickets.map(ticket => (
+            {[
+              ...group.tickets.filter(t => t.status !== 'closed').sort(byPriorityThenAge),
+              ...group.tickets.filter(t => t.status === 'closed'),
+            ].map(ticket => (
               <TicketCard
                 key={ticket.id}
                 ticket={ticket}
