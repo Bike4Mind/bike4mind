@@ -1,6 +1,6 @@
 ---
 title: Analytics
-description: Track active users, stickiness and real versus suspected signups over time in the Bike4Mind admin panel
+description: Track active users, stickiness, real versus suspected signups, AI usage and the heaviest accounts over time in the Bike4Mind admin panel
 sidebar_position: 6
 tags: [admin, analytics]
 ---
@@ -50,6 +50,26 @@ Switch to **By surface** to see AI requests per day stacked by surface as bars. 
 Stacked bars of likely legit, suspected and not-yet-classified signups. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
 
 Click a bar to open the Users list filtered to the accounts created in that bar's window. Below the chart, the signals that marked accounts in the range are listed with their counts.
+
+## Usage
+
+Three cards show what people use. Rankings and totals cover the complete days in the range, so they add up to the nightly rollup; the daily charts also show today so far, drawn faded.
+
+- **Usage by feature**: AI requests per day, stacked by feature. The six busiest features in the range get their own color, and everything else is grouped as **Other**.
+- **Requests by model**: the ten models with the most requests, with each model's share of all requests. **Open in Models** goes to **AI > Models** for latency, tokens and errors.
+- **Credits consumed**: credits charged per day. **Open in Credits** goes to the Credits page for spend by account and model. Analytics never shows a currency amount.
+
+## Top organizations and users
+
+Two tables list the 10 heaviest users and the 10 heaviest organizations over the complete days of the range. Rows are ranked by active days, then by AI requests. Each row shows the plan, active days, AI requests, credits consumed and its share of all requests. Click a column header to sort, or a row to open the user's profile or the organization.
+
+Suspected signups and suspended users are left out of both tables, and their usage is not added to any organization. The line under each table says how many accounts were left out.
+
+An organization's numbers add up the usage of its members on the days they worked in that organization.
+
+## Export
+
+**Export CSV** downloads a zip file with one CSV per section for the range on screen: active users, requests by surface, signups, signup signals, usage by feature, requests by model, credits consumed, top users and top organizations. Days are UTC `YYYY-MM-DD`, units are in the column headers, and a day with no rollup is an empty cell rather than 0. The files open directly in Excel, Numbers or Google Sheets.
 
 ## Tables and accessibility
 

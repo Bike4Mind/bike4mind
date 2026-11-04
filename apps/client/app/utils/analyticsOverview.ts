@@ -53,6 +53,21 @@ export type ActiveUsersDay = {
 
 export type RequestsBySourceDay = { day: string; partial: boolean; counts: Record<string, number> | null };
 
+/** Chart A's series: the top features by requests over the range, then everything else as one series. */
+export const ANALYTICS_TOP_FEATURES = 6;
+export const ANALYTICS_TOP_MODELS = 10;
+export const ANALYTICS_OTHER_FEATURE = 'other';
+
+export type UsageDay = {
+  day: string;
+  partial: boolean;
+  /** Requests per series in `usage.features`; null when the rollup row is missing. */
+  byFeature: Record<string, number> | null;
+  credits: number | null;
+};
+
+export type ModelUsage = { model: string; requests: number; /** Percent of all requests, 0 to 100. */ share: number };
+
 export type SignupBucket = {
   /** First UTC day of the bucket, clipped to the range. */
   start: string;
@@ -92,11 +107,43 @@ export type AnalyticsOverview = {
     newSignups: AnalyticsStat & { suspected: number | null };
   };
   activeUsers: { days: ActiveUsersDay[]; bySource: RequestsBySourceDay[]; sources: string[] };
+  /** Rankings and totals cover the complete days present in the rollup, so they match analytics_daily. */
+  usage: {
+    /** Top features first, ANALYTICS_OTHER_FEATURE last when anything falls outside them. */
+    features: string[];
+    days: UsageDay[];
+    models: ModelUsage[];
+    /** Requests on models outside the top ANALYTICS_TOP_MODELS. */
+    otherModelRequests: number;
+    totals: { requests: number; credits: number };
+  };
   signups: {
     buckets: SignupBucket[];
     totals: { legit: number; suspected: number; unclassified: number };
     bySignal: { signal: SignupSignal | string; count: number }[];
   };
+};
+
+export type TopAccountRow = {
+  id: string;
+  name: string;
+  /** User level or org subscription; null when unknown. */
+  plan: string | null;
+  activeDays: number;
+  requests: number;
+  credits: number;
+  /** Percent of the included accounts' requests in the range, 0 to 100. */
+  share: number;
+};
+
+/** GET /api/admin/analytics/top-accounts: the heaviest accounts over the range's complete rollup days. */
+export type AnalyticsTopAccounts = {
+  /** Inclusive UTC days the tables cover; null when the range has no complete day yet. */
+  covered: { from: string; to: string } | null;
+  users: TopAccountRow[];
+  orgs: TopAccountRow[];
+  /** Users left out of both tables (and of the org sums) over the range. */
+  excluded: { suspected: number; suspended: number };
 };
 
 export const ANALYTICS_STALE_AFTER_MS = 30 * 60 * 60 * 1000;

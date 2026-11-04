@@ -56,3 +56,12 @@ export function sparklineValues(values: readonly (number | null)[], points = 28)
     return chunk.reduce((total, value) => total + value, 0) / chunk.length;
   });
 }
+
+/** "12.3%" for a 0-100 share; under 0.1% reads "<0.1%" rather than a misleading zero. */
+export const formatShare = (share: number) => (share > 0 && share < 0.1 ? '<0.1%' : `${share.toFixed(1)}%`);
+
+/** A UsageEvent feature for display: `image_generation` -> "Image generation". */
+export const featureLabel = (feature: string) => {
+  const words = feature.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
