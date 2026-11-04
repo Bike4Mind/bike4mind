@@ -100,12 +100,8 @@ const run = (req: ReturnType<typeof makeReq>, precheck: (s: unknown) => void = (
     action: 'billing.subscription.cancel_scheduled',
     summary: 'scheduled cancellation at period end',
     precheck,
-    mutate: (stripe, { idempotencyKey, subscription }) =>
-      stripe.subscriptions.update(
-        subscription.subscriptionId,
-        { cancel_at_period_end: true },
-        { idempotencyKey }
-      ) as never,
+    mutate: (stripe, { idempotencyKey, stripeSubscriptionId }) =>
+      stripe.subscriptions.update(stripeSubscriptionId, { cancel_at_period_end: true }, { idempotencyKey }) as never,
     changes: () => [{ field: 'cancelAtPeriodEnd', before: false, after: true }],
   });
 

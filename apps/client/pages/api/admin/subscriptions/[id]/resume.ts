@@ -45,9 +45,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
             throw new ConflictError('This subscription has already ended.');
           }
         },
-        mutate: (stripe, { idempotencyKey, subscription }) =>
+        mutate: (stripe, { idempotencyKey, subscription, stripeSubscriptionId }) =>
           stripe.subscriptions.update(
-            subscription.subscriptionId,
+            stripeSubscriptionId,
             // An empty cancel_at unsets a custom cancel date; only send it when one is set.
             { cancel_at_period_end: false, ...(subscription.cancelAt ? { cancel_at: '' } : {}) },
             { idempotencyKey }

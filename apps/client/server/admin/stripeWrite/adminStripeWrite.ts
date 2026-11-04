@@ -45,10 +45,10 @@ type AdminStripeWriteArgs = {
   summary: string;
   /** Throws a 409 when the freshly read row cannot take this write. Runs after the replay check. */
   precheck: (subscription: ISubscription) => void;
-  /** Performs the Stripe mutation. Update `subscription.subscriptionId` (the Stripe id), and pass `idempotencyKey` through so Stripe dedupes a repeated call too. */
+  /** Performs the Stripe mutation. Update `stripeSubscriptionId`, and pass `idempotencyKey` through so Stripe dedupes a repeated call too. */
   mutate: (
     stripe: Stripe,
-    options: { idempotencyKey: string; subscription: ISubscription }
+    options: { idempotencyKey: string; subscription: ISubscription; stripeSubscriptionId: string }
   ) => Promise<Stripe.Response<Stripe.Subscription>>;
   changes: (before: ISubscription, after: Stripe.Subscription) => AuditChange[];
 };
@@ -159,8 +159,9 @@ export const runAdminStripeWrite = async ({
     if (iso(subscription.lastSyncedAt) !== expectedLastSyncedAt) throw new ConflictError(STRIPE_WRITE_CHANGED_MESSAGE);
     precheck(subscription);
 
-    const stripe = getStripe();
-    const updated = await mutate(stripe, { idempotencyKey, subscription });
+    const stripeSubscriptionId = subscription.subscriptionId;
+    if (!stripeSubscriptionId) throw new ConflictError('This subscription has no Stripe id.');
+    const updated = await mutate(getStripe(), { idempotencyKey, subscription, stripeSubscriptionId });
     const syncedAt = new Date();
 
     await withTransaction(async () => {

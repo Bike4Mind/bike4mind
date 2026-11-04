@@ -42,8 +42,8 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           assertLiveStripeRow(subscription);
           if (isScheduledToCancel(subscription)) throw new ConflictError('A cancellation is already scheduled.');
         },
-        mutate: (stripe, { idempotencyKey, subscription }) =>
-          stripe.subscriptions.update(subscription.subscriptionId, { cancel_at_period_end: true }, { idempotencyKey }),
+        mutate: (stripe, { idempotencyKey, subscription, stripeSubscriptionId }) =>
+          stripe.subscriptions.update(stripeSubscriptionId, { cancel_at_period_end: true }, { idempotencyKey }),
         changes: (before, after) => [
           { field: 'cancelAtPeriodEnd', before: Boolean(before.cancelAtPeriodEnd), after: after.cancel_at_period_end },
           {
