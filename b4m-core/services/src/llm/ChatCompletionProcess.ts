@@ -6055,15 +6055,15 @@ export class ChatCompletionProcess {
             lastError = attemptError as Error;
             // Expected provider outcomes are warned by the backend or the attempt summary below.
             // Other recoverable interruptions keep their stack at warn; unexpected failures page.
-            if (
-              isExpectedCompletionError(lastError) ||
+            if (isExpectedCompletionError(lastError)) {
+              // Already warned by the backend or the attempt summary below.
+            } else if (
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
               lastError instanceof ResponsesStreamTruncatedError ||
               isOutputBudgetExhaustedError(lastError)
             ) {
-              // Avoid duplicating the backend or summary warning for handled provider outcomes.
-              if (!isExpectedCompletionError(lastError)) logger.warn(lastError);
+              logger.warn(lastError);
             } else if (isProviderSpendLimitError(lastError)) {
               // Operator action needed (raise the provider limit): one error line per backend per
               // request, worded so the alert says so, instead of the raw dump plus a rethrow.
@@ -6112,10 +6112,15 @@ export class ChatCompletionProcess {
               isSafetyRefusalError(lastError) || isLlmTimeoutError(lastError)
                 ? logger.debug.bind(logger)
                 : logger.warn.bind(logger);
-            logAttempt(`LLM completion failed with ${currentModel.id} (attempt ${fallbackAttempt}):`, {
-              error: lastError.message,
-              shouldRetry: isRetryableError,
-            });
+            logAttempt(
+              `\u274C [${Date.now() - processStartTime}ms] LLM completion failed with ${
+                currentModel.id
+              } (attempt ${fallbackAttempt}):`,
+              {
+                error: lastError.message,
+                shouldRetry: isRetryableError,
+              }
+            );
 
             // Tool pairing recovery: if this is a tool_use/tool_result pairing error,
             // strip all tool blocks from history and retry with the same model
@@ -7835,12 +7840,7 @@ export class ChatCompletionProcess {
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isSlowModelTimeoutError(err)) {
-        // WARN, not error: an upstream request/idle timeout is expected and
-        // recoverable (the user gets the retry message below and the backend
-        // already emitted trend metrics). Logging at error severity re-trips the
-        // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
-        // was meant to avoid.
-        // Typed timeouts were already warned by the backend; preserve legacy timeout warnings.
+        // Never error (it trips the CloudWatch alert); typed timeouts were already warned by the backend.
         const logTimeout = isLlmTimeoutError(err) ? logger.debug.bind(logger) : logger.warn.bind(logger);
         logTimeout(`[Timeout] Quest ${questId}: ${err.message}`);
         setErrorReply(SLOW_MODEL_ERROR_REPLY);
