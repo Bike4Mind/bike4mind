@@ -5,6 +5,7 @@ import type { ILogger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 
 interface IUserRepository {
   findById(id: string): Promise<IUserDocument | null>;
@@ -135,6 +136,11 @@ export async function checkFreeTierDailySpendCap({
 
       const todaySpend = await usageEventRepository.findDailySpendByUser(user.id, startOfDay);
       if (todaySpend >= cap) {
+        await recordUserLimitEvent({
+          userId: user.id,
+          kind: 'free_tier_daily_cap',
+          details: { capCredits: cap, spentCredits: Math.ceil(todaySpend) },
+        });
         throw capReached('Daily free-tier credit limit reached. Try again tomorrow.', {
           spentToday: todaySpend,
           dailyCap: cap,
@@ -145,6 +151,11 @@ export async function checkFreeTierDailySpendCap({
     if (systemCapUsd > 0) {
       const systemCostUsd = await usageEventRepository.systemCostUsdByUserSince(user.id, startOfDay);
       if (systemCostUsd >= systemCapUsd) {
+        await recordUserLimitEvent({
+          userId: user.id,
+          kind: 'free_tier_daily_cap',
+          details: { capUsd: systemCapUsd, spentUsd: Number(systemCostUsd.toFixed(4)) },
+        });
         throw capReached('Daily free-tier usage limit reached. Try again tomorrow.', {
           systemCostUsdToday: systemCostUsd,
           dailySystemCostCapUsd: systemCapUsd,

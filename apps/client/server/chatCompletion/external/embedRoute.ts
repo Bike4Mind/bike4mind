@@ -75,6 +75,7 @@ import { Config } from '@bike4mind/server-utils/utils/config';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
 import { getUserEntitlements } from '@server/entitlements';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 
 /**
  * Public embed chat endpoint (`POST /api/embed/chat`), served by the always-on
@@ -547,6 +548,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       try {
         if (!ctx.endUserId) assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
       } catch (capErr) {
+        await recordUserLimitEvent({
+          userId: ctx.userId,
+          kind: 'api_key_spend_cap',
+          details: { keyId: ctx.keyId, spendCap: ctx.spendCap ?? null, currentSpend: ctx.currentSpend ?? null },
+        });
         const status = (capErr as { statusCode?: number }).statusCode ?? 422;
         return res.status(status).json({
           error: 'spend_cap_exceeded',

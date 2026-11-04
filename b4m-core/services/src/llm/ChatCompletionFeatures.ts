@@ -1,4 +1,12 @@
 import type { NewAccountSpendCapAdapters } from '../creditService/newAccountSpendCap';
+import type { UserLimitEventKind } from '@bike4mind/common';
+
+export type LimitEventRecord = {
+  userId: string;
+  kind: UserLimitEventKind;
+  model?: string;
+  details?: Record<string, string | number | boolean | null>;
+};
 import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
@@ -242,6 +250,11 @@ interface DatabaseAdapters {
   mcpServers: IMcpServerRepository;
   /** Read at the personal credit reservation; see creditService/newAccountSpendCap.ts. */
   newAccountSpendCap: NewAccountSpendCapAdapters;
+  /**
+   * Records a refusal or a settlement that left the balance negative, for the admin user timeline
+   * (apps/client/server/billing/userLimitEvents.ts). Optional, and must not throw.
+   */
+  recordLimitEvent?: (event: LimitEventRecord) => Promise<void>;
   creditTransactions?: ICreditTransactionRepository;
   /** Optional usage-event sink: dual-write analytics, never billing. */
   usageEvents?: IUsageEventRepository;

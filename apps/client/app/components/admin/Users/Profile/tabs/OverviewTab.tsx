@@ -1,11 +1,19 @@
 import React, { useState } from 'react';
 import { Box, Chip, Stack, Typography } from '@mui/joy';
-import { USER_TIMELINE_TYPES, resolveUserStorageLimit, storageLimitToBytes, type AuditEntry } from '@bike4mind/common';
+import {
+  USER_TIMELINE_CATEGORIES,
+  resolveUserStorageLimit,
+  storageLimitToBytes,
+  type AuditEntry,
+  type UserTimelineCategory,
+} from '@bike4mind/common';
 import { useGetUserProductAccess } from '@client/app/hooks/data/entitlements';
 import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
-import { Fact, SectionCard, StatusChip, formatUtc } from '../../../shared';
+import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtc } from '../../../shared';
+import { typesOfCategories } from '../activitySearch';
+import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
 import { RiskEvidenceCard } from '../RiskEvidenceCard';
 import { UserNotesCard } from './UserNotesCard';
@@ -158,7 +166,12 @@ const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void; onOp
   onViewAll,
   onOpenCredits,
 }) => {
-  const timeline = useUserTimeline(userId, { types: USER_TIMELINE_TYPES }, { pageSize: RECENT_ACTIVITY_COUNT });
+  const [categories, setCategories] = useState<UserTimelineCategory[]>([...USER_TIMELINE_CATEGORIES]);
+  const timeline = useUserTimeline(
+    userId,
+    { types: typesOfCategories(categories) },
+    { pageSize: RECENT_ACTIVITY_COUNT }
+  );
   const [selected, setSelected] = useState<AuditEntry | null>(null);
   const items = (timeline.data?.pages[0]?.entries ?? []).map(entry =>
     timelineItem(entry, { onOpenAudit: setSelected, onOpenCredits })
@@ -201,6 +214,15 @@ const RecentActivityCard: React.FC<{ userId: string; onViewAll: () => void; onOp
         }
         data-testid="user-profile-activity-card"
       >
+        <Box sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'admin.border' }}>
+          <ToggleChipGroup
+            options={CATEGORY_OPTIONS}
+            value={categories}
+            onChange={setCategories}
+            aria-label="Show recent activity from"
+            data-testid="user-profile-recent-activity-filter"
+          />
+        </Box>
         {body()}
       </SectionCard>
       <AuditEntryDrawer entry={selected} onClose={() => setSelected(null)} />

@@ -1,5 +1,6 @@
 import { newAccountSpendCapAdapters } from '@bike4mind/database';
 import type { creditService } from '@bike4mind/services';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 
 /**
  * The deployed spend-cap adapters plus a LiveOps alert on each refusal. Every hold path in the apps
@@ -14,6 +15,15 @@ export const newAccountSpendCapAdaptersWithAlert: creditService.NewAccountSpendC
   // Loaded on first refusal: the Slack module reads deploy config at import, and every hold path
   // (and every suite that imports one) would otherwise pull it in.
   onRefused: async ({ userId, refusal, requestedCredits }) => {
+    await recordUserLimitEvent({
+      userId,
+      kind: refusal.window === 'hour' ? 'new_account_hourly_cap' : 'new_account_daily_cap',
+      details: {
+        capCredits: refusal.capCredits,
+        spentCredits: Math.ceil(refusal.spentCredits),
+        requestedCredits: Math.ceil(requestedCredits),
+      },
+    });
     const { alertFraudBlock } = await import('@server/billing/fraudBlockAlert');
     await alertFraudBlock({
       kind: 'newAccountSpendCap',

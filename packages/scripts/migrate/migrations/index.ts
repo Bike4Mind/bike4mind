@@ -295,6 +295,7 @@ import EnsureFabFilePendingUploadIndex from './20260921239800_ensure-fabfile-pen
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
+import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 import EnsureAutoContainmentDecisionIndexes from './20260921239950_ensure-auto-containment-decision-indexes';
@@ -517,6 +518,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureAutoContainmentDecisionIndexes,
   EnsureUserDeletionScheduledForIndex,
   ConvertLegacyQuestPlansToFiles,
+  EnsureUserLimitEventIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];
