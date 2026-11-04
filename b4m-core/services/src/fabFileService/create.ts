@@ -144,6 +144,12 @@ export interface CreateFabFileAdapters {
    * for the claim (it read it off the stored object, not off the request) may let it outrank the name.
    */
   mimeTypePrecedence?: 'extension-first' | 'claim-first';
+  /**
+   * In-flight client-upload bytes already billed to the owning pool (keyed by the owner org, undefined
+   * for a personal file), counted as used by the quota check. Pass it only on a door that leaves a
+   * pending client upload, i.e. a create without `content`.
+   */
+  pendingUploadBytes?: (organizationId: string | undefined) => number;
 }
 
 /**
@@ -178,7 +184,16 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 export const prepareFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence, objectKey }: CreateFabFileAdapters
+  {
+    db,
+    storage,
+    provenance,
+    administeredOrgIds,
+    logger,
+    mimeTypePrecedence,
+    objectKey,
+    pendingUploadBytes,
+  }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -231,8 +246,10 @@ export const prepareFabFile = async (
     });
   }
 
-  await checkStorageLimitForOwner({ user, organizationId: ownerOrganizationId }, params.fileSize, id =>
-    db.organizations.findById(id)
+  await checkStorageLimitForOwner(
+    { user, organizationId: ownerOrganizationId, pendingBytes: pendingUploadBytes?.(ownerOrganizationId) },
+    params.fileSize,
+    id => db.organizations.findById(id)
   );
 
   const buildData: Omit<IFabFileDocument, 'id'> = {

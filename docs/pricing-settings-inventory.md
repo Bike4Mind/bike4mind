@@ -87,6 +87,7 @@ compute per-run and per-day USD caps) and settings that only toggle a feature.
 | `apiRateLimitDefaultWriteMode` | Admin Settings > Security > API Rate Limiting | The same middleware: `log` allows and logs writes over the limit, `enforce` refuses them with 429, `off` stops counting. | no. A request rate limit. | Usage limits |
 | `fileUploadLimitFreePerHour` | Admin Settings > Security > API Rate Limiting | The per-user hourly file-upload allowance (`apps/client/server/files/fileUploadBudget.ts`), spent per file by these upload routes: single and batch presign, direct upload, URL import, generated-image copy, re-chunk, reprocess and the public API. Applies to Free and admin-restricted users; a value of 0 blocks their uploads. Default 300 files per hour. | no. An upload rate limit. | Usage limits |
 | `fileUploadLimitPaidPerHour` | Admin Settings > Security > API Rate Limiting | Same as `fileUploadLimitFreePerHour`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 3000 files per hour. | no. An upload rate limit. | Usage limits |
+| `pendingUploadLimit` | Admin Settings > Security > API Rate Limiting | The per-user cap on presigned client uploads whose bytes have not landed (`apps/client/server/files/pendingUploads.ts`), checked by single and batch presign, the public API and direct upload without content. An upload stops counting when its bytes land or 30 minutes after it was requested. One value for every tier; admins and developer-tagged users are not limited; a value of 0 blocks presigned uploads. Default 250 uploads. | no. An upload limit. | Usage limits |
 | `imageModerationLimitFreePerDay` | Admin Settings > Security > API Rate Limiting | The per-user daily allowance of moderation scans for uploaded images (`apps/client/server/s3/imageModerationBudget.ts`), spent by the upload-landing scan, the on-demand moderate route and the daily moderation rescue sweep: one per still image, one per sampled frame (at most 10) for an animated image. An image over the allowance stays pending (not served). Applies to Free and admin-restricted users; a value of 0 holds all their uploaded images. Default 200 per day. | no. A moderation usage limit. | Usage limits |
 | `imageModerationLimitPaidPerDay` | Admin Settings > Security > API Rate Limiting | Same as `imageModerationLimitFreePerDay`, for Basic and Pro subscribers. Admins and developer-tagged users are not limited. Default 2000 per day. | no. A moderation usage limit. | Usage limits |
 
@@ -439,6 +440,12 @@ No match outside the definition and tests.
 <details><summary><code>fileUploadLimitPaidPerHour</code> (1 file)</summary>
 
 - `apps/client/server/files/fileUploadBudget.ts`
+
+</details>
+
+<details><summary><code>pendingUploadLimit</code> (1 file)</summary>
+
+- `apps/client/server/files/pendingUploads.ts`
 
 </details>
 

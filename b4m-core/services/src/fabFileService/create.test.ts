@@ -729,6 +729,36 @@ describe('createFabFile - owning organization', () => {
     expect(adapters.db.fabFiles.create).not.toHaveBeenCalled();
   });
 
+  it("counts the owning org's in-flight upload bytes as used", async () => {
+    const adapters = ownerAdapters();
+    vi.mocked(adapters.db.organizations.findById).mockResolvedValue({
+      id: 'org-1',
+      storageLimit: 1,
+      currentStorageSize: 0,
+    } as unknown as IOrganizationDocument);
+    const pendingUploadBytes = vi.fn(() => 950_000);
+
+    await expect(
+      createFabFile(
+        'u1',
+        { ...file, fileSize: 100_000, tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+        { ...adapters, pendingUploadBytes }
+      )
+    ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', used_bytes: 950_000 } });
+    expect(pendingUploadBytes).toHaveBeenCalledWith('org-1');
+  });
+
+  it("counts the uploader's personal in-flight upload bytes for a personal file", async () => {
+    const adapters = ownerAdapters();
+    vi.mocked(adapters.db.users.findById).mockResolvedValue({ id: 'u1', storageLimit: 1 } as never);
+    const pendingUploadBytes = vi.fn(() => 950_000);
+
+    await expect(
+      createFabFile('u1', { ...file, fileSize: 100_000 }, { ...adapters, pendingUploadBytes })
+    ).rejects.toMatchObject({ info: { errorCode: 'storage_limit_exceeded', used_bytes: 950_000 } });
+    expect(pendingUploadBytes).toHaveBeenCalledWith(undefined);
+  });
+
   it('persists the derived owner, not the caller-supplied org, when both are present', async () => {
     const created = await createFabFile(
       'u1',

@@ -27,6 +27,7 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { admitPendingUploads } from '@server/files/pendingUploads';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
@@ -120,8 +121,11 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   // Same owner rule as fabFileService.createFabFile, which this direct create bypasses. Resolved
   // before the quota gate so the bytes are checked against the pool they will be billed to.
   const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
-  await checkStorageLimitForOwner({ user: req.user, organizationId: ownerOrganizationId }, data.fileSize, id =>
-    organizationRepository.findById(id)
+  const pending = await admitPendingUploads(req, 1, [ownerOrganizationId]);
+  await checkStorageLimitForOwner(
+    { user: req.user, organizationId: ownerOrganizationId, pendingBytes: pending.bytesFor(ownerOrganizationId) },
+    data.fileSize,
+    id => organizationRepository.findById(id)
   );
 
   // A file joining a lake must also land under that lake's content prefix, or it is

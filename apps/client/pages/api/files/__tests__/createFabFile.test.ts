@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   // consume it are the real ones.
   administeredOrgIds: [] as string[],
   consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
+  pendingBytes: new Map<string | undefined, number>(),
+  admitPendingUploads: vi.fn(),
   baseApiOptions: undefined as unknown,
 }));
 
@@ -74,6 +76,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
+vi.mock('@server/files/pendingUploads', () => ({ admitPendingUploads: h.admitPendingUploads }));
 
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-fab-bucket' } } }));
 
@@ -126,6 +129,61 @@ const body = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   h.listByLake.mockResolvedValue([]);
   h.administeredOrgIds = [];
+  h.pendingBytes.clear();
+  h.admitPendingUploads.mockImplementation(async () => ({
+    count: 0,
+    bytesFor: (organizationId: string | undefined) => h.pendingBytes.get(organizationId) ?? 0,
+  }));
+});
+
+describe('POST /api/files/createFabFile - in-flight uploads', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findByDatalakeTag.mockResolvedValue(LAKE);
+    h.lakeFind.mockResolvedValue([]);
+    h.userFindById.mockResolvedValue({ id: 'u1', storageLimit: 1, currentStorageSize: 0 });
+    h.fabFileCreate.mockImplementation(async data => ({ id: 'f1', ...data }));
+    h.signUrl.mockResolvedValue('https://s3.test/put');
+  });
+
+  it('admits a create without content as one pending upload in the personal pool', async () => {
+    await run(body(), makeRes().res);
+
+    expect(h.admitPendingUploads).toHaveBeenCalledWith(expect.anything(), 1, [undefined]);
+  });
+
+  it('admits it against the org pool of the org lake it joins', async () => {
+    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, organizationId: 'org-1', createdAt: new Date() });
+
+    await run(body({ tags: [{ name: LAKE.datalakeTag, strength: 1 }] }), makeRes().res);
+
+    expect(h.admitPendingUploads).toHaveBeenCalledWith(expect.anything(), 1, ['org-1']);
+  });
+
+  it('leaves a create with content, whose bytes are written server-side, uncapped', async () => {
+    await run(body({ content: 'inline text' }), makeRes().res);
+
+    expect(h.admitPendingUploads).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses before spending the allowance or creating a file when the cap refuses', async () => {
+    h.admitPendingUploads.mockRejectedValueOnce(new Error('uploads in progress'));
+
+    await expect(run(body(), makeRes().res)).rejects.toThrow('uploads in progress');
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+
+  it("counts the owner's in-flight bytes against the quota", async () => {
+    // 1 MB personal quota, all but 5 bytes already promised to uploads in flight.
+    h.pendingBytes.set(undefined, 999_995);
+
+    await expect(run(body(), makeRes().res)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', used_bytes: 999_995, requested_bytes: 10 },
+    });
+    expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
 });
 
 const tagNamesOf = (callIndex = 0) => {

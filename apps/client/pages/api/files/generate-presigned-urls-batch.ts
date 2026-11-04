@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { admitPendingUploads } from '@server/files/pendingUploads';
 import { createFabFile } from '@server/managers/fabFileManager';
 import {
   adminSettingsRepository,
@@ -229,9 +230,12 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req:
       (bytesByOwnerOrganization.get(ownerOrganizationId) ?? 0) + (fileItem.fileSize || 0)
     );
   }
+  const pending = await admitPendingUploads(req, data.files.length, bytesByOwnerOrganization.keys());
   for (const [organizationId, bytes] of bytesByOwnerOrganization) {
-    await checkStorageLimitForOwner({ user: req.user, organizationId }, bytes, id =>
-      organizationRepository.findById(id)
+    await checkStorageLimitForOwner(
+      { user: req.user, organizationId, pendingBytes: pending.bytesFor(organizationId) },
+      bytes,
+      id => organizationRepository.findById(id)
     );
   }
 

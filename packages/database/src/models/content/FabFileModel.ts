@@ -4275,6 +4275,14 @@ FabFileSchema.index(
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
 );
 
+// An org pool's in-flight client uploads (apps/client/server/files/pendingUploads.ts). Partial, so
+// only rows still waiting for their bytes carry an entry. Pre-built by
+// 20260921239600_ensure-fabfile-pending-upload-index.
+FabFileSchema.index(
+  { organizationId: 1, createdAt: 1 },
+  { partialFilterExpression: { organizationId: { $type: 'string' }, clientUpload: true, status: 'pending' } }
+);
+
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the
 // `_id` keyset (scanned in reverse for newest first), so each page streams in order instead of sorting the user's whole file set.
 // Pre-built by 20260921235994_ensure-fabfile-owned-keyset-index rather than left to autoIndex: the

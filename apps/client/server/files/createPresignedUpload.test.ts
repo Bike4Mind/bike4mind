@@ -8,9 +8,12 @@ const h = vi.hoisted(() => ({
   assertCanWriteDataLakeTags: vi.fn(),
   reconcileDataLakeFallbackTags: vi.fn(),
   consumeFileUploadBudget: vi.fn(async (_req: unknown, _fileCount: number) => undefined),
+  pendingBytes: new Map<string | undefined, number>(),
+  admitPendingUploads: vi.fn(),
 }));
 
 vi.mock('@server/files/fileUploadBudget', () => ({ consumeFileUploadBudget: h.consumeFileUploadBudget }));
+vi.mock('@server/files/pendingUploads', () => ({ admitPendingUploads: h.admitPendingUploads }));
 vi.mock('sst', () => ({ Resource: { fabFileBucket: { name: 'test-bucket' } } }));
 vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -49,6 +52,14 @@ vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFi
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 
 import { createPresignedUpload } from './createPresignedUpload';
+
+beforeEach(() => {
+  h.pendingBytes.clear();
+  h.admitPendingUploads.mockImplementation(async () => ({
+    count: 0,
+    bytesFor: (organizationId: string | undefined) => h.pendingBytes.get(organizationId) ?? 0,
+  }));
+});
 
 const req = { user: { id: 'u1' }, ability: {}, logger: { warn: vi.fn() } } as never;
 const upload = (tags: { name: string; strength: number }[] = []) => ({
@@ -173,6 +184,44 @@ describe('createPresignedUpload - upload allowance', () => {
       } as never)
     ).rejects.toThrow(/unsupported file type/);
 
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+  });
+});
+
+describe('createPresignedUpload - in-flight uploads', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.createFabFile.mockResolvedValue({ id: 'f1' });
+    h.reconcileDataLakeFallbackTags.mockImplementation(async (tags: unknown) => tags);
+    h.assertCanWriteDataLakeTags.mockResolvedValue([]);
+  });
+
+  it('admits one pending upload against the pool the file bills to', async () => {
+    h.assertCanWriteDataLakeTags.mockResolvedValue([
+      { id: 'lake-1', datalakeTag: 'datalake:team', organizationId: 'org-1', createdAt: new Date() },
+    ]);
+    h.findOrganization.mockResolvedValue({ id: 'org-1', currentStorageSize: 0 });
+
+    await createPresignedUpload(req, upload([{ name: 'datalake:team', strength: 1 }]) as never);
+
+    expect(h.admitPendingUploads).toHaveBeenCalledWith(req, 1, ['org-1']);
+  });
+
+  it('refuses before spending the allowance or creating a file when the cap refuses', async () => {
+    h.admitPendingUploads.mockRejectedValueOnce(new Error('uploads in progress'));
+
+    await expect(createPresignedUpload(req, upload() as never)).rejects.toThrow('uploads in progress');
+    expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+  });
+
+  it("counts the owner's in-flight bytes against the quota", async () => {
+    // Default 1000 MB personal quota, all of it already promised to uploads in flight.
+    h.pendingBytes.set(undefined, 1000 * 1_000_000);
+
+    await expect(createPresignedUpload(req, upload() as never)).rejects.toMatchObject({
+      info: { errorCode: 'storage_limit_exceeded', used_bytes: 1000 * 1_000_000, requested_bytes: 10 },
+    });
     expect(h.consumeFileUploadBudget).not.toHaveBeenCalled();
   });
 });
