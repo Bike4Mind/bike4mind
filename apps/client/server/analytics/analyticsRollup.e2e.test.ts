@@ -242,7 +242,11 @@ describe('rollupDay', () => {
     await seedUser(apiUser);
     await seedEvent(apiUser, '2026-05-30T10:00:00Z', { source: 'api' });
     await rollupDay(DAY, { now: NOW });
-    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({ wau: 1, mau: 1, api: { wau: 0, mau: 0 } });
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      wau: 1,
+      mau: 1,
+      api: { wau: 0, mau: 0 },
+    });
     await rollupDay('2026-05-30', { now: NOW });
     expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
       dau: 1,

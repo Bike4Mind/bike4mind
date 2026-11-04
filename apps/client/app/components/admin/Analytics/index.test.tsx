@@ -181,7 +181,7 @@ describe('AnalyticsTab', () => {
     expect(within(strip).getByText('Coming soon')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-last-updated')).toHaveTextContent('Last updated');
     expect(screen.getByTestId('analytics-footer')).toHaveTextContent(
-      'Active users: an AI request that UTC day from the web app, CLI or Desktop. Counts exclude admin, Developer-tagged, test, banned and AI-held accounts. API users are shown separately and not counted. Days are UTC.'
+      /web app, CLI, Desktop or an agent run.*A signup is real when the email is verified.*banned or held ones included, is suspected.*API users are shown separately and not counted/
     );
     expect(screen.getByTestId('analytics-active-users-chart')).toHaveAttribute('aria-label');
   });
