@@ -137,6 +137,11 @@ describe('formatting', () => {
     expect(formatDuration(187_000)).toBe('3m 7s');
   });
 
+  it('reads a duration that is not a number as none', () => {
+    expect(formatDuration(Number.NaN)).toBe('0ms');
+    expect(formatDuration(Number.POSITIVE_INFINITY)).toBe('0ms');
+  });
+
   it('rounds before picking the unit, so no edge reads as the next unit up', () => {
     expect(formatDuration(999.4)).toBe('999ms');
     expect(formatDuration(999.6)).toBe('1.0s');
