@@ -675,6 +675,28 @@ describe('registerUser', () => {
         expect(created().pendingCreditGrant).toBe(10);
       });
 
+      it('records a referral signup invite even when the referral resolves no credits', async () => {
+        const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) =>
+          name === 'ReferralCreditsAmount' ? { settingValue: '0' } : readSetting(name)
+        );
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ startingCredits: 0 }));
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupGrant).toBeUndefined();
+        expect(created().referredByUserId).toBe('inviterId');
+        expect(created().signupInvite).toEqual({ source: 'referral', inviteId: 'invite-1', at: expect.any(Date) });
+      });
+
+      it('does not record a signup invite for an admin code or an unlimited referral code', async () => {
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupInvite).toBeUndefined();
+        mockAdapters.db.users.create.mockClear();
+        mockAdapters.db.users.findByUsernameOrEmail.mockResolvedValue(null);
+        mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ unlimitedUse: true }));
+        await registerUser(baseParams, mockAdapters);
+        expect(created().signupInvite).toBeUndefined();
+      });
+
       it('stages a referral invite with the retired staged flag off, keeping its whole amount', async () => {
         mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite());
         await registerUser(baseParams, mockAdapters);

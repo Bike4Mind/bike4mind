@@ -542,6 +542,8 @@ export interface IUser extends ICreditHolder {
   regInvites: Array<IRegInviteDocument['id']>;
   /** Sender of the referral invite this account redeemed; unset for accounts that signed up without one. */
   referredByUserId?: string | null;
+  /** The invite this account signed up through; absent for uninvited and pre-existing accounts. */
+  signupInvite?: SignupInvite;
 
   /**
    * This field is used to store the current selected organization ID.
@@ -827,6 +829,17 @@ export interface IAuthProviders {
 }
 
 export interface IUserDocument extends IUser, IMongoDocument {}
+
+export const SIGNUP_INVITE_SOURCES = ['referral', 'organization'] as const;
+export type SignupInviteSource = (typeof SIGNUP_INVITE_SOURCES)[number];
+
+export interface SignupInvite {
+  source: SignupInviteSource;
+  /** RegistrationInvite id for a referral, organization Invite id for an organization invite. */
+  inviteId: string;
+  organizationId?: string;
+  at: Date;
+}
 
 export interface IUserRepository
   extends IBaseRepository<IUserDocument>, ICreditHolderMethods, ICreditHolderFlooredDebit {

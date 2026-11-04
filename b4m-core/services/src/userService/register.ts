@@ -7,7 +7,6 @@ import {
   IUserRepository,
   type SignupProtection,
 } from '@bike4mind/common';
-import { IRegInviteDocument, RegInviteSource, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
@@ -26,6 +25,11 @@ import { type FreeCreditAdapters, releasePendingFreeCredits } from './freeCredit
 import { shouldBlockDisposableEmail } from './disposableEmail';
 import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
 import { assertUsernameNotReserved } from './reservedUsername';
+import {
+  redeemRegistrationInvite,
+  type RegistrationInviteRepository,
+  resolveRegistrationInvite,
+} from './registrationInvite';
 
 // NOT parsed at runtime - derives the param type via z.infer only. The policy/age fields are
 // enforced by the manual `!== true` / version checks in registerUser below, not by this schema.
@@ -70,13 +74,7 @@ interface RegisterUserAdapters {
     users: IUserRepository;
     signupProtection?: SignupProtection;
     adminSettings: IAdminSettingsRepository;
-    registrationInvites: {
-      findByCode: (code: string) => Promise<IRegInviteDocument | null>;
-      update: (
-        invite: Partial<IRegInviteDocument>,
-        options?: RepositoryUpdateOptions<IRegInviteDocument>
-      ) => Promise<unknown>;
-    };
+    registrationInvites: RegistrationInviteRepository;
     subscribers?: ISubscriberRepository;
 
     /**
@@ -195,28 +193,14 @@ export const registerUser = async (
   const hasInviteCode = typeof inviteCode === 'string' && inviteCode.trim().length > 0;
   const normalizedInviteCode = hasInviteCode ? inviteCode!.trim() : '';
 
-  let invite: IRegInviteDocument | null = null;
-  let isUnlimitedInvite = false;
+  const resolvedInvite = hasInviteCode
+    ? await resolveRegistrationInvite(normalizedInviteCode, normalizedEmail, db.registrationInvites)
+    : null;
+  const invite = resolvedInvite?.invite ?? null;
   let freeCredits = 0;
   let storageLimitOverride: number | null = null;
 
-  if (hasInviteCode) {
-    invite = await db.registrationInvites.findByCode(normalizedInviteCode);
-    if (!invite) throw new BadRequestError('Invalid invite code');
-    isUnlimitedInvite = Boolean(invite.unlimitedUse);
-    if (invite.expiresAt && invite.expiresAt.getTime() < Date.now()) {
-      throw new BadRequestError('Invite code has expired');
-    }
-    if (invite.used && !isUnlimitedInvite) throw new BadRequestError('Invite code already used');
-
-    // an invite issued to a specific inbox is redeemable only by that inbox -
-    // referral invites (refer.ts) always carry the target email, so a leaked/forwarded
-    // code can't move its credit grant to a different account. Admin bulk codes have
-    // no email and stay freely redeemable.
-    if (invite.email && invite.email.toLowerCase().trim() !== normalizedEmail) {
-      throw new BadRequestError('This invite code was issued for a different email address');
-    }
-
+  if (invite) {
     // Merge invite-code-specific tags with admin default tags
     if (invite.tags && invite.tags.length > 0) {
       tags = [...new Set([...tags, ...invite.tags])];
@@ -294,7 +278,7 @@ export const registerUser = async (
   }
 
   // Open signups and refer-a-friend invitees trickle their grant; admin and unlimited codes keep the flat grant.
-  const isReferralInvite = Boolean(invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral);
+  const isReferralInvite = resolvedInvite?.isReferral ?? false;
   const referralGrant = !hasInviteCode
     ? await newSignupGrant(db.adminSettings)
     : isReferralInvite && freeCredits > 0
@@ -304,8 +288,7 @@ export const registerUser = async (
   // Only an invite a user sent through the refer flow names an inviter. Admin bulk codes,
   // admin-issued subscriber invites and unlimited codes have no sender to credit, and invites
   // minted before `source` existed are deliberately not attributed.
-  const referredByUserId =
-    invite && !isUnlimitedInvite && invite.source === RegInviteSource.referral && invite.userId ? invite.userId : null;
+  const referredByUserId = isReferralInvite && invite?.userId ? invite.userId : null;
 
   const invitesPerUserSetting = await db.adminSettings.findBySettingName('ReferralInvitesPerUser');
   const invitesPerUserParsed = settingsMap.ReferralInvitesPerUser.schema.safeParse(invitesPerUserSetting?.settingValue);
@@ -379,6 +362,10 @@ export const registerUser = async (
     pendingEmailUsed: null,
     regInvites: [],
     referredByUserId,
+    // Marked whatever the referral credits resolve to, so a later invite bonus can key off it.
+    ...(isReferralInvite && invite
+      ? { signupInvite: { source: 'referral' as const, inviteId: invite.id, at: new Date() } }
+      : {}),
     numReferralsAvailable,
     stripeCustomerId: null,
     organizationId: null,
@@ -403,33 +390,8 @@ export const registerUser = async (
     }
     throw err;
   }
-  // Update the invite to mark it as used (only when registration used an invite code)
-  if (invite) {
-    const usageEventDate = new Date();
-    const usageEntry = { userId: user.id, usedAt: usageEventDate };
-    invite.usageHistory = [...(invite.usageHistory ?? []), usageEntry];
-
-    if (isUnlimitedInvite) {
-      delete invite.used;
-      delete invite.usedbyId;
-      invite.status = RegInviteStatusType.open;
-    } else {
-      invite.used = usageEventDate;
-      invite.usedbyId = user.id;
-      invite.status = RegInviteStatusType.used;
-    }
-    await db.registrationInvites.update(
-      isUnlimitedInvite
-        ? { id: invite.id, usageHistory: invite.usageHistory, status: invite.status }
-        : {
-            id: invite.id,
-            usageHistory: invite.usageHistory,
-            used: invite.used,
-            usedbyId: invite.usedbyId,
-            status: invite.status,
-          },
-      isUnlimitedInvite ? { unset: ['used', 'usedbyId'] } : undefined
-    );
+  if (resolvedInvite) {
+    await redeemRegistrationInvite(resolvedInvite, user.id, db.registrationInvites);
   }
 
   return user;

@@ -31,6 +31,7 @@ import {
   MFA_ATTEMPT_RESET_WINDOW_MS,
   PAYMENT_UNLOCK_REASONS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  SIGNUP_INVITE_SOURCES,
   SIGNUP_UNLOCK_FORFEIT_CAUSES,
   Collection,
   PaginatedResponse,
@@ -1325,6 +1326,18 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    signupInvite: {
+      type: new Schema(
+        {
+          source: { type: String, enum: SIGNUP_INVITE_SOURCES, required: true },
+          inviteId: { type: String, required: true },
+          organizationId: { type: String },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password
