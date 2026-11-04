@@ -132,7 +132,7 @@ export const loadAbuseAssessmentSettings = async (): Promise<AbuseAssessmentSett
 const toMicroUsd = (usd: number) => Math.ceil(usd * 1_000_000);
 
 /**
- * The internal policy: platform keys only, and a call cap and USD budget per 24h window shared by
+ * The internal policy: platform keys only, and a call cap and USD budget per fixed 24h window shared by
  * every assessment path. The budget is metered at each call's worst-case cost and not refunded, so it
  * can only under-spend. A zero budget refuses every call, free models included.
  */
@@ -489,6 +489,7 @@ export async function replayAbuseAssessments({
 }): Promise<Omit<AbuseAssessmentReplayResponse, 'missing'>> {
   const settings = given ?? (await loadAbuseAssessmentSettings());
   if (!settings.enabled) return { status: 'stopped', reason: 'disabled', rows: [] };
+  if (settings.config.model === null) return { status: 'stopped', reason: 'no_model', rows: [] };
   const rows: AbuseAssessmentReplayRow[] = [];
   for (const model of models) {
     try {

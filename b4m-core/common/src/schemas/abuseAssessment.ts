@@ -43,7 +43,7 @@ export const ABUSE_ASSESSMENT_MAX_ACCOUNTS = 10;
 export const ABUSE_ASSESSMENT_MAX_SIGNALS = 20;
 export const ABUSE_ASSESSMENT_MAX_SUMMARY_CHARS = 16_000;
 
-/** Unknown results are retried at most this many times per evidence version. */
+/** Unknown results are attempted at most this many times per evidence version. */
 export const ABUSE_ASSESSMENT_MAX_ATTEMPTS = 3;
 
 // Keys are code-authored identifiers; the pattern keeps any free text out of the provider payload.

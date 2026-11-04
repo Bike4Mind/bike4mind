@@ -130,7 +130,7 @@ const userDecisionAccounting = (caller: DecisionCaller): DecisionAccounting => {
         refund: () => reservation.refund(),
         fail: async ({ model, provider }) => {
           await reservation.refund();
-          await recordUsage('error', {
+          void recordUsage('error', {
             provider,
             model,
             inputTokens: 0,
@@ -149,7 +149,7 @@ const userDecisionAccounting = (caller: DecisionCaller): DecisionAccounting => {
             apiKeyId,
             source,
           });
-          await recordUsage('ok', { ...usage, creditsCharged });
+          void recordUsage('ok', { ...usage, creditsCharged });
           return creditsCharged;
         },
       };

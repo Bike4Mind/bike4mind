@@ -333,6 +333,19 @@ describe('POST /api/admin/shadow-detections/assessment-replay', () => {
     expect(h.record).not.toHaveBeenCalled();
   });
 
+  it('passes a no_model stop through with the missing ids and writes no audit entry', async () => {
+    h.findById.mockResolvedValue(detection());
+    h.replay.mockResolvedValue({ status: 'stopped', reason: 'no_model', rows: [] });
+    const { req, res } = request('POST', {
+      body: { detectionIds: [DETECTION_ID, OTHER_DETECTION_ID], models: ['test-decisions'] },
+    });
+
+    await h.handlers.replay.post(req, res);
+
+    expect(res._getJSONData()).toEqual({ status: 'stopped', reason: 'no_model', rows: [], missing: [] });
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
   it('audits a replay that returned rows', async () => {
     h.findById.mockResolvedValue(detection());
     h.replay.mockResolvedValue({

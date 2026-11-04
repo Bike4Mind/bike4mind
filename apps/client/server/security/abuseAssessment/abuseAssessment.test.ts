@@ -198,6 +198,16 @@ describe('assessShadowDetection', () => {
     expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
   });
 
+  it('retries an unknown result one attempt short of the cap and refuses at the cap', async () => {
+    mocks.findByCacheKey.mockResolvedValue({
+      result: 'unknown',
+      attempts: ABUSE_ASSESSMENT_MAX_ATTEMPTS - 1,
+      assessedAt: new Date(),
+    } as AbuseAssessmentItem);
+    expect(await run()).toMatchObject({ status: 'assessed', item: { result: 'abuse' } });
+    expect(mocks.providerDecide).toHaveBeenCalledTimes(1);
+  });
+
   it('retries an exhausted unknown once it is more than a day old', async () => {
     mocks.findByCacheKey.mockResolvedValue({
       result: 'unknown',
@@ -346,6 +356,17 @@ describe('sweepAbuseAssessments', () => {
 });
 
 describe('replayAbuseAssessments', () => {
+  it('stops with no_model, without a provider call, when enabled with a budget but no model configured', async () => {
+    mocks.settings.config = AbuseAssessmentConfigSchema.parse({ model: null, dailyBudgetUsd: 1 });
+    const result = await replayAbuseAssessments({
+      examples: [{ id: DETECTION_ID, label: null, summary: {} as never }],
+      models: ['gpt-6-luna'],
+      logger,
+    });
+    expect(result).toEqual({ status: 'stopped', reason: 'no_model', rows: [] });
+    expect(mocks.providerDecide).not.toHaveBeenCalled();
+  });
+
   it('returns per-example outputs next to the label without storing them', async () => {
     const summary = (await run()).status === 'assessed' ? mocks.save.mock.calls[0][0].featureSummary : null;
     mocks.save.mockClear();
