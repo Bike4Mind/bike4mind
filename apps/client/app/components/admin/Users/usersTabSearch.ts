@@ -14,7 +14,7 @@ import {
   type AdminUsersFilter,
   type AdminUsersSortField,
 } from '@client/app/utils/adminUsersFilter';
-import { oneOf, parsePage, parseStringList, toNumber } from '../adminSearchValues';
+import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 
 /**
  * The Users tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -148,15 +148,16 @@ export const parseDomain = (value: unknown): string | undefined => {
 };
 
 // The id is interpolated into `/api/users/<id>`, so only an ObjectId may come in from a link.
-export const parseUserId = (value: unknown): string | undefined =>
-  typeof value === 'string' && /^[0-9a-f]{24}$/.test(value) ? value : undefined;
+export const parseUserId = parseObjectId;
 
 // A view param that fails to parse still asked for a view. Keeping the default page stops
 // `validateSearch` from reducing `?sort=bogus` to a bare visit that restores the saved view.
 // Other tabs get no fallback: Users owns bare names like `status`, which another tab's link may carry.
+// No `tab` is the Users tab, the console's default.
 const parseUsersPage = (value: unknown, search: Record<string, unknown> = {}): number | undefined =>
   parsePage(value) ??
-  (search[ADMIN_TAB_PARAM] === ADMIN_USERS_TAB_SLUG && USERS_VIEW_PARAMS.some(key => search[key] !== undefined)
+  ((search[ADMIN_TAB_PARAM] ?? ADMIN_USERS_TAB_SLUG) === ADMIN_USERS_TAB_SLUG &&
+  USERS_VIEW_PARAMS.some(key => search[key] !== undefined)
     ? DEFAULT_USERS_PARAMS.page
     : undefined);
 

@@ -67,7 +67,7 @@ export const useUsersParams = (): readonly [UsersListParams, (patch: Partial<Use
     (patch: Partial<UsersListParams>) => {
       setStoredParams(patch);
       if (!touchesView(patch)) return;
-      // The debounced search can land after the tab unmounts; never write this view onto another tab.
+      // A debounced write can land after the URL has left the tab; never write this view onto another tab.
       const { pathname, search: current } = router.state.location;
       if (pathname !== ADMIN_PATH || (current as SearchRecord)[ADMIN_TAB_PARAM] !== ADMIN_USERS_TAB_SLUG) return;
       // Written from the store, which useUsersTabUrlSync keeps level with the URL and which already

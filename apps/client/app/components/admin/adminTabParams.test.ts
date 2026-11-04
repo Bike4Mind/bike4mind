@@ -101,6 +101,10 @@ describe('Users tab params', () => {
     expect(parseAdminSearch({ tab: 'organizations', sort: 'bogus' }).page).toBeUndefined();
   });
 
+  it('treats a link with no tab as the Users tab, the console default', () => {
+    expect(parseAdminSearch({ sort: 'bogus' }).page).toBe(1);
+  });
+
   it('never accepts the free-text search', () => {
     expect(parseAdminSearch({ search: 'someone@example.com' })).not.toHaveProperty('search');
   });
