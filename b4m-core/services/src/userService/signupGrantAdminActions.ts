@@ -1,25 +1,10 @@
-import { PENDING_FREE_CREDITS_TAG, signupGrantRemaining, isSignupGrantBlocked } from '@bike4mind/common';
+import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { withTransaction } from '@bike4mind/db-core';
 import type { HeldCreditRewardRepository } from '../creditService/payCreditReward';
 import type { FreeCreditAdapters } from './freeCredits';
 import { releaseHeldGrantNow, type HeldGrantAdapters } from './heldSignupGrants';
-import { isSignupGrantHeldForReview } from './signupRisk';
+import { classifySignupGrantAction, type SignupGrantNoopReason } from './signupGrantActionClassifier';
 import { resolveDripLimits, unlockSignupGrant } from './stagedSignupGrant';
-
-/**
- * Why an admin action changed nothing. A no-op is an answer, never a silent zero: the caller shows the reason
- * and writes no audit entry.
- */
-export type SignupGrantNoopReason =
-  | 'no_grant'
-  | 'blocked'
-  | 'not_blocked'
-  | 'already_blocked'
-  | 'not_held'
-  | 'held_for_review'
-  | 'tranche_pending'
-  | 'nothing_remaining'
-  | 'not_paid';
 
 export type SignupGrantActionResult =
   { outcome: 'applied'; credits: number } | { outcome: 'noop'; reason: SignupGrantNoopReason };
@@ -34,12 +19,8 @@ export async function releaseHeldSignupGrant(
   userId: string,
   adapters: HeldGrantAdapters
 ): Promise<SignupGrantActionResult> {
-  const user = await adapters.grant.db.users.findById(userId);
-  if (!user?.signupGrant) return noop('no_grant');
-  if (isSignupGrantBlocked(user)) return noop('blocked');
-  if (isSignupGrantHeldForReview(user)) return noop('held_for_review');
-  if (user.signupGrantHeldReason !== 'budget_exhausted' || !user.tags?.includes(PENDING_FREE_CREDITS_TAG))
-    return noop('not_held');
+  const verdict = classifySignupGrantAction(await adapters.grant.db.users.findById(userId), 'release_held');
+  if (!verdict.eligible) return noop(verdict.reason);
   const entry = await releaseHeldGrantNow(userId, adapters);
   // A failed payout is logged by the release; surfacing it as an error keeps it out of the audit log.
   if (entry.outcome === 'failed') throw new Error('Held signup grant release failed');
@@ -58,13 +39,9 @@ export async function releaseRemainingSignupGrant(
   adapters: Parameters<typeof unlockSignupGrant>[2]
 ): Promise<SignupGrantActionResult> {
   const user = await adapters.db.users.findById(userId);
-  const grant = user?.signupGrant;
-  if (!user || !grant) return noop('no_grant');
-  if (isSignupGrantBlocked(user)) return noop('blocked');
-  if (grant.stage === 'pending_email') return noop('tranche_pending');
-  if (isSignupGrantHeldForReview(user)) return noop('held_for_review');
   const { dripCap } = await resolveDripLimits(adapters.db.adminSettings);
-  if (signupGrantRemaining(grant, dripCap) <= 0) return noop('nothing_remaining');
+  const verdict = classifySignupGrantAction(user, 'release_remaining', dripCap);
+  if (!verdict.eligible) return noop(verdict.reason);
   const { creditsGranted } = await unlockSignupGrant(userId, 'admin', adapters);
   return creditsGranted > 0 ? { outcome: 'applied', credits: creditsGranted } : noop('not_paid');
 }
@@ -94,7 +71,7 @@ export async function blockSignupGrant(
   const state = await withTransaction<'blocked' | 'already_blocked' | 'no_grant'>(async () => {
     const user = await users.findById(userId);
     if (!user?.signupGrant) return 'no_grant';
-    if (user.signupGrant.blocked) return 'already_blocked';
+    if (!classifySignupGrantAction(user, 'block').eligible) return 'already_blocked';
     const updated = await users.update({
       id: userId,
       signupGrant: { ...user.signupGrant, blocked: { at: adapters.now?.() ?? new Date() } },
@@ -123,7 +100,7 @@ export async function unblockSignupGrant(
   const state = await withTransaction<'unblocked' | 'not_blocked' | 'no_grant'>(async () => {
     const user = await users.findById(userId);
     if (!user?.signupGrant) return 'no_grant';
-    if (!user.signupGrant.blocked) return 'not_blocked';
+    if (!classifySignupGrantAction(user, 'unblock').eligible) return 'not_blocked';
     const { blocked: _lifted, ...grant } = user.signupGrant;
     const requeue = grant.stage === 'pending_email' && !!user.emailVerified && !user.signupGrantHeldReason;
     const updated = await users.update({
