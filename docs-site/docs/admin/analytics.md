@@ -51,6 +51,15 @@ Stacked bars of likely legit, suspected and not-yet-classified signups. Bars are
 
 Click a bar to open the Users list filtered to the accounts created in that bar's window. Below the chart, the signals that marked accounts in the range are listed with their counts.
 
+## Retention cohorts
+
+A table of how many people come back. Each row is a signup week (weeks start on Monday, UTC) and shows the cohort size, then the share of that cohort who were active in week 0 (the signup week itself) through week 8. The percent is printed in every cell, and a darker shade means a higher share. Hover a cell to see the head count.
+
+- **Last 12 weeks.** Only signup weeks that are over appear, so a cohort never grows after you see it. The table is read through the last complete day and ignores the **Range** and **Compare** controls.
+- **Blank cells are gaps, not zero.** A cell is blank when its week is not over yet, when the nightly rollup is missing for a day it depends on, or when the cohort is empty. A real zero is printed as 0.0%.
+- **Signups toggle.** With **Legit only**, the cohort leaves out suspected signups and keeps accounts too new to classify. With **All**, it counts every signup. The size and the active counts follow the same rule.
+- **Active** uses the same definition as the rest of the page: at least one successful AI request that UTC day.
+
 ## Tables and accessibility
 
 Each chart has a **View as table** button that shows the same numbers as a table you can read with a screen reader or copy.
