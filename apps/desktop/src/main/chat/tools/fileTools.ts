@@ -665,7 +665,8 @@ export const grepSearch: ToolDefinition = {
 
     // rg lists files itself with no walk cap, so a search it ran leaves nothing unsearched.
     let complete = true;
-    const ranRipgrep = viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out';
+    const ranRipgrep =
+      viaRipgrep === 'done' || viaRipgrep === 'stopped' || viaRipgrep === 'timed-out' || viaRipgrep === 'cut-short';
     if (ranRipgrep && viaRipgrep === 'done') {
       // rg honours .gitignore even for a file git tracks; the JavaScript listing does not.
       for (const name of await trackedButIgnored(directory)) {
@@ -721,8 +722,11 @@ export const grepSearch: ToolDefinition = {
     const { body, matchingFiles, totalMatches, shownMatches, truncated } = tally;
     const scope = include ? ` in files matching ${include}` : '';
     const timedOut = viaRipgrep === 'timed-out' ? ' The search timed out, so these results are partial.' : '';
+    const cutShort = viaRipgrep === 'cut-short' ? ' The search ended early, so these results are partial.' : '';
     const partial =
-      (timedOut || (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`)) +
+      (timedOut ||
+        cutShort ||
+        (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`)) +
       droppedNote(dropped);
     if (matchingFiles === 0) return `${note}No matches for ${expression} under ${base}${scope}.${partial}`;
 
