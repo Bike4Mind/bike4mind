@@ -9,6 +9,8 @@ import { SubscriptionAdminLogTab } from './tabs/SubscriptionAdminLogTab';
 import { ExtendCompDialog } from './actions/ExtendCompDialog';
 import { EndCompDialog } from './actions/EndCompDialog';
 import { EditCreditsPerCycleDialog } from './actions/EditCreditsPerCycleDialog';
+import { CancelSubscriptionDialog } from './actions/CancelSubscriptionDialog';
+import { ResumeSubscriptionDialog } from './actions/ResumeSubscriptionDialog';
 import { RemoveSubscriptionDialog } from './actions/RemoveSubscriptionDialog';
 import type { SubscriptionDetailTab } from './subscriptionDetailSearch';
 import { ownerDisplayName, type SubscriptionAction } from './subscriptionDetailModel';
@@ -68,6 +70,10 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
         return <ExtendCompDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'end':
         return <EndCompDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
+      case 'cancel':
+        return <CancelSubscriptionDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
+      case 'resume':
+        return <ResumeSubscriptionDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'credits':
         return <EditCreditsPerCycleDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'remove':

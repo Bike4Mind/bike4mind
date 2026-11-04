@@ -9,7 +9,7 @@ import {
 
 export const ADMIN_SUBSCRIPTIONS_TAB_SLUG = 'subscriptions';
 
-export type SubscriptionAction = 'extend' | 'end' | 'credits' | 'remove';
+export type SubscriptionAction = 'extend' | 'end' | 'credits' | 'remove' | 'cancel' | 'resume';
 
 export const ownerDisplayName = (row: Pick<AdminSubscriptionRow, 'owner'>): string => {
   const { owner } = row;
@@ -38,6 +38,10 @@ export const NO_ACTING_USER_REASON = 'No account can act for this owner: the use
 export type SubscriptionActionAvailability = {
   /** Extend comp and End comp, the header's two buttons. */
   compActions: boolean;
+  /** Cancel at period end: a live Stripe row with no cancellation scheduled. */
+  stripeCancel: boolean;
+  /** Resume: a Stripe row with a scheduled cancellation whose period has not ended. */
+  stripeResume: boolean;
   editCredits: { visible: boolean; disabledReason: string | null };
   remove: { disabledReason: string | null };
 };
@@ -49,7 +53,12 @@ export const subscriptionActionAvailability = (
   const { subscription, actingUserId } = detail;
   const terminal = isTerminalSubscriptionStatus(subscription.status);
   const noActor = actingUserId === null ? NO_ACTING_USER_REASON : null;
+  const live = isLiveStripeSubscription(subscription);
+  const scheduled = Boolean(subscription.cancelAt);
+  const periodRunning = !subscription.periodEndsAt || new Date(subscription.periodEndsAt).getTime() > Date.now();
   return {
+    stripeCancel: live && !scheduled,
+    stripeResume: live && scheduled && periodRunning,
     compActions: isCompSubscription(subscription) && !terminal,
     editCredits: { visible: !terminal, disabledReason: noActor },
     remove: { disabledReason: isLiveStripeSubscription(subscription) ? REMOVE_LIVE_STRIPE_REASON : noActor },

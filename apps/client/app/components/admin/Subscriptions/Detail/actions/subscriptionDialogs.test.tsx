@@ -5,6 +5,8 @@ import { ExtendCompDialog } from './ExtendCompDialog';
 import { EndCompDialog } from './EndCompDialog';
 import { EditCreditsPerCycleDialog, parseCreditsPerCycle } from './EditCreditsPerCycleDialog';
 import { RemoveSubscriptionDialog } from './RemoveSubscriptionDialog';
+import { CancelSubscriptionDialog } from './CancelSubscriptionDialog';
+import { ResumeSubscriptionDialog } from './ResumeSubscriptionDialog';
 import {
   OWNER_ID,
   STRIPE_ROW,
@@ -13,10 +15,18 @@ import {
   buildOrgDetail,
 } from '../subscriptionDetailTestUtils';
 
-const mocks = vi.hoisted(() => ({ comp: vi.fn(), credits: vi.fn(), remove: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  comp: vi.fn(),
+  credits: vi.fn(),
+  remove: vi.fn(),
+  cancel: vi.fn(),
+  resume: vi.fn(),
+}));
 
 vi.mock('@client/app/hooks/data/adminSubscriptionDetail', () => ({
   useAdminSubscriptionCompChange: () => ({ mutateAsync: mocks.comp }),
+  useAdminSubscriptionCancel: () => ({ mutateAsync: mocks.cancel }),
+  useAdminSubscriptionResume: () => ({ mutateAsync: mocks.resume }),
 }));
 vi.mock('@client/app/hooks/data/subscriptions', () => ({
   useUpdateSubscriptionCredits: () => ({ mutateAsync: mocks.credits }),
@@ -41,6 +51,8 @@ beforeEach(() => {
   mocks.comp.mockResolvedValue({});
   mocks.credits.mockResolvedValue({});
   mocks.remove.mockResolvedValue({});
+  mocks.cancel.mockResolvedValue({ lastSyncedAt: '2026-11-04T10:00:00.000Z' });
+  mocks.resume.mockResolvedValue({ lastSyncedAt: '2026-11-04T10:01:00.000Z' });
 });
 
 describe('ExtendCompDialog', () => {
@@ -249,5 +261,64 @@ describe('RemoveSubscriptionDialog', () => {
   it('refuses a live Stripe row', () => {
     openRemove(buildDetail({ subscription: STRIPE_ROW }));
     expect(screen.getByTestId('remove-subscription-dialog-hint')).toHaveTextContent('Cancel it first');
+  });
+});
+
+describe('CancelSubscriptionDialog', () => {
+  const stripeDetail = () =>
+    buildDetail({
+      subscription: { ...STRIPE_ROW, periodEndsAt: '2026-12-01T00:00:00.000Z' },
+      stripe: { lastSyncedAt: '2026-11-01T00:00:00.000Z', cancelAtPeriodEnd: false },
+    });
+
+  it('states the end date and that there is no refund, and requires a reason', () => {
+    open(CancelSubscriptionDialog, stripeDetail());
+
+    expect(screen.getByTestId('cancel-subscription-dialog')).toHaveTextContent(
+      'Cancels at the end of the period on 1 Dec 2026. They keep access and credits until then. No refund.'
+    );
+    expect(screen.getByTestId('cancel-subscription-dialog-confirm-btn')).toBeDisabled();
+    expect(mocks.cancel).not.toHaveBeenCalled();
+  });
+
+  it('sends the reviewed sync stamp, reuses one key across a failed retry, and undoes with a fresh key', async () => {
+    mocks.cancel.mockRejectedValueOnce(new Error('boom'));
+    const { onClose } = open(CancelSubscriptionDialog, stripeDetail());
+
+    pickReason('cancel-subscription-dialog');
+    confirm('cancel-subscription-dialog');
+    await waitFor(() => expect(mocks.cancel).toHaveBeenCalledTimes(1));
+    expect(onClose).not.toHaveBeenCalled();
+
+    confirm('cancel-subscription-dialog');
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const [first] = mocks.cancel.mock.calls[0];
+    const [second] = mocks.cancel.mock.calls[1];
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.expectedLastSyncedAt).toBe('2026-11-01T00:00:00.000Z');
+
+    undo();
+    await waitFor(() => expect(mocks.resume).toHaveBeenCalledTimes(1));
+    const [resumeBody] = mocks.resume.mock.calls[0];
+    expect(resumeBody.idempotencyKey).not.toBe(first.idempotencyKey);
+    expect(resumeBody.reason).toBe(`Undo: ${first.reason}`);
+    expect(resumeBody.expectedLastSyncedAt).toBe('2026-11-04T10:00:00.000Z');
+  });
+});
+
+describe('ResumeSubscriptionDialog', () => {
+  it('resumes against the reviewed sync stamp', async () => {
+    const { onClose } = open(
+      ResumeSubscriptionDialog,
+      buildDetail({
+        subscription: { ...STRIPE_ROW, periodEndsAt: '2026-12-01T00:00:00.000Z' },
+        stripe: { lastSyncedAt: '2026-11-01T00:00:00.000Z', cancelAtPeriodEnd: true },
+      })
+    );
+
+    pickReason('resume-subscription-dialog');
+    confirm('resume-subscription-dialog');
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.resume.mock.calls[0][0]).toMatchObject({ expectedLastSyncedAt: '2026-11-01T00:00:00.000Z' });
   });
 });
