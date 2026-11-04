@@ -28,6 +28,15 @@ export interface OAuthFixtureOptions {
   noRevocation?: boolean;
   /** Metadata endpoint URL scheme override, for refusing non-https endpoints. */
   tokenEndpointOverride?: string;
+  /**
+   * A confidential client that exists at the server and may authenticate ONLY with HTTP Basic (the token and
+   * revocation endpoints answer `invalid_client` to anything else). Advertised as the sole auth method unless
+   * `omitAuthMethods` is set, which leaves the field out of the metadata.
+   */
+  basicOnlyClient?: { id: string; secret: string };
+  omitAuthMethods?: boolean;
+  /** The `token_type` of issued tokens (default `Bearer`). */
+  tokenType?: string;
 }
 
 export interface OAuthFixtureServer {
@@ -51,6 +60,8 @@ export interface OAuthFixtureServer {
   isValidAccessToken(token: string): boolean;
   /** Make the next refresh fail with `invalid_grant`. */
   failNextRefresh(): void;
+  /** `unavailable`: token requests get an HTML 503 (nothing is consumed) until set back to `ok`. */
+  setTokenMode(mode: 'ok' | 'unavailable'): void;
   /** Mark every issued access token expired (the next use must refresh). */
   expireAccessTokens(): void;
   close(): Promise<void>;
@@ -84,6 +95,7 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
     tokenResources: [] as (string | null)[],
   };
   let failRefresh = false;
+  let tokenMode: 'ok' | 'unavailable' = 'ok';
   let issued = 0;
   let origin = '';
 
@@ -95,7 +107,7 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
     refreshTokens.add(refreshToken);
     return {
       access_token: accessToken,
-      token_type: 'Bearer',
+      token_type: options.tokenType ?? 'Bearer',
       expires_in: expiresInSeconds,
       refresh_token: refreshToken,
     };
@@ -109,7 +121,13 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
     ...(options.noRevocation ? {} : { revocation_endpoint: `${origin}/revoke` }),
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code', 'refresh_token'],
-    token_endpoint_auth_methods_supported: ['none', 'client_secret_post', 'client_secret_basic'],
+    ...(options.omitAuthMethods
+      ? {}
+      : {
+          token_endpoint_auth_methods_supported: options.basicOnlyClient
+            ? ['client_secret_basic']
+            : ['none', 'client_secret_post', 'client_secret_basic'],
+        }),
     scopes_supported: ['read', 'write'],
     ...(metadataStyle === 'oidc'
       ? {
@@ -122,6 +140,19 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
     ...(options.cimd ? { client_id_metadata_document_supported: true } : {}),
     ...(options.iss ? { authorization_response_iss_parameter_supported: true } : {}),
   });
+
+  /** True when the request satisfies `basicOnlyClient` (or no such client is configured). */
+  const clientAuthenticated = (req: IncomingMessage, form: URLSearchParams) => {
+    const client = options.basicOnlyClient;
+    if (!client) return true;
+    if (form.has('client_secret')) return false;
+    const [scheme, encoded] = (req.headers.authorization ?? '').split(' ');
+    if (scheme?.toLowerCase() !== 'basic') return false;
+    const [id, secret] = Buffer.from(encoded ?? '', 'base64')
+      .toString('utf8')
+      .split(':');
+    return decodeURIComponent(id ?? '') === client.id && decodeURIComponent(secret ?? '') === client.secret;
+  };
 
   const handler = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', origin);
@@ -176,6 +207,11 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
 
     if (path === '/token' && req.method === 'POST') {
       const form = await readForm(req);
+      if (tokenMode === 'unavailable') {
+        res.writeHead(503, { 'content-type': 'text/html' });
+        return res.end('<html>Service Unavailable</html>');
+      }
+      if (!clientAuthenticated(req, form)) return json(res, 401, { error: 'invalid_client' });
       if (options.tokenDelayMs) await new Promise(resolve => setTimeout(resolve, options.tokenDelayMs));
       fixture.tokenResources.push(form.get('resource'));
       const grant = form.get('grant_type');
@@ -207,6 +243,7 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
 
     if (path === '/revoke' && req.method === 'POST') {
       const form = await readForm(req);
+      if (!clientAuthenticated(req, form)) return json(res, 401, { error: 'invalid_client' });
       fixture.counts.revoke += 1;
       const token = form.get('token') ?? '';
       fixture.revoked.push(token);
@@ -250,6 +287,9 @@ export async function startOAuthFixtureServer(options: OAuthFixtureOptions = {})
     isValidAccessToken: token => accessTokens.get(token)?.expired === false,
     failNextRefresh: () => {
       failRefresh = true;
+    },
+    setTokenMode: mode => {
+      tokenMode = mode;
     },
     expireAccessTokens: () => accessTokens.forEach(entry => (entry.expired = true)),
     close: () =>

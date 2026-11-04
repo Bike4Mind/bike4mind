@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   RemoteMcpInvalidGrantError,
   buildRemoteMcpAuthorizationUrl,
+  chooseClientAuthMethod,
   discoverRemoteMcpOAuth,
   exchangeRemoteMcpCode,
   refreshRemoteMcpTokens,
@@ -49,6 +50,14 @@ describe('discoverRemoteMcpOAuth', () => {
     });
   });
 
+  it('keeps the revocation endpoint and the RFC 9207 flag on the OIDC-only path', async () => {
+    const f = await start({ metadataStyle: 'oidc', iss: true });
+    expect(await discover(f)).toMatchObject({
+      revocationEndpoint: `${f.origin}/revoke`,
+      issParameterSupported: true,
+    });
+  });
+
   it('reads OIDC metadata when RFC 8414 metadata is absent', async () => {
     const f = await start({ metadataStyle: 'oidc', cimd: true });
     expect(await discover(f)).toMatchObject({ tokenEndpoint: `${f.origin}/token`, cimdSupported: true });
@@ -67,9 +76,62 @@ describe('discoverRemoteMcpOAuth', () => {
     await expect(discover(f)).rejects.toThrow(/S256/);
   });
 
-  it('refuses a metadata endpoint that is not https unless plain http is allowed', async () => {
+  it('refuses a server URL that is not https unless plain http is allowed', async () => {
     const f = await start();
     await expect(discoverRemoteMcpOAuth(f.resourceUrl, { fetchFn: f.fetch, network: {} })).rejects.toThrow();
+  });
+
+  describe('against a stubbed https server', () => {
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+    function stub(overrides: { issuer?: string; tokenEndpoint?: string } = {}) {
+      const requested: string[] = [];
+      const fetchFn = vi.fn(async (input: string | URL) => {
+        const url = input.toString();
+        requested.push(url);
+        if (url === 'https://mcp.example/.well-known/oauth-protected-resource/mcp') {
+          return json({ resource: 'https://mcp.example/mcp', authorization_servers: ['https://as.example'] });
+        }
+        if (url === 'https://as.example/.well-known/oauth-authorization-server') {
+          return json({
+            issuer: overrides.issuer ?? 'https://as.example',
+            authorization_endpoint: 'https://as.example/authorize',
+            token_endpoint: overrides.tokenEndpoint ?? 'https://as.example/token',
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+          });
+        }
+        return new Response('not found', { status: 404 });
+      });
+      return { fetchFn: fetchFn as unknown as typeof fetch, requested };
+    }
+    const run = (s: ReturnType<typeof stub>, resourceMetadataUrl?: string) =>
+      discoverRemoteMcpOAuth('https://mcp.example/mcp', { resourceMetadataUrl, fetchFn: s.fetchFn, network: {} });
+
+    it('accepts a well-formed https server', async () => {
+      expect(await run(stub())).toMatchObject({ tokenEndpoint: 'https://as.example/token' });
+    });
+
+    it('refuses an http token endpoint with the endpoint message', async () => {
+      await expect(run(stub({ tokenEndpoint: 'http://as.example/token' }))).rejects.toMatchObject({
+        code: 'discovery_failed',
+        message: expect.stringMatching(/token endpoint is not allowed/),
+      });
+    });
+
+    it('refuses metadata whose issuer is not the authorization server', async () => {
+      await expect(run(stub({ issuer: 'https://other.example' }))).rejects.toMatchObject({
+        code: 'discovery_failed',
+        message: expect.stringContaining('issuer does not match'),
+      });
+    });
+
+    it('never fetches a challenge resource_metadata URL on a private address', async () => {
+      const s = stub();
+      const found = await run(s, 'https://169.254.169.254/prm.json');
+      expect(s.requested.some(url => url.includes('169.254.169.254'))).toBe(false);
+      expect(found.issuer).toBe('https://as.example');
+    });
   });
 
   it('refuses a token endpoint on a private address', async () => {
@@ -159,5 +221,143 @@ describe('sign-in, refresh and revoke against the fixture', () => {
         fetchFn: f.fetch,
       })
     ).rejects.toBeInstanceOf(RemoteMcpInvalidGrantError);
+  });
+});
+
+describe('token endpoint failures', () => {
+  async function signedIn(f: OAuthFixtureServer) {
+    const discovery = await discover(f);
+    const client = await registerRemoteMcpClient(discovery, { redirectUri, clientName: 'Test', fetchFn: f.fetch });
+    const { authorizationUrl, codeVerifier } = await buildRemoteMcpAuthorizationUrl(discovery, {
+      client,
+      redirectUri,
+      state: 's',
+      scopes: [],
+    });
+    const back = new URL((await f.fetch(authorizationUrl, { redirect: 'manual' })).headers.get('location') ?? '');
+    const code = back.searchParams.get('code') ?? '';
+    const tokens = await exchangeRemoteMcpCode(discovery, {
+      client,
+      code,
+      codeVerifier,
+      redirectUri,
+      fetchFn: f.fetch,
+    });
+    return { discovery, client, tokens, code, codeVerifier };
+  }
+
+  it('reports a 503 on refresh as unavailable, not as a refused grant', async () => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    f.setTokenMode('unavailable');
+    await expect(
+      refreshRemoteMcpTokens(discovery, { client, refreshToken: tokens.refreshToken ?? '', fetchFn: f.fetch })
+    ).rejects.toMatchObject({ code: 'token_unavailable' });
+  });
+
+  it('reports a 503 on the code exchange as unavailable', async () => {
+    const f = await start();
+    const { discovery, client, code, codeVerifier } = await signedIn(f);
+    f.setTokenMode('unavailable');
+    await expect(
+      exchangeRemoteMcpCode(discovery, { client, code, codeVerifier, redirectUri, fetchFn: f.fetch })
+    ).rejects.toMatchObject({ code: 'token_unavailable' });
+  });
+
+  it('reports a network error and a timeout as unavailable', async () => {
+    const f = await start();
+    const { discovery, client, tokens } = await signedIn(f);
+    for (const error of [new TypeError('fetch failed'), new Error('Request timed out')]) {
+      await expect(
+        refreshRemoteMcpTokens(discovery, {
+          client,
+          refreshToken: tokens.refreshToken ?? '',
+          fetchFn: (() => Promise.reject(error)) as unknown as typeof fetch,
+        })
+      ).rejects.toMatchObject({ code: 'token_unavailable' });
+    }
+  });
+
+  it('reports a definitive refusal (invalid_client) as token_failed', async () => {
+    const f = await start({ basicOnlyClient: { id: 'c', secret: 's' } });
+    const discovery = await discover(f);
+    await expect(
+      refreshRemoteMcpTokens(discovery, {
+        client: { clientId: 'c', clientSecret: 'wrong', tokenEndpointAuthMethod: 'client_secret_basic' },
+        refreshToken: 'x',
+        fetchFn: f.fetch,
+      })
+    ).rejects.toMatchObject({ code: 'token_failed' });
+  });
+
+  it('refuses a token that is not a bearer token', async () => {
+    const f = await start({ tokenType: 'mac' });
+    await expect(signedIn(f)).rejects.toMatchObject({
+      code: 'token_failed',
+      message: expect.stringContaining('not a bearer token'),
+    });
+  });
+});
+
+describe('token endpoint authentication method', () => {
+  it.each([
+    [[], true, 'client_secret_basic'],
+    [['client_secret_basic', 'client_secret_post'], true, 'client_secret_basic'],
+    [['client_secret_post'], true, 'client_secret_post'],
+    [['private_key_jwt'], true, 'client_secret_basic'],
+    [['client_secret_post'], false, 'none'],
+  ])('chooses from %j (secret: %s) -> %s', (supported, hasSecret, expected) => {
+    expect(chooseClientAuthMethod(supported, hasSecret)).toBe(expected);
+  });
+
+  it.each([
+    ['advertised', {}],
+    ['not advertised', { omitAuthMethods: true }],
+  ])('a basic-only server signs in, refreshes and revokes a manual client (%s)', async (_name, extra) => {
+    const f = await start({ basicOnlyClient: { id: 'my client', secret: 's3cret/+=' }, ...extra });
+    const discovery = await discover(f);
+    const client = {
+      clientId: 'my client',
+      clientSecret: 's3cret/+=',
+      tokenEndpointAuthMethod: chooseClientAuthMethod(discovery.tokenEndpointAuthMethodsSupported, true),
+    };
+    const { authorizationUrl, codeVerifier } = await buildRemoteMcpAuthorizationUrl(discovery, {
+      client,
+      redirectUri,
+      state: 's',
+      scopes: [],
+    });
+    const back = new URL((await f.fetch(authorizationUrl, { redirect: 'manual' })).headers.get('location') ?? '');
+    const tokens = await exchangeRemoteMcpCode(discovery, {
+      client,
+      code: back.searchParams.get('code') ?? '',
+      codeVerifier,
+      redirectUri,
+      fetchFn: f.fetch,
+    });
+    const refreshed = await refreshRemoteMcpTokens(discovery, {
+      client,
+      refreshToken: tokens.refreshToken ?? '',
+      fetchFn: f.fetch,
+    });
+    await revokeRemoteMcpToken(discovery.revocationEndpoint ?? '', {
+      token: refreshed.refreshToken ?? '',
+      hint: 'refresh_token',
+      client,
+      fetchFn: f.fetch,
+    });
+    expect(f.revoked).toEqual([refreshed.refreshToken]);
+  });
+
+  it('client_secret_post is refused by a basic-only server', async () => {
+    const f = await start({ basicOnlyClient: { id: 'c', secret: 's' } });
+    const discovery = await discover(f);
+    await expect(
+      refreshRemoteMcpTokens(discovery, {
+        client: { clientId: 'c', clientSecret: 's', tokenEndpointAuthMethod: 'client_secret_post' },
+        refreshToken: 'x',
+        fetchFn: f.fetch,
+      })
+    ).rejects.toMatchObject({ code: 'token_failed' });
   });
 });
