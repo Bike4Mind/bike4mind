@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InviteType } from '@bike4mind/common';
+import { InviteType, SIGNUP_UNLOCK_FORFEIT_CAUSES } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 import { AdminSettings, CreditTransaction, Invite, mongoose, Organization, User } from '@bike4mind/database';
 import {
@@ -162,6 +162,21 @@ describe('payOrgInviteBonus', () => {
     const user = await createUser('new', released);
     expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
     expect((await User.findById(user.id).lean())?.signupInvite).toBeUndefined();
+  });
+
+  it.each(SIGNUP_UNLOCK_FORFEIT_CAUSES)('does not pay or reserve a bonus seat after a %s forfeiture', async cause => {
+    await createOrganization(true);
+    const invite = await createInvite();
+    const user = await createUser('forfeited', {
+      ...released,
+      signupGrant: { ...grant, unlockForfeited: { cause, at: new Date() } },
+    });
+
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(0);
+    expect(await retryOrgInviteBonus(user.id)).toBe(0);
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+    const organization = await Organization.collection.findOne({ _id: new mongoose.Types.ObjectId(organizationId) });
+    expect(organization?.signupInviteBonusCount).toBeUndefined();
   });
 
   it('does not use a later organization to fund a bonus attributed to another organization', async () => {

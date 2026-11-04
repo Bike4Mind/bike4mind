@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
-import { newSignupGrant } from '@bike4mind/common';
+import { newSignupGrant, SIGNUP_UNLOCK_FORFEIT_CAUSES } from '@bike4mind/common';
 import type { SignupProtection } from '@bike4mind/common';
 import {
   mongoose,
@@ -224,6 +224,21 @@ describe('invite bonus', () => {
     expect(await creditsOf(invited.id)).toBe(3000);
     expect(await bonusRows()).toBe(1);
     expect(await spent('signup')).toBe(3000);
+  });
+
+  it.each(SIGNUP_UNLOCK_FORFEIT_CAUSES)('keeps a deferred bonus unpaid after %s forfeits the grant', async cause => {
+    config.signupGrantSignupPoolDaily = '1500';
+    const invited = await createUser(1, true);
+    await userService.releaseSignupTranche(invited.id, adapters);
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect((await User.findById(invited.id))?.signupGrant?.inviteBonusPaid).toBeUndefined();
+
+    await userService.forfeitPaymentUnlock(invited.id, cause, adapters);
+    config.signupGrantSignupPoolDaily = UNCAPPED;
+    expect((await userService.payInviteBonus(invited.id, adapters)).creditsGranted).toBe(0);
+    expect(await creditsOf(invited.id)).toBe(1000);
+    expect(await spent('signup')).toBe(1000);
+    expect(await bonusRows()).toBe(0);
   });
 
   it('does not pay on a competing reservation that its owner can still refund', async () => {
