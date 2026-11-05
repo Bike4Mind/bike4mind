@@ -544,6 +544,39 @@ describe('evaluateSpend', () => {
       await expect(run(fakes, trustedDomain)).resolves.toEqual({ breaches: 0, posted: 0 });
     });
 
+    it('judges the platform on its full total when the trust lookup fails', async () => {
+      const fakes = createFakes();
+      fakes.findUsersByIds.mockRejectedValueOnce(new Error('users down'));
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 5000),
+        ...windowBuckets('User', 'staff', 4900),
+      ]);
+
+      await run(fakes, trustedDomain);
+
+      expect(fakes.alerts.find(alert => alert.rule === 'platform_spike')).toMatchObject({
+        severity: 'critical',
+        lastValue: 15000,
+      });
+    });
+
+    it('judges the platform on its full total when the trusted history read fails', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 5000),
+        ...windowBuckets('User', 'staff', 4900),
+      ]);
+      // The trusted history is the first owner-scope series read of the run.
+      fakes.windowSeries.mockRejectedValueOnce(new Error('rollup read failed'));
+
+      await run(fakes, trustedDomain);
+
+      expect(fakes.alerts.find(alert => alert.rule === 'platform_spike')).toMatchObject({ lastValue: 15000 });
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-trusted-spend-failed', expect.anything());
+    });
+
     it('still pages the same spike when the account is not trusted', async () => {
       const fakes = createFakes();
       fakes.setRollups([

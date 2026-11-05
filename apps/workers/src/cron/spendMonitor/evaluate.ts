@@ -454,7 +454,11 @@ export async function evaluateSpend(
     deps.logger.error('spend-monitor-trust-lookup-failed', { error });
     return new Set<string>();
   });
-  const trustedSpend = await trustedOwnerSpend(perType, trustedKeys, windowEnd, deps);
+  // Same fail-closed rule: with no trusted spend subtracted, the platform is judged on its full total.
+  const trustedSpend = await trustedOwnerSpend(perType, trustedKeys, windowEnd, deps).catch(error => {
+    deps.logger.error('spend-monitor-trusted-spend-failed', { error });
+    return { current: 0, series: [] } satisfies TrustedSpend;
+  });
   breaches.push(...(await platformBreaches(windowStart, windowEnd, trustedSpend, deps, thresholds)));
   for (const candidates of perType) {
     breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, deps, thresholds)));
