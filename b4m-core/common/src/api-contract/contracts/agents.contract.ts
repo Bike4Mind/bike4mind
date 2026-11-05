@@ -187,6 +187,10 @@ const AUTHORING_FORBIDDEN =
 const AUTHORING_400 =
   'The assistant cannot run: the feature is disabled or not configured on this deployment. Nothing is written.';
 
+const BILLING_400 =
+  'The billing user or organization could not be resolved, or the API key bills an organization ' +
+  'its owner is no longer a member of.';
+
 const AUTHORING_QUOTA_429 =
   'the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: ' +
   '"token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`).';
@@ -221,7 +225,8 @@ export const generateAgentAvatarContract = defineEndpoint({
       description:
         '`image_model` is not an available image model (`errorCode: unknown_model`), no image model is ' +
         'configured, or the generated image would exceed the caller storage quota ' +
-        '(`errorCode: storage_limit_exceeded`). Nothing is written.',
+        '(`errorCode: storage_limit_exceeded`). ' +
+        `${BILLING_400} Nothing is written.`,
       schema: ApiErrorSchema,
     },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
@@ -258,6 +263,7 @@ export const generateAgentDescriptionContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The generated description.', schema: GenerateAgentDescriptionResponseSchema },
+    400: { description: BILLING_400, schema: ApiErrorSchema },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
@@ -287,7 +293,7 @@ export const generateAgentSystemPromptContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The saved system prompt.', schema: GenerateAgentSystemPromptResponseSchema },
-    400: { description: AUTHORING_400, schema: ApiErrorSchema },
+    400: { description: `${AUTHORING_400} ${BILLING_400}`, schema: ApiErrorSchema },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
@@ -326,7 +332,7 @@ export const enhanceAgentFieldContract = defineEndpoint({
   responses: {
     200: { description: 'The enhanced text.', schema: EnhanceAgentFieldResponseSchema },
     400: {
-      description: 'No model is available to run the enhancement on this deployment.',
+      description: `No model is available to run the enhancement on this deployment. ${BILLING_400}`,
       schema: ApiErrorSchema,
     },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
