@@ -260,6 +260,40 @@ describe('realpathSyncNearest', () => {
     expect(withRealPath(join(tmpdir(), 'a', 'b'))).toEqual([join(tmpdir(), 'a', 'b')]);
   });
 
+  it('walks up past an over-long name and a NUL-containing name', () => {
+    const base = join(tmpdir(), 'b4m-missing-codes');
+    const native = realpathSync.native;
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      const text = String(path);
+      if (text.includes('toolong')) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      if (text.includes('\0')) throw Object.assign(new Error('nul'), { code: 'ERR_INVALID_ARG_VALUE' });
+      return native(path, options);
+    });
+    const long = join(tmpdir(), 'toolong', 'x');
+    expect(realpathSyncNearest(long)).toBe(join(native(tmpdir()), 'toolong', 'x'));
+    expect(realpathSyncNearest(`${base}\0x`)).toBe(join(native(tmpdir()), 'b4m-missing-codes\0x'));
+  });
+
+  it('retries with the JS realpath on win32 when native throws EISDIR', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+        throw Object.assign(new Error('is a directory'), { code: 'EISDIR' });
+      });
+      expect(realpathSyncNearest(tmpdir())).toBe(realpathSync(tmpdir()));
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('still returns null on EISDIR off win32', () => {
+    vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw Object.assign(new Error('is a directory'), { code: 'EISDIR' });
+    });
+    expect(realpathSyncNearest(tmpdir())).toBeNull();
+  });
+
   it('returns null when a missing path sits under a parent that cannot be resolved', () => {
     const native = realpathSync.native;
     const locked = join(tmpdir(), 'locked');

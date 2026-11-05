@@ -315,15 +315,37 @@ export function withRealPath(path: string): string[] {
 }
 
 /**
+ * Codes meaning no file by this name exists. ENAMETOOLONG is one: a shell operand such as a
+ * multi-line `git commit -m` message is checked like a path, and no file can carry that name.
+ * So is ERR_INVALID_ARG_VALUE, a NUL in the name: a WSL share path keeps some Linux names behind one.
+ */
+export const MISSING_PATH_CODES: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'ENOTDIR',
+  'ENAMETOOLONG',
+  'ERR_INVALID_ARG_VALUE',
+]);
+
+// Windows volumes outside the mount manager (RAM disks, some virtual drives) make native throw EISDIR.
+function nativeOrJsRealpath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch (error) {
+    if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EISDIR') throw error;
+    return realpathSync(path);
+  }
+}
+
+/**
  * `path` with symlinks resolved as far as it exists, the rest kept as given. Null when resolution
  * fails for any reason but a missing component (EACCES, ELOOP, ...): where it lands is then unknown.
  */
 export function realpathSyncNearest(path: string): string | null {
   try {
-    return realpathSync.native(path);
+    return nativeOrJsRealpath(path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
+    if (!MISSING_PATH_CODES.has(String(code))) return null;
     const parent = dirname(path);
     if (parent === path) return path;
     const real = realpathSyncNearest(parent);

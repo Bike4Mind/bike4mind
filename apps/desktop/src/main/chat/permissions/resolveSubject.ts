@@ -1,13 +1,7 @@
 import { readlink, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
+import { MISSING_PATH_CODES as MISSING } from '../tools/paths';
 import type { PermissionSubject } from './rules';
-
-/**
- * Codes meaning no file by this name exists. ENAMETOOLONG is one: a shell operand such as a
- * multi-line `git commit -m` message is checked like a path, and no file can carry that name.
- * So is ERR_INVALID_ARG_VALUE, a NUL in the name: a WSL share path keeps some Linux names behind one.
- */
-const MISSING = new Set(['ENOENT', 'ENOTDIR', 'ENAMETOOLONG', 'ERR_INVALID_ARG_VALUE']);
 
 export async function physicalPath(path: string): Promise<string> {
   try {
