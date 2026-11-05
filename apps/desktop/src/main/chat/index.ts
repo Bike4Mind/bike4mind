@@ -669,11 +669,15 @@ export function registerChat(
 
   const modelView = new ModelLiveView({
     state: state => send(IPC_CHANNELS.modelState, state),
-    captureRequest: request => {
-      // One rendering is enough: the focused app window, else the first.
+    // One rendering is enough: the focused app window, else the first.
+    captureTarget: () => {
       const target = focusedAppWindow();
-      if (!target || target.isDestroyed()) return false;
-      target.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
+      return target && !target.isDestroyed() ? target.webContents.id : null;
+    },
+    captureRequest: (target, request) => {
+      const window = appWindows().find(entry => !entry.isDestroyed() && entry.webContents.id === target);
+      if (!window) return false;
+      window.webContents.send(IPC_CHANNELS.modelCaptureRequest, request);
       return true;
     },
   });

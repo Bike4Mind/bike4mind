@@ -17,8 +17,10 @@ export type ModelCaptureRequest = { id: string; views: ModelView[]; pose: ModelP
 
 export type ModelLiveViewEvents = {
   state: (state: ModelViewState) => void;
-  /** Ask a window to render screenshots; false when no window can. */
-  captureRequest: (request: ModelCaptureRequest) => boolean;
+  /** The renderer (webContents id) a capture would go to; null when no window can render. */
+  captureTarget: () => number | null;
+  /** Ask that renderer to render screenshots; false when it is gone. */
+  captureRequest: (target: number, request: ModelCaptureRequest) => boolean;
 };
 
 export type ModelLiveViewOptions = {
@@ -27,7 +29,7 @@ export type ModelLiveViewOptions = {
   captureTimeoutMs?: number;
 };
 
-type Waiter = { resolve: (report: ModelBuildReport) => void };
+type Waiter = { from?: number; resolve: (report: ModelBuildReport) => void };
 type PendingCapture = { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 
 /**
@@ -48,6 +50,9 @@ export class ModelLiveView {
   private lastGlb: string | null = null;
   private waiters: Waiter[] = [];
   private readSeq = 0;
+  /** The last generation each renderer reported, by webContents id. */
+  private reported = new Map<number, number>();
+  private glbWrite: { generation: number; written: Promise<string | null> } | null = null;
   private captures = new Map<string, PendingCapture>();
   private readonly debounceMs: number;
   private readonly buildTimeoutMs: number;
@@ -106,12 +111,14 @@ export class ModelLiveView {
     this.publish({ ...this.state, source, missing, generation: this.state.generation + 1 });
   }
 
-  reportBuild(report: ModelBuildReport): void {
+  /** `from` is the reporting renderer's webContents id; every app window builds each generation. */
+  reportBuild(report: ModelBuildReport, from?: number): void {
     if (report.generation !== this.state.generation) return;
     this.lastReport = report;
+    if (from !== undefined) this.reported.set(from, report.generation);
     const waiters = this.waiters;
-    this.waiters = [];
-    for (const waiter of waiters) waiter.resolve(report);
+    this.waiters = waiters.filter(waiter => waiter.from !== undefined && waiter.from !== from);
+    for (const waiter of waiters) if (waiter.from === undefined || waiter.from === from) waiter.resolve(report);
   }
 
   /** The build report for the file as it is on disk now. */
@@ -120,8 +127,13 @@ export class ModelLiveView {
     if (!this.state.path) throw new Error('No model is open.');
     if (this.state.missing) throw new Error(`The model file no longer exists: ${this.state.path}`);
     if (this.lastReport && this.lastReport.generation === this.state.generation) return this.lastReport;
+    return this.nextReport();
+  }
+
+  private nextReport(from?: number): Promise<ModelBuildReport> {
     return new Promise<ModelBuildReport>((resolve, reject) => {
       const waiter: Waiter = {
+        from,
         resolve: report => {
           clearTimeout(timer);
           resolve(report);
@@ -140,7 +152,15 @@ export class ModelLiveView {
    * sibling, so it is never overwritten. Stale generations are dropped, before the write and again
    * before the rename into place, so an older build that finishes writing last cannot win.
    */
-  async writeGlb(generation: number, bytes: Uint8Array): Promise<string | null> {
+  writeGlb(generation: number, bytes: Uint8Array): Promise<string | null> {
+    // Every app window builds each generation; the first write serves them all.
+    if (this.glbWrite?.generation === generation) return this.glbWrite.written;
+    const written = this.writeGlbOnce(generation, bytes);
+    this.glbWrite = { generation, written };
+    return written;
+  }
+
+  private async writeGlbOnce(generation: number, bytes: Uint8Array): Promise<string | null> {
     const { path, kind } = this.state;
     if (generation !== this.state.generation || kind !== 'model' || !path || this.state.missing) return null;
     const target = siblingGlbPath(path);
@@ -180,7 +200,11 @@ export class ModelLiveView {
     return readFile(path).catch(() => null);
   }
 
-  capture(views: ModelView[], pose: ModelPose = 'rest'): Promise<Uint8Array> {
+  /** Renders in one window, after that window has reported the current generation. */
+  async capture(views: ModelView[], pose: ModelPose = 'rest'): Promise<Uint8Array> {
+    const target = this.events.captureTarget();
+    if (target === null) throw new Error('No Bike4Mind window is open to render the model.');
+    if (this.reported.get(target) !== this.state.generation) await this.nextReport(target);
     const id = randomUUID();
     return new Promise<Uint8Array>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -188,7 +212,7 @@ export class ModelLiveView {
         reject(new Error('The model pane did not return a screenshot in time.'));
       }, this.captureTimeoutMs);
       this.captures.set(id, { resolve, reject, timer });
-      if (!this.events.captureRequest({ id, views, pose })) {
+      if (!this.events.captureRequest(target, { id, views, pose })) {
         clearTimeout(timer);
         this.captures.delete(id);
         reject(new Error('No Bike4Mind window is open to render the model.'));

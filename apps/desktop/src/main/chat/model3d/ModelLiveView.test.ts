@@ -10,6 +10,8 @@ const SOURCE = `export const params = { width: { value: 60, min: 20, max: 200, s
 export default function model({ m, p }) { return m.Manifold.cube([p.width, 10, 10]); }
 `;
 
+const WINDOW = 7;
+
 describe('ModelLiveView', () => {
   let dir: string;
   let file: string;
@@ -28,9 +30,10 @@ describe('ModelLiveView', () => {
     view = new ModelLiveView(
       {
         state: state => states.push(state),
-        captureRequest: request => {
+        captureTarget: () => (canCapture ? WINDOW : null),
+        captureRequest: (target, request) => {
           captureRequests.push(request);
-          return canCapture;
+          return target === WINDOW;
         },
       },
       { debounceMs: 20, buildTimeoutMs: 200, captureTimeoutMs: 100 }
@@ -158,9 +161,34 @@ describe('ModelLiveView', () => {
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
 
+  it('writes the GLB once per generation however many windows build it', async () => {
+    await view.open(file);
+    const [first, second] = await Promise.all([
+      view.writeGlb(1, new Uint8Array([1])),
+      view.writeGlb(1, new Uint8Array([2])),
+    ]);
+    expect(first).toBe(join(dir, 'chest.glb'));
+    expect(second).toBe(first);
+    expect([...readFileSync(join(dir, 'chest.glb'))]).toEqual([1]);
+  });
+
+  it('captures only after the target window has built the current generation', async () => {
+    await view.open(file);
+    const pending = view.capture(['front']);
+    view.reportBuild({ generation: 1, ok: true }, WINDOW + 1);
+    await Promise.resolve();
+    expect(captureRequests).toHaveLength(0);
+    view.reportBuild({ generation: 1, ok: true }, WINDOW);
+    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
+    view.resolveCapture(captureRequests[0].id, { bytes: new Uint8Array([1]) });
+    await expect(pending).resolves.toEqual(new Uint8Array([1]));
+  });
+
   it('resolves a capture with the bytes a window returns', async () => {
     await view.open(file);
+    view.reportBuild({ generation: 1, ok: true }, WINDOW);
     const pending = view.capture(['front', 'iso']);
+    await vi.waitFor(() => expect(captureRequests).toHaveLength(1));
     expect(captureRequests[0].views).toEqual(['front', 'iso']);
     view.resolveCapture(captureRequests[0].id, { bytes: new Uint8Array([1, 2]) });
     await expect(pending).resolves.toEqual(new Uint8Array([1, 2]));
@@ -168,6 +196,7 @@ describe('ModelLiveView', () => {
 
   it('fails a capture with no window, and on timeout', async () => {
     await view.open(file);
+    view.reportBuild({ generation: 1, ok: true }, WINDOW);
     canCapture = false;
     await expect(view.capture(['front'])).rejects.toThrow(/No Bike4Mind window/);
     canCapture = true;

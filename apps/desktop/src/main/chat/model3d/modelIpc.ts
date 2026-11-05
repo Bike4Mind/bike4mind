@@ -68,9 +68,9 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     return path ? view.open(path) : null;
   });
 
-  ipcMain.handle(IPC_CHANNELS.modelBuildReport, (_event, value: unknown) => {
+  ipcMain.handle(IPC_CHANNELS.modelBuildReport, (event, value: unknown) => {
     const report = parseBuildReport(value);
-    if (report) view.reportBuild(report);
+    if (report) view.reportBuild(report, event.sender.id);
   });
 
   ipcMain.handle(IPC_CHANNELS.modelWriteGlb, (_event, value: unknown) => {
