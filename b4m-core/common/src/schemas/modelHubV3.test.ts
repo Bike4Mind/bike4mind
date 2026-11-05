@@ -72,6 +72,23 @@ describe('curated v3 schema', () => {
     expect(messages(doc)).toEqual([]);
   });
 
+  it('accepts a label that only resembles a known one, and a label on its own id', () => {
+    for (const license of [
+      { id: 'mit-0', label: 'MIT-0' },
+      { id: 'llama3.1', label: 'Llama 3.1 Community License' },
+      { id: 'apache-2.0', label: 'Apache 2.0' },
+    ])
+      expect(
+        messages(mutated(d => Object.assign(entry(d, 'gemma-4-12b').builds[0].license, license))),
+        license.label
+      ).toEqual([]);
+  });
+
+  it('keeps an own numBatch through parsing', () => {
+    const parsed = HubManifestV3Schema.parse(repoV3());
+    expect(parsed.entries.find(e => e.id === 'gemma-4-12b')?.builds[0].profiles[0].settings.numBatch).toBe(1024);
+  });
+
   const rejected: [string, (doc: Doc) => void, RegExp][] = [
     ['a schemaVersion of 2', d => (d.schemaVersion = 2), /expected 3/i],
     ['a NaN metric', d => (profile(d, 'gemma-4-12b').metrics.decodeTokS = NaN), /expected number/i],
@@ -116,6 +133,12 @@ describe('curated v3 schema', () => {
         ['mit', 'mit'],
         ['BSD-3-Clause', 'bsd-3-clause'],
         ['Gemma', 'gemma'],
+        ['The MIT License', 'mit'],
+        ['MITLicense', 'mit'],
+        ['Apache License, Version 2.0', 'apache-2.0'],
+        ['Apache License Version 2.0', 'apache-2.0'],
+        ['Apache Software License 2.0', 'apache-2.0'],
+        ['Apache 2', 'apache-2.0'],
       ] as const
     ).map(([label, owner]): [string, (doc: Doc) => void, RegExp] => [
       `the near-miss label ${label} on llama3.1`,
@@ -125,6 +148,14 @@ describe('curated v3 schema', () => {
     [
       'a profile with no numBatch',
       d => delete profile(d, 'gemma-4-12b').settings.numBatch,
+      /expected number, received undefined/i,
+    ],
+    [
+      'a profile whose numBatch is only inherited',
+      d => {
+        const { numBatch, ...own } = profile(d, 'gemma-4-12b').settings;
+        profile(d, 'gemma-4-12b').settings = Object.assign(Object.create({ numBatch }), own);
+      },
       /expected number, received undefined/i,
     ],
     ['a profile with no metrics', d => delete profile(d, 'gemma-4-12b').metrics, /expected record/i],

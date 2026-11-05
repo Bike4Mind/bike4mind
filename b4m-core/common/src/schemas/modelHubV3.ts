@@ -85,12 +85,15 @@ const LICENSE_LABELS = new Map<string, string>([
   ['isc', 'ISC'],
   ['gemma', 'Gemma Terms of Use'],
 ]);
-// Folds spelling variants ("Apache-2.0", "MIT License") together so a near-miss label is caught too.
+// Folds spelling variants ("Apache-2.0", "The MIT License", "Apache License, Version 2") together so a near-miss
+// label is caught too.
 const labelKey = (text: string): string =>
   text
     .toLowerCase()
-    .replace(/\blicen[cs]e\b/g, '')
-    .replace(/[^a-z0-9]/g, '');
+    .replace(/(\d)\.0\b/g, '$1')
+    .replace(/\b(the|version|software)\b/g, '')
+    .replace(/[^a-z0-9]/g, '')
+    .replace(/licen[cs]e/g, '');
 const LABEL_OWNERS = new Map(
   [...LICENSE_LABELS].flatMap(([id, label]) => [
     [labelKey(label), id],
@@ -104,13 +107,22 @@ const EntryLicenseSchema = HubLicenseSchema.extend({ label: LicenseLabelSchema }
 
 // The settings a profile was measured with. Ollama applies kv and flashAttn server-wide, so a client sets them per
 // model only where the runtime allows (llama-server presets).
-const TextProfileSettingsSchema = z.object({
+const TextProfileSettingsObjectSchema = z.object({
   numCtx: HubContextSchema,
   kv: z.enum(KV_CACHE_TYPES),
   flashAttn: z.enum(['on', 'auto', 'off']),
   draftNumPredict: z.number().int().min(0).max(16).optional(),
   numBatch: z.number().int().min(64).max(8192),
 });
+// zod reads inherited keys and copies them onto its output, so a check after parsing cannot tell; only own keys count.
+const TextProfileSettingsSchema = z.preprocess<
+  unknown,
+  typeof TextProfileSettingsObjectSchema,
+  z.input<typeof TextProfileSettingsObjectSchema>
+>(
+  raw => (typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? { ...raw } : raw),
+  TextProfileSettingsObjectSchema
+);
 
 const ProfileSchema = z.object({
   id: z.enum(HUB_PROFILE_IDS),
