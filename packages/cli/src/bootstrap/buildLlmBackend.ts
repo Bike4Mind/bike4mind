@@ -503,9 +503,12 @@ export async function attachLocalModels(
     ollamaAttach,
     attachServers(config, opts, deps),
   ]);
-  const ollamaHost = ollama.host;
-  const ollamaBackend = ollama.backend;
-  const ollamaModels = ollama.models;
+  // A detected host never shadows a server model that shares an id; a configured host still does.
+  const serverIds = new Set(serverModels.map(m => m.id));
+  const ollamaModels = ollama.detected ? ollama.models.filter(m => !serverIds.has(m.id)) : ollama.models;
+  const dropDetected = ollama.detected && ollamaModels.length === 0;
+  const ollamaHost = dropDetected ? null : ollama.host;
+  const ollamaBackend = dropDetected ? null : ollama.backend;
 
   if (serverModels.length === 0 && ollamaModels.length === 0 && !servers.owner) {
     if (!ollamaHost) throw new Error('No models available from server.');

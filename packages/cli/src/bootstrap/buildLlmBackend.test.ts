@@ -9,6 +9,7 @@ import {
   type BuildLlmBackendDeps,
 } from './buildLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
+import { modelSavePatch } from '../utils/performModelSwitch.js';
 
 const model = (id: string) => ({ id }) as ModelInfo;
 
@@ -371,6 +372,59 @@ describe('buildLlmBackend, detecting a running Ollama', () => {
     const flagged = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
     const res = await buildLlmBackend(detecting({ ollamaHost: 'http://flag-box:11434' }), flagged.deps);
     expect(res.detectedOllama).toBeNull();
+  });
+
+  it('does not offer a detected model whose id the server lists, so the server model keeps its id', async () => {
+    const { deps } = makeDeps({
+      detectOllama: vi.fn(async () => DETECTED),
+      createOllamaBackend: vi.fn(() => fakeBackend([model('m1'), model('ollama1')])),
+    });
+
+    const res = await buildLlmBackend(detecting(), deps);
+
+    const routes = vi.mocked(deps.createMultiBackend).mock.calls[0][2];
+    expect(routes.flatMap(r => r.models.map(m => m.id))).toEqual(['ollama1']);
+    expect((await res.llm.getModelInfo()).map(m => m.id)).toEqual(['m1', 'ollama1']);
+    expect(res.detectedOllama?.modelIds).toEqual(new Set(['ollama1']));
+    expect(modelSavePatch({ id: 'm1' }, createMockConfig({}), res.detectedOllama)).toEqual({ defaultModel: 'm1' });
+  });
+
+  it('attaches nothing when every detected model is also a server model', async () => {
+    const { deps, serverBackend } = makeDeps({
+      detectOllama: vi.fn(async () => DETECTED),
+      createOllamaBackend: vi.fn(() => fakeBackend([model('m1')])),
+    });
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(detecting({ startupLog }), deps);
+
+    expect(res.llm).toBe(serverBackend);
+    expect(res.detectedOllama).toBeNull();
+    expect(startupLog).toEqual([]);
+  });
+
+  it('keeps a configured host routing a model the server also lists', async () => {
+    const { deps } = makeDeps({
+      createOllamaBackend: vi.fn(() => fakeBackend([model('m1'), model('ollama1')])),
+    });
+
+    await buildLlmBackend(detecting({ ollamaHost: 'http://flag-box:11434' }), deps);
+
+    const routes = vi.mocked(deps.createMultiBackend).mock.calls[0][2];
+    expect(routes.flatMap(r => r.models.map(m => m.id))).toEqual(['m1', 'ollama1']);
+  });
+
+  it('still lists and saves a detected model the server does not list', async () => {
+    const { deps } = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
+
+    const res = await buildLlmBackend(detecting(), deps);
+
+    expect((await res.llm.getModelInfo()).map(m => m.id)).toEqual(['m1', 'ollama1']);
+    expect(modelSavePatch({ id: 'ollama1' }, createMockConfig({}), res.detectedOllama)).toEqual({
+      defaultModel: 'ollama1',
+      ollamaHost: DETECTED,
+      localDefaultModel: 'ollama1',
+    });
   });
 
   it('gives a detected host a short listing deadline instead of the saved-host one', async () => {
