@@ -4,7 +4,7 @@
 Runs from the operator's machine through kubectl and streams both artifacts off the
 cluster into a local directory: mongo.archive.gz (mongodump --oplog) and objects.tar
 (mc mirror of the seven buckets, via a helper pod cloned from the init Job), plus a
-manifest.json. The Secret (SECRET_ENCRYPTION_KEY and friends) is never read or copied.
+manifest.json. The Secret (SECRET_ENCRYPTION_KEY and friends) is never written or copied; only the bucket names are read from the helper's environment.
 The ElasticMQ PVC is excluded on purpose. See README.md "Backup and restore".
 """
 import argparse
@@ -256,8 +256,12 @@ class Helper:
             manifest = fallback_pod_manifest(self.release, self.name, self.mc_image, secret_name, self.release + '-config')
         else:
             raise BackupError('init Job %s-buckets-* is gone; pass --mc-image' % self.release)
-        self.kube.run(['create', '-f', '-'], input_text=json.dumps(manifest))
-        self.kube.run(['wait', '--for=condition=Ready', 'pod/' + self.name, '--timeout=300s'])
+        try:
+            self.kube.run(['create', '-f', '-'], input_text=json.dumps(manifest))
+            self.kube.run(['wait', '--for=condition=Ready', 'pod/' + self.name, '--timeout=300s'])
+        except BaseException:
+            self.__exit__()
+            raise
         return self
 
     def __exit__(self, *exc):
@@ -273,7 +277,7 @@ class Helper:
     def buckets(self):
         if not is_local_s3(self.text('printf %s "${AWS_ENDPOINT_URL_S3:-}"'), self.release):
             raise BackupError('object storage is not the bundled MinIO; back up external S3 with your provider')
-        return buckets_from_env(self.text('printenv'))
+        return buckets_from_env(self.text('for k in %s; do printf "%%s=%%s\\n" "$k" "$(printenv "$k")"; done' % ' '.join(BUCKET_KEYS)))
 
     def counts(self, buckets):
         return {line.split()[0]: int(line.split()[1]) for line in self.text(count_script(buckets)).splitlines()}
@@ -375,7 +379,7 @@ def restore(args):
             try:
                 scale(kube, roles, False, release)
             except BackupError as error:
-                raise BackupError('%s; and: %s' % (original, error)) from original
+                raise BackupError('%s; and: %s' % (str(original) or type(original).__name__, error)) from original
             raise
         scale(kube, roles, False, release)
     print('restore complete from %s' % src)

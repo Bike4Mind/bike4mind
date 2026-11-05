@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import subprocess
 import tarfile
@@ -42,6 +43,7 @@ class FakeKube:
         self.restored_counts, self.late_databases, self.db_reads = None, late_databases, 0
         self.calls, self.databases, self.counts, self.fail_restore = [], list(databases), counts, fail_restore
         self.fail_scale_at, self.replicas, self.scale_calls = fail_scale_at, replicas or {}, 0
+        self.restore_error = backup.BackupError('restore boom')
 
     def run(self, args, input_text=None, stdout=None, stdin=None, check=True):
         self.calls.append(list(args))
@@ -49,10 +51,10 @@ class FakeKube:
         out = ''
         if 'listDatabases' in joined:
             self.db_reads += 1
-            late = self.late_databases is not None and self.db_reads > 1
+            late = self.late_databases is not None and ['scale', 'deployment', 'rel-app', '--replicas', '0'] in self.calls
             out = json.dumps(self.late_databases if late else self.databases)
         elif 'mongorestore' in joined and self.fail_restore:
-            raise backup.BackupError('boom')
+            raise self.restore_error
         elif args[0] == 'scale':
             self.scale_calls += 1
             if self.scale_calls == self.fail_scale_at:
@@ -159,7 +161,7 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn('$(mc ls', script)
 
     def test_count_matches_tar_counts_for_marker_lookalike_keys(self):
-        keys = ['.initialized-abc', 'u1/uninitialized-notes.txt', 'reinitialized-x', 'dir/.initialized-y', 'plain.txt']
+        keys = ['.initialized-abc', 'u1/uninitialized-notes.txt', 'reinitialized-x', 'einitialized-x', 'dir/.initialized-y', 'plain.txt']
         with tempfile.TemporaryDirectory() as d:
             root = pathlib.Path(d)
             (root / 'bin').mkdir()
@@ -177,7 +179,7 @@ class CommandTests(unittest.TestCase):
                    'MINIO_ROOT_USER': 'u', 'MINIO_ROOT_PASSWORD': 'p'}
             out = subprocess.run(['sh', '-c', script], env=env, text=True, capture_output=True, check=True).stdout
             self.assertEqual(int(out.split()[1]), backup.tar_counts(tar, ['a'])['a'])
-            self.assertEqual(int(out.split()[1]), 4)
+            self.assertEqual(int(out.split()[1]), 5)
 
     def test_tar_counts_ignores_marker_and_other_dirs(self):
         with tempfile.TemporaryDirectory() as d:
@@ -428,8 +430,22 @@ class RestoreSafetyTests(unittest.TestCase):
         with self.assertRaises(backup.BackupError) as ctx:
             self.run_restore(kube)
         self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0', '2', '1'])
-        self.assertIn('boom', str(ctx.exception))
-        self.assertIn('scale boom', str(ctx.exception))
+        self.assertEqual(str(ctx.exception),
+                         'restore boom; and: could not scale back up (fix by hand): rel-app: scale boom')
+        self.assertIs(ctx.exception.__cause__, kube.restore_error)
+
+    def test_interrupt_scales_back_up_and_propagates(self):
+        kube = FakeKube(fail_restore=True)
+        kube.restore_error = KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_restore(kube)
+        self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0', '2', '1'])
+
+    def test_interrupt_with_failed_scale_up_names_the_interrupt(self):
+        kube = FakeKube(fail_restore=True, fail_scale_at=3)
+        kube.restore_error = KeyboardInterrupt()
+        with self.assertRaisesRegex(backup.BackupError, '^KeyboardInterrupt; and: '):
+            self.run_restore(kube)
 
     def test_database_seeded_during_drain_is_dropped(self):
         kube = FakeKube(databases=['admin'], late_databases=['admin', 'bike4mind'])
@@ -440,6 +456,12 @@ class RestoreSafetyTests(unittest.TestCase):
         self.assertIn('"bike4mind"', ' '.join(dropped[0]))
         self.assertLess(kube.calls.index(['scale', 'deployment', 'rel-app', '--replicas', '0']),
                         kube.calls.index(dropped[0]))
+
+    def test_database_seeded_after_check_is_dropped_without_yes(self):
+        kube = FakeKube(databases=['admin'], late_databases=['admin', 'bike4mind'])
+        kube.restored_counts = {'a': 1, 'b': 0}
+        self.run_restore(kube)
+        self.assertEqual(len([c for c in kube.calls if 'dropDatabase' in ' '.join(c)]), 1)
 
     def test_scaled_back_even_when_restore_fails(self):
         kube = FakeKube(fail_restore=True)
@@ -487,6 +509,20 @@ class HelperLifecycleTests(unittest.TestCase):
                 pass
             self.assertIn(['delete', 'pod', helper.name, '--wait=false', '--ignore-not-found'], kube.calls)
 
+    def test_pod_deleted_when_ready_wait_fails(self):
+        class K(self.kube().__class__):
+            def run(self, args, **kw):
+                if args[0] == 'wait':
+                    self.calls.append(list(args))
+                    raise backup.BackupError('timed out')
+                return super().run(args, **kw)
+        for exc in (backup.BackupError('timed out'), KeyboardInterrupt()):
+            kube = K()
+            helper = backup.Helper(kube, 'rel', 'mc:1')
+            with self.assertRaises(BaseException):
+                helper.__enter__()
+            self.assertIn(['delete', 'pod', helper.name, '--wait=false', '--ignore-not-found'], kube.calls)
+
     def test_fallback_pod_created_when_init_job_gone(self):
         kube = self.kube()
         with backup.Helper(kube, 'rel', 'mc:1'):
@@ -510,6 +546,21 @@ class RefusalTests(unittest.TestCase):
                 return False
         with self.assertRaisesRegex(backup.BackupError, 'external MongoDB'):
             backup.require_local_mongo(NoMongo(), 'rel')
+
+    def test_bucket_lookup_does_not_read_other_secrets(self):
+        helper = backup.Helper.__new__(backup.Helper)
+        helper.release, seen = 'rel', []
+        env = dict(os.environ, SECRET_ENCRYPTION_KEY='s3cret', **{k: 'b-' + k for k in backup.BUCKET_KEYS})
+
+        def text(script):
+            if script.startswith('printf'):
+                return 'http://rel-minio:9000'
+            out = subprocess.run(['sh', '-c', script], env=env, text=True, capture_output=True).stdout
+            seen.append(out)
+            return out
+        helper.text = text
+        self.assertEqual(helper.buckets(), ['b-' + k for k in backup.BUCKET_KEYS])
+        self.assertNotIn('s3cret', seen[0])
 
     def test_non_local_s3_refused(self):
         helper = backup.Helper.__new__(backup.Helper)
