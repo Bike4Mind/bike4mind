@@ -9,7 +9,7 @@ tags: [admin, analytics]
 
 The Analytics page (**Overview > Analytics**) shows who uses Bike4Mind, how often, and whether they come back. It is a trend page: the Dashboard answers "is anything wrong right now?", Analytics answers "are we growing?".
 
-All days are UTC days, and every chart says so. Counts exclude admin accounts, system accounts, accounts flagged as automated test accounts, accounts on your internal staff email domains, accounts tagged Developer, and test personas (a `persona-` username or an email on a configured test domain). Active users and real signups also exclude banned accounts and accounts whose AI access is held (moderated, awaiting review, suspended or under a payment dispute). Every other account is counted. The activation funnel and its user lists follow the same rule, so banned or held accounts do not appear in any step.
+All days are UTC days, and every chart says so. By default, counts exclude internal accounts: admin accounts, system accounts, accounts flagged as automated test accounts, accounts on your internal staff email domains, accounts tagged Developer, and test personas (a `persona-` username or an email on a configured test domain). Active users and real signups also exclude banned accounts and accounts whose AI access is held (moderated, awaiting review, suspended or under a payment dispute). Every other account is counted. The activation funnel and its user lists follow the same rule, so banned or held accounts do not appear in any step.
 
 ## Toolbar
 
@@ -18,10 +18,13 @@ All days are UTC days, and every chart says so. Counts exclude admin accounts, s
 | **Range** | 7d, 28d, 90d, 12m, Custom | 28d |
 | **Compare** | Previous period, Off | Previous period |
 | **Signups** | Real only, All | Real only |
+| **Accounts** | External only, Internal only, All | External only |
 
 **Custom** shows two date inputs. Both days are included, and the range can cover at most 366 days.
 
-The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signups`), so a copied link opens the same view.
+The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signups`, `accounts`), so a copied link opens the same view.
+
+**Accounts** chooses whose activity the active-user tiles and the Active users section count. **Internal only** counts just the internal accounts the default view leaves out, and **All** counts everyone. A user whose account changed between internal and external during a week or month is counted once in **All**'s weekly and monthly numbers. Signups always exclude internal accounts, whichever option is selected.
 
 **Last updated** shows when the nightly rollup last ran. A **Stale** chip appears when it is more than 30 hours old.
 
@@ -42,6 +45,8 @@ The tiles cover complete days only. When the range ends today, today is still co
 ## Active users
 
 A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished. A separate **API users (not counted)** line shows how many people used the public API each day; it is never part of the active user numbers.
+
+Hover over any day to see its external and internal daily, weekly and monthly active users, whichever **Accounts** option is selected.
 
 Switch to **By surface** to see AI requests per day stacked by surface as bars. Internal system traffic is not shown.
 
@@ -66,7 +71,7 @@ Each chart has a **View as table** button that shows the same numbers as a table
 
 ## Gaps, empty ranges and errors
 
-- **Missing days**: if the nightly rollup did not run for some days, a banner says how many. Those days are drawn as gaps, never as zero. Select **Show missing days** to list them.
+- **Missing days**: if the nightly rollup did not run for some days, a banner says how many. Those days are drawn as gaps, never as zero. Select **Show missing days** to list them. With **Accounts** set to Internal only or All, a second line lists days whose internal counts are missing or incomplete: days rolled up before internal counts were recorded, and days whose 28-day window includes one. They show as gaps, today included, until the rollup is run again for them.
 - **No activity**: a section with nothing to show offers **Show last 90 days**.
 - **Errors**: a section that fails to load shows **Try again**.
 

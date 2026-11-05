@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import axios, { type InternalAxiosRequestConfig } from 'axios';
+import { registerAccountDeletionRequestGuard } from '@client/app/utils/accountDeletionInterceptor';
 import { IUserDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import {
@@ -285,6 +287,37 @@ describe('useUser store — isHydrated flag', () => {
     useUser.getState().setCurrentUser(fakeUser({ aupAcceptedVersion: 'v1' }));
     const persisted = JSON.parse(localStorage.getItem('user-context') as string);
     expect(persisted.state.currentUser.aupAcceptedVersion).toBe('v1');
+  });
+
+  it('persists a pending deletion so a reload is locked before any request fires', () => {
+    const deletion = { requestedAt: new Date(), scheduledFor: new Date('2026-12-01T00:00:00.000Z'), source: 'self' };
+    useUser.getState().setCurrentUser(fakeUser({ deletion } as Partial<IUserDocument>));
+    const persisted = JSON.parse(localStorage.getItem('user-context') as string);
+    expect(persisted.state.currentUser.deletion.scheduledFor).toBe('2026-12-01T00:00:00.000Z');
+  });
+
+  it('cancels app requests through the api guard only while the store user is deletion-pending', async () => {
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => ({
+      data: {},
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    }));
+    const client = axios.create({ adapter });
+    const eject = registerAccountDeletionRequestGuard(client);
+    try {
+      const deletion = { requestedAt: new Date(), scheduledFor: new Date(), source: 'self' };
+      useUser.getState().setCurrentUser(fakeUser({ deletion } as Partial<IUserDocument>));
+      expect(axios.isCancel(await client.get('/api/sessions').catch((e: unknown) => e))).toBe(true);
+      expect(adapter).not.toHaveBeenCalled();
+
+      useUser.getState().setCurrentUser(fakeUser({ deletion: null }));
+      await client.get('/api/sessions');
+      expect(adapter).toHaveBeenCalledTimes(1);
+    } finally {
+      eject();
+    }
   });
 });
 

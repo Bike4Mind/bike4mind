@@ -32,7 +32,7 @@ function makeAdapters(startingCredits: number) {
   });
   const update = vi.fn().mockResolvedValue(undefined);
   // No purchase on the ledger unless a test says otherwise.
-  const findByOwnerWithFilters = vi.fn().mockResolvedValue([]);
+  const findUnreversedPurchase = vi.fn().mockResolvedValue(null);
 
   const db: any = {
     users: {
@@ -51,12 +51,12 @@ function makeAdapters(startingCredits: number) {
     friendship: {},
     userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
     realtimeConnections: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
-    creditTransactions: { createTransaction, findByOwnerWithFilters },
+    creditTransactions: { createTransaction, findUnreversedPurchase },
   };
   return {
     adapters: { db },
     createTransaction,
-    findByOwnerWithFilters,
+    findUnreversedPurchase,
     incrementCredits,
     update,
     target,
@@ -434,29 +434,36 @@ describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
   });
 
   it('re-stamps lastCreditsPurchasedAt when an admin grant repairs an account with a purchase row', async () => {
-    const { adapters, update, target, findByOwnerWithFilters } = makeAdapters(100);
+    const { adapters, update, target, findUnreversedPurchase } = makeAdapters(100);
     target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
-    findByOwnerWithFilters.mockResolvedValueOnce([{ id: 'purchase-row', type: 'purchase' }]);
+    findUnreversedPurchase.mockResolvedValueOnce({ id: 'purchase-row', type: 'purchase' });
     const before = Date.now();
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 5000, creditReason: 'repair' }, adapters);
 
-    expect(findByOwnerWithFilters).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User, {
-      transactionTypes: ['purchase'],
-      limit: 1,
-    });
+    expect(findUnreversedPurchase).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User);
     // Newer than the row, so creditPurchaseReconciliation stops flagging the repaired purchase.
     const stamp = update.mock.calls[0][0].lastCreditsPurchasedAt as Date;
     expect(stamp.getTime()).toBeGreaterThanOrEqual(before);
   });
 
+  it('does not re-stamp when every purchase on the ledger was refunded or lost a dispute', async () => {
+    const { adapters, update, target, findUnreversedPurchase } = makeAdapters(100);
+    target.lastCreditsPurchasedAt = null;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 5000, creditReason: 'goodwill' }, adapters);
+
+    expect(findUnreversedPurchase).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User);
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
   it('does not read the ledger for a deduction, so a clawback never stamps a buyer', async () => {
-    const { adapters, update, findByOwnerWithFilters } = makeAdapters(12000);
-    findByOwnerWithFilters.mockResolvedValue([{ id: 'purchase-row', type: 'purchase' }]);
+    const { adapters, update, findUnreversedPurchase } = makeAdapters(12000);
+    findUnreversedPurchase.mockResolvedValue({ id: 'purchase-row', type: 'purchase' });
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -2500 }, adapters);
 
-    expect(findByOwnerWithFilters).not.toHaveBeenCalled();
+    expect(findUnreversedPurchase).not.toHaveBeenCalled();
     expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 

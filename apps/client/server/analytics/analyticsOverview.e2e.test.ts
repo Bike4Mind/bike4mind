@@ -96,7 +96,10 @@ describe('getAnalyticsOverview', () => {
     await seedEvent(users.fresh, `${TODAY}T10:00:00Z`, { source: 'system' });
     await seedEvent(users.b, `${TODAY}T09:45:00Z`, { source: 'api' });
 
-    const overview = await getAnalyticsOverview({ range: '28d', compare: 'prev', signups: 'all' }, NOW);
+    const overview = await getAnalyticsOverview(
+      { range: '28d', compare: 'prev', signups: 'all', accounts: 'external' },
+      NOW
+    );
     const today = overview.activeUsers.days.at(-1);
     expect(today).toMatchObject({ day: TODAY, partial: true, dau: 2, wau: 2, mau: 3, apiDau: 1 });
     expect(overview.activeUsers.bySource.at(-1)?.counts).toEqual({ web: 1, cli: 1, api: 1 });
@@ -112,6 +115,18 @@ describe('getAnalyticsOverview', () => {
       apiDau: nightly?.api?.dau,
     });
     expect(nightly?.api).toEqual({ dau: 1, wau: 1, mau: 1 });
+    expect(today?.internal).toEqual({ dau: 1, wau: 1, mau: 1 });
+    expect(today?.internal).toEqual({
+      dau: nightly?.internal?.dau,
+      wau: nightly?.internal?.wau,
+      mau: nightly?.internal?.mau,
+    });
+    const all = await getAnalyticsOverview({ range: '28d', compare: 'prev', signups: 'all', accounts: 'all' }, NOW);
+    expect(all.activeUsers.days.at(-1)).toMatchObject({
+      dau: (nightly?.dau ?? 0) + (nightly?.internal?.dau ?? 0),
+      wau: nightly?.internal?.allWau,
+      mau: nightly?.internal?.allMau,
+    });
     const liveSignups = overview.signups.buckets.at(-1);
     expect({
       legit: liveSignups?.legit,
@@ -153,14 +168,21 @@ describe('getAnalyticsOverview', () => {
     await seedEvent(users.a, '2026-06-10T10:00:00Z');
     await rollupDay('2026-06-10', { now: NOW });
     await seedEvent(users.b, '2026-06-14T22:00:00Z');
+    await seedEvent(users.admin, '2026-06-14T23:00:00Z');
     await seedEvent(users.c, `${TODAY}T08:00:00Z`);
+    const today = (accounts: 'external' | 'internal' | 'all') =>
+      getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit', accounts }, NOW).then(overview =>
+        overview.activeUsers.days.at(-1)
+      );
 
-    const overview = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
-    expect(overview.activeUsers.days.at(-1)).toMatchObject({ day: TODAY, partial: true, dau: 1, wau: 3, mau: 3 });
+    expect(await today('external')).toMatchObject({ day: TODAY, partial: true, dau: 1, wau: 3, mau: 3 });
+    expect(await today('internal')).toMatchObject({ dau: 0, wau: 1, mau: 1 });
+    expect(await today('all')).toMatchObject({ dau: 1, wau: 4, mau: 4 });
 
     await rollupDay('2026-06-14', { now: NOW });
-    const afterRollup = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
-    expect(afterRollup.activeUsers.days.at(-1)).toMatchObject({ dau: 1, wau: 3, mau: 3 });
+    expect(await today('external')).toMatchObject({ dau: 1, wau: 3, mau: 3 });
+    expect(await today('internal')).toMatchObject({ dau: 0, wau: 1, mau: 1 });
+    expect(await today('all')).toMatchObject({ dau: 1, wau: 4, mau: 4 });
   });
 
   it('leaves today as a gap when the live slice fails, keeping the rolled-up days', async () => {
@@ -169,7 +191,10 @@ describe('getAnalyticsOverview', () => {
     liveFailure.error = new Error('operation exceeded time limit');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const overview = await getAnalyticsOverview({ range: '7d', compare: 'off', signups: 'legit' }, NOW);
+    const overview = await getAnalyticsOverview(
+      { range: '7d', compare: 'off', signups: 'legit', accounts: 'external' },
+      NOW
+    );
     expect(overview.activeUsers.days.at(-1)).toEqual({
       day: TODAY,
       dau: null,
@@ -177,6 +202,8 @@ describe('getAnalyticsOverview', () => {
       mau: null,
       apiDau: null,
       partial: true,
+      external: null,
+      internal: null,
     });
     expect(overview.activeUsers.days.find(day => day.day === '2026-06-10')).toMatchObject({ dau: 1 });
     expect(warn).toHaveBeenCalledWith('analytics overview: live slice for today failed', liveFailure.error);
@@ -189,13 +216,31 @@ describe('getAnalyticsOverview', () => {
     await seedEvent(users.b, `${TODAY}T08:00:00Z`);
 
     const overview = await getAnalyticsOverview(
-      { range: 'custom', from: '2026-06-01', to: '2026-06-02', compare: 'off', signups: 'legit' },
+      { range: 'custom', from: '2026-06-01', to: '2026-06-02', compare: 'off', signups: 'legit', accounts: 'external' },
       NOW
     );
     expect(overview.window).toMatchObject({ partialDay: null, completeDays: 2, previous: null });
     expect(overview.activeUsers.days).toEqual([
-      { day: '2026-06-01', dau: 1, wau: 1, mau: 1, apiDau: 0, partial: false },
-      { day: '2026-06-02', dau: null, wau: null, mau: null, apiDau: null, partial: false },
+      {
+        day: '2026-06-01',
+        dau: 1,
+        wau: 1,
+        mau: 1,
+        apiDau: 0,
+        partial: false,
+        external: { dau: 1, wau: 1, mau: 1 },
+        internal: { dau: 0, wau: 0, mau: 0 },
+      },
+      {
+        day: '2026-06-02',
+        dau: null,
+        wau: null,
+        mau: null,
+        apiDau: null,
+        partial: false,
+        external: null,
+        internal: null,
+      },
     ]);
     expect(overview.missingDays).toEqual(['2026-06-02']);
     expect(overview.lastUpdated).toBe(NOW.toISOString());

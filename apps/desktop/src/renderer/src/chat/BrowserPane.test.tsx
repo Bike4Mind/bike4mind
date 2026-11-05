@@ -230,10 +230,10 @@ describe('the browser pane resize handle', () => {
     flushFrames();
     expect(paneWidth()).toBe(BROWSER_PANE_WIDTH + 200);
 
-    // 42% of a 2000px window, well inside what the conversation can give up.
+    // Everything the 400px sidebar leaves but the conversation's minimum.
     move(0);
     flushFrames();
-    expect(paneWidth()).toBe(840);
+    expect(paneWidth()).toBe(1200);
 
     move(2000);
     flushFrames();
@@ -362,7 +362,7 @@ describe('the browser pane resize handle', () => {
     window.localStorage.setItem('b4m.browserPane.width', '800');
     setViewport(1400);
     mount();
-    expect(paneWidth()).toBe(588);
+    expect(paneWidth()).toBe(600);
     press(800);
     release();
     expect(window.localStorage.getItem('b4m.browserPane.width')).toBe('800');
@@ -401,8 +401,8 @@ describe('the browser pane resize handle', () => {
       window.dispatchEvent(new Event('resize'));
     });
     flushFrames();
-    // 42% of 1400.
-    expect(paneWidth()).toBe(588);
+    // 1400 less the sidebar and the conversation's minimum.
+    expect(paneWidth()).toBe(600);
 
     setViewport(2000);
     act(() => {

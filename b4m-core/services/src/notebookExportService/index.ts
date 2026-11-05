@@ -256,7 +256,25 @@ export class NotebookExportService {
     }
   }
 
-  private async getSessionsToExport(userId: string, options: NotebookExportOptions) {
+  /**
+   * Builds the user's notebooks one at a time without storing anything, so a caller that writes
+   * them elsewhere (the account data export) never holds the whole set in memory. Yields nothing
+   * when the user has no notebooks, rather than throwing NO_NOTEBOOKS.
+   */
+  async *buildNotebooks(userId: string, options: NotebookExportOptions): AsyncGenerator<ExportedNotebook> {
+    const sessions = await this.getSessionsToExport(userId, options);
+    for (const session of sessions) {
+      yield await this.exportSession(session, options, userId);
+    }
+  }
+
+  /** Id and name of every notebook `buildNotebooks` would visit, without building any of them. */
+  async listNotebooks(userId: string, options: NotebookExportOptions): Promise<{ id: string; name: string }[]> {
+    const sessions = await this.getSessionsToExport(userId, options, { name: 1 });
+    return sessions.map(session => ({ id: session.id, name: session.name }));
+  }
+
+  private async getSessionsToExport(userId: string, options: NotebookExportOptions, projection?: Record<string, 1>) {
     const query: SessionQuery = { userId };
 
     // Filter by specific notebook IDs
@@ -290,7 +308,9 @@ export class NotebookExportService {
       }
     }
 
-    return await this.adapters.sessionRepository.find(query);
+    return projection
+      ? await this.adapters.sessionRepository.find(query, projection as ExportReadOptions)
+      : await this.adapters.sessionRepository.find(query);
   }
 
   private async exportSession(
@@ -444,7 +464,7 @@ export class NotebookExportService {
             fileId: file.id,
             moderationStatus: file.moderationStatus,
           });
-        } else if ((exportedFile.size || 0) <= options.maxFileSize) {
+        } else if (options.maxFileSize > 0 && (exportedFile.size || 0) <= options.maxFileSize) {
           try {
             const storagePath = file.filePath;
             if (storagePath) {
@@ -648,6 +668,8 @@ export class NotebookExportService {
           });
           return null;
         }
+
+        if (options.imagesAsKeys) return imagePath;
 
         try {
           const imageContent = await this.adapters.fileStorageService.getFileContent(imagePath);

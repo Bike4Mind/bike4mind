@@ -36,3 +36,31 @@ describe('UserModel.findByIds - tolerates non-ObjectId ids', () => {
     expect(found.find(u => u.id === b)?.emailVerified).toBeFalsy();
   });
 });
+
+describe('UserModel.findAdminTargetsByIds', () => {
+  it('returns the admin flags and display fields for valid ids and drops the rest', async () => {
+    const a = new Types.ObjectId().toString();
+    const b = new Types.ObjectId().toString();
+    await User.create({ _id: a, username: 'alice', name: 'Alice', email: 'alice@example.com' });
+    await User.create({
+      _id: b,
+      username: 'bob',
+      name: 'Bob',
+      email: 'bob@example.com',
+      adminPermissions: ['credits:adjust'],
+    });
+
+    const found = await userRepository.findAdminTargetsByIds([a, 'slack:U123', b]);
+
+    expect(found.map(u => u.id).sort()).toEqual([a, b].sort());
+    expect(found.find(u => u.id === b)).toMatchObject({
+      email: 'bob@example.com',
+      username: 'bob',
+      adminPermissions: ['credits:adjust'],
+    });
+  });
+
+  it('returns nothing for an all-invalid id list', async () => {
+    await expect(userRepository.findAdminTargetsByIds(['not-an-oid'])).resolves.toEqual([]);
+  });
+});

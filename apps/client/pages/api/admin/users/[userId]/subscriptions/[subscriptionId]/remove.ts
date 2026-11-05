@@ -2,7 +2,7 @@ import { organizationRepository, userRepository, withTransaction } from '@bike4m
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { ApiKeyScope, IMongoDocument } from '@bike4mind/common';
-import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import {
   SubscriptionOwnerType,
   ISubscription,
@@ -112,7 +112,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).delete(
       // must wake the gate from here. (Individual admin-grant rows carry no
       // subscriptionId and are not reachable via this route's Stripe-id
       // lookup - pre-existing behavior.)
-      if (entitlementsForPriceIds([subscription.priceId]).size > 0) {
+      if (priceAffectsEntitlements(subscription.priceId)) {
         await sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'invalidate_query',
           queryKey: ['entitlements'],

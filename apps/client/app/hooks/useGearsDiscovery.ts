@@ -14,6 +14,8 @@ import {
   DISCOVERY_RECHECK_MS,
   DISCOVERY_SETTLE_MS,
   discoveryCandidates,
+  isDiscoveryHeldForCampaign,
+  isDiscoverySkippedPath,
   pickDiscoveryGears,
   readDiscoveryState,
   shouldShowDiscovery,
@@ -53,12 +55,13 @@ export function useGearsDiscovery(): GearsDiscovery {
 
   useEffect(() => {
     if (decidedRef.current || !settled || !userId || isError) return;
-    if (pathname.startsWith('/admin') || pathname.startsWith('/gears')) return;
+    if (isDiscoverySkippedPath(pathname)) return;
     if (wasWhatsNewShown()) {
       decidedRef.current = true;
       return;
     }
-    if (isStreaming || isAnyModalDialogOpen()) {
+    // The campaign hold expires, so it waits like an open dialog instead of ending the decision.
+    if (isStreaming || isAnyModalDialogOpen() || isDiscoveryHeldForCampaign(Date.now())) {
       const t = setTimeout(() => setTick(n => n + 1), DISCOVERY_RECHECK_MS);
       return () => clearTimeout(t);
     }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Box, useTheme } from '@mui/joy';
+import { Box, Divider, Typography, useTheme } from '@mui/joy';
 import {
   Bar,
   BarChart,
@@ -14,7 +14,7 @@ import {
   YAxis,
 } from 'recharts';
 import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
-import type { AnalyticsOverview } from '@client/app/utils/analyticsOverview';
+import type { ActiveUserCounts, ActiveUsersDay, AnalyticsOverview } from '@client/app/utils/analyticsOverview';
 import { DataTable, SegmentedControl, type DataColumn } from '../shared';
 import { SIGNAL_COLORS } from '../Signups/SignupChart';
 import { AnalyticsSection } from './AnalyticsSection';
@@ -39,6 +39,63 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 const PARTIAL_DASH = '4 4';
 
+type TooltipEntry = { name?: string | number; value?: unknown; color?: string; payload?: { day?: string } };
+const splitLine = (counts: ActiveUserCounts | null | undefined) =>
+  counts
+    ? `DAU ${formatCount(counts.dau)}, WAU ${formatCount(counts.wau)}, MAU ${formatCount(counts.mau)}`
+    : 'not recorded';
+
+/** The hovered day's series, then its external and internal active users whichever accounts are selected. */
+export function ActiveUsersTooltip({
+  active,
+  payload,
+  label,
+  daysById,
+}: {
+  active?: boolean;
+  payload?: readonly TooltipEntry[];
+  label?: string | number;
+  daysById: ReadonlyMap<string, ActiveUsersDay>;
+}) {
+  const day = payload?.[0]?.payload?.day;
+  if (!active || !payload?.length || !day) return null;
+  const split = daysById.get(day);
+  return (
+    <Box
+      data-testid="analytics-active-users-tooltip"
+      sx={{
+        bgcolor: 'admin.surface',
+        border: '1px solid',
+        borderColor: 'admin.border',
+        borderRadius: '8px',
+        px: 1.25,
+        py: 0.75,
+        color: 'admin.ink',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>{`${label} (UTC)`}</Typography>
+      {payload
+        .filter(entry => entry.value != null)
+        .map(entry => (
+          <Typography key={String(entry.name)} level="body-xs" sx={{ color: 'admin.ink' }}>
+            <Box component="span" sx={{ color: entry.color }}>
+              {'\u25CF '}
+            </Box>
+            {`${entry.name}: ${formatCount(Number(entry.value))}`}
+          </Typography>
+        ))}
+      <Divider sx={{ my: 0.5 }} />
+      <Typography level="body-xs" sx={{ color: 'admin.ink' }} data-testid="analytics-tooltip-external">
+        {`External: ${splitLine(split?.external)}`}
+      </Typography>
+      <Typography level="body-xs" sx={{ color: 'admin.ink' }} data-testid="analytics-tooltip-internal">
+        {`Internal: ${splitLine(split?.internal)}`}
+      </Typography>
+    </Box>
+  );
+}
+
 type Props = {
   data: AnalyticsOverview | undefined;
   loading: boolean;
@@ -54,6 +111,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
   const [mode, setMode] = useState<ActiveUsersMode>('users');
 
   const days = useMemo(() => data?.activeUsers.days ?? [], [data]);
+  const daysById = useMemo(() => new Map(days.map(day => [day.day, day])), [days]);
   const compare = !!data?.window.previous;
   const sources = useMemo(
     () =>
@@ -109,13 +167,6 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
       ? `Line chart of daily, weekly and monthly active users per UTC day. ${caption}`
       : 'Stacked bar chart of AI requests per UTC day by surface.';
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
-  const tooltipStyle = {
-    background: admin.surface,
-    border: `1px solid ${admin.border}`,
-    borderRadius: 8,
-    color: admin.ink,
-    fontSize: 12,
-  };
   const sourceColor = (source: string) => {
     const slot = SOURCE_ORDER.indexOf(source);
     const palette = SIGNAL_COLORS[scheme];
@@ -151,11 +202,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
             <CartesianGrid vertical={false} stroke={admin.border} />
             <XAxis dataKey="label" tick={axisTick} minTickGap={24} tickLine={false} />
             <YAxis tick={axisTick} width={44} allowDecimals={false} axisLine={false} tickLine={false} />
-            <Tooltip
-              contentStyle={tooltipStyle}
-              labelFormatter={label => `${label} (UTC)`}
-              formatter={(value, name) => [formatCount(value == null ? null : Number(value)), name]}
-            />
+            <Tooltip content={<ActiveUsersTooltip daysById={daysById} />} />
             <Legend wrapperStyle={{ fontSize: 12, color: admin.inkSecondary }} />
             {compare && (
               <Line
@@ -226,12 +273,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
             <CartesianGrid vertical={false} stroke={admin.border} />
             <XAxis dataKey="label" tick={axisTick} minTickGap={24} tickLine={false} />
             <YAxis tick={axisTick} width={44} allowDecimals={false} axisLine={false} tickLine={false} />
-            <Tooltip
-              cursor={{ fill: admin.hover }}
-              contentStyle={tooltipStyle}
-              labelFormatter={label => `${label} (UTC)`}
-              formatter={(value, name) => [formatCount(value == null ? null : Number(value)), name]}
-            />
+            <Tooltip cursor={{ fill: admin.hover }} content={<ActiveUsersTooltip daysById={daysById} />} />
             <Legend wrapperStyle={{ fontSize: 12, color: admin.inkSecondary }} />
             {sources.map(source => (
               <Bar

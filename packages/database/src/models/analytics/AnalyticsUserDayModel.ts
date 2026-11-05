@@ -51,16 +51,13 @@ export class AnalyticsUserDayRepository extends BaseRepository<IAnalyticsUserDay
     super(model);
   }
 
-  /** Distinct users with a row in the inclusive [fromDay, toDay] range that also matches `filter`. */
-  async countDistinctUsers(
+  /** Ids of the users with a row in the inclusive [fromDay, toDay] range that also matches `filter`. */
+  async distinctUserIds(
     fromDay: string,
     toDay: string,
     filter: { active: true } | { sources: string } = { active: true }
-  ): Promise<number> {
-    const rows = await this.model
-      .distinct('userId', { day: { $gte: fromDay, $lte: toDay }, ...filter })
-      .maxTimeMS(60_000);
-    return rows.length;
+  ): Promise<string[]> {
+    return this.model.distinct('userId', { day: { $gte: fromDay, $lte: toDay }, ...filter }).maxTimeMS(60_000);
   }
 }
 

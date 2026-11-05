@@ -1,6 +1,11 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import type { ImageModerationIncident as ImageModerationIncidentData, IncidentReviewStatus } from '@bike4mind/common';
-import { INCIDENT_REPORT_CHANNELS, INCIDENT_REVIEW_STATUSES, INCIDENT_SURFACES } from '@bike4mind/common';
+import {
+  INCIDENT_OVERRIDABLE_REVIEW_STATUSES,
+  INCIDENT_REPORT_CHANNELS,
+  INCIDENT_REVIEW_STATUSES,
+  INCIDENT_SURFACES,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
@@ -47,9 +52,11 @@ const ImageModerationIncidentSchema = new Schema(
     reportChannel: { type: String, enum: INCIDENT_REPORT_CHANNELS, required: false },
     reportedBy: { type: String, required: false },
     reportedAt: { type: Date, required: false },
-    previousReviewStatus: { type: String, enum: ['false_positive'], required: false },
+    previousReviewStatus: { type: String, enum: INCIDENT_OVERRIDABLE_REVIEW_STATUSES, required: false },
     falsePositiveBy: { type: String, required: false },
     falsePositiveAt: { type: Date, required: false },
+    noActionBy: { type: String, required: false },
+    noActionAt: { type: Date, required: false },
     alertedAt: { type: Date, required: false },
     lastReminderAt: { type: Date, required: false },
   },
@@ -78,6 +85,10 @@ export const STALE_CONFIRMED_CSAM_MS = 10 * 60 * 1000;
 // missing field too. Shared so claimForNcmecSubmission and recordManualReport cannot diverge:
 // both are the "unreviewed" predicate, and only one of them may win a given race.
 const UNREVIEWED_REVIEW_STATUSES: (IncidentReviewStatus | null)[] = ['pending_review', null];
+
+// Incidents with a final verdict, for looking past verdicts up. confirmed_csam is a claim in
+// flight, not a verdict, so it is neither here nor in the unreviewed set.
+export const CLOSED_REVIEW_STATUSES: IncidentReviewStatus[] = ['false_positive', 'no_action', 'reported'];
 
 export class ImageModerationIncidentRepository extends BaseRepository<IImageModerationIncidentDocument> {
   constructor(model: Model<IImageModerationIncidentDocument>) {
@@ -158,6 +169,29 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
   }
 
   /**
+   * Incidents with a final verdict (see CLOSED_REVIEW_STATUSES), newest first. `before` pages
+   * back: only incidents created strictly before it, or created at `before` with an id below
+   * `beforeId` (so rows sharing one createdAt are neither skipped nor repeated across pages).
+   */
+  async findClosed(limit: number, before?: Date, beforeId?: string): Promise<IImageModerationIncidentDocument[]> {
+    const cursor = !before
+      ? {}
+      : beforeId
+        ? {
+            $or: [
+              { createdAt: { $lt: before } },
+              { createdAt: before, _id: { $lt: new mongoose.Types.ObjectId(beforeId) } },
+            ],
+          }
+        : { createdAt: { $lt: before } };
+    return this.model
+      .find({ reviewStatus: { $in: CLOSED_REVIEW_STATUSES }, ...cursor })
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit)
+      .lean() as unknown as IImageModerationIncidentDocument[];
+  }
+
+  /**
    * Returns incidents stuck in 'confirmed_csam' for longer than staleAfterMs (default 10 min).
    * These are claims where the NCMEC HTTP call had an unknown outcome (timeout, network error)
    * and the verdict route deliberately left the incident unclaimed for human verification.
@@ -193,8 +227,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * absent/pending_review to 'reported' in one atomic write, so it races cleanly with
    * claimForNcmecSubmission: whichever lands first wins and the other gets null.
    *
-   * Also overrides a 'false_positive' verdict: the tip already exists at NCMEC, so the record
-   * must say so, and previousReviewStatus keeps the earlier verdict visible. Never acts on
+   * Also overrides a 'false_positive' or 'no_action' verdict: the tip already exists at NCMEC, so
+   * the record must say so, and previousReviewStatus keeps the earlier verdict visible. Never acts on
    * 'confirmed_csam' (an API submission owns it) or 'reported'.
    */
   async recordManualReport(
@@ -214,10 +248,27 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       { new: true }
     );
     if (fromUnreviewed) return fromUnreviewed;
-    // Each write is atomic on its own filter; a row can only match one of the two.
+    // Each write is atomic on its own filter; a row can only match one of them.
+    for (const previousReviewStatus of INCIDENT_OVERRIDABLE_REVIEW_STATUSES) {
+      const overridden = await this.model.findOneAndUpdate(
+        { _id: id, reviewStatus: previousReviewStatus },
+        { $set: { ...reported, previousReviewStatus } },
+        { new: true }
+      );
+      if (overridden) return overridden;
+    }
+    return null;
+  }
+
+  /**
+   * Close an unreviewed incident as correctly blocked with nothing to report. Only from
+   * absent/pending_review, so it never overwrites another verdict or an in-flight submission.
+   * Returns null when the incident is not unreviewed (or not found).
+   */
+  async markNoAction(id: string, actorId: string): Promise<IImageModerationIncidentDocument | null> {
     return this.model.findOneAndUpdate(
-      { _id: id, reviewStatus: 'false_positive' },
-      { $set: { ...reported, previousReviewStatus: 'false_positive' } },
+      { _id: id, reviewStatus: { $in: UNREVIEWED_REVIEW_STATUSES } },
+      { $set: { reviewStatus: 'no_action', noActionBy: actorId, noActionAt: new Date() } },
       { new: true }
     );
   }
@@ -227,7 +278,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * (`reportedBy`, with `reportedAt`) are set when `status === 'reported'`; for 'false_positive'
    * the acting admin and time go to `falsePositiveBy`/`falsePositiveAt`. Returns null if the
    * transition is disallowed:
-   * - always blocked when already 'reported' (idempotency)
+   * - always blocked when already 'reported' (idempotency) or 'no_action' (a closing verdict is
+   *   never replaced by this method; recordManualReport is the override path)
    * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
    *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
    */
@@ -247,7 +299,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       update.falsePositiveAt = new Date();
       if (actorId) update.falsePositiveBy = actorId;
     }
-    const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam'] : ['reported'];
+    const excluded =
+      status === 'false_positive' ? ['reported', 'confirmed_csam', 'no_action'] : ['reported', 'no_action'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
   }
 

@@ -30,6 +30,7 @@ import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule'
 import { SelfHostWorker } from './selfHostWorker';
 import { registerNotebookCurationQueue } from './notebookCurationQueue';
 import { registerQuestExportQueue } from './questExportQueue';
+import { registerAccountDataExportQueue } from './accountDataExportQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerRiskEvidenceQueue } from './riskEvidenceQueue';
@@ -51,6 +52,7 @@ import { registerSkillMarketReviewSla } from './skillMarketReviewSla';
 import { registerAdminAuditAlerts } from './adminAuditAlerts';
 import { registerOauthAbuseAutoBlock } from './oauthAbuseAutoBlock';
 import { registerSignupGrantHeldRelease } from './signupGrantHeldRelease';
+import { registerAccountDeletionSweep } from './accountDeletionSweep';
 import { registerRealtimeConnectionSweep } from './realtimeConnectionSweep';
 import { registerIntegrationHealthCheck } from './integrationHealthCheck';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -133,6 +135,7 @@ async function main() {
   registerAdminAuditAlerts(worker);
   registerOauthAbuseAutoBlock(worker);
   registerSignupGrantHeldRelease(worker);
+  registerAccountDeletionSweep(worker);
   registerRealtimeConnectionSweep(worker);
   registerIntegrationHealthCheck(worker, bootLogger);
   registerLakeHealthSweep(worker);
@@ -241,6 +244,7 @@ async function main() {
   registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
   await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
   await registerQuestExportQueue(worker, Resource.questExportQueue?.url, bootLogger);
+  await registerAccountDataExportQueue(worker, Resource.accountDataExportQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
