@@ -1,7 +1,27 @@
-import type { ModelInfo } from '@bike4mind/common';
+import { ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { parseLocalModelId } from '@bike4mind/local-models/servers';
 
 export const MODEL_SWITCH_BUSY_MESSAGE =
   'Agent is busy - wait for the current response to finish before switching models.';
+
+/**
+ * What to save for a picked model. A model on an Ollama found by detection also saves that host and the
+ * local default, since later runs that never detect (`b4m -p`) must reach it instead of a hosted model.
+ */
+export function modelSavePatch(
+  model: Pick<ModelInfo, 'id' | 'backend'>,
+  config: { ollamaHost?: string },
+  detectedOllamaHost: string | null
+): { defaultModel: string; ollamaHost?: string; localDefaultModel?: string } {
+  const onDetectedOllama =
+    model.backend === ModelBackend.Ollama &&
+    !parseLocalModelId(model.id) &&
+    !config.ollamaHost &&
+    detectedOllamaHost !== null;
+  return onDetectedOllama
+    ? { defaultModel: model.id, ollamaHost: detectedOllamaHost, localDefaultModel: model.id }
+    : { defaultModel: model.id };
+}
 
 export interface ModelSwitchDeps {
   /** True while a response is streaming; re-read, never snapshotted. */

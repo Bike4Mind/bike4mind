@@ -49,6 +49,8 @@ export interface BuildLlmBackendInput {
   detectOllama?: boolean;
   /** Deadline for that probe (ms); defaults to `OLLAMA_DETECT_TIMEOUT_MS`. */
   ollamaDetectTimeoutMs?: number;
+  /** Deadline for listing a detected Ollama's models (ms); defaults to `DETECTED_OLLAMA_LISTING_TIMEOUT_MS`. */
+  ollamaDetectedListingTimeoutMs?: number;
   /** The live session id, sent with each completion so the server ledger can attribute it. */
   getSessionId?: () => string | undefined;
   /** Where a model server's tools-off notice goes; defaults to a logged warning. */
@@ -62,6 +64,8 @@ export interface BuildLlmBackendInput {
 export const SAVED_OLLAMA_LISTING_TIMEOUT_MS = 5_000;
 /** How long startup waits for an Ollama on the default loopback address when no host is configured. */
 export const OLLAMA_DETECT_TIMEOUT_MS = 1_000;
+/** How long startup waits to list the models of a detected Ollama; the user never configured it. */
+export const DETECTED_OLLAMA_LISTING_TIMEOUT_MS = 1_500;
 /** The default model's server must answer before startup goes on; a busy CPU-only box can be slow to. */
 export const DEFAULT_SERVER_TIMEOUT_MS = 60_000;
 
@@ -78,6 +82,8 @@ export interface BuildLlmBackendResult {
   modelInfo: ModelInfo;
   /** Settles once every other saved model server has joined `llm` or been skipped. */
   later: Promise<void>;
+  /** The base URL of an Ollama that was found running with no host configured; null otherwise. */
+  detectedOllamaHost: string | null;
 }
 
 /**
@@ -260,6 +266,8 @@ export interface LocalModelsAttachment {
   ollamaModelCount: number;
   /** Ollama's model listing failed or timed out, so its models are unknown. */
   ollamaListingFailed: boolean;
+  /** `ollamaHost` was found by detection, not configured. */
+  ollamaDetected: boolean;
   /** Saved model servers whose models were listed before startup went on: the default model's, if any. */
   servers: { name: string; modelCount: number }[];
   warnings: string[];
@@ -273,6 +281,8 @@ export interface AttachLocalModelsOptions {
   detectOllama?: (signal: AbortSignal) => Promise<string | null>;
   /** Deadline for `detectOllama` (ms); defaults to `OLLAMA_DETECT_TIMEOUT_MS`. */
   detectTimeoutMs?: number;
+  /** Deadline for listing a detected Ollama's models (ms); defaults to `DETECTED_OLLAMA_LISTING_TIMEOUT_MS`. */
+  detectedListingTimeoutMs?: number;
   /** Deadline for a saved Ollama host, and for each saved model server other than the default model's (ms). */
   listingTimeoutMs?: number;
   /** Deadline for the default model's server to answer and list its models (ms). */
@@ -460,23 +470,33 @@ export async function attachLocalModels(
   const rawHost = explicit ?? config.ollamaHost;
   // A down Ollama must not block startup on the server models. A saved host may be a machine that is
   // gone, so its listing also gets a deadline; a host passed for this run is waited on.
-  const deadlineMs = explicit ? undefined : (opts.listingTimeoutMs ?? SAVED_OLLAMA_LISTING_TIMEOUT_MS);
-  const ollamaAttach = (rawHost ? Promise.resolve(withDefaultOllamaPort(rawHost)) : detectOllamaHost(opts)).then(
-    async host => {
-      const backend = host ? deps.createOllamaBackend(host) : null;
-      const listing: { models: ModelInfo[]; error?: string } = backend
-        ? await withDeadline(backend.getModelInfo(), deadlineMs).then(
-            listed => ({ models: listed }),
-            (error: unknown) => {
-              const message = extractErrorMessage(error);
-              logger.warn(`Error fetching model info from Ollama: ${message}`);
-              return { models: [] as ModelInfo[], error: message };
-            }
-          )
-        : { models: [] };
-      return { host, backend, ...listing };
+  const ollamaAttach = (async () => {
+    const detected = rawHost ? null : await detectOllamaHost(opts);
+    const host = rawHost ? withDefaultOllamaPort(rawHost) : detected;
+    const deadlineMs = explicit
+      ? undefined
+      : detected
+        ? (opts.detectedListingTimeoutMs ?? DETECTED_OLLAMA_LISTING_TIMEOUT_MS)
+        : (opts.listingTimeoutMs ?? SAVED_OLLAMA_LISTING_TIMEOUT_MS);
+    const backend = host ? deps.createOllamaBackend(host) : null;
+    const listing: { models: ModelInfo[]; error?: string } = backend
+      ? await withDeadline(backend.getModelInfo(), deadlineMs).then(
+          listed => ({ models: listed }),
+          (error: unknown) => {
+            const message = extractErrorMessage(error);
+            if (detected) logger.debug(`Error fetching model info from Ollama: ${message}`);
+            else logger.warn(`Error fetching model info from Ollama: ${message}`);
+            return { models: [] as ModelInfo[], error: message };
+          }
+        )
+      : { models: [] };
+    // An Ollama the user never configured is attached only when it has models to offer; it never warns.
+    if (detected && (listing.error !== undefined || listing.models.length === 0)) {
+      logger.debug(`Detected Ollama at ${detected} not attached: ${listing.error ?? 'no models pulled'}`);
+      return { host: null, backend: null, models: [] as ModelInfo[], detected: false };
     }
-  );
+    return { host, backend, detected: detected !== null, ...listing };
+  })();
   const [serverModels, ollama, servers] = await Promise.all([
     llm.getModelInfo(),
     ollamaAttach,
@@ -510,6 +530,7 @@ export async function attachLocalModels(
     ollamaHost,
     ollamaModelCount: ollamaModels.length,
     ollamaListingFailed: ollama.error !== undefined,
+    ollamaDetected: ollama.detected,
     servers: servers.owner ? [{ name: servers.owner.name, modelCount: servers.owner.models.length }] : [],
     warnings,
   };
@@ -571,6 +592,7 @@ export async function buildLlmBackend(
       listingTimeoutMs: input.ollamaListingTimeoutMs,
       detectOllama: input.detectOllama ? deps.detectOllama : undefined,
       detectTimeoutMs: input.ollamaDetectTimeoutMs,
+      detectedListingTimeoutMs: input.ollamaDetectedListingTimeoutMs,
       servers: input.servers ?? 'all',
       onNotice: input.onNotice ?? (text => logger.warn(`\u26a0\ufe0f  ${text}`)),
       onModelsAdded: input.onModelsAdded,
@@ -600,5 +622,12 @@ export async function buildLlmBackend(
   // Update LLM backend with selected model
   llm.currentModel = modelInfo.id;
 
-  return { llm, wsManager, models, modelInfo, later };
+  return {
+    llm,
+    wsManager,
+    models,
+    modelInfo,
+    later,
+    detectedOllamaHost: attached.ollamaDetected ? attached.ollamaHost : null,
+  };
 }

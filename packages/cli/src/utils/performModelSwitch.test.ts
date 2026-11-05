@@ -1,6 +1,33 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { ModelInfo } from '@bike4mind/common';
-import { performModelSwitch, MODEL_SWITCH_BUSY_MESSAGE, type ModelSwitchDeps } from './performModelSwitch';
+import { ModelBackend, type ModelInfo } from '@bike4mind/common';
+import {
+  modelSavePatch,
+  performModelSwitch,
+  MODEL_SWITCH_BUSY_MESSAGE,
+  type ModelSwitchDeps,
+} from './performModelSwitch';
+
+describe('modelSavePatch', () => {
+  const DETECTED = 'http://127.0.0.1:11434';
+  const ollama = { id: 'qwen3.5', backend: ModelBackend.Ollama };
+
+  it('saves the detected host and local default with a detected Ollama model', () => {
+    expect(modelSavePatch(ollama, {}, DETECTED)).toEqual({
+      defaultModel: 'qwen3.5',
+      ollamaHost: DETECTED,
+      localDefaultModel: 'qwen3.5',
+    });
+  });
+
+  it.each([
+    ['a hosted model', { id: 'claude-opus-4-8', backend: ModelBackend.Anthropic }, {}, DETECTED],
+    ['a saved model server model', { id: 'local:srv-a:qwen', backend: ModelBackend.Ollama }, {}, DETECTED],
+    ['a host that is already saved', ollama, { ollamaHost: 'box' }, DETECTED],
+    ['no detected host', ollama, {}, null],
+  ])('saves only the model for %s', (_name, picked, config, detected) => {
+    expect(modelSavePatch(picked, config, detected)).toEqual({ defaultModel: picked.id });
+  });
+});
 
 const model = { id: 'claude-opus-4-8', name: 'Claude Opus 4.8' } as unknown as ModelInfo;
 

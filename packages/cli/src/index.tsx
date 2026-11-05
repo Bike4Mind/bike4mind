@@ -62,6 +62,7 @@ import {
   formatStep,
   resolveModelCommand,
   performModelSwitch,
+  modelSavePatch,
   MODEL_SWITCH_BUSY_MESSAGE,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
@@ -353,6 +354,7 @@ function CliApp() {
   // init()'s stable closure.
   const folderTrustResolvedRef = useRef(false);
   const mcpApprovalResolvedRef = useRef(false);
+  const detectedOllamaHostRef = useRef<string | null>(null);
   const todoStoreRef = useRef(createTodoStore());
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
@@ -723,7 +725,7 @@ function CliApp() {
       // carries feature events, never completions (see buildLlmBackend).
       // Saved model servers other than the default model's join the /model picker as they answer.
       const liveModels: { current: ModelInfo[] | null } = { current: null };
-      const { llm, wsManager, models, modelInfo } = await buildLlmBackend({
+      const { llm, wsManager, models, modelInfo, detectedOllamaHost } = await buildLlmBackend({
         config,
         apiClient,
         tokenGetter,
@@ -735,6 +737,8 @@ function CliApp() {
           setState((prev: CliState) => ({ ...prev, availableModels: next }));
         },
       });
+
+      detectedOllamaHostRef.current = detectedOllamaHost;
 
       // Create new session with the ACTUAL model being used.
       // Host board-pane session pinning (claude-compat): --resume reopens an
@@ -3906,8 +3910,9 @@ function CliApp() {
         // merged effective config through handleSaveConfig would launder repo
         // preferences into the global layer. The live-session apply is handled
         // by performModelSwitch's applyToSession (applyModelToSession) below.
-        await state.configStore.save({ defaultModel: modelId });
-        setState(prev => (prev.config ? { ...prev, config: { ...prev.config, defaultModel: modelId } } : prev));
+        const patch = modelSavePatch({ ...model, id: modelId }, state.config, detectedOllamaHostRef.current);
+        await state.configStore.save(patch);
+        setState(prev => (prev.config ? { ...prev, config: { ...prev.config, ...patch } } : prev));
       },
       applyToSession: applyModelToSession,
       log: message => console.log(message),
