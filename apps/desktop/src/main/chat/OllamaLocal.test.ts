@@ -1870,10 +1870,53 @@ describe('OllamaLocal context sizing', () => {
       });
       const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13), undefined, read);
       expect((await local.models()).map(model => model.id)).toEqual([longTurn.model]);
+      expect(await local.contextFit()).toEqual({});
       await expect(local.stream(longTurn, () => undefined)).rejects.toThrow(
         '/data/model-settings.json is not valid JSON'
       );
       expect(sent()).toEqual([]);
+    });
+
+    it('stops reading again under saves that keep landing, sends one read whole, and caches none of it', async () => {
+      ollama(mtp(131072));
+      let reads = 0;
+      let saving = true;
+      const read = vi.fn(async (): Promise<ModelLoadSettings> => {
+        reads++;
+        if (saving) forgetLocalContextOf(longTurn.model);
+        return { context: { mode: 'fixed', tokens: 1024 * (reads + 4) }, draftTokens: reads };
+      });
+      const local = new OllamaLocal(undefined, undefined, undefined, read);
+      await local.stream(longTurn, () => undefined);
+      expect(read).toHaveBeenCalledTimes(25);
+      saving = false;
+      await local.stream(longTurn, () => undefined);
+      expect(read).toHaveBeenCalledTimes(26);
+      expect(chatBodies().map(body => body.options)).toEqual([
+        { num_ctx: 1024 * 29, draft_num_predict: 25 },
+        { num_ctx: 1024 * 30, draft_num_predict: 26 },
+      ]);
+    });
+
+    it('stops sizing again under Settings changes that keep landing, without caching the result', async () => {
+      ollama(trainedFor(131072));
+      let saving = true;
+      const footprint = vi.fn(async () => {
+        if (saving) forgetLocalContexts();
+        return footprintOn(13);
+      });
+      const local = new OllamaLocal(undefined, {
+        setting: async () => AUTO_LOCAL_CONTEXT,
+        footprint,
+        cachedFootprint: () => footprintOn(13),
+      });
+      expect(await local.contextTokens(longTurn.model)).toBe(65536);
+      expect(footprint).toHaveBeenCalledTimes(5);
+      saving = false;
+      expect(await local.contextTokens(longTurn.model)).toBe(65536);
+      expect(footprint).toHaveBeenCalledTimes(6);
+      expect(await local.contextTokens(longTurn.model)).toBe(65536);
+      expect(footprint).toHaveBeenCalledTimes(6);
     });
 
     it('stops Auto at its cap and says the cap is why a prompt was not given more room', async () => {
