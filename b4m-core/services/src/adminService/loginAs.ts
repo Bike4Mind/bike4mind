@@ -75,6 +75,10 @@ export const loginAs = async (adminUser: IUserDocument, parameters: LoginAsParam
     throw new ForbiddenError('Cannot loginAs a system user');
   }
 
+  if (targetUser.deletion) {
+    throw new ForbiddenError('Cannot loginAs an account that is scheduled for deletion');
+  }
+
   await notify.send(targetUser);
 
   return targetUser;

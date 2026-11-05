@@ -115,6 +115,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'questExportQueue',
   },
   {
+    label: 'account-data-export',
+    displayName: 'Account Data Export',
+    application: 'AccountDataExport',
+    sourceQueue: 'accountDataExportQueue',
+  },
+  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',

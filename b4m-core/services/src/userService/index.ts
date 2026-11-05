@@ -42,4 +42,6 @@ export * from './signupProtection';
 export * from './signupGrantBudget';
 export * from './domainIntelligence';
 export * from './heldSignupGrants';
+export * from './signupGrantActionClassifier';
 export * from './signupGrantAdminActions';
+export * from './bulkSignupGrantActions';

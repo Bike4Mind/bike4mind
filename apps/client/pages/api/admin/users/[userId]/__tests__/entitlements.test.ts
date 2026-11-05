@@ -55,6 +55,7 @@ vi.mock('@server/entitlements/partnerRules', () => ({
   partnerEntitlementsForEmail: (...a: unknown[]) => mockPartnerKeys(...a),
 }));
 
+import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import handler from '../entitlements';
 
 const ADMIN = { id: 'admin1', isAdmin: true };
@@ -378,5 +379,25 @@ describe('GET /api/admin/users/:userId/entitlements', () => {
     const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === key);
     expect(row.held).toBe(true);
     expect(row.sources.some((s: { type: string }) => s.type === 'subscription')).toBe(true);
+  });
+  it('reports Questmaster as held through an active paid plan, with a subscription source', async () => {
+    const paidPriceId = Object.keys(SUBSCRIPTION_PLANS_MAP)[0];
+    expect(paidPriceId).toBeDefined();
+    mockSubs.mockResolvedValue([{ priceId: paidPriceId }]);
+    mockUserFind.mockResolvedValue({ id: 'u1', tags: [], isAdmin: false, email: null, emailVerified: false });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === 'questmaster:pro');
+    expect(row.held).toBe(true);
+    expect(row.sources).toContainEqual({ type: 'subscription', detail: 'Active paid subscription' });
+  });
+
+  it('does not report Questmaster as held for a lapsed subscriber with no active rows', async () => {
+    mockSubs.mockResolvedValue([]);
+    mockUserFind.mockResolvedValue({ id: 'u1', tags: [], isAdmin: false, email: null, emailVerified: false });
+    const { res, promise } = run({ user: ADMIN });
+    await promise;
+    const row = res._getJSONData().entitlements.find((r: { key: string }) => r.key === 'questmaster:pro');
+    expect(row.held).toBe(false);
   });
 });

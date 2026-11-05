@@ -3496,7 +3496,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return fabFileIds;
   }
 
-  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+  async hardDeleteWithChunks(
+    fabFileId: string,
+    chunkBatchSize = 1000,
+    beforeBatch?: () => Promise<void>
+  ): Promise<void> {
     if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
       throw new Error('Cleanup chunk batch size must be between 1 and 1000');
     }
@@ -3512,6 +3516,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
     }
     for (;;) {
+      await beforeBatch?.();
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
         .limit(chunkBatchSize + 1)
         .lean();
@@ -3523,6 +3528,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         continue;
       }
       const completed = await withTransaction(async () => {
+        await beforeBatch?.();
         // Include chunks committed between the candidate read and transaction start.
         const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
           .limit(chunkBatchSize + 1)

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import { releasePendingFreeCredits } from './freeCredits';
+import { previewSignupGrantAction } from './bulkSignupGrantActions';
 import { bulkReleaseHeldGrants, releaseHeldGrantsAgainstBudget, revokeHeldGrantRelease } from './heldSignupGrants';
 
 vi.mock('./freeCredits', () => ({ releasePendingFreeCredits: vi.fn() }));
@@ -157,6 +158,23 @@ describe('held grant release', () => {
     expect(cron).toMatchObject({ scanned: 1, failed: 1, withheld: 0 });
   });
 
+  it('withholds a grant that is still in the risk review queue, like the dry-run classifier', async () => {
+    const adapters = buildReleaseAdapters();
+    adapters.grant.db.users.findById.mockResolvedValueOnce({
+      id: 'user-1',
+      tags: [PENDING_FREE_CREDITS_TAG],
+      signupGrantHeldReason: 'budget_exhausted',
+      emailVerified: true,
+      signupGrantAssessment: { band: 'review', status: 'evaluated' },
+      signupGrant: { stage: 'signup', creditsReleased: 0, signupCredits: 100 },
+    } as never);
+
+    const bulk = await bulkReleaseHeldGrants({ actorId: 'admin-1', userIds: ['user-1'] }, adapters);
+
+    expect(bulk.results).toEqual([{ userId: 'user-1', outcome: 'withheld', credits: 0 }]);
+    expect(releasePendingFreeCredits).not.toHaveBeenCalled();
+  });
+
   it('keeps a committed payout as released when clearing the hold fails', async () => {
     vi.mocked(releasePendingFreeCredits).mockResolvedValue({
       released: true,
@@ -173,5 +191,63 @@ describe('held grant release', () => {
     expect(bulk.results).toEqual([{ userId: 'user-1', outcome: 'released', credits: 40 }]);
     expect(adapters.batches.createBatch).toHaveBeenCalledWith({ actorId: 'admin-1', entries: bulk.results });
     expect(adapters.grant.logger.error).toHaveBeenCalledWith(expect.stringContaining('user-1'), clearFailure);
+  });
+});
+
+describe('held release preview parity', () => {
+  const heldUser = (overrides: Record<string, unknown> = {}) => ({
+    id: 'user-1',
+    tags: [PENDING_FREE_CREDITS_TAG],
+    signupGrantHeldReason: 'budget_exhausted',
+    emailVerified: true,
+    signupGrant: { stage: 'signup', signupCredits: 100, unlockCredits: 400, creditsReleased: 100 },
+    ...overrides,
+  });
+
+  it.each([
+    ['healthy held', heldUser()],
+    ['unverified email', heldUser({ emailVerified: false })],
+    [
+      'blocked held',
+      heldUser({
+        signupGrant: {
+          stage: 'signup',
+          signupCredits: 100,
+          unlockCredits: 400,
+          creditsReleased: 100,
+          blocked: { at: new Date() },
+        },
+      }),
+    ],
+    [
+      'review-held',
+      heldUser({
+        signupGrantAssessment: { band: 'review', status: 'evaluated' },
+        signupGrant: { stage: 'signup', signupCredits: 100, unlockCredits: 400, creditsReleased: 0 },
+      }),
+    ],
+    ['ai access revoked', heldUser({ isModerated: true })],
+    ['account blocked', heldUser({ isBanned: true })],
+    ['not held', heldUser({ tags: [], signupGrantHeldReason: null })],
+  ])('preview would_apply matches the real run for %s', async (_name, user) => {
+    vi.mocked(releasePendingFreeCredits).mockReset();
+    vi.mocked(releasePendingFreeCredits).mockResolvedValue({
+      released: true,
+      creditsGranted: 40,
+      currentCredits: 40,
+      patch: {},
+    });
+    const adapters = buildReleaseAdapters();
+    adapters.grant.db.users.findById.mockResolvedValue(user as never);
+
+    const preview = await previewSignupGrantAction(
+      { action: 'release_held', userIds: ['user-1'] },
+      { users: adapters.grant.db.users }
+    );
+    const real = await bulkReleaseHeldGrants({ actorId: 'admin-1', userIds: ['user-1'] }, adapters);
+
+    const applied = preview.results[0].outcome === 'would_apply';
+    expect(applied).toBe(!['withheld', 'not_held'].includes(real.results[0].outcome));
+    expect(applied).toBe(user.id === 'user-1' && real.results[0].outcome === 'released');
   });
 });

@@ -47,10 +47,9 @@ export class AnalyticsUserDayRepository extends BaseRepository<IAnalyticsUserDay
     super(model);
   }
 
-  /** Distinct users active in the inclusive [fromDay, toDay] range. */
-  async countDistinctUsers(fromDay: string, toDay: string): Promise<number> {
-    const rows = await this.model.distinct('userId', { day: { $gte: fromDay, $lte: toDay } }).maxTimeMS(60_000);
-    return rows.length;
+  /** Ids of the users active in the inclusive [fromDay, toDay] range. */
+  async distinctUserIds(fromDay: string, toDay: string): Promise<string[]> {
+    return this.model.distinct('userId', { day: { $gte: fromDay, $lte: toDay } }).maxTimeMS(60_000);
   }
 }
 

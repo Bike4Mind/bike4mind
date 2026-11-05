@@ -1,3 +1,4 @@
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { signupProtection } from '@server/auth/signupProtection';
 import {
   AuthEvents,
@@ -19,10 +20,9 @@ import {
   creditLotRepository,
   grantPackageRepository,
   pendingOtcTokenRepository,
-  authSessionRepository,
   oauthClientRepository,
 } from '@bike4mind/database';
-import { userService, authSessionService } from '@bike4mind/services';
+import { userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { withTransaction } from '@bike4mind/db-core';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
@@ -47,11 +47,10 @@ import {
   reserveOtcEmailBudget,
   reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { recordLoginEvent, readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
+import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
 import { assertSignupNetworkWithinLimits } from '@server/auth/signupNetworkLimits';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -324,17 +323,12 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
-      const { accessToken, refreshToken } = await authSessionService.issueSession(
-        existingUser.id,
-        { createdVia: 'otc', tokenVersion: existingUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
-        {
-          db: { authSessions: authSessionRepository },
-          signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
-          logger: req.logger,
-        }
-      );
+      const { accessToken, refreshToken } = await issueSessionForRequest(req, existingUser.id, {
+        createdVia: 'otc',
+        tokenVersion: existingUser.tokenVersion ?? 0,
+        device: buildSessionDevice(req),
+      });
       setRefreshCookie(res, refreshToken);
-      await recordLoginEvent({ req, userId: existingUser.id, method: 'otc' });
       const tokens = { accessToken };
       const ip = getClientIp(req);
 
@@ -678,17 +672,12 @@ const handler = baseApi({ auth: false })
     });
     await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
 
-    const registrationSession = await authSessionService.issueSession(
-      newUser.id,
-      { createdVia: 'otc-registration', tokenVersion: newUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
-      {
-        db: { authSessions: authSessionRepository },
-        signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
-        logger: req.logger,
-      }
-    );
+    const registrationSession = await issueSessionForRequest(req, newUser.id, {
+      createdVia: 'otc-registration',
+      tokenVersion: newUser.tokenVersion ?? 0,
+      device: buildSessionDevice(req),
+    });
     setRefreshCookie(res, registrationSession.refreshToken);
-    await recordLoginEvent({ req, userId: newUser.id, method: 'otc-registration' });
     return respond(res, otcRegistrationResponseSchema, {
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,

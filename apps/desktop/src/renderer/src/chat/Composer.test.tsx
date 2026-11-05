@@ -139,24 +139,39 @@ afterEach(() => {
   host = null;
 });
 
+function tree(props: Partial<Parameters<typeof Composer>[0]> = {}) {
+  return (
+    <CssVarsProvider>
+      <Composer
+        sessionId="s1"
+        disabled={false}
+        streaming={false}
+        attachments={draft}
+        onSend={() => {}}
+        onStop={() => {}}
+        {...props}
+      />
+    </CssVarsProvider>
+  );
+}
+
 function mount(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() => {
-    root?.render(
-      <CssVarsProvider>
-        <Composer
-          sessionId="s1"
-          disabled={false}
-          streaming={false}
-          attachments={draft}
-          onSend={() => {}}
-          onStop={() => {}}
-          {...props}
-        />
-      </CssVarsProvider>
-    );
+    root?.render(tree(props));
+  });
+}
+
+/**
+ * Render again into the same root, which is what switching conversations does: the shell keys
+ * the thread beside this on the session id, but hands this one a new `sessionId` prop and
+ * leaves it mounted.
+ */
+function rerender(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
+  act(() => {
+    root?.render(tree(props));
   });
 }
 
@@ -328,6 +343,50 @@ describe('skills mid-sentence', () => {
     mount({ skills, onRunCommand: () => {} });
     type('/clear');
     expect(marks()).toEqual(['clear']);
+  });
+});
+
+describe('the draft and the conversation it belongs to', () => {
+  it('does not carry what was typed into the conversation switched to', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('');
+  });
+
+  it('gives each draft back on returning to the conversation it was typed in', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    type('something else entirely');
+
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('something else entirely');
+  });
+
+  // Sending is what ends a draft, so coming back must not resurrect the message just sent.
+  it('keeps nothing for a conversation whose draft was sent', () => {
+    const send = vi.fn();
+    mount({ sessionId: 's1', onSend: send });
+    type('ship it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('ship it');
+
+    rerender({ sessionId: 's2' });
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('');
+  });
+
+  it('leaves no command menu open from the conversation left behind', () => {
+    mount({ sessionId: 's1', onRunCommand: () => {} });
+    type('/comp');
+    expect(rows()).toHaveLength(1);
+
+    rerender({ sessionId: 's2', onRunCommand: () => {} });
+    expect(rows()).toHaveLength(0);
   });
 });
 

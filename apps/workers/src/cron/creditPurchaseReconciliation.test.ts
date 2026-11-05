@@ -65,6 +65,7 @@ const NOW = new Date('2026-10-11T07:00:00Z');
 const TX_CREATED_AT = new Date('2026-10-11T06:00:05Z');
 const purchaseRow = (overrides: Record<string, unknown> = {}) => ({
   id: 'tx_1',
+  type: 'purchase',
   ownerId: 'user_1',
   ownerType: 'User',
   createdAt: TX_CREATED_AT,
@@ -237,6 +238,15 @@ describe('creditPurchaseReconciliation cron', () => {
 
     it('treats a row repaired by the audit script (balanceBackfilledAt) as applied', async () => {
       mockFindByPaymentIntentId.mockResolvedValue(purchaseRow({ metadata: { balanceBackfilledAt: new Date() } }));
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: null });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted).toEqual([]);
+    });
+
+    it('does not flag a refunded or lost-dispute purchase whose stamp was revoked', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(purchaseRow({ reversedAt: new Date(), reversalReason: 'refunded' }));
       mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: null });
 
       const result = await runCreditPurchaseReconciliation(undefined, NOW);

@@ -1,5 +1,5 @@
 import { withTransaction } from '@bike4mind/database';
-import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import { StripeSubscriptionMetadataSchema } from '@bike4mind/server-utils/lib/subscriptions/schema';
 import {
   type ISubscription,
@@ -163,7 +163,7 @@ export const handler = withEventContext(async (event, logger) => {
   // are derived-on-read from the updated Subscription row - this push only
   // wakes the client gate.
   const priceId = subscription.items.data[0]?.price.id;
-  if (priceId && entitlementsForPriceIds([priceId]).size > 0) {
+  if (priceId && priceAffectsEntitlements(priceId)) {
     const isUserOwned = metadata.ownerType !== SubscriptionOwnerType.Organization;
     if (isUserOwned && metadata.userId) {
       logger.info(

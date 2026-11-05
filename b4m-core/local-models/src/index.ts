@@ -46,6 +46,7 @@ export { isAbliteratedModel } from './abliterated';
 export {
   BUNDLED_CURATED_JSON_TEXT,
   configuredNumCtx,
+  curatedBuildForInstalled,
   curatedBuildForRef,
   curatedEntryForRef,
   curatedLibrary,
@@ -65,6 +66,8 @@ export {
   type CuratedListing,
   type CuratedSource,
   type CuratedTierPick,
+  type InstalledMatch,
+  type InstalledModelKey,
   type LoadCuratedOptions,
 } from './curated';
 export {

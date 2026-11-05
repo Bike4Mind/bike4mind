@@ -33,6 +33,26 @@ describe('SidebarNav', () => {
     window.localStorage.clear();
   });
 
+  it('badges the Audit log with the unreviewed count, and nothing when there are none', () => {
+    const { unmount } = render(
+      <SidebarNav
+        activeTab={AdminTab.Dashboard}
+        showLiveOpsTriageTab={false}
+        hiddenNotifications={[]}
+        onTabSelect={vi.fn()}
+        unreviewedAuditCount={3}
+      />,
+      { wrapper: Wrapper }
+    );
+    const badge = screen.getByTestId('admin-sidebar-unreviewed-audit-badge');
+    expect(badge).toHaveTextContent('3');
+    expect(badge).toHaveAttribute('aria-label', '3 audit entries to review');
+    unmount();
+
+    renderNav({ unreviewedAuditCount: 0 });
+    expect(screen.queryByTestId('admin-sidebar-unreviewed-audit-badge')).toBeNull();
+  });
+
   it('selects the Dashboard tab from the Dashboard link', () => {
     const { onTabSelect } = renderNav();
 

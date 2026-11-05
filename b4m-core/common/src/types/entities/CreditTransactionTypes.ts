@@ -10,6 +10,10 @@ export enum CreditPurchaseStatus {
   Failed = 'failed',
 }
 
+/** Why a completed purchase stopped counting toward paid standing: a full refund or a lost dispute. */
+export const PURCHASE_REVERSAL_REASONS = ['refunded', 'dispute_lost'] as const;
+export type PurchaseReversalReason = (typeof PURCHASE_REVERSAL_REASONS)[number];
+
 // Base transaction properties
 const BaseCreditTransaction = z.object({
   id: z.string().optional(), // MongoDB ObjectId
@@ -50,6 +54,9 @@ export const PurchaseTransaction = BaseCreditTransaction.extend({
   stripePaymentIntentId: z.string(),
   packageId: z.string().optional(),
   amount: z.number(),
+  /** Set once the purchase is fully refunded or loses a dispute; absent on legacy rows. */
+  reversedAt: z.date().nullable().optional(),
+  reversalReason: z.enum(PURCHASE_REVERSAL_REASONS).optional(),
 });
 
 /**
@@ -568,6 +575,16 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
     paymentIntentId: string,
     status: CreditPurchaseStatus
   ): Promise<ICreditTransactionDocument | null>;
+  /**
+   * Marks the purchase row for this payment intent reversed (first reversal wins). Returns the row even when
+   * it was already reversed, or null when no purchase row carries the intent.
+   */
+  markPurchaseReversed(
+    paymentIntentId: string,
+    reason: PurchaseReversalReason
+  ): Promise<ICreditTransactionDocument | null>;
+  /** Any completed purchase of this owner's that was never refunded or lost to a dispute, or null. */
+  findUnreversedPurchase(ownerId: string, ownerType: CreditHolderType): Promise<ICreditTransactionDocument | null>;
   findByOwnerWithFilters(
     ownerId: string,
     ownerType: CreditHolderType,

@@ -6,24 +6,14 @@ import { Logger } from '@bike4mind/observability';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
 import { buildErrorBody } from '@server/middlewares/errorHandler';
+import { isCalendarDate, isWithinPuzzleWindow, PUZZLE_DATE_PATTERN } from '@server/partners/bedrocknewsPuzzleDate';
 import { grantPuzzleReward } from '@server/partners/bedrocknewsPuzzleReward';
 import { fromZodError } from 'zod-validation-error';
 import { z } from 'zod';
 
-const MAX_PUZZLE_AGE_DAYS = 30;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-const isCalendarDate = (value: string) => {
-  const date = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
-};
-
 const bodySchema = z.object({
   userId: z.string().regex(/^[a-f0-9]{24}$/),
-  puzzleDate: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .refine(isCalendarDate, 'Not a calendar date'),
+  puzzleDate: z.string().regex(PUZZLE_DATE_PATTERN).refine(isCalendarDate, 'Not a calendar date'),
   tier: z.union([z.literal(5), z.literal(6), z.literal(7)]),
   hard: z.boolean(),
 });
@@ -38,13 +28,6 @@ const REFUSAL_MESSAGES = {
 // A code on every refusal lets the caller tell a rejected request from an outage and stop retrying.
 const failureBody = (error: string, code: string, requestId: string | undefined) =>
   buildErrorBody({ error, requestId, additionalInfo: { code } });
-
-// Dates compare as ISO strings: puzzleDate is validated as YYYY-MM-DD above.
-function isWithinPuzzleWindow(puzzleDate: string, now = Date.now()) {
-  const today = new Date(now).toISOString().slice(0, 10);
-  const oldest = new Date(now - MAX_PUZZLE_AGE_DAYS * DAY_MS).toISOString().slice(0, 10);
-  return puzzleDate >= oldest && puzzleDate <= today;
-}
 
 const handler = baseApi({ requiredScopes: [ApiKeyScope.REWARDS_GRANT], allowedMethods: ['POST'] }).post(
   async (req, res) => {

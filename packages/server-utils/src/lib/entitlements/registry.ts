@@ -188,8 +188,10 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // boundary stops rejecting it as unknown. Removed when the overlay is extracted.
   { tag: 'meetings', entitlements: ['meetings:pro'] },
   // [DELETION-FOOTPRINT] Questmaster comp grant: the `questmaster-pro` tag bridges to
-  // `questmaster:pro`. No Stripe price; granted-only. Listing it here puts the key in
-  // KNOWN_ENTITLEMENT_KEYS (admin Product Access + the partner-rules write boundary).
+  // `questmaster:pro`. No Stripe price. Every active paid subscription also grants it
+  // (SUBSCRIBER_ENTITLEMENT_KEYS in apps/client/server/entitlements/paidStanding.ts).
+  // Listing it here puts the key in KNOWN_ENTITLEMENT_KEYS (admin Product Access + the
+  // partner-rules write boundary).
   // Holders of `optihashi:pro` also get it via IMPLIED_ENTITLEMENT_ROWS below.
   // NOT the bare `questmaster` tag: that is an existing cohort tag (Invite Center colors
   // `QuestMaster`, see InviteCenter/shared/tagColors.ts), and tags match case-insensitively,

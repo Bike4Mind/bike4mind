@@ -44,8 +44,8 @@ export function __resetAnalyticsThrottle(): void {
 
 export function analyticsMiddleware() {
   return (req: Request, _res: Response, next: NextFunction): void => {
-    // Gate: human JWT session only - skip API-key callers and system accounts
-    if (!req.user || isApiKeyAuth(req) || req.user.isSystem === true) {
+    // Gate: human JWT session only - skip API-key callers, system accounts and accounts pending deletion
+    if (!req.user || isApiKeyAuth(req) || req.user.isSystem === true || req.user.deletion) {
       next();
       return;
     }

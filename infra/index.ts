@@ -6,6 +6,7 @@ export * from './dataSyncer';
 export * from './emailIngestion';
 export * from './bus';
 export * from './mcp';
+export * from './remoteMcp';
 export * from './cliToolHandler';
 export * from './queues';
 export * from './eventBus';
