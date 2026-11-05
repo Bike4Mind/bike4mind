@@ -323,6 +323,13 @@ Charts are first-class, not decoration: every money page gets at least one.
 | Subscription detail | **Credits per cycle**: granted vs used per billing period | grouped bars | credit ledger |
 | Subscription detail (orgs) | **Seats used vs paid** over time | step line, two series | BillingEvent + org history |
 
+As built (`components/admin/Revenue/`):
+- MRR movement and Paying customers by owner type group the days into periods: days for 30 days, weeks (from Monday, UTC) for 90 days, months for 12 months. Movement sums the period's days; customers are the period's last day.
+- MRR by plan names the four largest plans (by MRR on the last day) and folds the rest into "Other plans", in one `accent` hue stepped down by size, with "Other plans" in the comparison grey.
+- At-risk MRR draws past due and canceling as two unstacked series: the snapshot stores them separately, so a row that is both is in both.
+- New and churned use the `good` and `bad` tones, net is an `ink` line. `contrast.test.ts` checks each solid series color reaches 3:1 on the card in light and dark.
+- The list's sparklines show only in the Paying and All views with no search, where the tile counts the same rows the snapshot does. Past due's sparkline is its MRR at risk, since the snapshot stores no past-due count.
+
 To make this possible, `RevenueSnapshot` (6.4) also stores per day:
 - MRR by plan and by owner type;
 - the paying count;
@@ -400,7 +407,7 @@ The endpoints use the contract pattern only if they become public; these stay ad
 | `GET /api/admin/subscriptions/[id]` | Detail from Mongo |
 | `GET /api/admin/subscriptions/[id]/stripe` | Live read: invoices, payment method, upcoming invoice; cached 60 s |
 | `GET /api/admin/subscriptions/[id]/timeline` | Merged feed |
-| `GET /api/admin/revenue` | Snapshot series and current totals |
+| `GET /api/admin/revenue` | Snapshot series and current totals; `part=trend` returns only the last 30 days of snapshots, for the list's tile sparklines |
 | `POST /api/admin/subscriptions/[id]/sync` | Sync from Stripe (5.2, 7) |
 
 `GET /api/admin/subscriptions` takes an optional `cancel` filter, inherited by the list, summary and export routes:

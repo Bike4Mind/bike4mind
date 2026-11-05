@@ -115,6 +115,26 @@ export const SubscriptionDetailHeader: React.FC<SubscriptionDetailHeaderProps> =
               </Button>
             </>
           )}
+          {available.stripeCancel && (
+            <Button
+              variant="outlined"
+              color="danger"
+              onClick={() => onAction('cancel')}
+              data-testid="subscription-detail-cancel-btn"
+            >
+              Cancel subscription
+            </Button>
+          )}
+          {available.stripeResume && (
+            <Button
+              variant="outlined"
+              color="neutral"
+              onClick={() => onAction('resume')}
+              data-testid="subscription-detail-resume-btn"
+            >
+              Resume subscription
+            </Button>
+          )}
           <Dropdown>
             <MenuButton
               slots={{ root: Button }}

@@ -7,6 +7,8 @@ import { getErrorMessage } from '@client/app/utils/error';
 import type {
   AdminCompChange,
   AdminCompChangeResponse,
+  AdminStripeWriteBody,
+  AdminStripeWriteResponse,
   AdminSubscriptionByStripeIdResponse,
   AdminSubscriptionDetail,
   AdminSubscriptionSyncPreview,
@@ -132,3 +134,32 @@ export const useAdminSubscriptionSync = (id: string) => {
     },
   });
 };
+
+export type AdminStripeWriteRequest = AdminStripeWriteBody & { reason: string };
+
+const useAdminStripeWrite = (id: string, path: 'cancel' | 'resume') => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: AdminStripeWriteRequest): Promise<AdminStripeWriteResponse> =>
+      (await api.post<AdminStripeWriteResponse>(`${subscriptionPath(id)}/${path}`, body)).data,
+    onSuccess: ({ subscription, stripe }) => {
+      queryClient.setQueryData<AdminSubscriptionDetail>(adminSubscriptionDetailKey(id), current =>
+        current ? { ...current, subscription, stripe } : current
+      );
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
+    },
+    // A 409 carries the server's plain-language message ("This subscription changed. Review and try again.").
+    // Refetch so the retry reviews the current state instead of resending the stale token.
+    onError: error => {
+      toast.error(getErrorMessage(error));
+      void queryClient.invalidateQueries({ queryKey: adminSubscriptionDetailKey(id) });
+    },
+  });
+};
+
+/** Schedules a Stripe subscription to cancel at period end. Rejects on failure so the dialog stays open. */
+export const useAdminSubscriptionCancel = (id: string) => useAdminStripeWrite(id, 'cancel');
+
+/** Clears a scheduled cancel. A separate audited write, also used as the cancel toast's undo. */
+export const useAdminSubscriptionResume = (id: string) => useAdminStripeWrite(id, 'resume');

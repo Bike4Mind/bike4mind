@@ -33,6 +33,20 @@ import { MrrDefinitionHelp, atRiskNote, mrrExclusionNote } from '../Subscription
 import type { SubscriptionsBuiltInView } from '../Subscriptions/subscriptionsListViews';
 import type { SubscriptionsListView } from '../Subscriptions/subscriptionsTabSearch';
 import { MrrTrendChart } from './MrrTrendChart';
+import { AtRiskChart, MrrByPlanChart, MrrMovementChart, PayingByOwnerChart } from './RevenueCharts';
+import {
+  PERIOD_UNIT,
+  atRiskTakeaway,
+  movementTakeaway,
+  ownerTakeaway,
+  planSeries,
+  planTakeaway,
+  toPeriods,
+  toPlanPoints,
+  type PlanPoint,
+  type PlanSeries,
+  type RevenuePeriod,
+} from './revenueChartData';
 import { formatLongDay, formatShare, formatTrendDay, signedMoney, trendTakeaway } from './revenueFormat';
 import { subscriptionsViewSearch } from './revenueLinks';
 import { useAdminRevenue } from './useAdminRevenue';
@@ -132,7 +146,21 @@ const TREND_COLUMNS: DataColumn<RevenueTrendPoint>[] = [
   },
 ];
 
-function MrrTrendSection({ data, loading }: { data?: AdminRevenueData; loading: boolean }) {
+type ChartSectionProps = {
+  title: string;
+  /** Prefixes the section's test ids. */
+  testId: string;
+  data?: AdminRevenueData;
+  loading: boolean;
+  /** The page's lead chart gets the full empty state; the others a line, so four of them stay quiet. */
+  lead?: boolean;
+  caption: (trend: RevenueTrendPoint[], data: AdminRevenueData) => string;
+  chart: (trend: RevenueTrendPoint[], data: AdminRevenueData) => ReactNode;
+  table: (trend: RevenueTrendPoint[], data: AdminRevenueData) => ReactNode;
+};
+
+/** A chart in a SectionCard with its takeaway, a "View as table" fallback, and loading and empty states (spec 5.7). */
+function ChartSection({ title, testId, data, loading, lead = false, caption, chart, table }: ChartSectionProps) {
   const [asTable, setAsTable] = useState(false);
   const trend = data?.trend ?? [];
   const hasTrend = trend.length > 0;
@@ -142,23 +170,22 @@ function MrrTrendSection({ data, loading }: { data?: AdminRevenueData; loading: 
       <Box sx={{ p: 2 }}>
         <Skeleton
           variant="rectangular"
-          height={240}
+          height={lead ? 240 : 200}
           sx={{ borderRadius: '8px' }}
-          data-testid="admin-revenue-chart-skeleton"
+          data-testid={`${testId}-skeleton`}
         />
       </Box>
     );
   } else if (!hasTrend) {
     // trendStartsOn is today until the first snapshot; one before the range means the snapshots stopped.
     const notStarted = data.trendStartsOn >= data.from;
-    body = (
-      <Box data-testid="admin-revenue-trend-empty">
+    const emptyTitle = notStarted
+      ? `Trend starts collecting on ${formatLongDay(data.trendStartsOn)}`
+      : 'No snapshots in this range';
+    body = lead ? (
+      <Box data-testid={`${testId}-empty`}>
         <EmptyState
-          title={
-            notStarted
-              ? `Trend starts collecting on ${formatLongDay(data.trendStartsOn)}`
-              : 'No snapshots in this range'
-          }
+          title={emptyTitle}
           description={
             notStarted
               ? 'A snapshot is taken once a day. The numbers above are current.'
@@ -167,34 +194,26 @@ function MrrTrendSection({ data, loading }: { data?: AdminRevenueData; loading: 
           action={null}
         />
       </Box>
+    ) : (
+      <Typography level="body-sm" sx={{ color: 'admin.inkMuted', p: 2 }} data-testid={`${testId}-empty`}>
+        {`${emptyTitle}.`}
+      </Typography>
     );
   } else {
     body = (
       <Stack gap={1.5} sx={{ p: 2 }}>
-        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid="admin-revenue-chart-caption">
-          {trendTakeaway(trend)}
+        <Typography level="body-sm" sx={{ color: 'admin.inkMuted' }} data-testid={`${testId}-caption`}>
+          {caption(trend, data)}
         </Typography>
-        {asTable ? (
-          <DataTable
-            label="MRR over time"
-            testId="admin-revenue-trend-table"
-            rows={trend}
-            columns={TREND_COLUMNS}
-            getRowId={point => point.date}
-            onRetry={() => undefined}
-            minWidth="24rem"
-          />
-        ) : (
-          <MrrTrendChart points={trend} />
-        )}
+        {asTable ? table(trend, data) : chart(trend, data)}
       </Stack>
     );
   }
   return (
     <SectionCard
-      title="MRR over time"
+      title={title}
       body="custom"
-      data-testid="admin-revenue-trend"
+      data-testid={testId}
       action={
         hasTrend && (
           <Button
@@ -202,7 +221,7 @@ function MrrTrendSection({ data, loading }: { data?: AdminRevenueData; loading: 
             variant="plain"
             onClick={() => setAsTable(previous => !previous)}
             aria-pressed={asTable}
-            data-testid="admin-revenue-trend-table-toggle-btn"
+            data-testid={`${testId}-table-toggle-btn`}
             sx={adminFocus}
           >
             {asTable ? 'View as chart' : 'View as table'}
@@ -212,6 +231,163 @@ function MrrTrendSection({ data, loading }: { data?: AdminRevenueData; loading: 
     >
       {body}
     </SectionCard>
+  );
+}
+
+const moneyColumn = <Row,>(id: string, label: string, amount: (row: Row) => number): DataColumn<Row> => ({
+  id,
+  label: `${label} (${MRR_CURRENCY.toUpperCase()})`,
+  numeric: true,
+  render: row => money(amount(row)),
+  sortValue: amount,
+});
+
+const countColumn = <Row,>(id: string, label: string, count: (row: Row) => number): DataColumn<Row> => ({
+  id,
+  label,
+  numeric: true,
+  render: row => count(row).toLocaleString(),
+  sortValue: count,
+});
+
+const dayColumn: DataColumn<{ date: string }> = {
+  id: 'date',
+  label: 'Date (UTC)',
+  render: point => formatLongDay(point.date),
+  sortValue: point => point.date,
+};
+
+const periodColumn: DataColumn<RevenuePeriod> = {
+  id: 'period',
+  label: 'Period (UTC)',
+  render: period => period.label,
+  sortValue: period => period.start,
+};
+
+const MOVEMENT_COLUMNS: DataColumn<RevenuePeriod>[] = [
+  periodColumn,
+  moneyColumn('new', 'New MRR', period => period.newMrr),
+  moneyColumn('churned', 'Churned MRR', period => -period.churnedMrr),
+  moneyColumn('net', 'Net', period => period.net),
+];
+
+const OWNER_COLUMNS: DataColumn<RevenuePeriod>[] = [
+  periodColumn,
+  countColumn('users', 'Individuals', period => period.payingUsers),
+  countColumn('orgs', 'Organizations', period => period.payingOrgs),
+  countColumn('total', 'Total', period => period.payingUsers + period.payingOrgs),
+];
+
+const AT_RISK_TREND_COLUMNS: DataColumn<RevenueTrendPoint>[] = [
+  dayColumn,
+  moneyColumn('pastDue', 'Past due MRR', point => point.pastDueMrr),
+  moneyColumn('canceling', 'Canceling MRR', point => point.cancelingMrr),
+];
+
+const planTrendColumns = (series: readonly PlanSeries[]): DataColumn<PlanPoint>[] => [
+  dayColumn,
+  ...series.map(entry =>
+    moneyColumn<PlanPoint>(`plan-${entry.key}`, entry.label, point => point.values[entry.key] ?? 0)
+  ),
+  moneyColumn('total', 'Total', point => point.total),
+];
+
+const chartTable = <Row,>(
+  label: string,
+  testId: string,
+  rows: readonly Row[],
+  columns: DataColumn<Row>[],
+  getRowId: (row: Row) => string
+) => (
+  <DataTable
+    label={label}
+    testId={testId}
+    rows={[...rows]}
+    columns={columns}
+    getRowId={getRowId}
+    onRetry={() => undefined}
+    minWidth="24rem"
+  />
+);
+
+function TrendSections({ data, loading }: { data?: AdminRevenueData; loading: boolean }) {
+  const unit = PERIOD_UNIT[data?.range ?? '30d'];
+  const periods = useMemo(() => toPeriods(data?.trend ?? [], unit), [data?.trend, unit]);
+  const series = useMemo(() => planSeries(data?.trendPlans ?? []), [data?.trendPlans]);
+  const planPoints = useMemo(() => toPlanPoints(data?.trend ?? [], series), [data?.trend, series]);
+  const shared = { data, loading };
+  return (
+    <>
+      <ChartSection
+        {...shared}
+        lead
+        title="MRR over time"
+        testId="admin-revenue-trend"
+        caption={trendTakeaway}
+        chart={trend => <MrrTrendChart points={trend} />}
+        table={trend => chartTable('MRR over time', 'admin-revenue-trend-table', trend, TREND_COLUMNS, row => row.date)}
+      />
+      <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, minWidth: 0 }}>
+        <ChartSection
+          {...shared}
+          title="MRR movement"
+          testId="admin-revenue-movement"
+          caption={() => movementTakeaway(periods)}
+          chart={() => <MrrMovementChart periods={periods} />}
+          table={() =>
+            chartTable('MRR movement', 'admin-revenue-movement-table', periods, MOVEMENT_COLUMNS, row => row.start)
+          }
+        />
+        <ChartSection
+          {...shared}
+          title="MRR by plan over time"
+          testId="admin-revenue-plan-trend"
+          caption={() => planTakeaway(planPoints, series)}
+          chart={() => <MrrByPlanChart points={planPoints} series={series} />}
+          table={() =>
+            chartTable(
+              'MRR by plan over time',
+              'admin-revenue-plan-trend-table',
+              planPoints,
+              planTrendColumns(series),
+              row => row.date
+            )
+          }
+        />
+        <ChartSection
+          {...shared}
+          title="Paying customers by owner type"
+          testId="admin-revenue-by-owner"
+          caption={ownerTakeaway}
+          chart={() => <PayingByOwnerChart periods={periods} />}
+          table={() =>
+            chartTable(
+              'Paying customers by owner type',
+              'admin-revenue-by-owner-table',
+              periods,
+              OWNER_COLUMNS,
+              row => row.start
+            )
+          }
+        />
+        <ChartSection
+          {...shared}
+          title="At-risk MRR"
+          testId="admin-revenue-at-risk-trend"
+          caption={atRiskTakeaway}
+          chart={trend => <AtRiskChart points={trend} />}
+          table={trend =>
+            chartTable(
+              'At-risk MRR',
+              'admin-revenue-at-risk-trend-table',
+              trend,
+              AT_RISK_TREND_COLUMNS,
+              row => row.date
+            )
+          }
+        />
+      </Box>
+    </>
   );
 }
 
@@ -419,7 +595,7 @@ const AdminRevenue: React.FC = () => {
     content = (
       <>
         <RevenueStrip data={data} isError={query.isError} />
-        <MrrTrendSection data={data} loading={loading} />
+        <TrendSections data={data} loading={loading} />
         <TablesSection data={data} loading={!data} openView={openView} />
       </>
     );

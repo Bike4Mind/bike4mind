@@ -4,15 +4,15 @@ import type { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 type AuditTarget = Parameters<typeof recordAdminActionFromRequest>[1]['target'];
 
-export type SubscriptionOwnerContext = {
+export type OwnerContext = {
   target: AuditTarget;
   organizationId?: string;
   notifyUserId: string | null;
   actingUserId: string | null;
 };
 
-/** The audit target and the user ids a subscription admin action notifies, for its owner. */
-export const resolveSubscriptionOwner = async (subscription: ISubscription): Promise<SubscriptionOwnerContext> => {
+/** The audit target, notification recipient and self-check user for a subscription's owner (a user, or an org's billing owner). */
+export const resolveSubscriptionOwner = async (subscription: ISubscription): Promise<OwnerContext> => {
   if (subscription.ownerType === SubscriptionOwnerType.User) {
     const user = await userRepository.findById(subscription.ownerId);
     return {

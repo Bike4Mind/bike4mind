@@ -16,6 +16,8 @@ describe('subscriptionActionAvailability', () => {
   it('offers the comp actions, credits and remove on a live comp', () => {
     expect(subscriptionActionAvailability(buildDetail())).toEqual({
       compActions: true,
+      stripeCancel: false,
+      stripeResume: false,
       editCredits: { visible: true, disabledReason: null },
       remove: { disabledReason: null },
       sync: { visible: false, disabledReason: null },
@@ -25,6 +27,8 @@ describe('subscriptionActionAvailability', () => {
   it('blocks remove on a live Stripe row and offers no comp actions', () => {
     expect(subscriptionActionAvailability(buildDetail({ subscription: STRIPE_ROW }))).toEqual({
       compActions: false,
+      stripeCancel: true,
+      stripeResume: false,
       editCredits: { visible: true, disabledReason: null },
       remove: { disabledReason: REMOVE_LIVE_STRIPE_REASON },
       sync: { visible: true, disabledReason: null },
@@ -37,6 +41,8 @@ describe('subscriptionActionAvailability', () => {
     );
     expect(endedStripe).toEqual({
       compActions: false,
+      stripeCancel: false,
+      stripeResume: false,
       editCredits: { visible: false, disabledReason: null },
       remove: { disabledReason: null },
       sync: { visible: true, disabledReason: null },
@@ -44,6 +50,41 @@ describe('subscriptionActionAvailability', () => {
     expect(
       subscriptionActionAvailability(buildDetail({ subscription: { status: 'incomplete_expired' } })).compActions
     ).toBe(false);
+  });
+
+  it('offers resume instead of cancel only while a cancellation is scheduled and the period runs', () => {
+    const future = new Date(Date.now() + 10 * 86_400_000).toISOString();
+    const past = new Date(Date.now() - 86_400_000).toISOString();
+    const scheduled = { ...STRIPE_ROW, periodEndsAt: future, cancelAt: future };
+
+    const live = subscriptionActionAvailability(buildDetail({ subscription: scheduled }));
+    expect([live.stripeCancel, live.stripeResume]).toEqual([false, true]);
+
+    const lapsed = subscriptionActionAvailability(
+      buildDetail({ subscription: { ...scheduled, periodEndsAt: past, cancelAt: past } })
+    );
+    expect([lapsed.stripeCancel, lapsed.stripeResume]).toEqual([false, false]);
+
+    const noPeriodEnd = subscriptionActionAvailability(
+      buildDetail({ subscription: { ...scheduled, periodEndsAt: null } })
+    );
+    expect(noPeriodEnd.stripeResume).toBe(false);
+  });
+
+  it('offers no Stripe action on a legacy comp row that reads as source stripe', () => {
+    const legacyComp = subscriptionActionAvailability(
+      buildDetail({ subscription: { ...STRIPE_ROW, source: 'stripe', subscriptionId: 'admin_granted_1' } })
+    );
+    expect([legacyComp.stripeCancel, legacyComp.stripeResume]).toEqual([false, false]);
+    expect(legacyComp.remove.disabledReason).not.toBe(REMOVE_LIVE_STRIPE_REASON);
+  });
+
+  it('reads a period-end schedule from the mirror flag when the row has no cancel date', () => {
+    const detail = buildDetail({
+      subscription: { ...STRIPE_ROW, periodEndsAt: null, cancelAt: null },
+      stripe: { lastSyncedAt: null, cancelAtPeriodEnd: true, stateToken: 't' },
+    });
+    expect(subscriptionActionAvailability(detail).stripeCancel).toBe(false);
   });
 
   it('disables credits and remove when no account can act for the owner', () => {

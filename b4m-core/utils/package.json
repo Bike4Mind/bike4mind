@@ -100,6 +100,16 @@
         "default": "./dist/escapeRegex.cjs"
       }
     },
+    "./escapeHtml": {
+      "import": {
+        "types": "./dist/escapeHtml.d.mts",
+        "default": "./dist/escapeHtml.mjs"
+      },
+      "require": {
+        "types": "./dist/escapeHtml.d.cts",
+        "default": "./dist/escapeHtml.cjs"
+      }
+    },
     "./safeObjectKey": {
       "import": {
         "types": "./dist/safeObjectKey.d.mts",

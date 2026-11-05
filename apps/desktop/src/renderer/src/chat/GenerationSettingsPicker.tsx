@@ -58,6 +58,7 @@ function FieldRow({
   control,
   fallback,
   stored,
+  latest,
   sent,
   autoFocus,
   disabled,
@@ -68,6 +69,8 @@ function FieldRow({
   /** What a blank field sends: the Models-screen default, catalog sampling or the control's own. */
   fallback: number | undefined;
   stored: number | undefined;
+  /** The value last asked for, which the stored prop trails while a save is in flight. */
+  latest: () => number | undefined;
   sent: number | undefined;
   autoFocus: boolean;
   disabled?: boolean;
@@ -75,26 +78,20 @@ function FieldRow({
 }) {
   const noteId = useId();
   const [draft, setDraft] = useState(shown(sent));
-  // The value last asked for, so Enter and the blur after it save once.
-  const committed = useRef<string | null>(null);
   const attempt = useRef(0);
   const discarded = useRef(false);
   // Whether the field was typed in since it last showed what the turn sends.
   const edited = useRef(false);
   useEffect(() => {
-    committed.current = null;
     edited.current = false;
     setDraft(shown(sent));
   }, [sent]);
   const locked = control.locked;
 
   const save = (value: number | undefined) => {
-    if (shown(value) === committed.current) return;
-    committed.current = shown(value);
     const mine = ++attempt.current;
     void onCommit(value).then(saved => {
       if (saved !== false || mine !== attempt.current) return;
-      committed.current = null;
       setDraft(shown(sent));
     });
   };
@@ -105,19 +102,21 @@ function FieldRow({
     if (input.validity.badInput) {
       input.value = shown(sent);
       setDraft(shown(sent));
+      edited.current = false;
       return;
     }
     const text = draft.trim();
+    const current = latest();
     if (!edited.current && text === shown(sent)) return;
     edited.current = false;
     if (!text) {
-      if (stored !== undefined) save(undefined);
+      if (current !== undefined) save(undefined);
       return;
     }
     const next = requestGeneration({ [field]: Number(text) }, { [field]: control })[field];
     setDraft(shown(next ?? sent));
-    // Against what is stored, so typing the value this model adjusts a stored one to saves it.
-    if (next !== undefined && next !== stored) save(next);
+    // Retyping the value last asked for saves nothing; typing what this model clamps or rounds it to saves that.
+    if (next !== undefined && next !== current && Number(text) !== current) save(next);
   };
 
   return (
@@ -326,6 +325,7 @@ export function GenerationSettingsPicker({
               control={control}
               fallback={fallbacks[field] ?? control.default}
               stored={generation?.[field]}
+              latest={() => (pending.current ?? generation)?.[field]}
               sent={sent[field]}
               autoFocus={field === firstEditable}
               disabled={disabled}

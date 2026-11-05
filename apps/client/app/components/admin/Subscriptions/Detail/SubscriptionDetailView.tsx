@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Link, Stack, Typography } from '@mui/joy';
 import type { AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
+import { subscriptionActionAvailability } from './subscriptionDetailModel';
 import { SubscriptionDetailHeader } from './SubscriptionDetailHeader';
 import { SubscriptionDetailStats } from './SubscriptionDetailStats';
 import { SubscriptionDetailTabs, subscriptionDetailPanelId, subscriptionDetailTabId } from './SubscriptionDetailTabs';
@@ -9,6 +10,8 @@ import { SubscriptionAdminLogTab } from './tabs/SubscriptionAdminLogTab';
 import { ExtendCompDialog } from './actions/ExtendCompDialog';
 import { EndCompDialog } from './actions/EndCompDialog';
 import { EditCreditsPerCycleDialog } from './actions/EditCreditsPerCycleDialog';
+import { CancelSubscriptionDialog } from './actions/CancelSubscriptionDialog';
+import { ResumeSubscriptionDialog } from './actions/ResumeSubscriptionDialog';
 import { SyncFromStripeDialog } from './actions/SyncFromStripeDialog';
 import { RemoveSubscriptionDialog } from './actions/RemoveSubscriptionDialog';
 import type { SubscriptionDetailTab } from './subscriptionDetailSearch';
@@ -61,6 +64,13 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
   const closeAction = () => setAction(null);
   const openAdminLog = () => onTabChange('admin');
 
+  // A refetch (after a 409, or another admin's write) can make the open Stripe action moot; close it rather than
+  // leave a dialog whose retry can only 409 again.
+  const availability = subscriptionActionAvailability(detail);
+  const stale =
+    (action === 'cancel' && !availability.stripeCancel) || (action === 'resume' && !availability.stripeResume);
+  if (stale) setAction(null);
+
   const dialog = () => {
     switch (action) {
       case null:
@@ -69,6 +79,10 @@ export const SubscriptionDetailView: React.FC<SubscriptionDetailViewProps> = ({
         return <ExtendCompDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'end':
         return <EndCompDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
+      case 'cancel':
+        return <CancelSubscriptionDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
+      case 'resume':
+        return <ResumeSubscriptionDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'credits':
         return <EditCreditsPerCycleDialog detail={detail} onClose={closeAction} onAudit={openAdminLog} />;
       case 'sync':

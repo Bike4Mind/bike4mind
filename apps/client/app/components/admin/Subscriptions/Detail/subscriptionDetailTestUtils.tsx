@@ -70,6 +70,7 @@ export const buildDetail = (
     seats: null,
     actingUserId: OWNER_ID,
     mismatch: null,
+    stripe: null,
     ...rest,
   };
 };

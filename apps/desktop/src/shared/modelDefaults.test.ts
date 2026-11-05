@@ -1,10 +1,19 @@
 import type { ChatModelOption } from '@shared/chat';
-import { requestGeneration, type ModelControls } from '@shared/generation';
+import { requestGeneration, type ModelControls, type NumericControl } from '@shared/generation';
 import { describe, expect, it } from 'vitest';
 import { auxiliaryGeneration, turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
-import { ollamaControls, openAICompatibleControls } from './modelControls';
 
-const controls: ModelControls = ollamaControls({ inspected: true, contextWindow: 32_768, thinks: true });
+const range = (min: number, max: number, step: number): NumericControl => ({ min, max, step, scope: 'request' });
+
+const controls: ModelControls = {
+  temperature: range(0, 2, 0.05),
+  topP: range(0, 1, 0.01),
+  topK: range(0, 200, 1),
+  minP: range(0, 1, 0.01),
+  repeatPenalty: range(0.5, 2, 0.01),
+  presencePenalty: range(0, 2, 0.05),
+  maxOutputTokens: range(256, 32_768, 256),
+};
 
 const qwen: ChatModelOption = {
   id: 'local:ollama:qwen3.8:27b',
@@ -88,11 +97,19 @@ describe('auxiliaryGeneration', () => {
 
 describe('catalog sampling on an OpenAI-compatible server', () => {
   const sampling = qwen.catalogSampling;
-  const compatible = (product: Parameters<typeof openAICompatibleControls>[0]): ChatModelOption => ({
+  const compatible = (product: 'llama-server' | null): ChatModelOption => ({
     ...qwen,
     id: 'local:srv-abc123:qwen3.8:27b',
     catalogSampling: sampling,
-    controls: openAICompatibleControls(product, { effortLevels: false, thinks: true }),
+    controls: {
+      temperature: range(0, 2, 0.05),
+      topP: range(0.01, 1, 0.01),
+      presencePenalty: range(0, 2, 0.05),
+      ...(product === 'llama-server'
+        ? { topK: range(0, 200, 1), minP: range(0, 1, 0.01), repeatPenalty: range(0.5, 2, 0.01) }
+        : {}),
+      maxOutputTokens: range(256, 16_384, 256),
+    },
   });
 
   const sent = (option: ChatModelOption) =>

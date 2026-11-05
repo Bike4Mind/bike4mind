@@ -169,6 +169,20 @@ describe('names listed in a WSL folder, opened over the share', () => {
     });
   });
 
+  it('lists each file once and says the results are partial when ripgrep ended early', async () => {
+    ripgrepSearch.mockImplementation(async ({ onFile }) => {
+      onFile({ path: 'x.ts', matches: 1, lines: [{ number: 1, text: 'needle', match: true }] });
+      return 'cut-short';
+    });
+    listed.tracked = 'x.ts\0';
+    files.set(`${PROJECT}\\x.ts`, 'needle\n');
+
+    const result = await grepSearch.run({ pattern: 'needle', path: PROJECT, outputMode: 'files' }, context());
+
+    expect(result.match(/x\.ts/g)).toHaveLength(1);
+    expect(result.split('\n')[0]).toMatch(/ The search ended early, so these results are partial\.$/);
+  });
+
   it('greps a tracked name that holds a backslash at the share spelling of it', async () => {
     files.set(SPELLED, 'needle tracked in the folder\n');
     listed.tracked = 'a\\..\\..\\outside.txt\0';

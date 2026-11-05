@@ -14,7 +14,7 @@ import {
   type AdminCompChange,
   type AdminCompChangeResponse,
 } from '@client/app/utils/adminSubscriptionDetail';
-import { resolveSubscriptionOwner as resolveOwner } from '@server/admin/subscriptionDetail/resolveSubscriptionOwner';
+import { resolveSubscriptionOwner } from '@server/admin/subscriptionDetail/resolveSubscriptionOwner';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Subscription, subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -169,7 +169,7 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       throw new ConflictError('Only comped subscriptions can be changed here.');
     }
 
-    const owner = await resolveOwner(subscription);
+    const owner = await resolveSubscriptionOwner(subscription);
     if (owner.actingUserId && isSelfOrImpersonator(req.user, owner.actingUserId)) {
       await denySelfAdminAction(req, {
         action: 'user.subscription.denied',

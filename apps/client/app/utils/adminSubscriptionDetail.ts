@@ -65,6 +65,65 @@ export type AdminSubscriptionSyncResponse = {
   changes: AdminSubscriptionSyncChange[];
 };
 
+type DateLike = Date | string | null | undefined;
+
+const isoOrNull = (value: DateLike): string | null => (value ? new Date(value).toISOString() : null);
+
+/** A cancellation is scheduled by the period-end flag or by a custom cancel date. The routes and the model share it. */
+export const isScheduledToCancel = (subscription: {
+  cancelAtPeriodEnd?: boolean | null;
+  cancelAt?: DateLike;
+}): boolean => Boolean(subscription.cancelAtPeriodEnd || subscription.cancelAt);
+
+/**
+ * The business state an admin reviews before a Stripe write. It deliberately leaves out `lastSyncedAt`: our own
+ * customer.subscription.updated webhook re-stamps that seconds after every write without changing anything the admin
+ * looked at, so a stamp compare would 409 the Undo.
+ */
+export const stripeStateToken = (subscription: {
+  status?: string;
+  cancelAtPeriodEnd?: boolean | null;
+  cancelAt?: DateLike;
+  periodEndsAt?: DateLike;
+}): string =>
+  JSON.stringify([
+    subscription.status ?? null,
+    Boolean(subscription.cancelAtPeriodEnd),
+    isoOrNull(subscription.cancelAt),
+    isoOrNull(subscription.periodEndsAt),
+  ]);
+
+/** Mirror state a Stripe-write action is previewed against; `stateToken` is what the write sends back. */
+export type AdminSubscriptionStripeState = {
+  lastSyncedAt: string | null;
+  cancelAtPeriodEnd: boolean;
+  stateToken: string;
+};
+
+export const stripeStateOf = (doc: {
+  status?: string;
+  cancelAtPeriodEnd?: boolean | null;
+  cancelAt?: DateLike;
+  periodEndsAt?: DateLike;
+  lastSyncedAt?: DateLike;
+}): AdminSubscriptionStripeState => ({
+  lastSyncedAt: isoOrNull(doc.lastSyncedAt),
+  cancelAtPeriodEnd: Boolean(doc.cancelAtPeriodEnd),
+  stateToken: stripeStateToken(doc),
+});
+
+/**
+ * Body of the admin Stripe-write routes (cancel, resume) under /api/admin/subscriptions/[id]. The key is minted
+ * once per dialog open and reused across retries; `expectedState` is the `stripe.stateToken` the admin reviewed.
+ */
+export const AdminStripeWriteBodySchema = z.object({
+  idempotencyKey: z.string().min(8).max(128),
+  expectedState: z.string().min(1).max(256),
+});
+export type AdminStripeWriteBody = z.infer<typeof AdminStripeWriteBodySchema>;
+
+export type AdminStripeWriteResponse = { subscription: AdminSubscriptionRow; stripe: AdminSubscriptionStripeState };
+
 export type AdminSubscriptionCreditGrant = {
   id: string;
   credits: number;
@@ -115,6 +174,8 @@ export type AdminSubscriptionDetail = {
    * `null` when no such user exists, which disables those actions.
    */
   actingUserId: string | null;
+  /** Mirror state the Stripe-write actions are previewed against; `null` for comps, which never touch Stripe. */
+  stripe: AdminSubscriptionStripeState | null;
 };
 
 export type AdminSubscriptionByStripeIdResponse = { id: string };
