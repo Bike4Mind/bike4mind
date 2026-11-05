@@ -84,12 +84,12 @@ const SharePage = () => {
       .split(',')
       .map(i => i.trim())
       .filter(Boolean);
-    return ids;
+    return [...new Set(ids)];
   }, [id]);
 
   // Fetch multiple invites
   const query = useQuery({
-    queryKey: ['invites', 'multiple', inviteIds.sort()],
+    queryKey: ['invites', 'multiple', [...inviteIds].sort()],
     queryFn: async () => {
       const results = await Promise.allSettled(inviteIds.map(inviteId => fetchInvite(inviteId)));
       const isPastExpiry = (inv: { expiresAt?: Date | string | null }) =>

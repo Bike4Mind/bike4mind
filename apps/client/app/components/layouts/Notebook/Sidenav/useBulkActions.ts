@@ -6,6 +6,7 @@ import { MAX_BULK_ITEMS } from '@bike4mind/common';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDeleteSessions, useDownloadSession } from '@client/app/hooks/data/sessions';
 import { api } from '@client/app/contexts/ApiContext';
+import { getErrorMessage } from '@client/app/utils/error';
 import type { CombinedSessionDocument } from './types';
 
 interface UseBulkActionsArgs {
@@ -188,7 +189,7 @@ export function useBulkActions({
       }
       setSelectedItems(new Set());
     } catch (error) {
-      toast.error('Failed to update favorites');
+      toast.error(getErrorMessage(error));
     } finally {
       queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
     }

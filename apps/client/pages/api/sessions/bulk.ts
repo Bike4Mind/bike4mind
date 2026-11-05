@@ -91,8 +91,17 @@ async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string
       ...existing,
       ...newTags.filter(name => !existing.some(t => t.name === name)).map(name => ({ name, strength: 1 })),
     ];
+    let updated;
     try {
-      const updated = await sessionService.updateSession(user, { id, tags: merged }, adapters);
+      updated = await sessionService.updateSession(user, { id, tags: merged }, adapters);
+    } catch (error) {
+      req.logger.warn('[sessions/bulk] tag update failed', { sessionId: id, error });
+      results.push({ id, ok: false, error: 'Update failed' });
+      continue;
+    }
+    results.push({ id, ok: true, session: redactSessionForClient(updated as ISessionDocument) });
+    // The write already landed; an analytics failure must not report the item as failed.
+    try {
       await logEvent(
         {
           userId: user.id,
@@ -106,10 +115,8 @@ async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string
         },
         { ability: req.ability }
       );
-      results.push({ id, ok: true, session: redactSessionForClient(updated as ISessionDocument) });
     } catch (error) {
-      req.logger.warn('[sessions/bulk] tag update failed', { sessionId: id, error });
-      results.push({ id, ok: false, error: 'Update failed' });
+      req.logger.warn('[sessions/bulk] tag update event log failed', { sessionId: id, error });
     }
   }
   return { results, okCount: results.filter(r => r.ok).length };

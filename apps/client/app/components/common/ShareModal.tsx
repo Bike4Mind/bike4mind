@@ -359,7 +359,7 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
           return;
         } else if (tabIndex === 1) {
           // One invite per item, combined into one link the share page accepts in one request.
-          const { links, failedItems } = await shareInBatches(recipientValue, description);
+          const { links, failedItems, rateLimitMessage, total } = await shareInBatches(recipientValue, description);
 
           if (links.length > 0) {
             const inviteIds = links.map(link => {
@@ -370,7 +370,11 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
             setGeneratedLink(`${baseUrl}/share/${inviteIds.join(',')}`);
           }
 
-          showBulkFeedback(links.length, failedItems, itemType, 'generated links for');
+          if (rateLimitMessage) {
+            showRateLimitedBulkFeedback(rateLimitMessage, links.length, total, itemType, failedItems);
+          } else {
+            showBulkFeedback(links.length, failedItems, itemType, 'generated links for');
+          }
         } else {
           const { okCount, failedItems, rateLimitMessage, total } = await shareInBatches(recipientValue, description);
 

@@ -335,6 +335,19 @@ describe('POST /api/sessions/bulk - tags', () => {
     expect(res._getJSONData().okCount).toBe(2);
   });
 
+  it('reports a persisted update as ok when the event log fails', async () => {
+    mockTag.findUpdatable.mockResolvedValue([{ id: id(1), tags: [] }]);
+    mockTag.update.mockResolvedValue({ id: id(1), name: 'n' });
+    mockLogEvent.mockRejectedValue(new Error('analytics down'));
+
+    const { req, res } = fireWith('POST', { action: 'addTags', sessionIds: [id(1)], tags: ['t'] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().okCount).toBe(1);
+    expect(res._getJSONData().results[0]).toMatchObject({ id: id(1), ok: true });
+  });
+
   it('fails an id the caller cannot update without touching it', async () => {
     mockTag.findUpdatable.mockResolvedValue([{ id: id(1), tags: [] }]);
     mockTag.update.mockResolvedValue({ id: id(1), name: 'n' });
