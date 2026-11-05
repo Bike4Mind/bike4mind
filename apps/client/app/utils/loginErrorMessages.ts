@@ -90,3 +90,17 @@ export const getLoginErrorMessage = (code: string | null | undefined): string | 
   // be indexable; an unknown code falls through to the generic message.
   return (LOGIN_ERROR_MESSAGES as Record<string, string>)[code] ?? GENERIC_LOGIN_ERROR;
 };
+
+/** Codes for a blocked account (server/auth/blockedSignIn.ts); their notice names the support address. */
+const BLOCKED_ACCOUNT_LOGIN_ERROR_CODES: ReadonlySet<string> = new Set<LoginErrorCode>([
+  'account_suspended',
+  'account_on_hold',
+  'account_policy_suspended',
+]);
+
+export const isBlockedAccountLoginError = (code: string | null | undefined): boolean =>
+  !!code && BLOCKED_ACCOUNT_LOGIN_ERROR_CODES.has(code);
+
+/** Must match blockedSignInMessage (server/auth/blockedSignIn.ts), so OTC and OAuth read the same. */
+export const withSupportContact = (message: string, supportEmail: string | null | undefined): string =>
+  supportEmail ? `${message} Support: ${supportEmail}` : message;

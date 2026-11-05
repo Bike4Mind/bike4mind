@@ -27,10 +27,18 @@ export function blockedSignInErrorCode(user: AccountStateFields): string | null 
   return reason ? BLOCKED_SIGN_IN_ERROR_CODES[reason] : null;
 }
 
-/** The refusal message for a JSON sign-in response, naming the support address when one is configured. */
+/** The SUPPORT_EMAIL secret, or undefined when it is unset or still the placeholder. */
+export function configuredSupportEmail(): string | undefined {
+  return isPlaceholderValue(Config.SUPPORT_EMAIL) ? undefined : Config.SUPPORT_EMAIL;
+}
+
+/**
+ * The refusal message for a JSON sign-in response, naming the support address when one is configured.
+ * Must match what the login page builds for a redirect code (withSupportContact in loginErrorMessages.ts).
+ */
 export function blockedSignInMessage(user: AccountStateFields): string | null {
   const message = accountBlockedMessage(user);
   if (!message) return null;
-  const supportEmail = isPlaceholderValue(Config.SUPPORT_EMAIL) ? undefined : Config.SUPPORT_EMAIL;
+  const supportEmail = configuredSupportEmail();
   return supportEmail ? `${message} Support: ${supportEmail}` : message;
 }

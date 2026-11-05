@@ -6,6 +6,7 @@ import { isOpenRegistrationAllowed } from '@server/utils/auth/openRegistration';
 import { getTurnstilePolicy } from '@server/utils/auth/turnstile';
 import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
 import { publicAppUrl } from '@server/utils/validators';
+import { configuredSupportEmail } from '@server/auth/blockedSignIn';
 
 export type ServerConfigPublic = {
   apiUrl: string;
@@ -20,6 +21,8 @@ export type ServerConfigPublic = {
   turnstileSiteKey: string;
   /** True when Apple credentials are configured, so the login page offers Sign in with Apple. */
   appleSignInEnabled: boolean;
+  /** Support address the login page names on a blocked-account notice; empty when not configured. */
+  supportEmail: string;
 };
 
 // Public pre-login config - minimal fields only.
@@ -51,6 +54,7 @@ const handler = baseApi({ auth: false }).get(
       allowTrustedDevices,
       turnstileSiteKey: turnstile.active ? turnstile.siteKey : '',
       appleSignInEnabled: getAppleConfig() !== null,
+      supportEmail: configuredSupportEmail() ?? '',
     };
 
     return res.json(config);
