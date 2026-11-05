@@ -324,12 +324,68 @@ describe('ModelServerStore', () => {
     expect(store.launchSettings(record.id)).toEqual({ flashAttention: 'off' });
   });
 
-  it('ignores a KV cache type in saved specs', async () => {
+  describe('a KV cache type saved under Hardware', () => {
     const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
-    const file = memoryFile(JSON.stringify({ version: 1, servers: [], localSpecs: { ...specs, kvCacheType: 'q8_0' } }));
-    const store = new ModelServerStore(cipher(), file, logger);
-    expect(await store.localSpecs()).toEqual(specs);
-    expect(store.localLaunch()).toEqual({});
+    const server = {
+      id: 'a1',
+      name: 'gpu box',
+      kind: 'ollama',
+      transport: { type: 'http', baseUrl: 'http://10.0.0.5:11434' },
+      access: 'chat',
+      auth: { type: 'none' },
+    };
+
+    it('becomes the launch cache type of this computer and of a server with none', async () => {
+      const file = memoryFile(
+        JSON.stringify({
+          version: 1,
+          servers: [{ ...server, specs: { ...specs, kvCacheType: 'q4_0' } }],
+          localSpecs: { ...specs, kvCacheType: 'q8_0' },
+          localLaunch: { flashAttention: 'on' },
+        })
+      );
+      const store = new ModelServerStore(cipher(), file, logger);
+      expect(await store.localSpecs()).toEqual(specs);
+      expect(store.localLaunch()).toEqual({ kvCacheType: 'q8_0', flashAttention: 'on' });
+      expect(store.launchSettings('a1')).toEqual({ kvCacheType: 'q4_0' });
+      expect((await store.get('a1'))?.specs).toEqual(specs);
+
+      await store.update('a1', { name: 'renamed' });
+      const saved = JSON.parse(file.contents!);
+      expect(saved.servers[0].specs).toEqual(specs);
+      expect(saved.servers[0].launch).toEqual({ kvCacheType: 'q4_0' });
+    });
+
+    it('leaves a cache type or flash attention setting saved under Launch as it is', async () => {
+      const file = memoryFile(
+        JSON.stringify({
+          version: 1,
+          servers: [
+            { ...server, specs: { ...specs, kvCacheType: 'q4_0' }, launch: { kvCacheType: 'q8_0' } },
+            { ...server, id: 'b2', specs: { ...specs, kvCacheType: 'q4_0' }, launch: { flashAttention: 'off' } },
+          ],
+          localSpecs: { ...specs, kvCacheType: 'q4_0' },
+          localLaunch: { kvCacheType: 'q8_0' },
+        })
+      );
+      const store = new ModelServerStore(cipher(), file, logger);
+      await store.localSpecs();
+      expect(store.localLaunch()).toEqual({ kvCacheType: 'q8_0' });
+      expect(store.launchSettings('a1')).toEqual({ kvCacheType: 'q8_0' });
+      expect(store.launchSettings('b2')).toEqual({ flashAttention: 'off' });
+    });
+
+    it('is not carried to a server that is not Ollama', async () => {
+      const file = memoryFile(
+        JSON.stringify({
+          version: 1,
+          servers: [{ ...server, kind: 'openai-compatible', specs: { ...specs, kvCacheType: 'q8_0' } }],
+        })
+      );
+      const store = new ModelServerStore(cipher(), file, logger);
+      await store.list();
+      expect(store.launchSettings('a1')).toEqual({});
+    });
   });
 
   it('remembers the models a server found thinking across a restart, and forgets them with the server', async () => {

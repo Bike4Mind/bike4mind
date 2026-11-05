@@ -333,7 +333,7 @@ export class ModelServerStore {
         // Records this version cannot read (a later kind, transport or auth) are carried through untouched.
         const all: unknown[] = Array.isArray(parsed.servers) ? parsed.servers : [];
         this.orphans = all.filter(value => !hasId(value));
-        document = { ...parsed, version: 1, servers: all.filter(hasId) };
+        document = migrateHardwareKvCache({ ...parsed, version: 1, servers: all.filter(hasId) });
         if (typeof parsed.version === 'number' && parsed.version > 1) {
           this.readOnly = true;
           this.logger.warn(
@@ -380,6 +380,35 @@ export class ModelServerStore {
       throw new Error('The saved server list was written by a newer Desktop. Update Desktop to change it.');
     }
   }
+}
+
+/** The Hardware form used to hold the KV cache type; it now lives in launch settings, so a saved one moves there. */
+function takeHardwareKvCache(
+  specs: unknown,
+  launch: unknown,
+  moves: boolean
+): { specs: unknown; launch: unknown } | null {
+  if (typeof specs !== 'object' || specs === null || !('kvCacheType' in specs)) return null;
+  const { kvCacheType, ...rest } = specs as Record<string, unknown>;
+  const kept = readLaunchShape(launch);
+  const type = readLaunchShape({ kvCacheType }).kvCacheType;
+  if (!moves || !type || kept.kvCacheType || kept.flashAttention === 'off') return { specs: rest, launch };
+  return { specs: rest, launch: { ...(launch as object | undefined), kvCacheType: type } };
+}
+
+function migrateHardwareKvCache(document: StoreDocument): StoreDocument {
+  const servers = document.servers.map(server => {
+    const taken = takeHardwareKvCache(server.specs, server.launch, server.kind === 'ollama');
+    if (!taken) return server;
+    return { ...server, specs: taken.specs, ...(taken.launch ? { launch: taken.launch } : {}) } as StoredServer;
+  });
+  const taken = takeHardwareKvCache(document.localSpecs, document.localLaunch, true);
+  return {
+    ...document,
+    servers,
+    ...(taken ? { localSpecs: taken.specs as ModelServerSpecs } : {}),
+    ...(taken?.launch ? { localLaunch: taken.launch as ModelServerLaunchSettings } : {}),
+  };
 }
 
 function setLaunch(stored: StoredServer, settings: ModelServerLaunchSettings): void {
