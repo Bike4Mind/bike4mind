@@ -183,7 +183,10 @@ const REGISTERED_WITHOUT_CONSUMER: Record<string, string> = {
   sreFixQueue: 'SRE Slack approval path enqueues; decide together with sreJobQueue',
 };
 
-/** Where self-host queue consumers are registered. A consumer reads its queue as `Resource.<name>`. */
+/**
+ * Where self-host queue consumers are registered, each passing its queue name as a `'<name>'` literal.
+ * Top-level files only: a consumer moved into a subfolder fails the coverage test, it is not missed.
+ */
 const SELF_HOST_CONSUMER_DIR = 'apps/workers/src/selfhost';
 
 /** Consumers outside the self-host worker that take their queue URL from an env var, not `Resource`. */
@@ -191,15 +194,16 @@ const ENV_VAR_CONSUMERS: Record<string, { file: string; envVar: string }> = {
   agentContinuationQueue: { file: 'apps/workers/src/agentExecutor/main.ts', envVar: 'AGENT_CONTINUATION_QUEUE' },
 };
 
-/** Queue names a self-host consumer reads, by `Resource.<name>` or a `'<name>'` literal. */
+/**
+ * Queue names a self-host consumer registers, by `'<name>'` literal. `Resource.<name>` is not counted:
+ * producers in the same dir read their target queue that way too.
+ */
 const selfHostConsumedQueues = (): Set<string> => {
   const consumed = new Set<string>();
   const dir = join(REPO_ROOT, SELF_HOST_CONSUMER_DIR);
   for (const entry of readdirSync(dir)) {
     if (!/\.ts$/.test(entry) || /\.test\./.test(entry)) continue;
     const content = readFileSync(join(dir, entry), 'utf8');
-    RESOURCE_READ.lastIndex = 0;
-    for (const m of content.matchAll(RESOURCE_READ)) consumed.add(m[1]);
     for (const m of content.matchAll(/'([A-Za-z][A-Za-z0-9]*Queue)'/g)) consumed.add(m[1]);
   }
   for (const [name, { file, envVar }] of Object.entries(ENV_VAR_CONSUMERS)) {
@@ -284,6 +288,15 @@ describe('self-host resource manifest coverage', () => {
       stale,
       `listed as registered-without-consumer but now consumed or unregistered: ${stale.join(', ')}`
     ).toEqual([]);
+  });
+
+  it('gives every registered-without-consumer queue a gapBecause entry in the parity policy', () => {
+    const policy = readFileSync(join(REPO_ROOT, 'packages/scripts/src/selfhostParityPolicy.ts'), 'utf8');
+    const withReason = new Set(
+      [...policy.matchAll(/gapBecause\(\s*'queue:infra\/[A-Za-z]+\.ts:([A-Za-z][A-Za-z0-9]*Queue)'/g)].map(m => m[1])
+    );
+    const missing = Object.keys(REGISTERED_WITHOUT_CONSUMER).filter(k => !withReason.has(k));
+    expect(missing, `no gapBecause entry in selfhostParityPolicy.ts: ${missing.join(', ')}`).toEqual([]);
   });
 });
 
