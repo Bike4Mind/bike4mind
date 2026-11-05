@@ -221,6 +221,27 @@ describe('save_generated_image', () => {
     expect(await readFile(join(h.root, 'refs', 'lantern.png'))).toEqual(PNG_BYTES);
   });
 
+  // The save usually comes in a later turn than the generation, when the agent no longer sees the
+  // image, so the save is what puts it back in front of the agent before it models from it.
+  it('shows the saved image to the agent again', async () => {
+    const h = await harness();
+    const id = await generate(h);
+    h.shown.length = 0;
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'refs/lantern.png' }, h.context);
+    expect(h.shown).toEqual(['image/png']);
+    expect(result).toMatch(/You see it below this result in this reply only/);
+  });
+
+  it('tells a model that reads no images it was not shown the saved image', async () => {
+    const h = await harness({ vision: false });
+    const id = await generate(h);
+
+    const result = await saveGeneratedImageTool.run({ id, path: 'refs/lantern.png' }, h.context);
+    expect(h.shown).toEqual([]);
+    expect(result).toMatch(/could not be shown it: the current model does not accept images/);
+  });
+
   // A viewer or slicer trusts the extension, so a JPEG saved as .png would open as a broken file.
   it('corrects the extension to the type the bytes really are', async () => {
     const h = await harness({ generated: 'jpeg' });

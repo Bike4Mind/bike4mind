@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { dirname, extname } from 'node:path';
 import {
   ASPECT_RATIOS,
@@ -208,7 +208,6 @@ export const generateImageTool: ToolDefinition = {
   },
 };
 
-/** Shared by the three Audio-tag tools: report the media, then say what happened. */
 /**
  * Attach each generated image for the model's next request, and say what it was shown.
  *
@@ -231,7 +230,9 @@ async function showGenerated(context: ToolContext, media: MediaContext, ids: rea
     if (result.ok) shown.push(result.pixels ? `${id} (${result.pixels})` : id);
     else failures.push(result.reason);
   }
-  if (failures.length === 0) return `They are attached so you can see them too: ${shown.join(', ')}.`;
+  if (failures.length === 0) {
+    return `They are attached so you can see them too, in this reply only: ${shown.join(', ')}.`;
+  }
   const reason = [...new Set(failures)].join('; ');
   return (
     `${shown.length > 0 ? `Attached for you: ${shown.join(', ')}. ` : ''}` +
@@ -287,6 +288,19 @@ async function planSave(input: Record<string, unknown>, context: ToolContext): P
   };
 }
 
+/**
+ * Show the saved image again. A tool's image reaches the model only in the reply it ran in, and
+ * the save usually comes in a later turn than the generation (the user picks one, then asks for a
+ * model), so without this the agent would be working from memory of a picture it can no longer see.
+ */
+async function showSaved(context: ToolContext, target: string): Promise<string> {
+  const bytes = await readFile(target);
+  const type = sniffImageType(bytes);
+  const shown = type ? showImage(context, bytes, type) : { ok: false as const, reason: 'it is not a readable image' };
+  if (shown.ok) return `You see it below this result in this reply only; read ${target} with file_read to look again.`;
+  return `You could not be shown it: ${shown.reason}. Do not describe what you have not seen.`;
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await stat(path);
@@ -303,7 +317,7 @@ export const saveGeneratedImageTool: ToolDefinition = {
       'Copy an image generate_image made in THIS conversation into the project, so it outlives the',
       'conversation: a reference to model from, an asset, a texture. Free - nothing is generated again.',
       "The extension is set to the image's real type, and an existing file is never replaced.",
-      'Save the one the user chose, not every variation. Read it back later with file_read to see it again.',
+      'Save the one the user chose, not every variation. The result shows you the saved image again.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -339,11 +353,13 @@ export const saveGeneratedImageTool: ToolDefinition = {
       recordRecentFile(context, plan.target);
       await recordSessionWrite(context, plan.target);
       const renamed = plan.renamed ? " The name was corrected to match the image's type." : '';
-      return `Saved ${plan.id} as ${plan.target} (${formatBytes(plan.size)}).${renamed}`;
+      const seen = await showSaved(context, plan.target);
+      return `Saved ${plan.id} as ${plan.target} (${formatBytes(plan.size)}).${renamed} ${seen}`;
     });
   },
 };
 
+/** Shared by the three Audio-tag tools: report the media, then say what happened. */
 function describeAudio(context: ToolContext, outcome: AudioOutcome, what: string): string {
   context.report?.media(outcome.media);
   if (outcome.notice) context.report?.notice(outcome.notice);
