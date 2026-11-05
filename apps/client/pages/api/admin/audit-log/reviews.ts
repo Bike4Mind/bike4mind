@@ -14,13 +14,14 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { parseOrBadRequest } from '@bike4mind/server-utils/utils/errors';
 import { adminApi } from '@server/middlewares/adminApi';
-import { isSameUserId } from '@server/utils/adminAudit';
+import { isSameUserId, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 const OBJECT_ID_PATTERN = /^[a-f0-9]{24}$/;
 
 type ReviewingUser = { id: string; name?: string | null; username?: string | null; isAdmin?: boolean | null };
 
-// Reviews are meta: the review document is the record, so nothing is written to the audit log.
+const REVIEW_TARGET = { kind: 'system', id: 'admin-audit-log', displayName: 'Audit Log' } as const;
+
 const assertCanReview = (user: ReviewingUser): void => {
   if ((user as { impersonatedBy?: string }).impersonatedBy) {
     throw new ForbiddenError('Stop impersonating to review audit entries.');
@@ -78,6 +79,14 @@ const handler = adminApi({
     const inserted = new Set(reviewed);
     for (const id of eligible) if (!inserted.has(id)) skipped.push({ id, reason: 'already_reviewed' });
 
+    if (reviewed.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'audit.reviewed',
+        target: REVIEW_TARGET,
+        summary: `reviewed ${reviewed.length} audit ${reviewed.length === 1 ? 'entry' : 'entries'}`,
+        details: { entryIds: reviewed, hasNote: !!trimmedNote },
+      });
+    }
     Logger.info('[Admin] Reviewed audit entries', {
       reviewerId: req.user.id,
       reviewed: reviewed.length,
@@ -106,6 +115,14 @@ const handler = adminApi({
       skipped.push({ id, reason: reviewById.has(id) ? 'not_reviewer' : 'not_reviewed' });
     }
 
+    if (unreviewed.length > 0) {
+      await recordAdminActionFromRequest(req, {
+        action: 'audit.unreviewed',
+        target: REVIEW_TARGET,
+        summary: `removed review sign-off from ${unreviewed.length} audit ${unreviewed.length === 1 ? 'entry' : 'entries'}`,
+        details: { entryIds: unreviewed },
+      });
+    }
     Logger.info('[Admin] Unreviewed audit entries', {
       reviewerId: req.user.id,
       unreviewed: unreviewed.length,

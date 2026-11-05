@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindById, mockFindByEntryIds, mockCreateMany, mockDeleteByReviewer } = vi.hoisted(() => ({
+const { mockFindById, mockFindByEntryIds, mockCreateMany, mockDeleteByReviewer, mockRecordAudit } = vi.hoisted(() => ({
+  mockRecordAudit: vi.fn(),
   mockFindById: vi.fn(),
   mockFindByEntryIds: vi.fn(),
   mockCreateMany: vi.fn(),
@@ -42,6 +43,11 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
+vi.mock('@server/utils/adminAudit', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
+  recordAdminActionFromRequest: (...a: unknown[]) => mockRecordAudit(...a),
+}));
+
 import handler from '../reviews';
 
 const ADMIN = { id: 'admin1', isAdmin: true, name: 'Ada', username: 'ada', email: 'ada@example.com' };
@@ -71,6 +77,7 @@ const entry = (id: string, overrides: { severity?: string; userId?: string; targ
 const configOf = () => (handler as unknown as { _config?: { auth?: unknown; requiredScopes?: string[] } })._config;
 
 beforeEach(() => {
+  mockRecordAudit.mockReset().mockResolvedValue(null);
   mockFindById.mockReset().mockImplementation(async (id: string) => entry(id));
   mockFindByEntryIds.mockReset().mockResolvedValue([]);
   mockCreateMany
@@ -136,6 +143,11 @@ describe('/api/admin/audit-log/reviews', () => {
       expect(mockCreateMany).toHaveBeenCalledWith([
         { auditEntryId: ID_E, reviewer: { userId: 'admin1', name: 'Ada' }, note: 'looks fine' },
       ]);
+      expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'audit.reviewed', details: { entryIds: [ID_E], hasNote: true } })
+      );
       expect(res._getJSONData()).toEqual({
         reviewed: [ID_E],
         skipped: [
@@ -230,6 +242,11 @@ describe('/api/admin/audit-log/reviews', () => {
       await promise;
 
       expect(mockDeleteByReviewer).toHaveBeenCalledWith([ID_A], 'admin1');
+      expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'audit.unreviewed', details: { entryIds: [ID_A] } })
+      );
       expect(res._getJSONData()).toEqual({
         unreviewed: [ID_A],
         skipped: [
@@ -238,6 +255,12 @@ describe('/api/admin/audit-log/reviews', () => {
           { id: ID_D, reason: 'not_reviewed' },
         ],
       });
+    });
+
+    it('writes no audit row when nothing was unreviewed', async () => {
+      mockDeleteByReviewer.mockResolvedValue([]);
+      await call('DELETE', { body: { entryIds: [ID_A] } }).promise;
+      expect(mockRecordAudit).not.toHaveBeenCalled();
     });
 
     it('rejects a non-full admin and an impersonating session with 403', async () => {
