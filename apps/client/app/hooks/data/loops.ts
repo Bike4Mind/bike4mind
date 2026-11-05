@@ -217,7 +217,7 @@ export const useCreateLoopTicket = () =>
   useLoopMutation(
     (body: { loopId: string; title: string; description?: string; stage: string; priority: WorkItemPriority }) =>
       api.post('/api/work-items', body),
-    ({ loopId }) => [{ queryKey: loopKeys.tickets(loopId) }, { queryKey: loopKeys.detail(loopId) }]
+    ({ loopId }) => [{ queryKey: loopKeys.detail(loopId) }]
   );
 
 export type MoveLoopTicketVars = { loopId: string; id: string; stage?: string; priority?: WorkItemPriority };
@@ -259,6 +259,8 @@ export const useMoveLoopTicket = () => {
       onError(error);
     },
     onSettled: (_data, _error, { loopId }) => {
+      // The last move to settle refetches, so a refetch does not overwrite a move still saving.
+      if (queryClient.isMutating({ mutationKey: MOVE_LOOP_TICKET_KEY }) > 1) return;
       void queryClient.invalidateQueries({ queryKey: loopKeys.tickets(loopId) });
       void queryClient.invalidateQueries({ queryKey: loopKeys.detail(loopId), exact: true });
     },

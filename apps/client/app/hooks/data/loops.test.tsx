@@ -140,7 +140,7 @@ describe('loop mutations', () => {
       await keysAfter(() =>
         result.current.ticket.mutateAsync({ loopId: 'l3', title: 't', stage: 'todo', priority: 'p2' })
       )
-    ).toEqual([{ queryKey: loopKeys.tickets('l3') }, { queryKey: loopKeys.detail('l3') }]);
+    ).toEqual([{ queryKey: loopKeys.detail('l3') }]);
   });
 
   it('does not wait for the refetch to settle', async () => {
@@ -205,6 +205,23 @@ describe('useMoveLoopTicket', () => {
       { queryKey: loopKeys.tickets('l1') },
       { queryKey: loopKeys.detail('l1'), exact: true },
     ]);
+  });
+
+  it('waits for the last of two overlapping moves before refetching', async () => {
+    const resolvers: ((value: unknown) => void)[] = [];
+    patch.mockImplementation(() => new Promise(r => resolvers.push(r)));
+    const { result, cached, invalidate } = seeded();
+
+    act(() => result.current.mutate({ loopId: 'l1', id: 't1', stage: 'doing' }));
+    act(() => result.current.mutate({ loopId: 'l1', id: 't2', stage: 'doing' }));
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+
+    await act(async () => resolvers[0]({ data: {} }));
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(cached()).toEqual({ todo: [], doing: ['t1:p2', 't2:p2'] });
+
+    await act(async () => resolvers[1]({ data: {} }));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: loopKeys.tickets('l1') }));
   });
 
   it('changes priority in place', async () => {

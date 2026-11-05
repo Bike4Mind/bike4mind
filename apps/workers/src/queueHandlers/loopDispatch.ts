@@ -11,7 +11,13 @@ const messageSchema = z.object({ loopId: z.string().min(1) });
  */
 export const handler = dispatchWithLogger(async (event, _context, logger) => {
   for (const record of event.Records) {
-    const parsed = messageSchema.safeParse(JSON.parse(record.body));
+    let body: unknown;
+    try {
+      body = JSON.parse(record.body);
+    } catch {
+      body = undefined;
+    }
+    const parsed = messageSchema.safeParse(body);
     if (!parsed.success) {
       logger.warn('[Loops] Dropping a malformed loop dispatch message', { body: record.body });
       continue;
