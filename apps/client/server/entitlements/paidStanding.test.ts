@@ -16,6 +16,7 @@ import {
   hasPurchasedCredits,
   holdsPaidStanding,
   priceAffectsEntitlements,
+  resolvePaidStanding,
 } from './paidStanding';
 
 const PURCHASED = new Date('2026-10-01T00:00:00Z');
@@ -78,5 +79,28 @@ describe('priceAffectsEntitlements', () => {
   it('is false for an unknown or empty price', () => {
     expect(priceAffectsEntitlements('price_unknown')).toBe(false);
     expect(priceAffectsEntitlements('')).toBe(false);
+  });
+});
+
+describe('resolvePaidStanding', () => {
+  it('returns standing and subscriber keys together for an active paid plan', () => {
+    expect(resolvePaidStanding({}, [{ priceId: 'price_basic' }])).toEqual({
+      holdsPaidStanding: true,
+      subscriberKeys: ['questmaster:pro'],
+    });
+  });
+
+  it('gives standing without subscriber keys to a credit buyer with no plan', () => {
+    expect(resolvePaidStanding({ lastCreditsPurchasedAt: PURCHASED }, [])).toEqual({
+      holdsPaidStanding: true,
+      subscriberKeys: [],
+    });
+  });
+
+  it('gives neither without a purchase or a paid row', () => {
+    expect(resolvePaidStanding({}, [{ priceId: 'price_unknown' }])).toEqual({
+      holdsPaidStanding: false,
+      subscriberKeys: [],
+    });
   });
 });
