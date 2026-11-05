@@ -70,6 +70,9 @@ export interface SessionPlacement {
   failed: () => void;
 }
 
+/** Latest context notice per conversation that was not open when it arrived; shown when it opens. */
+const backgroundNotices = new Map<string, string>();
+
 export function useSessions(): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -162,6 +165,7 @@ export function useSessions(): SessionsController {
 
   const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
     await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+    backgroundNotices.delete(sessionId);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 
@@ -593,7 +597,8 @@ export function useConversation(
 
   useEffect(() => {
     setSendError(null);
-    setNotice(null);
+    setNotice(backgroundNotices.get(sessionId ?? '') ?? null);
+    if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
     setReturned(null);
     setQueued([]);
@@ -801,6 +806,10 @@ export function useConversation(
         // Counted before the session filter below, and deliberately: a reply running in a
         // background conversation spends from the same balance as this one.
         setSettledTurns(count => count + 1);
+      }
+      if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
+        backgroundNotices.set(event.sessionId, event.message);
+        return;
       }
       if (event.sessionId !== activeSessionId.current) return;
 

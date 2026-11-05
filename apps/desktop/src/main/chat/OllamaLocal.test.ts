@@ -718,8 +718,8 @@ describe('OllamaLocal', () => {
             : new Response(`${JSON.stringify({ done: true })}\n`)
         )
       );
-    const turn = (sessionId: string, offered: 'tools' | 'withheld' | 'none') => ({
-      model: 'local:ollama:gemma3:270m',
+    const turn = (sessionId: string, offered: 'tools' | 'withheld' | 'none', model = 'gemma3:270m') => ({
+      model: `local:ollama:${model}`,
       messages: [{ role: 'user' as const, content: 'read README.md' }],
       sessionId,
       ...(offered === 'tools' ? { tools: [{ toolSchema: { name: 'read_file', parameters: {} } }] } : {}),
@@ -733,10 +733,38 @@ describe('OllamaLocal', () => {
       await local.stream(turn('a', 'withheld'), () => undefined, undefined, undefined, onNotice);
       await local.stream(turn('a', 'tools'), () => undefined, undefined, undefined, onNotice);
       await local.stream(turn('b', 'tools'), () => undefined, undefined, undefined, onNotice);
-      expect(onNotice.mock.calls).toEqual([[noToolsNotice('gemma3:270m')], [noToolsNotice('gemma3:270m')]]);
+      await local.stream(turn('c', 'withheld'), () => undefined, undefined, undefined, onNotice);
+      expect(onNotice.mock.calls).toEqual(Array(3).fill([noToolsNotice('gemma3:270m')]));
       expect(noToolsNotice('gemma3:270m')).toBe(
         'gemma3:270m has no tool support, so this conversation runs without tools. Pick a model with tool support to use tools.'
       );
+    });
+
+    it('tells a conversation again when it switches to another model without tools, or returns after one with tools', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: unknown, init?: RequestInit) => {
+          if (!String(input).endsWith('/api/show')) return new Response(`${JSON.stringify({ done: true })}\n`);
+          const { name } = JSON.parse(String(init?.body)) as { name: string };
+          return Response.json({ capabilities: name === 'qwen3:0.6b' ? ['completion', 'tools'] : ['completion'] });
+        })
+      );
+      const local = new OllamaLocal();
+      const onNotice = vi.fn();
+      const run = (model: string) =>
+        local.stream(turn('a', 'tools', model), () => undefined, undefined, undefined, onNotice);
+      await run('gemma3:270m');
+      await run('gemma3:270m');
+      await run('tinyllama');
+      await run('gemma3:270m');
+      await run('qwen3:0.6b');
+      await run('gemma3:270m');
+      expect(onNotice.mock.calls.map(([notice]) => notice)).toEqual([
+        noToolsNotice('gemma3:270m'),
+        noToolsNotice('tinyllama'),
+        noToolsNotice('gemma3:270m'),
+        noToolsNotice('gemma3:270m'),
+      ]);
     });
 
     it('says nothing for a model with tool support, or a turn that offered no tools', async () => {

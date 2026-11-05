@@ -236,8 +236,8 @@ export interface RemoteOllama {
 export class OllamaLocal {
   private listed: ChatModelOption[] = [];
   private readonly runtimeId: string;
-  /** Conversations already told that their model has no tool support. */
-  private readonly toldNoTools = new Set<string>();
+  /** Conversation to the model it was last told has no tool support; cleared once a model with tools runs. */
+  private readonly toldNoTools = new Map<string, string>();
 
   /**
    * Main passes Electron's net.fetch: Node's fetch gives up after five minutes without response
@@ -347,8 +347,10 @@ export class OllamaLocal {
       ? (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }))
       : [];
     const offeredTools = request.toolsUnsupported === true || (request.tools?.length ?? 0) > 0;
-    if (!canUseTools && offeredTools && onNotice && request.sessionId && !this.toldNoTools.has(request.sessionId)) {
-      this.toldNoTools.add(request.sessionId);
+    if (canUseTools && request.sessionId) {
+      this.toldNoTools.delete(request.sessionId);
+    } else if (offeredTools && onNotice && request.sessionId && this.toldNoTools.get(request.sessionId) !== model) {
+      this.toldNoTools.set(request.sessionId, model);
       onNotice(noToolsNotice(model));
     }
     const post = (fitted: OllamaMessage[]) => {
