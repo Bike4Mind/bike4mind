@@ -101,7 +101,7 @@ describe('passphrase shell - owner bypass', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    sessionStorage.clear(); // the one-shot mint sentinel is keyed on pathname; do not leak it
+    sessionStorage.clear(); // the mint sentinel is keyed on pathname; do not leak it
   });
 
   it('starts with the form hidden so the owner never sees a prompt they do not need', () => {
@@ -218,6 +218,19 @@ describe('passphrase shell - owner bypass', () => {
     expect(called(OWNER_ROUTE)).toBe(true);
     expect(reload).toHaveBeenCalledTimes(2);
     expect(formVisible()).toBe(false);
+  });
+
+  it('mints again once the sentinel is just past its freshness window', async () => {
+    stubFetch({ signedIn: true, ownerStatus: 204 });
+    await runShell(); // mint + reload
+
+    await vi.advanceTimersByTimeAsync(15001);
+    calls = [];
+    mountShell();
+    await runShell();
+
+    expect(called(OWNER_ROUTE)).toBe(true);
+    expect(reload).toHaveBeenCalledTimes(2);
   });
 
   it('retries the bypass on refresh after a failed attempt', async () => {
