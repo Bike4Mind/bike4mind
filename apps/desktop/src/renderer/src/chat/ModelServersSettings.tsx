@@ -388,7 +388,8 @@ const OWNER_LOOK: Record<
 
 /** What an unmanaged server runs with, as far as Desktop can read it, and what fit sizes with. */
 function observedLine(launch: ModelServerLaunchView): string {
-  const sizing = `Fit badges assume a${launch.sizingKvCacheType === 'f16' ? 'n' : ''} ${launch.sizingKvCacheType} KV cache.`;
+  const flash = launch.sizingFlashAttention === 'auto' ? '' : ` with flash attention ${launch.sizingFlashAttention}`;
+  const sizing = `Fit badges assume a${launch.sizingKvCacheType === 'f16' ? 'n' : ''} ${launch.sizingKvCacheType} KV cache${flash}.`;
   if (launch.runtime !== 'ollama') return sizing;
   if (!launch.observed) return `Desktop can't read this server's settings, so fit badges assume an f16 KV cache.`;
   const set = Object.entries(launch.observed).map(([key, value]) => `${key}=${value}`);

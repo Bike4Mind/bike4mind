@@ -219,6 +219,57 @@ describe('ModelServerRegistry launching servers', () => {
     expect((await local(unread.registry)).launch).toMatchObject({ observed: null, sizingKvCacheType: 'f16' });
   });
 
+  it('sizes with the flash attention the Ollama Desktop started runs with, auto when nothing says otherwise', async () => {
+    const { registry, localSpecsChanged } = setup();
+    await registry.check('local');
+    expect(registry.flashAttention('local')).toBeUndefined();
+    await registry.update('local', { launch: { flashAttention: 'off' } });
+    expect(registry.flashAttention('local')).toBeUndefined();
+    await registry.startServer('local');
+    expect(registry.flashAttention('local')).toBe('off');
+    expect((await local(registry)).launch).toMatchObject({ sizingFlashAttention: 'off', sizingKvCacheType: 'f16' });
+    expect(localSpecsChanged).toHaveBeenCalledTimes(1);
+
+    // A quantized cache left at auto starts with flash attention on (ollamaLaunchEnv).
+    await registry.update('local', { launch: { kvCacheType: 'q8_0' } });
+    localSpecsChanged.mockClear();
+    await registry.restartServer('local');
+    expect(registry.flashAttention('local')).toBe('on');
+    expect(localSpecsChanged).toHaveBeenCalled();
+    await registry.stopServer('local');
+    expect(registry.flashAttention('local')).toBeUndefined();
+  });
+
+  it('sizes an unmanaged Ollama with the flash attention read from it, and sees it change', async () => {
+    let env: OllamaEnvironment = { OLLAMA_FLASH_ATTENTION: 'false' };
+    const { registry, up, localSpecsChanged } = setup({ readOllamaEnv: async () => env });
+    up.add(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    expect(registry.flashAttention('local')).toBe('off');
+    expect((await local(registry)).launch).toMatchObject({ owner: 'other', sizingFlashAttention: 'off' });
+    expect(localSpecsChanged).toHaveBeenCalledTimes(1);
+
+    const lan = setup({ readOllamaEnv: async () => env });
+    lan.up.add('http://192.168.1.20:11434');
+    const [, remote] = await lan.registry.add({
+      address: 'http://192.168.1.20:11434',
+      credential: none,
+      name: 'lan',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    expect(lan.registry.flashAttention(remote.id)).toBeUndefined();
+
+    env = { OLLAMA_FLASH_ATTENTION: '1' };
+    up.delete(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    expect(registry.flashAttention('local')).toBeUndefined();
+    up.add(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    expect(registry.flashAttention('local')).toBe('on');
+    expect(localSpecsChanged).toHaveBeenCalledTimes(3);
+  });
+
   it('never reads the settings of the Ollama it started', async () => {
     const readOllamaEnv = vi.fn(async () => ({ OLLAMA_KV_CACHE_TYPE: 'q4_0' }));
     const { registry } = setup({ readOllamaEnv });

@@ -47,6 +47,7 @@ import {
   serverIdOfRuntime,
   serverManagement,
   serverRuntimeId,
+  type FlashAttention,
   type LaunchOwner,
   type LaunchRuntime,
   type ModelServerAddInput,
@@ -68,7 +69,7 @@ import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
 import { loopbackPortFree } from './loopbackPort';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
-import { observedKvCacheType, observedLaunchVars } from './observedOllama';
+import { observedFlashAttention, observedKvCacheType, observedLaunchVars } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 
 export const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -183,8 +184,8 @@ interface LaunchState {
   observed: Record<string, string> | null;
   observedAt: number;
   observedVersion: string | null;
-  /** The cache type sizing last used, so a change can expire what was sized with the old one. */
-  sizedWith: QuantizedKvCacheType | undefined;
+  /** The cache type and flash attention sizing last used, so a change can expire what was sized with the old ones. */
+  sizedWith: string;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -285,6 +286,18 @@ export class ModelServerRegistry {
 
   localKvCacheType(): QuantizedKvCacheType | undefined {
     return this.kvCacheType(LOCAL_SERVER_ID);
+  }
+
+  /** Flash attention as the server at `id` runs it, known as kvCacheType is; undefined is auto. */
+  flashAttention(id: string): FlashAttention | undefined {
+    const owned = this.supervisor.owned(id);
+    if (owned) {
+      // ollamaLaunchEnv turns flash attention on for a quantized cache left at auto.
+      const quantized = owned.runtime === 'ollama' && owned.settings.kvCacheType !== undefined;
+      return owned.settings.flashAttention ?? (quantized ? 'on' : undefined);
+    }
+    const observed = this.launchStates.get(id)?.observed;
+    return observed && this.ownerOf(id) === 'other' ? observedFlashAttention(observed) : undefined;
   }
 
   /** Starts a server at this server's address on this computer, with its saved launch settings. */
@@ -912,6 +925,7 @@ export class ModelServerRegistry {
       problem: owner === 'remote' ? null : (this.supervisor.problem(id) ?? settingsProblem),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
+      sizingFlashAttention: this.flashAttention(id) ?? 'auto',
       noun: nounOf(target),
     };
   }
@@ -955,7 +969,7 @@ export class ModelServerRegistry {
   private launchState(id: string): LaunchState {
     let state = this.launchStates.get(id);
     if (!state) {
-      state = { observed: null, observedAt: 0, observedVersion: null, sizedWith: undefined };
+      state = { observed: null, observedAt: 0, observedVersion: null, sizedWith: sizingKey(undefined, undefined) };
       this.launchStates.set(id, state);
     }
     return state;
@@ -963,9 +977,9 @@ export class ModelServerRegistry {
 
   private sizingChanged(id: string): void {
     const state = this.launchState(id);
-    const kv = this.kvCacheType(id);
-    if (kv === state.sizedWith) return;
-    state.sizedWith = kv;
+    const key = sizingKey(this.kvCacheType(id), this.flashAttention(id));
+    if (key === state.sizedWith) return;
+    state.sizedWith = key;
     if (id === LOCAL_SERVER_ID) this.deps.localSpecsChanged?.();
     else this.deps.edited?.();
     this.saved(id);
@@ -1217,6 +1231,10 @@ function launchPort(parsed: ParsedAddress): number | null {
   const url = new URL(parsed.baseUrl);
   if (url.protocol !== 'http:' || !LAUNCH_HOSTS.has(url.hostname.toLowerCase()) || !url.port) return null;
   return ['', '/', '/v1', '/v1/'].includes(url.pathname) ? Number(url.port) : null;
+}
+
+function sizingKey(kv: QuantizedKvCacheType | undefined, flash: FlashAttention | undefined): string {
+  return `${kv ?? 'f16'}/${flash ?? 'auto'}`;
 }
 
 const PRODUCT_NOUNS: Record<OpenAICompatibleProduct, string> = {

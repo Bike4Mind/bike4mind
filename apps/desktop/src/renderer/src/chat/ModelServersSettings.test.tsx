@@ -477,6 +477,7 @@ describe('ModelServersSettings launch settings', () => {
       problem: null,
       observed: null,
       sizingKvCacheType: 'f16',
+      sizingFlashAttention: 'auto',
       noun: 'Ollama server',
       ...over,
     };
@@ -554,6 +555,21 @@ describe('ModelServersSettings launch settings', () => {
     await clickId('model-servers-launch-settings-btn');
     expect((byTestId('model-servers-launch-save-btn') as HTMLButtonElement).disabled).toBe(true);
     expect(byTestId('model-servers-launch-kv-select')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('names the flash attention fit sizes an unmanaged server with when it is not auto', async () => {
+    await show({
+      ...LOCAL,
+      launch: launch({
+        owner: 'other',
+        canStart: false,
+        observed: { OLLAMA_FLASH_ATTENTION: '0' },
+        sizingFlashAttention: 'off',
+      }),
+    });
+    expect(byTestId('model-servers-launch-observed')?.textContent).toBe(
+      'It runs with OLLAMA_FLASH_ATTENTION=0. Fit badges assume an f16 KV cache with flash attention off.'
+    );
   });
 
   it('says it sizes with f16 when it cannot read an unmanaged server', async () => {

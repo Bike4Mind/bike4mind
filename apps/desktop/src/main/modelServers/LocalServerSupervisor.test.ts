@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
-import { observedKvCacheType, observedLaunchVars } from './observedOllama';
+import { observedFlashAttention, observedKvCacheType, observedLaunchVars } from './observedOllama';
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stopped: boolean };
 
@@ -171,5 +171,12 @@ describe('observed Ollama settings', () => {
     expect(observedKvCacheType({ OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_FLASH_ATTENTION: 'false' })).toBeUndefined();
     expect(observedKvCacheType({ OLLAMA_KV_CACHE_TYPE: 'f16' })).toBeUndefined();
     expect(observedKvCacheType({})).toBeUndefined();
+  });
+
+  it('reads flash attention as Ollama does, leaving it unset at auto', () => {
+    expect(observedFlashAttention({ OLLAMA_FLASH_ATTENTION: '1' })).toBe('on');
+    expect(observedFlashAttention({ OLLAMA_FLASH_ATTENTION: 'false' })).toBe('off');
+    expect(observedFlashAttention({ OLLAMA_FLASH_ATTENTION: '' })).toBeUndefined();
+    expect(observedFlashAttention({})).toBeUndefined();
   });
 });

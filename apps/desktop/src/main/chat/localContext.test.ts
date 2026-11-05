@@ -266,6 +266,11 @@ describe('chatContextTokens', () => {
     });
   });
 
+  it("plans the daemon's flash attention when known", () => {
+    loadsInMemory({ ...on(9), flashAttention: 'off' }, 16384);
+    expect(vi.mocked(estimateFit).mock.calls.at(-1)?.[0].runtime).toEqual({ kind: 'ollama', flashAttn: 'off' });
+  });
+
   it('gives a fixed Settings size past 32K on a machine without a GPU', () => {
     expect(chatContextTokens({ setting: { mode: 'fixed', tokens: 131072 }, footprint: on(64) })).toBe(131072);
   });

@@ -94,7 +94,7 @@ function curatedSource(onChange: () => void): CuratedListSource {
  * Face token never leaves main except as the Authorization header of requests to huggingface.co.
  */
 export function registerModels(
-  servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs' | 'kvCacheType'>,
+  servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs' | 'kvCacheType' | 'flashAttention'>,
   { localContext, modelSettings }: Pick<ModelHubServiceDeps, 'localContext' | 'modelSettings'>,
   capabilityLedger: ConstructorParameters<typeof PullLedger>[0]
 ): ModelHubService {
@@ -121,6 +121,7 @@ export function registerModels(
     hardware: () => localHardware.probed().then(profile => profile ?? probeHardware()),
     specs: id => servers.specs(id),
     kvCacheType: id => servers.kvCacheType(id),
+    flashAttention: id => servers.flashAttention(id),
     localContext,
     modelSettings,
     curated: () => source.current(),

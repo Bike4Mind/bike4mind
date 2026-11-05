@@ -502,6 +502,7 @@ export function registerChat(
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
     kvCacheType: () => modelServers.localKvCacheType(),
+    flashAttention: () => modelServers.flashAttention(LOCAL_SERVER_ID),
   });
   const lateReload = createLateReload(() => {
     models.forgetLocal();

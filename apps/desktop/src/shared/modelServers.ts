@@ -63,6 +63,9 @@ export interface ModelServerView {
 export const QUANTIZED_KV_CACHE_TYPES = ['q8_0', 'q4_0'] as const;
 export type QuantizedKvCacheType = (typeof QUANTIZED_KV_CACHE_TYPES)[number];
 
+/** OLLAMA_FLASH_ATTENTION or llama-server's --flash-attn when set; unset is auto. */
+export type FlashAttention = 'on' | 'off';
+
 /** What Desktop runs for a server it starts on this computer: `ollama serve`, or llama-server in router mode. */
 export type LaunchRuntime = 'ollama' | 'llama-server';
 
@@ -71,7 +74,7 @@ export interface ModelServerLaunchSettings {
   /** Ollama: OLLAMA_KV_CACHE_TYPE for every model; absent is f16. */
   kvCacheType?: QuantizedKvCacheType;
   /** OLLAMA_FLASH_ATTENTION, or llama-server's --flash-attn; absent is auto. */
-  flashAttention?: 'on' | 'off';
+  flashAttention?: FlashAttention;
   /** llama-server: the program; absent is the one on PATH. */
   binaryPath?: string;
   /** llama-server: the folder of GGUF files it serves. */
@@ -100,6 +103,8 @@ export interface ModelServerLaunchView {
   observed: Record<string, string> | null;
   /** The KV cache type fit sizes this server's models with. */
   sizingKvCacheType: QuantizedKvCacheType | 'f16';
+  /** The flash attention fit sizes this server's models with. */
+  sizingFlashAttention: FlashAttention | 'auto';
   /** What answers there, for "This <noun> was not started by Bike4Mind Desktop": "Ollama server", "llama-server". */
   noun: string;
 }
