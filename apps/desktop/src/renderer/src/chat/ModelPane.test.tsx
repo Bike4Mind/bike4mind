@@ -155,7 +155,18 @@ describe('ModelPane', () => {
     render(model);
     await act(async () => byTestId('model-pane-export-glb-btn')?.click());
     expect(model.exportFile).toHaveBeenCalledWith('glb');
-    expect(byTestId('model-pane-export-note')?.textContent).toBe('Saved chest.glb');
+    expect(byTestId('model-pane-note')?.textContent).toBe('Saved chest.glb');
+  });
+
+  it('says why a picked file could not be opened', async () => {
+    const model = engine({
+      openFile: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'model:open-dialog': Error: Not a model file: /a/b.js.");
+      }),
+    });
+    render(model);
+    await act(async () => byTestId('model-pane-open-empty-btn')?.click());
+    expect(byTestId('model-pane-note')?.textContent).toBe('Not a model file: /a/b.js.');
   });
 
   it('only offers STL for model files, since a loaded asset has no source parts', () => {

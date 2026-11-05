@@ -97,7 +97,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
     setPicked({ path: state.path, name: part });
     onPickPart(partMention(part));
   };
-  const [exportNote, setExportNote] = useState('');
+  const [note, setNote] = useState('');
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
   const canExport = !!object && status !== 'building';
@@ -105,9 +105,20 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
   const runExport = async (format: 'glb' | 'stl') => {
     try {
       const saved = await engine.exportFile(format);
-      setExportNote(saved ? `Saved ${saved.split(/[\\/]/).pop()}` : '');
+      setNote(saved ? `Saved ${saved.split(/[\\/]/).pop()}` : '');
     } catch (caught) {
-      setExportNote(caught instanceof Error ? caught.message : String(caught));
+      setNote(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const runOpen = async () => {
+    try {
+      await engine.openFile();
+      setNote('');
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      // Electron prefixes a rejected invoke with where it came from; the user needs the reason only.
+      setNote(message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
     }
   };
 
@@ -255,7 +266,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               size="sm"
               variant="plain"
               color="neutral"
-              onClick={() => void engine.openFile()}
+              onClick={() => void runOpen()}
               data-testid="model-pane-open-empty-btn"
             >
               Or open a .glb / .stl file
@@ -327,7 +338,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           size="sm"
           variant="plain"
           color="neutral"
-          onClick={() => void engine.openFile()}
+          onClick={() => void runOpen()}
           data-testid="model-pane-open-btn"
         >
           Open
@@ -354,13 +365,13 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           STL
         </Button>
       </Stack>
-      {exportNote && (
+      {note && (
         <Typography
           level="body-xs"
           sx={{ px: 1.5, pb: 1, color: 'text.secondary' }}
-          data-testid="model-pane-export-note"
+          data-testid="model-pane-note"
         >
-          {exportNote}
+          {note}
         </Typography>
       )}
     </Stack>
