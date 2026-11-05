@@ -174,7 +174,7 @@ export function buildRoster(input: {
       state,
       ...(state === 'working' && preparing?.has(session.id) && { preparing: true }),
       outcome: session.lastOutcome,
-      activity: state === 'working' ? activity.get(session.id) : undefined,
+      activity: state === 'working' || state === 'needs-you' ? activity.get(session.id) : undefined,
       lastSnippet: session.lastSnippet,
       usdCost: session.totalUsdCost,
       credits: session.totalCredits,
