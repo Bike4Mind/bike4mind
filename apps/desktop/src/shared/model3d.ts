@@ -153,13 +153,25 @@ export function writeParamValue(source: string, key: string, value: number): str
   if (end < 0) return null;
   const block = source.slice(start, end + 1);
   const pattern = new RegExp(
-    `((?<![\\w$-])(['"]?)${escapeRegExp(key)}\\2\\s*:\\s*(?:\\{[^{}]*?\\bvalue\\s*:\\s*)?)(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?=\\s*[,}\\r\\n])`,
+    `((?<![\\w$-])(['"]?)${escapeRegExp(key)}\\2\\s*:\\s*(\\{[^{}]*?\\bvalue\\s*:\\s*)?)(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?=\\s*[,}\\r\\n])`,
     'g'
   );
-  const matches = [...block.matchAll(pattern)];
+  // The bare `key: N` form only counts at the block's top level, so it never matches another
+  // param's `min`/`max`/`step`/`value` field.
+  const depthAt = (offset: number): number => {
+    let level = 0;
+    for (let index = 0; index < offset; index += 1) {
+      if (block[index] === '{') level += 1;
+      else if (block[index] === '}') level -= 1;
+    }
+    return level;
+  };
+  const matches = [...block.matchAll(pattern)].filter(match => match[3] !== undefined || depthAt(match.index) === 1);
   if (matches.length !== 1) return null;
+  const [match] = matches;
   const rounded = Number(value.toPrecision(12));
-  const replaced = block.replace(pattern, (_whole, prefix: string) => `${prefix}${rounded}`);
+  const at = match.index + match[1].length;
+  const replaced = block.slice(0, at) + rounded + block.slice(at + match[4].length);
   return source.slice(0, start) + replaced + source.slice(end + 1);
 }
 

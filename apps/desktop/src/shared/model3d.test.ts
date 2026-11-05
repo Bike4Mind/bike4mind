@@ -87,6 +87,15 @@ describe('writeParamValue', () => {
     expect(writeParamValue(bare.replace('lidRatio:', 'width:'), 'width', 10)).toBeNull();
   });
 
+  it("ignores another param's fields when matching a bare key", () => {
+    const step = 'export const params = { step: { value: 2 }, width: { value: 10, min: 1, step: 1 } };\n';
+    expect(writeParamValue(step, 'step', 3)).toBe(
+      'export const params = { step: { value: 3 }, width: { value: 10, min: 1, step: 1 } };\n'
+    );
+    const min = 'export const params = { min: { value: 2 * 3 }, width: { value: 10, min: 1 } };\n';
+    expect(writeParamValue(min, 'min', 9)).toBeNull();
+  });
+
   it('returns null when the key is missing', () => {
     expect(writeParamValue(SOURCE, 'height', 10)).toBeNull();
   });
