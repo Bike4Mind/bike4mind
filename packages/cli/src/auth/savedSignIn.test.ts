@@ -1,5 +1,5 @@
 import { promises as fsPromises } from 'fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -545,6 +545,68 @@ describe('ConfigStore saves across processes', () => {
     expect(JSON.stringify(printed.mock.calls.map(call => call.map(String)))).not.toContain('secret');
     printed.mockRestore();
   });
+
+  it.each([1, 2])(
+    "never leaves the old backend's sign-in next to a new API URL when write %i onto the file fails",
+    async failing => {
+      const store = await savedStore();
+      await store.getAuthTokens();
+      const realRename = fsPromises.rename.bind(fsPromises);
+      let renames = 0;
+      vi.spyOn(fsPromises, 'rename').mockImplementation((async (...args: Parameters<typeof realRename>) => {
+        if (String(args[1]).endsWith('config.json') && ++renames === failing) {
+          throw Object.assign(new Error('i/o error'), { code: 'EIO' });
+        }
+        return realRename(...args);
+      }) as typeof fsPromises.rename);
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await store
+        .withRefreshLock(() => store.setCustomApiUrlSignedOut('https://self.example.com'))
+        .catch(() => undefined);
+
+      const file = JSON.parse(await readFile(configPath, 'utf-8')) as { auth?: unknown; apiConfig?: object };
+      const moved = (file.apiConfig as { customUrl?: string } | undefined)?.customUrl === 'https://self.example.com';
+      expect({ moved, auth: file.auth }).toEqual(moved ? { moved, auth: undefined } : { moved, auth: stale });
+    }
+  );
+
+  it('upgrades an old config from a fresh read, keeping a sign-in saved since load() first read it', async () => {
+    await writeFile(configPath, JSON.stringify({ auth: stale }));
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    let interleaved = false;
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      const text = await realRead(...args);
+      if (!interleaved && String(args[0]) === configPath) {
+        interleaved = true;
+        await writeFile(configPath, JSON.stringify({ auth: newer }));
+      }
+      return text;
+    }) as typeof fsPromises.readFile);
+
+    await new ConfigStore(configPath).load();
+
+    const file = JSON.parse(await readFile(configPath, 'utf-8')) as { auth?: unknown; version?: unknown };
+    expect(interleaved).toBe(true);
+    expect(file.auth).toEqual(newer);
+    expect(file.version).toBeDefined();
+  });
+
+  it('carries a sign-in field in an unexpected shape through a settings save unchanged', async () => {
+    const store = await savedStore();
+    await store.load();
+    const file = JSON.parse(await readFile(configPath, 'utf-8')) as Record<string, unknown>;
+    await writeFile(configPath, JSON.stringify({ ...file, authByEnv: 'not-a-map', apiConfig: [1] }));
+
+    await store.save({ defaultModel: 'x' });
+
+    expect(JSON.parse(await readFile(configPath, 'utf-8'))).toMatchObject({
+      auth: stale,
+      authByEnv: 'not-a-map',
+      apiConfig: [1],
+      defaultModel: 'x',
+    });
+  });
 });
 
 describe('concurrent refreshes across b4m processes', () => {
@@ -577,120 +639,72 @@ describe('concurrent refreshes across b4m processes', () => {
     expect(await onDisk()).toMatchObject({ refreshToken: 'refresh-new' });
   });
 
+  /** A lock directory as another b4m process leaves it, last touched `ageMs` ago. */
+  async function lockHeldBy(owner: Record<string, unknown>, ageMs = 0): Promise<void> {
+    await mkdir(lockPath());
+    await writeFile(path.join(lockPath(), 'owner'), JSON.stringify(owner));
+    const touched = new Date(Date.now() - ageMs);
+    await utimes(lockPath(), touched, touched);
+  }
+
   it('breaks a lock left behind longer than the stale limit', async () => {
-    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now() - 31_000, nonce: 'gone' }));
+    await lockHeldBy({ pid: 1, nonce: 'gone' }, 31_000);
 
     expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 1_000)).toBe('ran');
-    await expect(readFile(lockPath())).rejects.toThrow();
+    await expect(readFile(path.join(lockPath(), 'owner'))).rejects.toThrow();
   });
 
   it('gives up after the wait bound, without running the work, while another process holds the lock', async () => {
-    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now(), nonce: 'other' }));
+    await lockHeldBy({ pid: process.pid, hostname: os.hostname(), nonce: 'other' });
     const work = vi.fn(async () => 'ran');
 
     await expect(new ConfigStore(configPath).withRefreshLock(work, 300)).rejects.toThrow('still refreshing');
     expect(work).not.toHaveBeenCalled();
-    expect(JSON.parse(await readFile(lockPath(), 'utf-8'))).toMatchObject({ nonce: 'other' });
+    expect(JSON.parse(await readFile(path.join(lockPath(), 'owner'), 'utf-8'))).toMatchObject({ nonce: 'other' });
   });
 
   it('breaks at once a fresh lock whose holder on this host has exited', async () => {
-    const goneProcess = 2_147_483_646;
-    await writeFile(
-      lockPath(),
-      JSON.stringify({ pid: goneProcess, hostname: os.hostname(), at: Date.now(), nonce: 'gone' })
-    );
+    await lockHeldBy({ pid: 2_147_483_646, hostname: os.hostname(), nonce: 'gone' });
 
     expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 300)).toBe('ran');
   });
 
-  it('stands down when another waiter took the lock it broke', async () => {
-    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now() - 31_000, nonce: 'gone' }));
-    const work = vi.fn(async () => 'ran');
-
-    const locking = new ConfigStore(configPath).withRefreshLock(work, 800);
-    await vi.waitFor(
-      async () => {
-        const lock = JSON.parse(await readFile(lockPath(), 'utf-8')) as { nonce: string };
-        expect(lock.nonce).not.toBe('gone');
-      },
-      { interval: 5 }
-    );
-    await writeFile(
-      lockPath(),
-      JSON.stringify({ pid: process.pid, hostname: os.hostname(), at: Date.now(), nonce: 'other' })
-    );
-
-    await expect(locking).rejects.toThrow('still refreshing');
-    expect(work).not.toHaveBeenCalled();
-  });
-
-  it('stands down when a lock it just made is replaced before it confirmed it', async () => {
-    const work = vi.fn(async () => 'ran');
-    const realOpen = fsPromises.open.bind(fsPromises);
-    vi.spyOn(fsPromises, 'open').mockImplementation((async (...args: Parameters<typeof realOpen>) => {
-      const handle = await realOpen(...args);
-      if (String(args[0]) === lockPath()) {
-        // Another process removes the new lock as stale and makes its own, as a racing breaker would.
-        setTimeout(() => {
-          void writeFile(
-            lockPath(),
-            JSON.stringify({ pid: process.pid, hostname: os.hostname(), at: Date.now(), nonce: 'other' })
-          );
-        }, 20);
+  it('does not write the config once another process has taken the write lock over', async () => {
+    const store = await savedStore();
+    await store.load();
+    const before = await readFile(configPath, 'utf-8');
+    const realWrite = fsPromises.writeFile.bind(fsPromises);
+    vi.spyOn(fsPromises, 'writeFile').mockImplementation((async (...args: Parameters<typeof realWrite>) => {
+      await realWrite(...args);
+      if (String(args[0]).endsWith('.tmp')) {
+        const configLock = path.join(dir, 'config.json.lock');
+        await rm(configLock, { recursive: true, force: true });
+        await mkdir(configLock);
+        await realWrite(path.join(configLock, 'owner'), JSON.stringify({ nonce: 'other' }));
       }
-      return handle;
-    }) as typeof fsPromises.open);
+    }) as typeof fsPromises.writeFile);
 
-    await expect(new ConfigStore(configPath).withRefreshLock(work, 400)).rejects.toThrow('still refreshing');
-    expect(work).not.toHaveBeenCalled();
+    await expect(store.save({ defaultModel: 'x' })).rejects.toThrow('took over');
+    expect(await readFile(configPath, 'utf-8')).toBe(before);
   });
 
-  it('leaves in place a lock another process made while this one held it', async () => {
-    const replaced = JSON.stringify({ pid: process.pid, hostname: os.hostname(), at: Date.now(), nonce: 'other' });
-
-    await new ConfigStore(configPath).withRefreshLock(async () => {
-      await writeFile(lockPath(), replaced);
-    }, 1_000);
-
-    expect(await readFile(lockPath(), 'utf-8')).toBe(replaced);
-  });
-
-  it('keeps the lock it broke when re-reading it briefly fails', async () => {
-    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now() - 31_000, nonce: 'gone' }));
+  it('saves settings when Windows briefly refuses the check of its own write lock', async () => {
+    const store = await savedStore();
+    await store.load();
     const realRead = fsPromises.readFile.bind(fsPromises);
     let failed = false;
     vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
-      const text = await realRead(...args);
-      if (!failed && String(args[0]) === lockPath() && !String(text).includes('"gone"')) {
+      if (!failed && String(args[0]) === path.join(dir, 'config.json.lock', 'owner')) {
         failed = true;
         throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
       }
-      return text;
+      return realRead(...args);
     }) as typeof fsPromises.readFile);
 
-    try {
-      expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 1_000)).toBe('ran');
-      expect(failed).toBe(true);
-    } finally {
-      vi.mocked(fsPromises.readFile).mockRestore();
-    }
-  });
+    await store.save({ defaultModel: 'x' });
 
-  it('on Windows, waits out a lock still being deleted instead of failing', async () => {
-    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
-    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
-    const realOpen = fsPromises.open.bind(fsPromises);
-    const open = vi
-      .spyOn(fsPromises, 'open')
-      .mockRejectedValueOnce(Object.assign(new Error('operation not permitted'), { code: 'EPERM' }))
-      .mockImplementation(realOpen as typeof fsPromises.open);
-    try {
-      expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 1_000)).toBe('ran');
-      expect(open).toHaveBeenCalledTimes(2);
-    } finally {
-      open.mockRestore();
-      Object.defineProperty(process, 'platform', platform);
-    }
+    expect(failed).toBe(true);
+    expect(JSON.parse(await readFile(configPath, 'utf-8'))).toMatchObject({ defaultModel: 'x' });
   });
 });
 

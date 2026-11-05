@@ -1,7 +1,7 @@
 import { promises as fs, existsSync } from 'fs';
 import { createHash } from 'node:crypto';
 import path from 'path';
-import { homedir, hostname } from 'os';
+import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
@@ -19,6 +19,7 @@ import { canTrustTool } from '../tools/gateway/toolPolicy.js';
 import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
 import { escapeTerminalControlChars, sanitizeTerminalText } from '../utils/sanitizeTerminalText.js';
 import { logger } from '../utils/Logger';
+import { withLockDir, type HeldLock } from './lockDir';
 
 /**
  * Zod schema for sandbox filesystem configuration
@@ -401,7 +402,32 @@ const ProjectLocalConfigSchema = z.object({
  * stops being capped by it. A value-keyed rule with no marker would instead make 4096
  * permanently unrepresentable, even though the /config select still offers it.
  */
-/** A refresh lock older than this (ms) is abandoned: its holder outlived the refresh request's own bound. */
+const LEGACY_PINNED_MAX_TOKENS = 4096;
+
+/** Rewrites the old environment-based API config in place to the current simple form. */
+function migrateApiConfig(raw: { apiConfig?: unknown }): void {
+  const old = raw.apiConfig;
+  if (typeof old !== 'object' || old === null || !('environment' in old)) return;
+  const { environment, customUrl } = old as { environment: unknown; customUrl?: unknown };
+  // A custom URL is kept for self-hosted instances; every other environment becomes the build-time default service.
+  raw.apiConfig = environment === 'custom' && customUrl ? { customUrl } : {};
+}
+
+/** The one-time upgrade of a file not yet at CONFIG_SCHEMA_VERSION, in place. */
+function upgradeConfig(raw: { preferences?: unknown; version?: unknown }): void {
+  // Clear the legacy pinned output budget. Every config written before maxTokens
+  // became optional carries this exact value from the old DEFAULT_CONFIG, not from
+  // a user decision - and leaving it pinned keeps starving adaptive reasoning models
+  // on machines that have merely *run* an older CLI. Only the untouched legacy value
+  // is cleared, so a budget the user actually chose (any other number) survives.
+  const preferences = raw.preferences as { maxTokens?: unknown } | null | undefined;
+  if (typeof preferences === 'object' && preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
+    delete preferences.maxTokens;
+  }
+  raw.version = CONFIG_SCHEMA_VERSION;
+}
+
+/** A refresh lock whose heartbeat stopped this long ago (ms) is abandoned. */
 export const REFRESH_LOCK_STALE_MS = 30_000;
 export const REFRESH_LOCK_WAIT_MS = 40_000;
 const REFRESH_LOCK_POLL_MS = 100;
@@ -409,37 +435,13 @@ const REFRESH_LOCK_POLL_MS = 100;
 const CONFIG_LOCK_STALE_MS = 10_000;
 const CONFIG_LOCK_WAIT_MS = 15_000;
 const CONFIG_LOCK_POLL_MS = 10;
-const LOCK_REREAD_TRIES = 5;
-const LOCK_REREAD_PAUSE_MS = 20;
 
-interface LockFile {
-  pid?: unknown;
-  hostname?: unknown;
-  at?: unknown;
-  nonce?: unknown;
+/** The sign-in and backend fields as written to the file; read from it, each may be in any shape. */
+interface DiskAuthFields {
+  auth: unknown;
+  authByEnv: unknown;
+  apiConfig: unknown;
 }
-
-interface LockFileOptions {
-  waitMs: number;
-  staleMs: number;
-  pollMs: number;
-  heldMessage: string;
-}
-
-const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-/** True when no process `pid` exists on this host. EPERM means one exists that this user cannot signal. */
-function holderIsGone(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH';
-  }
-}
-
-const LEGACY_PINNED_MAX_TOKENS = 4096;
 
 /**
  * Schema version of the on-disk config, and the marker that makes the migrations in
@@ -906,6 +908,8 @@ export class ConfigStore {
    */
   private globalConfig: CliConfig | null = null;
   private serial: Promise<unknown> = Promise.resolve();
+  /** The config write lock while this store holds it; checked right before each rename onto the file. */
+  private configLock: HeldLock | null = null;
   /** Canonicalized (realpath'd) discovered project root, or null. */
   private projectRealPath: string | null = null;
   /** Whether the discovered project root is in the global `trustedProjects`. */
@@ -974,40 +978,20 @@ export class ConfigStore {
           throw new Error(`Could not load ${this.configPath}: it is not valid JSON.`);
         }
 
-        // Auto-migrate old environment-based API config to new simple format
-        if (rawConfig.apiConfig && 'environment' in rawConfig.apiConfig) {
-          const oldApiConfig = rawConfig.apiConfig as { environment: string; customUrl?: string };
-
-          // Migrate to new format
-          if (oldApiConfig.environment === 'custom' && oldApiConfig.customUrl) {
-            // Keep custom URL for self-hosted instances
-            rawConfig.apiConfig = { customUrl: oldApiConfig.customUrl };
-          } else {
-            // All other environments (production/staging/preview/local) become the default service
-            rawConfig.apiConfig = {}; // No customUrl = use the build-time default service
-          }
-        }
+        migrateApiConfig(rawConfig);
 
         // One-time upgrade pass, gated on the version stamp so each step runs against a
         // given file exactly once and is then written back at the current version. Without
         // the stamp a value-keyed step is not a migration at all but a standing rule, and
         // the user can never hold the value it rewrites.
         if (rawConfig.version !== CONFIG_SCHEMA_VERSION) {
-          // Clear the legacy pinned output budget. Every config written before maxTokens
-          // became optional carries this exact value from the old DEFAULT_CONFIG, not from
-          // a user decision - and leaving it pinned keeps starving adaptive reasoning models
-          // on machines that have merely *run* an older CLI. Only the untouched legacy value
-          // is cleared, so a budget the user actually chose (any other number) survives.
-          if (rawConfig.preferences?.maxTokens === LEGACY_PINNED_MAX_TOKENS) {
-            delete rawConfig.preferences.maxTokens;
-          }
-          rawConfig.version = CONFIG_SCHEMA_VERSION;
+          upgradeConfig(rawConfig);
 
           // A failed write (read-only home, etc.) is non-fatal: the in-memory result of this
           // pass still applies to the current session and the stamp simply stays behind, so
           // the migration retries on the next launch rather than being silently skipped.
           try {
-            await this.writeConfigFile(JSON.stringify(rawConfig, null, 2));
+            rawConfig = (await this.writeUpgradedConfig()) ?? rawConfig;
           } catch {
             // Intentionally ignored - see above.
           }
@@ -1436,7 +1420,7 @@ export class ConfigStore {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return {};
       throw error;
     }
-    const raw: unknown = JSON.parse(text);
+    const raw = this.parseConfigText(text);
     const parsed = z.object({ modelServerCredentials: CliConfigSchema.shape.modelServerCredentials }).safeParse(raw);
     if (!parsed.success) throw new Error(`${this.configPath} has malformed model server credentials.`);
     return parsed.data.modelServerCredentials ?? {};
@@ -1449,11 +1433,30 @@ export class ConfigStore {
     const temp = `${target}.${process.pid}.${uuidv4()}.tmp`;
     try {
       await fs.writeFile(temp, contents, { encoding: 'utf-8', mode: 0o600 });
+      await this.configLock?.assertHeld();
       await fs.rename(temp, target);
     } catch (error) {
       await fs.rm(temp, { force: true });
       throw error;
     }
+  }
+
+  /**
+   * Writes the upgraded file under the config write lock, from a fresh read so a save another process made since
+   * load() read the file is kept. Returns what it wrote, or null when the file is gone or not a JSON object.
+   */
+  private async writeUpgradedConfig(): Promise<Record<string, unknown> | null> {
+    return this.withConfigWriteLock(async () => {
+      const text = await this.readConfigText();
+      const raw = text === null ? null : this.parseConfigText(text);
+      if (!raw) return null;
+      migrateApiConfig(raw);
+      if (raw.version !== CONFIG_SCHEMA_VERSION) {
+        upgradeConfig(raw);
+        await this.writeConfigFile(JSON.stringify(raw, null, 2));
+      }
+      return raw;
+    });
   }
 
   /** Reloads from the file so the write below carries what other processes saved (a refreshed sign-in token). */
@@ -1518,40 +1521,35 @@ export class ConfigStore {
   }
 
   private withConfigWriteLock<T>(work: () => Promise<T>): Promise<T> {
-    return this.withLockFile(path.join(path.dirname(this.configPath), 'config.json.lock'), work, {
-      waitMs: CONFIG_LOCK_WAIT_MS,
-      staleMs: CONFIG_LOCK_STALE_MS,
-      pollMs: CONFIG_LOCK_POLL_MS,
-      heldMessage: 'Another b4m process is still saving settings',
-    });
+    return withLockDir(
+      path.join(path.dirname(this.configPath), 'config.json.lock'),
+      async held => {
+        this.configLock = held;
+        try {
+          return await work();
+        } finally {
+          this.configLock = null;
+        }
+      },
+      {
+        waitMs: CONFIG_LOCK_WAIT_MS,
+        staleMs: CONFIG_LOCK_STALE_MS,
+        pollMs: CONFIG_LOCK_POLL_MS,
+        heldMessage: 'Another b4m process is still saving settings',
+      }
+    );
   }
 
   /**
    * The sign-in and backend fields as the file holds them now; another process may have signed in or switched
    * since this store loaded. No file, or JSON that is not an object, means none are set. A file that cannot be read
    * or parsed rejects, so a save never writes this store's copy over a sign-in it failed to read. A field in an
-   * unexpected shape keeps this store's value.
+   * unexpected shape is returned as found, so a write carries it through unchanged.
    */
-  private async diskAuthFields(own: CliConfig): Promise<Pick<CliConfig, 'auth' | 'authByEnv' | 'apiConfig'>> {
-    const none = { auth: undefined, authByEnv: undefined, apiConfig: undefined };
+  private async diskAuthFields(): Promise<DiskAuthFields> {
     const text = await this.readConfigText();
-    if (text === null) return none;
-    const disk = this.parseConfigText(text);
-    if (!disk) return none;
-    const pick = <T>(
-      key: 'auth' | 'authByEnv' | 'apiConfig',
-      schema: z.ZodType<T>,
-      fallback: T | undefined
-    ): T | undefined => {
-      if (!Object.prototype.hasOwnProperty.call(disk, key) || disk[key] === undefined) return undefined;
-      const parsed = schema.safeParse(disk[key]);
-      return parsed.success ? parsed.data : fallback;
-    };
-    return {
-      auth: pick('auth', AuthTokensSchema, own.auth),
-      authByEnv: pick('authByEnv', z.record(z.string(), AuthTokensSchema), own.authByEnv),
-      apiConfig: pick('apiConfig', ApiConfigSchema, own.apiConfig),
-    };
+    const disk = text === null ? null : this.parseConfigText(text);
+    return { auth: disk?.auth, authByEnv: disk?.authByEnv, apiConfig: disk?.apiConfig };
   }
 
   /**
@@ -1560,7 +1558,7 @@ export class ConfigStore {
    */
   private async persistGlobal(
     config?: GlobalConfigPatch,
-    opts?: { clearFeatures?: boolean; authFields?: Pick<CliConfig, 'auth' | 'authByEnv' | 'apiConfig'> }
+    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
   ): Promise<void> {
     await this.init();
 
@@ -1574,10 +1572,10 @@ export class ConfigStore {
   /** persistGlobal's read-modify-write of the file; the caller holds the config write lock. */
   private async writeGlobal(
     config?: GlobalConfigPatch,
-    opts?: { clearFeatures?: boolean; authFields?: Pick<CliConfig, 'auth' | 'authByEnv' | 'apiConfig'> }
+    opts?: { clearFeatures?: boolean; authFields?: DiskAuthFields }
   ): Promise<void> {
     const global = this.globalConfig!;
-    const authFields = opts?.authFields ?? (await this.diskAuthFields(global));
+    const authFields = opts?.authFields ?? (await this.diskAuthFields());
 
     if (config) {
       // The security-critical, repo-launderable fields never flow through a
@@ -1923,113 +1921,16 @@ export class ConfigStore {
 
   /**
    * Run `work` holding the sign-in refresh lock shared by every b4m process using this config
-   * directory. Waits at most `waitMs`, then rejects without running `work`.
+   * directory. Waits at most `waitMs`, then rejects without running `work`. Rejects after `work` when another
+   * process took the lock over meanwhile; a refresh guards its own save with a compare-and-set.
    */
   async withRefreshLock<T>(work: () => Promise<T>, waitMs = REFRESH_LOCK_WAIT_MS): Promise<T> {
-    return this.withLockFile(path.join(path.dirname(this.configPath), 'auth-refresh.lock'), work, {
+    return withLockDir(path.join(path.dirname(this.configPath), 'auth-refresh.lock'), () => work(), {
       waitMs,
       staleMs: REFRESH_LOCK_STALE_MS,
       pollMs: REFRESH_LOCK_POLL_MS,
       heldMessage: 'Another b4m process is still refreshing the sign-in',
     });
-  }
-
-  /** Runs `work` holding the lockfile `lockPath` against other processes. Not reentrant. */
-  private async withLockFile<T>(lockPath: string, work: () => Promise<T>, opts: LockFileOptions): Promise<T> {
-    const nonce = uuidv4();
-    const deadline = Date.now() + opts.waitMs;
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-    for (;;) {
-      let created = false;
-      try {
-        const handle = await fs.open(lockPath, 'wx', 0o600);
-        try {
-          await handle.writeFile(JSON.stringify({ pid: process.pid, hostname: hostname(), at: Date.now(), nonce }));
-        } finally {
-          await handle.close();
-        }
-        created = true;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        // Windows reports a lock still being deleted as EPERM/EACCES rather than EEXIST.
-        const held = code === 'EEXIST' || (process.platform === 'win32' && (code === 'EPERM' || code === 'EACCES'));
-        if (!held) throw error;
-      }
-      if (created) {
-        // A waiter that judged an older lock stale may have removed this one just after it was made: confirm it stands.
-        await pause(opts.pollMs * 2);
-        if ((await this.readLockFileSteadily(lockPath))?.nonce === nonce) break;
-      } else {
-        const stale = await this.staleLockFile(lockPath, opts.staleMs);
-        if (stale) {
-          await this.removeLockFileIf(lockPath, stale.nonce);
-          continue;
-        }
-      }
-      if (Date.now() >= deadline) throw new Error(`${opts.heldMessage} (${lockPath} is held)`);
-      await pause(opts.pollMs);
-    }
-    try {
-      return await work();
-    } finally {
-      await this.removeLockFileIf(lockPath, nonce);
-    }
-  }
-
-  private async readLockFile(lockPath: string): Promise<LockFile | null> {
-    try {
-      const parsed: unknown = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
-      return typeof parsed === 'object' && parsed !== null ? (parsed as LockFile) : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /** A read can fail transiently (EBUSY on Windows); retry briefly instead of giving up the lock. */
-  private async readLockFileSteadily(lockPath: string): Promise<LockFile | null> {
-    let lock = await this.readLockFile(lockPath);
-    for (let retry = 0; lock === null && retry < LOCK_REREAD_TRIES; retry++) {
-      await pause(LOCK_REREAD_PAUSE_MS);
-      lock = await this.readLockFile(lockPath);
-    }
-    return lock;
-  }
-
-  /** The lock as read when it is abandoned, else null. */
-  private async staleLockFile(lockPath: string, staleMs: number): Promise<{ nonce: unknown } | null> {
-    const lock = await this.readLockFile(lockPath);
-    const seen = { nonce: lock?.nonce };
-    if (lock && lock.hostname === hostname() && typeof lock.pid === 'number' && holderIsGone(lock.pid)) return seen;
-    let at = typeof lock?.at === 'number' && Number.isFinite(lock.at) ? lock.at : null;
-    if (at === null) {
-      // Unreadable or still being written by its creator: age it by the file itself.
-      try {
-        at = (await fs.stat(lockPath)).mtimeMs;
-      } catch {
-        return null;
-      }
-    }
-    return Date.now() - at > staleMs ? seen : null;
-  }
-
-  /**
-   * Removes the lock only if it still carries `nonce`. It is moved aside before it is checked, so a lock another
-   * process made in the meantime is put back rather than deleted.
-   */
-  private async removeLockFileIf(lockPath: string, nonce: unknown): Promise<void> {
-    const aside = `${lockPath}.${uuidv4()}.aside`;
-    try {
-      await fs.rename(lockPath, aside);
-    } catch {
-      return;
-    }
-    try {
-      if ((await this.readLockFileSteadily(aside))?.nonce !== nonce) {
-        await fs.link(aside, lockPath).catch(() => undefined);
-      }
-    } finally {
-      await fs.rm(aside, { force: true });
-    }
   }
 
   /** The sign-in `text` (the config file) holds for the environment keyed `envKey`, without echoing its bytes in errors. */
@@ -2079,13 +1980,30 @@ export class ConfigStore {
    * Pass null to reset to the build-time default service.
    */
   async setCustomApiUrl(url: string | null): Promise<void> {
+    await this.writeCustomApiUrl(url, false);
+  }
+
+  /**
+   * Points the CLI at `url` (null: the build-time default service) and drops the active sign-in, which belongs to
+   * the old origin, in the same write, so a failure never leaves the old backend's tokens next to the new URL.
+   */
+  async setCustomApiUrlSignedOut(url: string | null): Promise<void> {
+    await this.writeCustomApiUrl(url, true);
+  }
+
+  private async writeCustomApiUrl(url: string | null, signOut: boolean): Promise<void> {
     await this.load();
     await this.lockedWrite(async () => {
+      const apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
+      const disk = await this.diskAuthFields();
+      await this.writeGlobal(undefined, {
+        authFields: { ...disk, apiConfig, ...(signOut ? { auth: undefined } : {}) },
+      });
+      // writeGlobal replaced the snapshot object; update the new one only now the file holds the change.
       const g = this.globalConfig!;
-      // Reset to the build-time default service (null) or set a self-hosted URL.
-      g.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
-      const disk = await this.diskAuthFields(g);
-      await this.writeGlobal(undefined, { authFields: { ...disk, apiConfig: g.apiConfig } });
+      g.apiConfig = apiConfig;
+      if (signOut) g.auth = undefined;
+      this.config = await this.computeMerged();
     });
   }
 
@@ -2095,12 +2013,14 @@ export class ConfigStore {
     if (this.globalConfig!.apiConfig?.endpointChosen) return;
     await this.lockedWrite(async () => {
       const g = this.globalConfig!;
-      const disk = await this.diskAuthFields(g);
+      const disk = await this.diskAuthFields();
       g.apiConfig = { ...g.apiConfig, endpointChosen: true };
-      if (disk.apiConfig?.endpointChosen) return;
-      await this.writeGlobal(undefined, {
-        authFields: { ...disk, apiConfig: { ...disk.apiConfig, endpointChosen: true } },
-      });
+      const onDisk =
+        typeof disk.apiConfig === 'object' && disk.apiConfig !== null && !Array.isArray(disk.apiConfig)
+          ? (disk.apiConfig as Record<string, unknown>)
+          : {};
+      if (onDisk.endpointChosen === true) return;
+      await this.writeGlobal(undefined, { authFields: { ...disk, apiConfig: { ...onDisk, endpointChosen: true } } });
     });
   }
 
@@ -2140,13 +2060,26 @@ export class ConfigStore {
       const g = this.globalConfig!;
       const wasHere = normalizeEnvKey(g.apiConfig?.customUrl || getDefaultApiUrl()) === normalizeEnvKey(newUrl);
       // The swap starts from the file, which another process may have switched or signed in since this one loaded.
-      const disk = await this.diskAuthFields(g);
-      const swap = swapActiveEnvAuth(disk, disk.apiConfig?.customUrl || getDefaultApiUrl(), newUrl);
-      const apiConfig = swap.changed || !disk.apiConfig?.endpointChosen ? newApiConfig : disk.apiConfig;
+      const disk = await this.diskAuthFields();
+      const auth = AuthTokensSchema.optional().safeParse(disk.auth);
+      const authByEnv = z.record(z.string(), AuthTokensSchema).optional().safeParse(disk.authByEnv);
+      if (!auth.success || !authByEnv.success) {
+        throw new Error(
+          `Could not switch backend: the saved sign-in in ${this.configPath} is not in the expected shape`
+        );
+      }
+      const onDisk = ApiConfigSchema.optional().safeParse(disk.apiConfig);
+      const diskApi = onDisk.success ? onDisk.data : undefined;
+      const swap = swapActiveEnvAuth(
+        { auth: auth.data, authByEnv: authByEnv.data },
+        diskApi?.customUrl || getDefaultApiUrl(),
+        newUrl
+      );
+      const apiConfig = swap.changed || !diskApi?.endpointChosen ? newApiConfig : diskApi;
       g.apiConfig = apiConfig;
-      g.authByEnv = swap.changed ? swap.authByEnv : disk.authByEnv;
+      g.authByEnv = swap.changed ? swap.authByEnv : authByEnv.data;
       g.auth = swap.auth; // undefined -> user will be prompted to /login
-      if (swap.changed || !disk.apiConfig?.endpointChosen) {
+      if (swap.changed || !diskApi?.endpointChosen) {
         await this.writeGlobal(undefined, { authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig } });
       } else {
         this.config = await this.computeMerged();

@@ -2535,10 +2535,7 @@ function CliApp() {
         const { url } = result;
 
         // Clear authentication when changing API URL; under the refresh lock so no refresh lands in between.
-        await state.configStore.withRefreshLock(async () => {
-          await state.configStore.setCustomApiUrl(url);
-          await state.configStore.clearAuthTokens();
-        });
+        await state.configStore.withRefreshLock(() => state.configStore.setCustomApiUrlSignedOut(url));
 
         console.log(`\n✅ API URL updated: ${url}`);
         console.log('🔓 Authentication cleared');
@@ -2549,10 +2546,7 @@ function CliApp() {
 
       case 'reset-api': {
         // Clear authentication when resetting API URL; under the refresh lock so no refresh lands in between.
-        await state.configStore.withRefreshLock(async () => {
-          await state.configStore.setCustomApiUrl(null);
-          await state.configStore.clearAuthTokens();
-        });
+        await state.configStore.withRefreshLock(() => state.configStore.setCustomApiUrlSignedOut(null));
 
         const resetEndpoint = resolveApiEndpoint();
         console.log('\n✅ Custom API URL cleared');
