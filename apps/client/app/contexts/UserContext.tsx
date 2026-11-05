@@ -10,6 +10,7 @@ import { setFunnelSyntheticUser } from '@client/app/utils/funnelEvents';
 import ExpiredSession from '../components/ExpiredSession';
 import { useSubscribeCollection } from '../utils/react-query';
 import { useGetIdentify } from '@client/app/hooks/data/user';
+import { setDeletionGuardUser } from '@client/app/utils/accountDeletionInterceptor';
 import { persist, PersistStorage, StorageValue } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
@@ -174,6 +175,9 @@ type PersistedUserFields = Pick<
   // this field being persisted still won't flash the /accept-policies interstitial on hard reload -
   // it waits for /api/identify to land the grandfathered value.
   | 'aupAcceptedVersion'
+  // Persisted so a reload knows the account is deletion-pending before any request fires, and so
+  // shows only the cancel screen instead of booting the app into the server's 403s.
+  | 'deletion'
 >;
 
 const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | null => {
@@ -196,6 +200,7 @@ const pickPersistedFields = (user: IUserDocument | null): PersistedUserFields | 
     tags: user.tags,
     createdAt: user.createdAt,
     aupAcceptedVersion: user.aupAcceptedVersion,
+    deletion: user.deletion,
   };
 };
 
@@ -318,6 +323,10 @@ export const useUser = create<UserContextProps>()(
 
 // Keeps synthetic test personas out of client funnel events (funnelEvents.ts).
 useUser.subscribe(state => setFunnelSyntheticUser(!!state.currentUser?.isSynthetic));
+
+// The api request guard (accountDeletionInterceptor.ts) reads this; seeded from the rehydrated user.
+setDeletionGuardUser(useUser.getState().currentUser);
+useUser.subscribe(state => setDeletionGuardUser(state.currentUser));
 
 /**
  * Decide whether a real-time `users` update should force a graceful sign-out

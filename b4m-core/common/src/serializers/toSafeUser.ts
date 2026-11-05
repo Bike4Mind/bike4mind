@@ -58,6 +58,8 @@ export const USER_SECRET_FIELDS = [
   'throttle',
   'riskSignals',
   'stripeCustomerId',
+  // Server-side lease against an export racing account cleanup; never client state.
+  'accountDataExportLease',
 ] as const;
 
 /**

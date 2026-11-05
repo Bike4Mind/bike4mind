@@ -1,7 +1,8 @@
 import { ChangeMessageVisibilityCommand, GetQueueAttributesCommand, SQSClient } from '@aws-sdk/client-sqs';
 import type { SelfHostWorker } from './selfHostWorker';
 
-// Receive count and visibility must match notebookCurationQueue and questExportQueue in elasticmq.conf.
+// Receive count and visibility must match notebookCurationQueue, questExportQueue and accountDataExportQueue in
+// elasticmq.conf.
 const MAX_RECEIVE_COUNT = 3;
 const VISIBILITY_TIMEOUT_SECONDS = 900;
 const RENEWAL_INTERVAL_MS = 60000;

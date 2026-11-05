@@ -45,6 +45,10 @@ vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: vi.
 vi.mock('@server/middlewares/apiKeyAuth', () => ({ isApiKeyAuth: () => false }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('@server/auth/networkMeta', () => ({ recordLoginEvent: vi.fn() }));
+// Persistence is in-memory here; the transaction-backed purge lock has separate real-Mongo coverage.
+vi.mock('@server/auth/withAccountNotPurging', () => ({
+  withAccountNotPurging: async <T>(_userId: string, operation: () => Promise<T>) => operation(),
+}));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/auth/tokenGenerator', () => ({
   ACCESS_TOKEN_TTL_SECONDS: 3600,
