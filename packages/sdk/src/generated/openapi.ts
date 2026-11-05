@@ -10013,7 +10013,7 @@ export interface operations {
           'application/json': components['schemas']['editImageResponse200'];
         };
       };
-      /** @description `fabFileIds` is empty for a mask model or set for FLUX.2, `referenceImageFabFileIds` is set for a model that does not accept them or exceeds its limit, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
+      /** @description `fabFileIds` is empty on a model other than FLUX.2, `referenceImageFabFileIds` is set for a model that does not accept them or exceeds its limit, or the `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks. An organization-billed API key bills an organization that no longer exists, or one its owner is no longer a member of; re-mint the key. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

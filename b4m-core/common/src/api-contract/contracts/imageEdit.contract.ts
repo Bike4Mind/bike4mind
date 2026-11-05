@@ -69,7 +69,7 @@ export const editImageContract = defineEndpoint({
     },
     400: {
       description:
-        `\`fabFileIds\` is empty for a mask model or set for FLUX.2, \`referenceImageFabFileIds\` is set for a model that ` +
+        `\`fabFileIds\` is empty on a model other than FLUX.2, \`referenceImageFabFileIds\` is set for a model that ` +
         `does not accept them or exceeds its limit, or the ` +
         `${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
       schema: ApiErrorSchema,
