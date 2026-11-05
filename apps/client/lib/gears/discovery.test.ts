@@ -144,6 +144,14 @@ describe('campaign hold', () => {
     });
   });
 
+  it('falls back to this page load when reading sessionStorage throws', () => {
+    holdDiscoveryForCampaign(NOW);
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect(isDiscoveryHeldForCampaign(NOW + 1000)).toBe(true);
+  });
+
   it('still holds this page load when sessionStorage throws', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('quota');

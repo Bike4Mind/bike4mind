@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react';
 import type { GearStatus } from '@client/app/hooks/useGearsStatus';
 import { FirstRunEvents } from '@bike4mind/common';
 import {
+  DISCOVERY_CAMPAIGN_HOLD_MS,
   DISCOVERY_RECHECK_MS,
   DISCOVERY_SETTLE_MS,
   holdDiscoveryForCampaign,
@@ -162,6 +163,15 @@ describe('useGearsDiscovery', () => {
     act(() => vi.advanceTimersByTime(DISCOVERY_RECHECK_MS * 3));
     expect(result.current.open).toBe(false);
     expect(localStorage.getItem('gears_discovery_u1')).toBeNull();
+  });
+
+  it('opens in the same page load once the campaign hold expires', () => {
+    holdDiscoveryForCampaign(Date.now());
+    const { result } = renderHook(() => useGearsDiscovery());
+    settle();
+    expect(result.current.open).toBe(false);
+    act(() => vi.advanceTimersByTime(DISCOVERY_CAMPAIGN_HOLD_MS));
+    expect(result.current.open).toBe(true);
   });
 
   it('waits while another dialog is visible, then opens', () => {

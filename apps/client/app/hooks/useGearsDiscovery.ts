@@ -56,11 +56,12 @@ export function useGearsDiscovery(): GearsDiscovery {
   useEffect(() => {
     if (decidedRef.current || !settled || !userId || isError) return;
     if (isDiscoverySkippedPath(pathname)) return;
-    if (wasWhatsNewShown() || isDiscoveryHeldForCampaign(Date.now())) {
+    if (wasWhatsNewShown()) {
       decidedRef.current = true;
       return;
     }
-    if (isStreaming || isAnyModalDialogOpen()) {
+    // The campaign hold expires, so it waits like an open dialog instead of ending the decision.
+    if (isStreaming || isAnyModalDialogOpen() || isDiscoveryHeldForCampaign(Date.now())) {
       const t = setTimeout(() => setTick(n => n + 1), DISCOVERY_RECHECK_MS);
       return () => clearTimeout(t);
     }

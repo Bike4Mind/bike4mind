@@ -61,7 +61,7 @@ describe('captureUtmParams', () => {
 
   it('captures source only when just utm_source is present', () => {
     setSearch('?utm_source=newsletter');
-    captureUtmParams();
+    expect(captureUtmParams()).toBe(true);
     expect(readUtmCookie()).toEqual({ source: 'newsletter' });
   });
 
