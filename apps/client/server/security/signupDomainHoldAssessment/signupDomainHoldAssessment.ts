@@ -322,6 +322,7 @@ const buildShadowDetection = (
   userIds: hold.cohortUserIds.slice(0, COHORT_SAMPLE_LIMIT),
   network: null,
   group: null,
+  payment: null,
   signals: [
     {
       key: 'confidence',
