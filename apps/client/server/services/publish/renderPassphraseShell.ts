@@ -104,14 +104,22 @@ export function renderPassphraseShell(): string {
   }
   var revealTimer = setTimeout(revealForm, FORM_REVEAL_MS);
 
-  // One-shot: a proof cookie that does not stick (blocked, or dropped between the 204 and the
+  // Loop breaker: a proof cookie that does not stick (blocked, or dropped between the 204 and the
   // reload) would otherwise re-serve this shell, mint again and reload again, bounded only by the
-  // 60/min rate limit. The sentinel turns that cycle into exactly one attempt, degrading to the
-  // form - the correct destination when the cookie mechanism is not working.
-  var SENTINEL = 'b4m-pp-tried-' + location.pathname;
-  var alreadyTried = false;
-  try { alreadyTried = sessionStorage.getItem(SENTINEL) === '1'; } catch (e) {}
-  if (alreadyTried) { revealForm(); return; }
+  // 60/min rate limit. The sentinel is armed with a timestamp ONLY on a 204, right before the
+  // reload, and consumed here. Only a load that follows that reload within SENTINEL_FRESH_MS
+  // counts as "the cookie did not stick". A stale or leftover sentinel (the proof cookie expired
+  // hours later in the same tab, or an earlier attempt failed) must NOT disable the bypass: it
+  // lives in sessionStorage, so it survives every refresh of the tab.
+  var SENTINEL = 'b4m-pp-minted-' + location.pathname;
+  var SENTINEL_FRESH_MS = 15000;
+  var mintedAt = 0;
+  try {
+    mintedAt = parseInt(sessionStorage.getItem(SENTINEL) || '', 10) || 0;
+    sessionStorage.removeItem(SENTINEL);
+  } catch (e) {}
+  var age = Date.now() - mintedAt;
+  if (mintedAt && age >= 0 && age < SENTINEL_FRESH_MS) { revealForm(); return; }
 
   b4mExchangeSession(function (token) {
     if (!token) { revealForm(); return; }
@@ -121,7 +129,6 @@ export function renderPassphraseShell(): string {
     // and the artifact comes back through the ordinary serve path, with the ordinary wrapper
     // and CSP. Rendering in place would mean rebuilding the sandboxed-iframe pipeline inside a
     // page whose CSP is deliberately tight because it holds a credential input.
-    try { sessionStorage.setItem(SENTINEL, '1'); } catch (e) {}
     fetch('/api/publish/gate/owner', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
@@ -139,6 +146,7 @@ export function renderPassphraseShell(): string {
           settled = true;
           clearTimeout(revealTimer);
           if (hint) hint.textContent = 'Opening your artifact...';
+          try { sessionStorage.setItem(SENTINEL, String(Date.now())); } catch (e) {}
           location.reload();
           return;
         }
