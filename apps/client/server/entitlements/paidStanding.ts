@@ -6,10 +6,11 @@ import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
  * and API key / CLI access. Admin and developer bypasses are separate exemptions, not paid standing.
  *
  * Sources: an active paid subscription the account holds (its own, an `admin_grant` comp row, or an org
- * plan it holds a seat on - `getActiveSubscriptionsForUser` resolves which orgs count), or a credit
- * purchase ever made. `addCredits` with type `purchase` stamps `lastCreditsPurchasedAt`; an admin credit
- * grant re-stamps only an account that already has a purchase row (adminUpdate.ts), so it never confers
- * paid standing on its own. Sticky: a refund or dispute does not clear the stamp.
+ * plan it holds a seat on - `getActiveSubscriptionsForUser` resolves which orgs count), or an unreversed
+ * credit purchase. `addCredits` with type `purchase` stamps `lastCreditsPurchasedAt`; an admin credit
+ * grant re-stamps only an account that still has an unreversed purchase row (adminUpdate.ts), so it never confers
+ * paid standing on its own. A full refund or lost dispute marks the purchase row reversed and clears the
+ * stamp once no unreversed purchase remains (server/billing/purchaseReversal.ts); a partial refund keeps it.
  */
 export interface PaidStandingUser {
   lastCreditsPurchasedAt?: Date | null;

@@ -821,6 +821,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
   }
 
   /**
+   * Clears lastCreditsPurchasedAt only while it still equals `stamp`, so a purchase landing after the
+   * caller read it (which rewrites the stamp) survives. Resolves whether the stamp was cleared.
+   */
+  async clearPurchaseStampIfUnchanged(userId: string, stamp: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastCreditsPurchasedAt: stamp },
+      { $set: { lastCreditsPurchasedAt: null } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  /**
    * Debit up to `credits` without taking the balance below zero, in one atomic update: a balance
    * that cannot cover the whole debit is taken to zero (a negative one is left as is). Resolves the
    * credits actually debited, 0 for a missing user, so the caller can see and act on a shortfall.

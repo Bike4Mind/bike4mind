@@ -156,6 +156,10 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
 const mockRespondToEarlyFraudWarning = vi.fn();
 const mockPropagateAccountRisk = vi.fn();
 vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
+const mockReversePurchaseStanding = vi.fn();
+vi.mock('@server/billing/purchaseReversal', () => ({
+  reversePurchaseStanding: (...args: unknown[]) => mockReversePurchaseStanding(...args),
+}));
 vi.mock('@server/billing/earlyFraudWarning', () => ({
   respondToEarlyFraudWarning: (...args: unknown[]) => mockRespondToEarlyFraudWarning(...args),
 }));
@@ -1027,6 +1031,24 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       expect(mockPostMessageToSlack).not.toHaveBeenCalled();
     });
 
+    it('reverses the purchase standing when the dispute is lost', async () => {
+      await invokeWebhookWithEvent(makeDisputeClosedEvent('lost'));
+
+      expect(mockReversePurchaseStanding).toHaveBeenCalledWith(
+        { paymentIntentId: 'pi_123', reason: 'dispute_lost' },
+        expect.anything()
+      );
+    });
+
+    it.each(['won', 'warning_closed'])('does not reverse the purchase when the dispute closes %s', async status => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+
+      await invokeWebhookWithEvent(makeDisputeClosedEvent(status));
+
+      expect(mockReversePurchaseStanding).not.toHaveBeenCalled();
+    });
+
     it('logs a warning when user cannot be found for a won dispute', async () => {
       mockFindByPaymentIntentId.mockResolvedValue(null);
       mockStripeChargesRetrieve.mockResolvedValue({ customer: 'cus_unknown' });
@@ -1042,6 +1064,43 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
   });
 
   describe('charge.refunded', () => {
+    const refundedEvent = (refunded: boolean, refunds?: { data: Array<{ id: string; amount: number }> }) => ({
+      type: 'charge.refunded',
+      data: {
+        object: { id: 'ch_full', payment_intent: 'pi_full', amount: 2000, amount_captured: 2000, refunded, refunds },
+      },
+    });
+
+    it('reverses the purchase standing on a full refund', async () => {
+      await invokeWebhookWithEvent(refundedEvent(true, { data: [{ id: 're_full', amount: 2000 }] }));
+
+      expect(mockReversePurchaseStanding).toHaveBeenCalledWith(
+        { paymentIntentId: 'pi_full', reason: 'refunded' },
+        expect.anything()
+      );
+    });
+
+    it('reverses the purchase standing on a full refund whose event omits the refund list', async () => {
+      await invokeWebhookWithEvent(refundedEvent(true));
+
+      expect(mockReversePurchaseStanding).toHaveBeenCalledWith(
+        { paymentIntentId: 'pi_full', reason: 'refunded' },
+        expect.anything()
+      );
+    });
+
+    it('leaves the purchase standing alone on a partial refund', async () => {
+      await invokeWebhookWithEvent(refundedEvent(false, { data: [{ id: 're_part', amount: 500 }] }));
+
+      expect(mockReversePurchaseStanding).not.toHaveBeenCalled();
+    });
+
+    it('rethrows a failed standing reversal so Stripe redelivers', async () => {
+      mockReversePurchaseStanding.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(invokeWebhookWithEvent(refundedEvent(true))).rejects.toThrow('db down');
+    });
+
     it('clawbacks 50% of credits on a 50% refund', async () => {
       const mockUser = { id: 'user123', name: 'Test', email: 'test@example.com' };
       const mockTx = { id: 'tx1', ownerId: 'user123', credits: 1000, stripePaymentIntentId: 'pi_ref' };
