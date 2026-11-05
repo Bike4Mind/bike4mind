@@ -29,9 +29,13 @@ function sharedRefresh(
  * Wait, at most `boundMs`, for a startup refresh still in flight. Called before the process exits: a refresh
  * the server accepted but this process never saved leaves a superseded refresh token for the next run.
  */
-export async function settleSignInRefresh(boundMs = SIGN_IN_REFRESH_SETTLE_MS): Promise<void> {
+export async function settleSignInRefresh(
+  boundMs = SIGN_IN_REFRESH_SETTLE_MS,
+  say: (line: string) => void = line => process.stderr.write(`${line}\n`)
+): Promise<void> {
   const pending = pendingRefresh;
   if (!pending) return;
+  say(`Finishing the sign-in refresh before exiting (up to ${Math.round(boundMs / 1000)}s)...`);
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([
     pending.then(

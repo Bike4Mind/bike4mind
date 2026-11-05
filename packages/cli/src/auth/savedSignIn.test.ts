@@ -137,8 +137,13 @@ describe('checkSavedSignIn', () => {
 
     expect(await checkSavedSignIn(await savedStore(), refresh, 20)).toMatchObject({ status: 'unchecked' });
     expect(finished).toBe(false);
-    await settleSignInRefresh(5_000);
+    const said: string[] = [];
+    await settleSignInRefresh(5_000, line => said.push(line));
     expect(finished).toBe(true);
+    expect(said).toEqual([expect.stringContaining('sign-in refresh')]);
+
+    await settleSignInRefresh(5_000, line => said.push(line));
+    expect(said).toHaveLength(1);
   });
 
   it('stops waiting at exit, after the bound, on a refresh that never settles', async () => {
@@ -152,11 +157,11 @@ describe('checkSavedSignIn', () => {
     await checkSavedSignIn(await savedStore(), refresh, 20);
     const started = performance.now();
 
-    await settleSignInRefresh(100);
+    await settleSignInRefresh(100, () => {});
 
     expect(performance.now() - started).toBeLessThan(1_000);
     settle();
-    await settleSignInRefresh(1_000);
+    await settleSignInRefresh(1_000, () => {});
   });
 
   it('stops waiting on a refresh that never answers and keeps the tokens', async () => {
@@ -263,6 +268,34 @@ describe('ConfigStore.reloadAuthTokens', () => {
   });
 });
 
+describe('ConfigStore.reloadAuthTokens during a save', () => {
+  it('keeps what a save already in flight wrote when the re-read straddles its end', async () => {
+    const store = await savedStore();
+    await store.getAuthTokens();
+    const before = await readFile(configPath, 'utf-8');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      if (String(args[0]) === configPath && new Error().stack?.includes('reloadAuthTokens')) {
+        await gate;
+        return before;
+      }
+      return realRead(...args);
+    }) as typeof fsPromises.readFile);
+    const fresh = { ...stale, accessToken: 'access-fresh', refreshToken: 'refresh-fresh' };
+
+    const saving = store.save({ auth: fresh });
+    const reloading = store.reloadAuthTokens();
+    await saving;
+    release();
+    await reloading;
+    vi.mocked(fsPromises.readFile).mockRestore();
+
+    expect(await store.getAuthTokens()).toEqual(fresh);
+  });
+});
+
 describe('concurrent refreshes across b4m processes', () => {
   const lockPath = () => path.join(dir, 'auth-refresh.lock');
 
@@ -307,5 +340,90 @@ describe('concurrent refreshes across b4m processes', () => {
     await expect(new ConfigStore(configPath).withRefreshLock(work, 300)).rejects.toThrow('still refreshing');
     expect(work).not.toHaveBeenCalled();
     expect(JSON.parse(await readFile(lockPath(), 'utf-8'))).toMatchObject({ nonce: 'other' });
+  });
+
+  it('breaks at once a fresh lock whose holder on this host has exited', async () => {
+    const goneProcess = 2_147_483_646;
+    await writeFile(
+      lockPath(),
+      JSON.stringify({ pid: goneProcess, hostname: os.hostname(), at: Date.now(), nonce: 'gone' })
+    );
+
+    expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 300)).toBe('ran');
+  });
+
+  it('stands down when another waiter took the lock it broke', async () => {
+    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now() - 31_000, nonce: 'gone' }));
+    const work = vi.fn(async () => 'ran');
+
+    const locking = new ConfigStore(configPath).withRefreshLock(work, 800);
+    await vi.waitFor(
+      async () => {
+        const lock = JSON.parse(await readFile(lockPath(), 'utf-8')) as { nonce: string };
+        expect(lock.nonce).not.toBe('gone');
+      },
+      { interval: 5 }
+    );
+    await writeFile(
+      lockPath(),
+      JSON.stringify({ pid: process.pid, hostname: os.hostname(), at: Date.now(), nonce: 'other' })
+    );
+
+    await expect(locking).rejects.toThrow('still refreshing');
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it('on Windows, waits out a lock still being deleted instead of failing', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    const realOpen = fsPromises.open.bind(fsPromises);
+    const open = vi
+      .spyOn(fsPromises, 'open')
+      .mockRejectedValueOnce(Object.assign(new Error('operation not permitted'), { code: 'EPERM' }))
+      .mockImplementation(realOpen as typeof fsPromises.open);
+    try {
+      expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 1_000)).toBe('ran');
+      expect(open).toHaveBeenCalledTimes(2);
+    } finally {
+      open.mockRestore();
+      Object.defineProperty(process, 'platform', platform);
+    }
+  });
+});
+
+describe('ConfigStore sign-in writes', () => {
+  const prod = { ...stale, accessToken: 'access-prod-1', refreshToken: 'refresh-prod-1' };
+  const dev = { ...stale, accessToken: 'access-dev', refreshToken: 'refresh-dev' };
+
+  /** This process on the default backend; another one has since switched to dev and signed in there. */
+  async function afterAnotherProcessSwitched(): Promise<{ mine: ConfigStore; theirs: ConfigStore }> {
+    const mine = await savedStore();
+    await mine.getAuthTokens();
+    const theirs = new ConfigStore(configPath);
+    await theirs.switchApiEnvironment('dev');
+    await theirs.setAuthTokens(dev);
+    return { mine, theirs };
+  }
+
+  it("saves only this backend's sign-in, keeping another process's backend and sign-in", async () => {
+    const { mine, theirs } = await afterAnotherProcessSwitched();
+
+    await mine.setAuthTokens(prod);
+
+    const file = JSON.parse(await readFile(configPath, 'utf-8')) as { auth: unknown; authByEnv: object };
+    expect(file.auth).toEqual(dev);
+    expect(Object.values(file.authByEnv)).toContainEqual(prod);
+    expect(await theirs.reloadAuthTokens()).toEqual(dev);
+    expect(await mine.reloadAuthTokens()).toEqual(prod);
+  });
+
+  it("clears only this backend's sign-in", async () => {
+    const { mine, theirs } = await afterAnotherProcessSwitched();
+
+    await mine.clearAuthTokens();
+
+    expect(await theirs.reloadAuthTokens()).toEqual(dev);
+    expect(await mine.reloadAuthTokens()).toBeNull();
+    expect(await mine.getAuthTokens()).toBeNull();
   });
 });

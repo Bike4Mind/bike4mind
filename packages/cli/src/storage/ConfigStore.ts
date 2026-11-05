@@ -1,7 +1,7 @@
 import { promises as fs, existsSync } from 'fs';
 import { createHash } from 'node:crypto';
 import path from 'path';
-import { homedir } from 'os';
+import { homedir, hostname } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
@@ -405,6 +405,24 @@ const ProjectLocalConfigSchema = z.object({
 export const REFRESH_LOCK_STALE_MS = 30_000;
 export const REFRESH_LOCK_WAIT_MS = 40_000;
 const REFRESH_LOCK_POLL_MS = 100;
+
+interface RefreshLockFile {
+  pid?: unknown;
+  hostname?: unknown;
+  at?: unknown;
+  nonce?: unknown;
+}
+
+/** True when no process `pid` exists on this host. EPERM means one exists that this user cannot signal. */
+function holderIsGone(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
 
 const LEGACY_PINNED_MAX_TOKENS = 4096;
 
@@ -1443,7 +1461,16 @@ export class ConfigStore {
    * Save configuration to disk
    */
   async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
+    // Bumped at both ends, so a sign-in re-read that starts while this save is in flight also stands down.
     this.saveGeneration++;
+    try {
+      await this.persistGlobal(config, opts);
+    } finally {
+      this.saveGeneration++;
+    }
+  }
+
+  private async persistGlobal(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
     await this.init();
 
     // Ensure the global snapshot exists (first save on a fresh store).
@@ -1666,27 +1693,84 @@ export class ConfigStore {
     return config.auth || null;
   }
 
-  /**
-   * Set authentication tokens
-   */
-  async setAuthTokens(tokens: {
-    accessToken: string;
-    refreshToken: string;
-    expiresAt: string;
-    userId: string;
-  }): Promise<void> {
-    await this.load();
-    this.globalConfig!.auth = tokens;
-    await this.save();
+  /** Save the sign-in for this process's backend, leaving the rest of the file as another process may have left it. */
+  async setAuthTokens(tokens: AuthTokens): Promise<void> {
+    await this.saveAuthSlot(tokens);
+  }
+
+  /** Clear the sign-in for this process's backend (logout), leaving other backends' sign-ins alone. */
+  async clearAuthTokens(): Promise<void> {
+    await this.saveAuthSlot(undefined);
   }
 
   /**
-   * Clear authentication tokens (logout)
+   * Write only this process's sign-in slot into the file as it is now: `auth` when the file's active backend
+   * is this process's, otherwise `authByEnv[<this backend>]`. Another process's backend switch and sign-in survive.
    */
-  async clearAuthTokens(): Promise<void> {
+  private async saveAuthSlot(tokens: AuthTokens | undefined): Promise<void> {
     await this.load();
-    this.globalConfig!.auth = undefined;
-    await this.save();
+    const text = await this.readConfigText();
+    if (text === null) {
+      this.globalConfig!.auth = tokens;
+      await this.save();
+      return;
+    }
+    const file = this.parseConfigText(text) ?? {};
+    const myKey = this.envKey();
+    if (this.fileEnvKey(file) === myKey) {
+      if (tokens) file.auth = tokens;
+      else delete file.auth;
+    } else {
+      const byEnv: Record<string, unknown> =
+        typeof file.authByEnv === 'object' && file.authByEnv !== null ? { ...file.authByEnv } : {};
+      if (tokens) byEnv[myKey] = tokens;
+      else delete byEnv[myKey];
+      file.authByEnv = byEnv;
+    }
+    this.saveGeneration++;
+    this.globalConfig!.auth = tokens;
+    if (this.config) this.config.auth = tokens;
+    try {
+      await this.writeConfigFile(JSON.stringify(file, null, 2));
+    } finally {
+      this.saveGeneration++;
+    }
+  }
+
+  private envKey(): string {
+    return normalizeEnvKey(this.globalConfig!.apiConfig?.customUrl || getDefaultApiUrl());
+  }
+
+  private fileEnvKey(file: Record<string, unknown>): string {
+    const apiConfig = file.apiConfig as { customUrl?: unknown } | undefined;
+    const url =
+      typeof apiConfig?.customUrl === 'string' && apiConfig.customUrl ? apiConfig.customUrl : getDefaultApiUrl();
+    return normalizeEnvKey(url);
+  }
+
+  /** The config file's text, or null when there is none. Errors name the file and the error code only. */
+  private async readConfigText(): Promise<string | null> {
+    try {
+      return await fs.readFile(this.configPath, 'utf-8');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return null;
+      throw new Error(`Could not read the saved sign-in from ${this.configPath}: ${code ?? 'read failed'}`);
+    }
+  }
+
+  /** The parsed config file, or null when it is not an object. Never echoes the file's bytes in an error. */
+  private parseConfigText(text: string): Record<string, unknown> | null {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (error) {
+      const position = error instanceof Error ? /position (\d+)/.exec(error.message)?.[1] : undefined;
+      throw new Error(
+        `Could not read the saved sign-in from ${this.configPath}: not valid JSON${position ? ` (at position ${position})` : ''}`
+      );
+    }
+    return typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
   }
 
   /**
@@ -1696,17 +1780,8 @@ export class ConfigStore {
   async reloadAuthTokens(): Promise<AuthTokens | null> {
     await this.load();
     const generation = this.saveGeneration;
-    const myKey = normalizeEnvKey(this.globalConfig!.apiConfig?.customUrl || getDefaultApiUrl());
-    let text: string | null = null;
-    try {
-      text = await fs.readFile(this.configPath, 'utf-8');
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT') {
-        throw new Error(`Could not read the saved sign-in from ${this.configPath}: ${code ?? 'read failed'}`);
-      }
-    }
-    const auth = text === null ? undefined : this.authForEnv(text, myKey);
+    const text = await this.readConfigText();
+    const auth = text === null ? undefined : this.authForEnv(text, this.envKey());
     if (generation !== this.saveGeneration) return this.globalConfig!.auth ?? null;
     this.globalConfig!.auth = auth;
     if (this.config) this.config.auth = auth;
@@ -1721,27 +1796,40 @@ export class ConfigStore {
     const lockPath = path.join(path.dirname(this.configPath), 'auth-refresh.lock');
     const nonce = uuidv4();
     const deadline = Date.now() + waitMs;
+    const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    let brokeStale = false;
     for (;;) {
+      let created = false;
       try {
         const handle = await fs.open(lockPath, 'wx', 0o600);
         try {
-          await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now(), nonce }));
+          await handle.writeFile(JSON.stringify({ pid: process.pid, hostname: hostname(), at: Date.now(), nonce }));
         } finally {
           await handle.close();
         }
-        break;
+        created = true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        const code = (error as NodeJS.ErrnoException).code;
+        // Windows reports a lock still being deleted as EPERM/EACCES rather than EEXIST.
+        const held = code === 'EEXIST' || (process.platform === 'win32' && (code === 'EPERM' || code === 'EACCES'));
+        if (!held) throw error;
       }
-      if (await this.refreshLockIsStale(lockPath)) {
+      if (created) {
+        if (!brokeStale) break;
+        // Two waiters can break the same stale lock, and one may then remove the other's new one: confirm ours stands.
+        await pause(REFRESH_LOCK_POLL_MS * 2);
+        if ((await this.readRefreshLock(lockPath))?.nonce === nonce) break;
+        brokeStale = false;
+      } else if (await this.refreshLockIsStale(lockPath)) {
         await fs.rm(lockPath, { force: true });
+        brokeStale = true;
         continue;
       }
       if (Date.now() >= deadline) {
         throw new Error(`Another b4m process is still refreshing the sign-in (${lockPath} is held)`);
       }
-      await new Promise(resolve => setTimeout(resolve, REFRESH_LOCK_POLL_MS));
+      await pause(REFRESH_LOCK_POLL_MS);
     }
     try {
       return await work();
@@ -1750,10 +1838,10 @@ export class ConfigStore {
     }
   }
 
-  private async readRefreshLock(lockPath: string): Promise<{ at?: unknown; nonce?: unknown } | null> {
+  private async readRefreshLock(lockPath: string): Promise<RefreshLockFile | null> {
     try {
       const parsed: unknown = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
-      return typeof parsed === 'object' && parsed !== null ? (parsed as { at?: unknown; nonce?: unknown }) : null;
+      return typeof parsed === 'object' && parsed !== null ? (parsed as RefreshLockFile) : null;
     } catch {
       return null;
     }
@@ -1761,6 +1849,7 @@ export class ConfigStore {
 
   private async refreshLockIsStale(lockPath: string): Promise<boolean> {
     const lock = await this.readRefreshLock(lockPath);
+    if (lock && lock.hostname === hostname() && typeof lock.pid === 'number' && holderIsGone(lock.pid)) return true;
     let at = typeof lock?.at === 'number' && Number.isFinite(lock.at) ? lock.at : null;
     if (at === null) {
       // Unreadable or still being written by its creator: age it by the file itself.
@@ -1775,23 +1864,10 @@ export class ConfigStore {
 
   /** The sign-in `text` (the config file) holds for the environment keyed `envKey`, without echoing its bytes in errors. */
   private authForEnv(text: string, envKey: string): AuthTokens | undefined {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch (error) {
-      const position = error instanceof Error ? /position (\d+)/.exec(error.message)?.[1] : undefined;
-      throw new Error(
-        `Could not read the saved sign-in from ${this.configPath}: not valid JSON${position ? ` (at position ${position})` : ''}`
-      );
-    }
-    if (typeof raw !== 'object' || raw === null) return undefined;
-    const file = raw as { auth?: unknown; authByEnv?: unknown; apiConfig?: { customUrl?: unknown } };
-    const fileUrl =
-      typeof file.apiConfig?.customUrl === 'string' && file.apiConfig.customUrl
-        ? file.apiConfig.customUrl
-        : getDefaultApiUrl();
+    const file = this.parseConfigText(text);
+    if (!file) return undefined;
     let candidate: unknown;
-    if (normalizeEnvKey(fileUrl) === envKey) {
+    if (this.fileEnvKey(file) === envKey) {
       candidate = file.auth;
     } else if (
       typeof file.authByEnv === 'object' &&
