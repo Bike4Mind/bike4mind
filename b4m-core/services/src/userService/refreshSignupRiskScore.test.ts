@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { settingsMap, type ISignupRiskScore } from '@bike4mind/common';
+import { settingsMap, type ISignupRiskScore, type SignupDomainReview } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { refreshSignupRiskScore, type RefreshSignupRiskScoreAdapters } from './refreshSignupRiskScore';
+import { SIGNUP_BURST_HOLD_REASONS } from './signupBurstDetector';
 
 const SIGNED_UP = new Date('2026-10-20T10:00:00Z');
 const NOW = new Date('2026-10-21T10:00:00Z');
@@ -12,10 +13,12 @@ const setup = ({
   firstKeyAt = null as Date | null,
   spent = 0,
   settings = {} as Record<string, unknown>,
+  review = null as SignupDomainReview | null,
 } = {}) => {
   const setRiskScore = vi.fn(async (_userId: string, _riskScore: ISignupRiskScore) => undefined);
   const creditsSpentByUser = vi.fn(async () => spent);
   const warn = vi.fn();
+  const findReview = vi.fn(async (_domain: string) => review);
   const adapters: RefreshSignupRiskScoreAdapters = {
     db: {
       users: {
@@ -37,12 +40,13 @@ const setup = ({
           name in settings ? { settingName: name, settingValue: settings[name] } : null
         ),
       } as unknown as RefreshSignupRiskScoreAdapters['db']['adminSettings'],
+      signupDomainReviews: { findReview },
     },
     logger: { warn },
     now: NOW,
   };
   const stored = () => setRiskScore.mock.calls[0]?.[1];
-  return { adapters, setRiskScore, creditsSpentByUser, warn, stored };
+  return { adapters, setRiskScore, creditsSpentByUser, findReview, warn, stored };
 };
 
 describe('refreshSignupRiskScore', () => {
@@ -70,6 +74,48 @@ describe('refreshSignupRiskScore', () => {
       ['quickApiKey', 'First API key created 10 minutes after signup'],
       ['fastSpend', '400 credits spent in the first 24 hours'],
     ]);
+  });
+
+  describe('burst cohort', () => {
+    const burst = (overrides: Partial<SignupDomainReview> = {}): SignupDomainReview => ({
+      domain: 'example.net',
+      status: 'held_pending_review',
+      reason: SIGNUP_BURST_HOLD_REASONS.generated,
+      triggeredAt: new Date('2026-10-20T12:00:00Z'),
+      cohortUserIds: ['u1', 'u2'],
+      sampleEmails: [],
+      signupCount: 2,
+      ...overrides,
+    });
+    const burstSignal = async (review: SignupDomainReview | null, user: Record<string, unknown> = {}) => {
+      const { adapters, stored, findReview } = setup({ review, user: { email: 'merlin@a.example.net', ...user } });
+      await refreshSignupRiskScore('u1', adapters);
+      return { flagged: !!stored()?.signals.some(s => s.signal === 'burstCohort'), findReview };
+    };
+
+    it('flags an account in the cohort of a held burst, looked up by its registrable domain', async () => {
+      const { flagged, findReview } = await burstSignal(burst());
+
+      expect(flagged).toBe(true);
+      expect(findReview).toHaveBeenCalledWith('example.net');
+    });
+
+    it('flags a later signup on the held domain', async () => {
+      const { flagged } = await burstSignal(burst({ cohortUserIds: ['u2'] }), {
+        createdAt: new Date('2026-10-20T13:00:00Z'),
+      });
+
+      expect(flagged).toBe(true);
+    });
+
+    it.each([
+      ['an account from before the burst', burst({ cohortUserIds: ['u2'] })],
+      ['a burst an admin released', burst({ status: 'released' })],
+      ['a domain-reputation hold', burst({ reason: 'disposable-list' })],
+      ['no hold on the domain', null],
+    ])('leaves %s unflagged', async (_label, review) => {
+      expect((await burstSignal(review)).flagged).toBe(false);
+    });
   });
 
   it('reads the datacenter flag from the signup metadata', async () => {

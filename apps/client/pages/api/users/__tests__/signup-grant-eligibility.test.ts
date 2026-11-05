@@ -26,7 +26,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: mocks.csrf }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: mocks.rate }));
-vi.mock('@server/credits/signupGrantEligibility', () => ({ checkSignupGrantEligibility: mocks.eligibility }));
+vi.mock('@server/credits/activityUnlock', () => ({ unlockSignupGrantFromActivity: mocks.eligibility }));
 await import('../signup-grant-eligibility');
 
 describe('self signup grant eligibility', () => {

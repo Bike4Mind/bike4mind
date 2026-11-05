@@ -182,6 +182,17 @@ describe('signup activity drip', () => {
     expect(await creditsOf(user.id)).toBe(10000);
   });
 
+  it('pays the schedule with no unlock settings stored and writes no retired unlock rows', async () => {
+    expect(Object.keys(config).filter(key => /^(noCardUnlock|signupGrantOrgInvite)/.test(key))).toEqual([]);
+    const user = await createSignupStageUser();
+    expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 1000 });
+    expect(await creditsOf(user.id)).toBe(2000);
+    expect(await dripRows(user.id)).toHaveLength(1);
+    expect(
+      await CreditTransaction.countDocuments({ transactionId: /^unlock-grant:(github_verified|work_email_verified):/ })
+    ).toBe(0);
+  });
+
   it('grants nothing on a same-day rerun and exactly once under concurrent turns', async () => {
     const user = await createSignupStageUser();
     expect(await drip(user.id, 0)).toMatchObject({ creditsGranted: 1000 });

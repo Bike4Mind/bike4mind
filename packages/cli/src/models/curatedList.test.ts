@@ -14,7 +14,7 @@ import {
 import { createCliCuratedList } from './curatedList.js';
 
 const LATEST = 'http://127.0.0.1:4777/curated/latest.json';
-const BUNDLED_SEQUENCE: number = JSON.parse(BUNDLED_CURATED_JSON_TEXT).sequence;
+const BUNDLED_SEQUENCE = loadCuratedManifest(() => {}).sequence;
 const encode = (text: string) => new TextEncoder().encode(text);
 
 // The public test seed, as Desktop's dev build trusts it.
