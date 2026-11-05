@@ -38,10 +38,12 @@ import {
 } from '@bike4mind/database';
 import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { withTransaction } from '@bike4mind/db-core';
 import {
   HELP_DATALAKE_SLUG,
   HELP_DATALAKE_TAG,
   createHelpEmbedder,
+  ensureHelpDataLake,
   ingestHelpDatalake,
 } from '@bike4mind/scripts/help/ingestHelpDatalake';
 import { apiKeyService } from '@bike4mind/services';
@@ -85,6 +87,26 @@ export const HELP_LAKE_BOOTSTRAP_MARKER = 'helpDatalakeBootstrapped';
 
 const markHelpLakeSeen = () => adminSettingsRepository.claimOnce(HELP_LAKE_BOOTSTRAP_MARKER, randomUUID());
 
+const helpLakeDependencies = {
+  db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, dataLakes: dataLakeRepository },
+  logger: {
+    info: (message: string) => logger.info(`[helpDatalakeIngest] ${message}`),
+    warn: (message: string) => logger.warn(`[helpDatalakeIngest] ${message}`),
+  },
+};
+
+async function bootstrapHelpLake(ownerId: string): Promise<boolean> {
+  return withTransaction(async () => {
+    const claimed = await adminSettingsRepository.claimOnce(HELP_LAKE_BOOTSTRAP_MARKER, randomUUID());
+    if (!claimed) return false;
+    // Recheck inside the transaction so a concurrent deletion cannot be reactivated by ensureHelpDataLake.
+    if (await dataLakeRepository.findByDatalakeTag(HELP_DATALAKE_TAG)) return false;
+    const lakeId = await ensureHelpDataLake(helpLakeDependencies, { userId: ownerId });
+    if (!lakeId) throw new Error('Failed to create the system-help data lake');
+    return true;
+  });
+}
+
 const readEmbeddingModel = async (): Promise<SupportedEmbeddingModel | null> => {
   const embeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
   if (embeddingModel && isSupportedEmbeddingModel(embeddingModel)) return embeddingModel;
@@ -114,16 +136,13 @@ async function ingestForOwner(ownerId: string, embeddingModel: SupportedEmbeddin
 
   return ingestHelpDatalake(
     {
-      db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, dataLakes: dataLakeRepository },
+      ...helpLakeDependencies,
       embed,
       embeddingModel: resolvedEmbeddingModel,
-      logger: {
-        info: msg => logger.info(`[helpDatalakeIngest] ${msg}`),
-        warn: msg => logger.warn(`[helpDatalakeIngest] ${msg}`),
-      },
     },
     {
       userId: ownerId,
+      requireActiveLake: true,
       helpIndexPath: path.join(corpusRoot, 'help-index.json'),
       helpContentRoot: path.join(corpusRoot, 'docs'),
     }
@@ -136,7 +155,6 @@ export async function runHelpDatalakeIngest(opts: HelpDatalakeIngestRunOptions):
   const lake = await dataLakeRepository.findBySlug(HELP_DATALAKE_SLUG);
   let ownerId: string;
   let embeddingModel: SupportedEmbeddingModel | null = null;
-  let bootstrapClaimId: string | undefined;
   if (lake) {
     // Owner comes from the lake, never from this function - see the no-bootstrap note above.
     ownerId = lake.createdByUserId;
@@ -157,8 +175,8 @@ export async function runHelpDatalakeIngest(opts: HelpDatalakeIngestRunOptions):
     // Checked before claiming, so a misconfigured install does not burn its one bootstrap.
     embeddingModel = await readEmbeddingModel();
     if (!embeddingModel) return { skipped: 'embedding-model' };
-    bootstrapClaimId = randomUUID();
-    if (!(await adminSettingsRepository.claimOnce(HELP_LAKE_BOOTSTRAP_MARKER, bootstrapClaimId))) {
+    // Commit the lake and its durable marker together, before key lookup or embedding I/O.
+    if (!(await bootstrapHelpLake(bootstrapOwner))) {
       return lakeMissing();
     }
     ownerId = bootstrapOwner;
@@ -168,16 +186,7 @@ export async function runHelpDatalakeIngest(opts: HelpDatalakeIngestRunOptions):
   embeddingModel ??= await readEmbeddingModel();
   if (!embeddingModel) return { skipped: 'embedding-model' };
 
-  let result: Awaited<ReturnType<typeof ingestHelpDatalake>>;
-  try {
-    result = await ingestForOwner(ownerId, embeddingModel, opts.corpusRoot);
-  } catch (err) {
-    // A bootstrap that failed before the lake row existed must not use up the install's one bootstrap.
-    if (bootstrapClaimId && !(await dataLakeRepository.findByDatalakeTag(HELP_DATALAKE_TAG))) {
-      await adminSettingsRepository.releaseClaim(HELP_LAKE_BOOTSTRAP_MARKER, bootstrapClaimId);
-    }
-    throw err;
-  }
+  const result = await ingestForOwner(ownerId, embeddingModel, opts.corpusRoot);
 
   // Drift that the mirror could not close by itself: an indexed article whose markdown is absent
   // from the bundle is the one case a re-run cannot fix, so it is surfaced rather than counted.

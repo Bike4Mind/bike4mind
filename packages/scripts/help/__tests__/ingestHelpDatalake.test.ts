@@ -421,6 +421,31 @@ describe('ingestHelpDatalake', () => {
     });
   });
 
+  it.each([null, { id: 'lake-1', status: 'deleted' }, { id: 'lake-1', status: 'purging' }])(
+    'refuses to recreate or reactivate an unavailable lake on an unattended run: %j',
+    async lake => {
+      writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
+      const h = makeHarness(lake);
+
+      await expect(ingestHelpDatalake(h.deps, { ...opts(), requireActiveLake: true })).rejects.toThrow(
+        'refusing unattended reactivation'
+      );
+
+      expect(h.lakeCreates).toEqual([]);
+      expect(h.lakeUpdates).toEqual([]);
+      expect(h.files).toEqual([]);
+      expect(h.embed).not.toHaveBeenCalled();
+    }
+  );
+
+  it('syncs an active lake on an unattended run', async () => {
+    writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
+    const h = makeHarness();
+
+    expect(await ingestHelpDatalake(h.deps, { ...opts(), requireActiveLake: true })).toMatchObject({ created: 1 });
+    expect(h.lakeCreates).toEqual([]);
+  });
+
   it('reactivates a deleted lake rather than re-creating it into the unique datalakeTag', async () => {
     writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
     const h = makeHarness({ id: 'lake-1', status: 'deleted' });

@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   findByDatalakeTag: vi.fn(),
   getSettingsValue: vi.fn(),
   claimOnce: vi.fn(),
-  releaseClaim: vi.fn(),
+  ensureHelpDataLake: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   createHelpEmbedder: vi.fn(),
   ingestHelpDatalake: vi.fn(),
@@ -20,13 +20,13 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {
     getSettingsValue: h.getSettingsValue,
     claimOnce: h.claimOnce,
-    releaseClaim: h.releaseClaim,
   },
   apiKeyRepository: {},
   dataLakeRepository: { findBySlug: h.findBySlug, findByDatalakeTag: h.findByDatalakeTag },
   fabFileChunkRepository: {},
   fabFileRepository: {},
 }));
+vi.mock('@bike4mind/db-core', () => ({ withTransaction: async (callback: () => Promise<unknown>) => callback() }));
 vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     info = vi.fn();
@@ -39,6 +39,7 @@ vi.mock('@bike4mind/scripts/help/ingestHelpDatalake', () => ({
   HELP_DATALAKE_TAG: 'datalake:system-help',
   createHelpEmbedder: h.createHelpEmbedder,
   ingestHelpDatalake: h.ingestHelpDatalake,
+  ensureHelpDataLake: h.ensureHelpDataLake,
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
@@ -161,6 +162,7 @@ describe('runHelpDatalakeIngest with a bootstrap owner (self-host)', () => {
     h.createHelpEmbedder.mockReturnValue({ embed: vi.fn(), model: 'text-embedding-3-small' });
     h.ingestHelpDatalake.mockResolvedValue(CLEAN_RESULT);
     h.claimOnce.mockResolvedValue(true);
+    h.ensureHelpDataLake.mockResolvedValue('lake-1');
     bootstrapOwnerId.mockResolvedValue('admin-1');
   });
 
@@ -170,7 +172,11 @@ describe('runHelpDatalakeIngest with a bootstrap owner (self-host)', () => {
     expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('admin-1', expect.anything());
     expect(h.ingestHelpDatalake).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ userId: 'admin-1', helpIndexPath: path.join('/corpus', 'help-index.json') })
+      expect.objectContaining({
+        userId: 'admin-1',
+        helpIndexPath: path.join('/corpus', 'help-index.json'),
+        requireActiveLake: true,
+      })
     );
   });
 
@@ -232,22 +238,24 @@ describe('runHelpDatalakeIngest with a bootstrap owner (self-host)', () => {
     expect(h.claimOnce).not.toHaveBeenCalled();
   });
 
-  it('releases the bootstrap when it fails before the lake row exists', async () => {
-    h.ingestHelpDatalake.mockRejectedValue(new Error('embed failed'));
+  it('does not embed when creating the lake fails', async () => {
+    h.ensureHelpDataLake.mockRejectedValueOnce(new Error('lake creation failed'));
 
-    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow('embed failed');
-    const claimId = h.claimOnce.mock.calls[0][1];
-    expect(h.releaseClaim).toHaveBeenCalledWith(HELP_LAKE_BOOTSTRAP_MARKER, claimId);
+    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow(
+      'lake creation failed'
+    );
+    expect(h.ingestHelpDatalake).not.toHaveBeenCalled();
   });
 
-  it('keeps the bootstrap once the lake row exists, even if the run then fails', async () => {
-    h.ingestHelpDatalake.mockImplementation(async () => {
-      h.findByDatalakeTag.mockResolvedValue({ id: 'lake-1', status: 'active' });
-      throw new Error('embed failed');
+  it('creates the lake before resolving embedding credentials', async () => {
+    h.getEffectiveLLMApiKeys.mockImplementationOnce(async () => {
+      expect(h.ensureHelpDataLake).toHaveBeenCalledOnce();
+      throw new Error('key lookup failed');
     });
 
-    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow('embed failed');
-    expect(h.releaseClaim).not.toHaveBeenCalled();
+    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow(
+      'key lookup failed'
+    );
   });
 });
 

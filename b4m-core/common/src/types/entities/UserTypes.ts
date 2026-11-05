@@ -1044,8 +1044,6 @@ export interface IUserRepository
   findCurrentStorageSize: (userId: string) => Promise<number | null>;
   /** One keyset page of user ids in `_id` order, starting after `afterId` (null = first page). */
   listUserIdsAfter: (afterId: string | null, limit: number) => Promise<string[]>;
-  /** The earliest-created admin that is neither banned nor deleted, or null when there is none. */
-  findOldestActiveAdminId: () => Promise<string | null>;
   /**
    * Atomically bump the user's tokenVersion - the server-side session kill switch.
    * Every currently-issued access/refresh token for the user carries the old version and
