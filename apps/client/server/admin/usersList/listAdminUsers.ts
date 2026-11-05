@@ -21,6 +21,7 @@ import { withSafeOrganization } from '@server/utils/toSafeOrganizationSubdocumen
 import { getDomainGroups, SIGNUP_SCAN_LIMIT } from '@server/users/signupAnomaly';
 import { funnelStepUserIds } from '@server/analytics/activationFunnel';
 import { signupVerdictUserIds } from '@server/analytics/signupCohort';
+import { listAiAbuseAdvisories } from '@server/admin/aiAdvisory/aiAbuseAdvisories';
 import { LIVE_API_KEY_STATUS, adminUsersSort, buildAdminUsersMatch, organizationNamesOf } from './adminUsersQuery';
 
 // ms. A list read that runs past this is a filter the indexes cannot serve; fail it rather than queue.
@@ -75,13 +76,16 @@ export async function adminUsersPipeline(
     ? ((await UserApiKey.distinct('userId', { status: LIVE_API_KEY_STATUS })) as unknown[]).map(String)
     : undefined;
   const cohortOptions = { now, deadlineMs: LIST_MAX_TIME_MS };
-  const [verdictUserIds, activeIds, funnelIds] = await Promise.all([
+  const [verdictUserIds, activeIds, funnelIds, aiAbuseUserIds] = await Promise.all([
     filter.verdict
       ? signupVerdictUserIds({ ...cohortWindow(filter, 'verdict'), verdict: filter.verdict }, cohortOptions)
       : undefined,
     filter.activeFrom && filter.activeTo ? activeUserIds(filter.activeFrom, filter.activeTo) : undefined,
     filter.funnelStep
       ? funnelStepUserIds({ ...cohortWindow(filter, 'funnelStep'), step: filter.funnelStep }, cohortOptions)
+      : undefined,
+    filter.aiVerdict
+      ? listAiAbuseAdvisories(now).then(({ advisories }) => advisories.map(advisory => advisory.userId))
       : undefined,
   ]);
   const match = buildAdminUsersMatch(filter, {
@@ -92,6 +96,7 @@ export async function adminUsersPipeline(
     verdictUserIds,
     activeUserIds: activeIds,
     funnelStepUserIds: funnelIds,
+    aiAbuseUserIds,
   });
   // adminUsersQuery builds plain objects so it stays mongoose-free and unit-testable.
   return [{ $match: match }] as unknown as mongoose.PipelineStage[];
