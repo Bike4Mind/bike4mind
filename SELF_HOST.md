@@ -1110,13 +1110,13 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
-To verify the executor end to end, mint an API key (`b4m_live_...`) in the app and run the check against your deployment. It starts an agent run, polls `GET /api/v1/agent-executions/{id}` for that execution ID, and passes only when the run reaches `completed` and its answer echoes a per-run token. A `failed` or `aborted` run fails the check and prints the run's `error`, even though a failed run also saves an error reply into the session:
+To verify the executor end to end, mint an API key (`b4m_live_...`) in the app with the `ai:generate` scope, or `ai:chat` plus `notebooks:write`, and run the check against your deployment. It starts an agent run, polls `GET /api/v1/agent-executions/{id}` for that execution ID, and passes only when the run reaches `completed` and its answer echoes a per-run token. A `failed` or `aborted` run fails the check and prints the run's `error`, even though a failed run also saves an error reply into the session:
 
 ```sh
 BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-agent-run
 ```
 
-It needs a working model provider credential (or local model) in `.env.selfhost`. Optional: `MODEL`, `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). Exit code 0 is pass, 1 is fail, 2 is bad configuration.
+It needs a working model provider credential (or local model) in `.env.selfhost`. Optional: `MODEL`, `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). `RUN_TIMEOUT_MS` bounds the whole check, including each request, and a failure after the run started prints its execution ID. Exit code 0 is pass, 1 is fail, 2 is bad configuration.
 
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
 

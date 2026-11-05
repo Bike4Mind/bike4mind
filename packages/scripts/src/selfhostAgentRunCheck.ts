@@ -6,6 +6,8 @@ export interface AgentRunCheckDeps {
   fetch: typeof fetch;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
+  /** Abort signal firing after `ms`; injectable so tests need no wall-clock time. */
+  timeoutSignal?: (ms: number) => AbortSignal;
 }
 
 export interface AgentRunCheckConfig {
@@ -66,16 +68,48 @@ async function errorText(res: Response): Promise<string> {
   return res.statusText || 'no detail';
 }
 
-/** Starts an agent run, polls it by execution ID, and asserts it completed with the nonce. */
+/** Polls that hit these are retried until the deadline, like a transient proxy or network fault. */
+const RETRYABLE_POLL_STATUSES = new Set([429, 502, 503, 504]);
+
+const isAbort = (err: unknown): boolean =>
+  err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Starts an agent run, polls it by execution ID, and asserts it completed with the nonce.
+ * `timeoutMs` bounds the whole check, including every request. Every failure after the start
+ * carries the execution ID, because the run keeps executing on the server.
+ */
 export async function runSelfhostAgentCheck(
   deps: AgentRunCheckDeps,
   config: AgentRunCheckConfig
 ): Promise<AgentRunCheckResult> {
   const { baseUrl, apiKey, nonce, model, timeoutMs = 300_000, pollIntervalMs = 3_000 } = config;
   const headers = { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+  const timeoutSignal = deps.timeoutSignal ?? ((ms: number) => AbortSignal.timeout(ms));
+  const deadline = deps.now() + timeoutMs;
 
   const call = async (method: string, path: string, body?: unknown): Promise<Response> =>
-    deps.fetch(`${baseUrl}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    deps.fetch(`${baseUrl}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: timeoutSignal(Math.max(1, deadline - deps.now())),
+    });
+
+  let executionId: string | undefined;
+  let lastStatus: unknown;
+  let lastError: string | undefined;
+  const timedOut = (): AgentRunCheckResult => {
+    const seen = lastStatus === undefined ? 'no status observed' : `last status ${String(lastStatus)}`;
+    const err = lastError ? `; last error ${lastError}` : '';
+    return {
+      ok: false,
+      executionId,
+      reason: `timed out after ${Math.round(timeoutMs / 1000)}s; ${seen}${err}`,
+    };
+  };
 
   try {
     const sessionRes = await call('POST', '/api/v1/sessions', { name: `selfhost agent-run check ${nonce}` });
@@ -93,29 +127,34 @@ export async function runSelfhostAgentCheck(
     });
     if (startRes.status !== 202)
       return { ok: false, reason: `start HTTP ${startRes.status}: ${await errorText(startRes)}` };
-    const executionId = ((await startRes.json()) as { id?: unknown }).id;
-    if (typeof executionId !== 'string') return { ok: false, reason: 'start returned no execution id' };
+    const startedId = ((await startRes.json()) as { id?: unknown }).id;
+    if (typeof startedId !== 'string') return { ok: false, reason: 'start returned no execution id' };
+    executionId = startedId;
 
-    const deadline = deps.now() + timeoutMs;
-    let lastStatus: unknown = 'pending';
     while (deps.now() < deadline) {
-      const res = await call('GET', `/api/v1/agent-executions/${encodeURIComponent(executionId)}`);
-      if (res.status === 429) {
+      let polled: PolledExecution;
+      try {
+        const res = await call('GET', `/api/v1/agent-executions/${encodeURIComponent(startedId)}`);
+        if (RETRYABLE_POLL_STATUSES.has(res.status)) {
+          lastError = `HTTP ${res.status}`;
+          await deps.sleep(pollIntervalMs);
+          continue;
+        }
+        if (!res.ok) return { ok: false, executionId, reason: `poll HTTP ${res.status}: ${await errorText(res)}` };
+        polled = (await res.json()) as PolledExecution;
+      } catch (err) {
+        if (isAbort(err)) break;
+        lastError = messageOf(err);
         await deps.sleep(pollIntervalMs);
         continue;
       }
-      if (!res.ok) return { ok: false, executionId, reason: `poll HTTP ${res.status}: ${await errorText(res)}` };
-      const polled = (await res.json()) as PolledExecution;
-      if (!isActive(polled.status)) return evaluateExecution(executionId, polled, nonce);
+      if (!isActive(polled.status)) return evaluateExecution(startedId, polled, nonce);
       lastStatus = polled.status;
       await deps.sleep(pollIntervalMs);
     }
-    return {
-      ok: false,
-      executionId,
-      reason: `timed out after ${Math.round(timeoutMs / 1000)}s; last status ${String(lastStatus)}`,
-    };
+    return timedOut();
   } catch (err) {
-    return { ok: false, reason: `request failed: ${err instanceof Error ? err.message : String(err)}` };
+    if (isAbort(err)) return timedOut();
+    return { ok: false, executionId, reason: `request failed: ${messageOf(err)}` };
   }
 }
