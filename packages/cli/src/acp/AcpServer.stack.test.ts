@@ -38,6 +38,11 @@ vi.mock('../bootstrap/buildLlmBackend.js', () => ({
   })),
 }));
 
+vi.mock('../auth/savedSignIn.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../auth/savedSignIn.js')>();
+  return { ...actual, checkSavedSignIn: vi.fn(actual.checkSavedSignIn) };
+});
+
 vi.mock('../bootstrap/buildSandbox.js', () => ({
   buildSandbox: vi.fn(async () => ({ sandboxOrchestrator: null })),
 }));
@@ -176,22 +181,31 @@ describe('AcpServer agent stack while signed out', () => {
     expect(mergeRemoteSkills).not.toHaveBeenCalled();
   });
 
-  it('builds on local models and clears the saved sign-in when it has expired', async () => {
+  it.each([
+    [{ status: 'expired' } as const, 'Bike4Mind sign-in expired; running on local models.'],
+    [
+      { status: 'unchecked', reason: 'connect ECONNREFUSED' } as const,
+      'Could not check the Bike4Mind sign-in (connect ECONNREFUSED); running on local models for this run.',
+    ],
+  ])('builds on local models and says so on stderr when the saved sign-in is %o', async (signIn, said) => {
     const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
     vi.mocked(buildLlmBackend).mockClear();
-    const { server } = signedOutServer();
-    const internals = server as unknown as StackInternals;
-    const clearAuthTokens = vi.fn(async () => {});
-    internals.configStore = {
-      ...internals.configStore,
-      getAuthTokens: async () => ({ accessToken: 'stale', expiresAt: new Date(Date.now() - 60_000).toISOString() }),
-      clearAuthTokens,
-    };
+    const { checkSavedSignIn } = await import('../auth/savedSignIn.js');
+    vi.mocked(checkSavedSignIn).mockResolvedValueOnce(signIn);
+    let stderr = '';
+    const write = vi.spyOn(process.stderr, 'write').mockImplementation(chunk => {
+      stderr += String(chunk);
+      return true;
+    });
 
-    await buildStack(server);
+    try {
+      await buildStack(serverWithStubbedBootstrap());
+    } finally {
+      write.mockRestore();
+    }
 
     expect(vi.mocked(buildLlmBackend).mock.calls[0][0].apiClient.signedOut).toBe(true);
-    expect(clearAuthTokens).toHaveBeenCalledOnce();
+    expect(stderr).toContain(said);
   });
 
   it('asks for sign-in with what to fix locally when no local model can chat', async () => {

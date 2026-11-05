@@ -4,7 +4,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { startFakeServer, startFakeVllm } from '@bike4mind/local-models/testing';
+import { json as fakeJson, startFakeServer, startFakeVllm } from '@bike4mind/local-models/testing';
 import { signedOutHeadlessCloudModelMessage } from '../bootstrap/signedOutLocal.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { handleHeadlessCommand } from './headlessCommand.js';
@@ -52,6 +52,13 @@ let nodeRequests: string[];
 let passThrough: string[];
 let fetchMock: ReturnType<typeof ollamaFetch>;
 const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+
+/** axios hands http.request an options object rather than a URL. */
+function requestUrl(target: unknown): string {
+  if (typeof target === 'string' || target instanceof URL) return String(target);
+  const { protocol = 'http:', hostname, host, port, path: pathname = '/' } = target as http.RequestOptions;
+  return `${protocol}//${hostname ?? host}${port ? `:${port}` : ''}${pathname}`;
+}
 const realFetch = globalThis.fetch;
 
 beforeEach(async () => {
@@ -80,7 +87,7 @@ beforeEach(async () => {
   passThrough = [];
   const realHttpRequest = http.request;
   vi.spyOn(http, 'request').mockImplementation(((...args: Parameters<typeof http.request>) => {
-    const url = String(args[0]);
+    const url = requestUrl(args[0]);
     if (passThrough.some(origin => url.startsWith(`${origin}/`))) return realHttpRequest(...args);
     nodeRequests.push(`http:${url}`);
     throw new Error('network is off in this test');
@@ -117,7 +124,7 @@ async function saveServer(baseUrl: string, auth: 'none' | 'bearer' = 'none'): Pr
 
 /** `models` null means no Ollama answers; `local` origins (fake model servers) reach the real network. */
 async function runSignedOut(
-  config: { defaultModel: string; localDefaultModel?: string },
+  config: { defaultModel: string; localDefaultModel?: string; apiConfig?: { customUrl: string } },
   models: string[] | null,
   local: string[] = []
 ) {
@@ -158,22 +165,40 @@ describe('b4m -p while signed out', () => {
     expect(fetchMock.mock.calls.some(([request]) => String(request).endsWith('/api/chat'))).toBe(true);
   }, 30_000);
 
-  it('runs on local models when the saved sign-in has expired, and clears it', async () => {
-    await new ConfigStore().setAuthTokens({
-      accessToken: 'stale',
-      refreshToken: 'stale-refresh',
-      expiresAt: new Date(Date.now() - 60_000).toISOString(),
-      userId: 'u1',
-    });
+  it.each([
+    [400, 'Bike4Mind sign-in expired; running on local models.', false],
+    [503, 'Could not check the Bike4Mind sign-in (', true],
+  ])(
+    'runs on local models when the expired access token cannot be refreshed (HTTP %i)',
+    async (status, said, kept) => {
+      const auth = await startFakeServer({ 'POST /api/oauth/refresh': fakeJson({ error: 'invalid_grant' }, status) });
+      try {
+        const stale = {
+          accessToken: 'stale',
+          refreshToken: 'stale-refresh',
+          expiresAt: new Date(Date.now() - 60_000).toISOString(),
+          userId: 'u1',
+        };
+        await new ConfigStore().setAuthTokens(stale);
 
-    const output = await runSignedOut({ defaultModel: LOCAL_MODEL }, [LOCAL_MODEL]);
+        const output = await runSignedOut(
+          { defaultModel: LOCAL_MODEL, apiConfig: { customUrl: auth.baseUrl } },
+          [LOCAL_MODEL],
+          [auth.baseUrl]
+        );
 
-    expect(output.error).toBeUndefined();
-    expect(output.result).toContain('hello from ollama');
-    expect(exitCodes).toEqual([0]);
-    expect(stderr).toContain('Bike4Mind sign-in expired; running on local models.');
-    expect(await new ConfigStore().getAuthTokens()).toBeNull();
-  }, 30_000);
+        expect(output.error).toBeUndefined();
+        expect(output.result).toContain('hello from ollama');
+        expect(exitCodes).toEqual([0]);
+        expect(stderr).toContain(said);
+        expect(auth.requests.map(request => request.path)).toEqual(['/api/oauth/refresh']);
+        expect(await new ConfigStore().getAuthTokens()).toEqual(kept ? stale : null);
+      } finally {
+        await auth.close();
+      }
+    },
+    30_000
+  );
 
   it('says how to sign in when the default is a cloud model', async () => {
     const output = await runSignedOut({ defaultModel: CLOUD_MODEL }, [LOCAL_MODEL]);

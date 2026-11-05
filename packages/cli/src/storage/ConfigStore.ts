@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
 import { isAuthTokenValid, swapActiveEnvAuth } from '@bike4mind/client-auth';
-import type { CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
+import type { AuthTokens, CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
 import { getDefaultApiUrl, LOCAL_DEV_URL, getEnvironmentName } from '../utils/apiUrl';
 import {
   DEFAULT_SANDBOX_CONFIG,
@@ -1679,6 +1679,28 @@ export class ConfigStore {
     await this.load();
     this.globalConfig!.auth = undefined;
     await this.save();
+  }
+
+  /**
+   * The saved sign-in as the file holds it now, which another b4m process may have refreshed or cleared since
+   * this store loaded; later reads return it too. The token refresh reads through this before it saves or clears.
+   */
+  async reloadAuthTokens(): Promise<AuthTokens | null> {
+    const config = await this.load();
+    let auth: AuthTokens | undefined;
+    try {
+      const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as { auth?: unknown };
+      auth = raw.auth === undefined ? undefined : AuthTokensSchema.parse(raw.auth);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(
+          `Could not read the saved sign-in from ${this.configPath}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+    this.globalConfig!.auth = auth;
+    config.auth = auth;
+    return auth ?? null;
   }
 
   /**

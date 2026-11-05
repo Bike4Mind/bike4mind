@@ -198,7 +198,10 @@ import {
   SIGNED_OUT_BANNER,
   signedOutCommandMessage,
   signedOutNoMatchMessage,
+  signInUncheckedLoginMessage,
+  signInUncheckedMessage,
 } from './bootstrap/signedOutLocal.js';
+import { checkSavedSignIn } from './auth/savedSignIn.js';
 import { extractErrorMessage } from '@bike4mind/utils';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
@@ -599,10 +602,13 @@ function CliApp() {
 
       // Validate authentication tokens on startup - auto-trigger login if needed
       const authTokens = await state.configStore.getAuthTokens();
-      const tokenExpired = authTokens ? new Date(authTokens.expiresAt) <= new Date() : false;
 
       // A signed-in install predating the marker has already chosen a backend.
       if (authTokens && !config.apiConfig?.endpointChosen) await state.configStore.markEndpointChosen();
+
+      const signIn = await checkSavedSignIn(state.configStore, rejected =>
+        new ApiClient(requireApiUrl(config.apiConfig), state.configStore).refreshSession(rejected)
+      );
 
       // Token getter for the feature-event WebSocket auth
       const tokenGetter = async (): Promise<string | null> => {
@@ -636,7 +642,7 @@ function CliApp() {
       // sign-in flow below take over.
       let signedOutBackend: BuildLlmBackendResult | null = null;
       let noLocalModelsReason: string | null = null;
-      const signedOutClient = authTokens && !tokenExpired ? null : ApiClient.whileSignedOut(state.configStore);
+      const signedOutClient = signIn.status === 'signed-in' ? null : ApiClient.whileSignedOut(state.configStore);
       if (signedOutClient) {
         try {
           signedOutBackend = await buildLlmBackend({ ...backendInput, apiClient: signedOutClient });
@@ -648,8 +654,8 @@ function CliApp() {
 
       let apiClient: ApiClient;
       let backend: BuildLlmBackendResult;
-      if (authTokens && !tokenExpired) {
-        const expiresAt = new Date(authTokens.expiresAt);
+      if (signIn.status === 'signed-in') {
+        const expiresAt = new Date(signIn.tokens.expiresAt);
         const daysUntilExpiry = Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
         startupLog.push(
           `\u{2705} Authenticated (expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''})`
@@ -694,10 +700,8 @@ function CliApp() {
       } else if (signedOutClient && signedOutBackend) {
         apiClient = signedOutClient;
         backend = signedOutBackend;
-        if (tokenExpired) {
-          await state.configStore.clearAuthTokens();
-          startupLog.unshift(SIGN_IN_EXPIRED);
-        }
+        if (signIn.status === 'expired') startupLog.unshift(SIGN_IN_EXPIRED);
+        if (signIn.status === 'unchecked') startupLog.unshift(signInUncheckedMessage(signIn.reason));
         startupLog.unshift(SIGNED_OUT_BANNER);
         if (config.features?.tavern || config.features?.hearth) {
           startupLog.push('Tavern and Hearth are Bike4Mind cloud features; they stay off while signed out.');
@@ -718,10 +722,11 @@ function CliApp() {
           return;
         }
 
-        if (tokenExpired) {
+        if (signIn.status === 'expired') {
           // Returning user with expired token - auto-trigger re-authentication
           console.log("\n🔐 Your session has expired. Let's re-authenticate.\n");
-          await state.configStore.clearAuthTokens();
+        } else if (signIn.status === 'unchecked') {
+          console.log(`\n${signInUncheckedLoginMessage(signIn.reason)}\n`);
         } else {
           // Signed out with nothing local to chat with - auto-trigger login flow
           console.log('\n\u{1f510} Welcome to B4M CLI! Sign in to use Bike4Mind cloud models.\n');

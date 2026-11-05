@@ -35,7 +35,12 @@ import { ToolCatalog, type PermissionPromptKind } from '../tools/gateway/index.j
 import { logger } from '../utils/Logger';
 
 import { buildLlmBackend } from '../bootstrap/buildLlmBackend.js';
-import { NoLocalModelsError } from '../bootstrap/signedOutLocal.js';
+import {
+  NoLocalModelsError,
+  SIGN_IN_EXPIRED_HEADLESS,
+  signInUncheckedHeadlessMessage,
+} from '../bootstrap/signedOutLocal.js';
+import { checkSavedSignIn } from '../auth/savedSignIn.js';
 import { buildSandbox } from '../bootstrap/buildSandbox.js';
 import { buildSupportingStores } from '../bootstrap/buildSupportingStores.js';
 import { buildAgent } from '../bootstrap/buildAgent.js';
@@ -541,13 +546,16 @@ export class AcpServer {
     this.configStore.warnPendingMcpApprovals();
     await this.loadCustomCommands();
 
-    const authTokens = await this.configStore.getAuthTokens();
-    const tokenExpired = authTokens !== null && new Date(authTokens.expiresAt) <= new Date();
-    if (tokenExpired) await this.configStore.clearAuthTokens();
+    const signIn = await checkSavedSignIn(this.configStore, rejected =>
+      new ApiClient(requireApiUrl(config.apiConfig), this.configStore).refreshSession(rejected)
+    );
+    // stdout carries the protocol; stderr is what an ACP client shows in its agent log.
+    if (signIn.status === 'expired') process.stderr.write(`${SIGN_IN_EXPIRED_HEADLESS}\n`);
+    if (signIn.status === 'unchecked') process.stderr.write(`${signInUncheckedHeadlessMessage(signIn.reason)}\n`);
 
     // Signed out, the stack runs on local models only and sends nothing to Bike4Mind.
     const apiClient =
-      authTokens && !tokenExpired
+      signIn.status === 'signed-in'
         ? new ApiClient(requireApiUrl(config.apiConfig), this.configStore)
         : ApiClient.whileSignedOut(this.configStore);
     const tokenGetter = async () => (await this.configStore.getAuthTokens())?.accessToken ?? null;

@@ -39,6 +39,20 @@ export const SIGN_IN_EXPIRED =
 
 export const SIGN_IN_EXPIRED_HEADLESS = `Bike4Mind sign-in expired; running on local models. ${SIGN_IN_OUTSIDE_HINT}`;
 
+/** The saved sign-in could not be refreshed (network, timeout, server error) and is kept for the next run. */
+export function signInUncheckedMessage(reason: string): string {
+  return `Could not check your Bike4Mind sign-in (${clean(reason)}); chatting with local models for now. Restart b4m to try again.`;
+}
+
+/** As `signInUncheckedMessage`, when nothing local can chat and the sign-in flow starts instead. */
+export function signInUncheckedLoginMessage(reason: string): string {
+  return `Could not check your Bike4Mind sign-in (${clean(reason)}). Sign in to continue, or restart b4m to try again.`;
+}
+
+export function signInUncheckedHeadlessMessage(reason: string): string {
+  return `Could not check the Bike4Mind sign-in (${clean(reason)}); running on local models for this run.`;
+}
+
 /**
  * Headless (`-p`) runs signed out never swap a cloud default for a local model on their own, unless a local
  * default was saved; this is the error when none was.
