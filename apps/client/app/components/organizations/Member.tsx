@@ -53,8 +53,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   const [modalSearch, setModalSearch] = useState('');
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const params: IGetUsersParams = useMemo(
-    () => ({ search: modalSearch, page: 1, limit: 10, publicView: true }),
-    [modalSearch]
+    () => ({
+      search: modalSearch,
+      page: 1,
+      limit: 10,
+      publicView: true,
+      pendingInviteOrganizationId: organization.id,
+    }),
+    [modalSearch, organization.id]
   );
   const { data: usersData, isFetching } = useGetUsers(params, { enabled: modalSearch.length >= 3 });
 
@@ -167,6 +173,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     [organization.id, permissions.value, shareDocument]
   );
 
+  const pendingEmails = useMemo(
+    () =>
+      new Set(
+        (pendingInvites ?? []).flatMap(invite => invite.recipients?.pending ?? []).map(email => email.toLowerCase())
+      ),
+    [pendingInvites]
+  );
+
   const renderNoResults = useCallback(
     (term: string) => {
       const email = term.trim().toLowerCase();
@@ -175,6 +189,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         !isFetching &&
         z.email().safeParse(email).success &&
         email !== currentUser?.email?.toLowerCase() &&
+        !pendingEmails.has(email) &&
         canInviteMembers &&
         hasAvailableSeats;
       return (
@@ -204,6 +219,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
       modalSearch,
       isFetching,
       currentUser?.email,
+      pendingEmails,
       canInviteMembers,
       hasAvailableSeats,
       shareDocument,
@@ -230,11 +246,12 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   }, [organization.users, pendingInvites]);
 
   const getInviteStatus = useCallback(
-    (user: any) => {
+    (user: { id: string; email?: string | null; username?: string; pendingInvite?: boolean }) => {
+      if (user.pendingInvite) return 'pending' as const;
       return (
         alreadyInvitedUsers.get(user.id) ||
         alreadyInvitedUsers.get(user.email?.toLowerCase() ?? '') ||
-        alreadyInvitedUsers.get(user.username) ||
+        alreadyInvitedUsers.get(user.username ?? '') ||
         undefined
       );
     },

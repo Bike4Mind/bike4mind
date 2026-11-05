@@ -439,10 +439,10 @@ export function useOrganizationInvites(organizationId: string | null | undefined
     queryKey: ['organizations', organizationId, 'invites'],
     queryFn: async () => {
       const response = await api.get<ISharerInviteView[]>(`/api/organizations/${organizationId}/invites`);
-      return response.data.filter(
-        invite => invite.remaining > 0 && (!invite.expiresAt || new Date(invite.expiresAt) > new Date())
-      );
+      return response.data;
     },
+    select: invites =>
+      invites.filter(invite => invite.remaining > 0 && (!invite.expiresAt || new Date(invite.expiresAt) > new Date())),
     enabled: !!organizationId,
   });
 }

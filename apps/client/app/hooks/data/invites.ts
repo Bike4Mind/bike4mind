@@ -7,11 +7,33 @@ import {
   refuseDocument,
   shareDocument,
 } from '@client/app/utils/invitesAPICalls';
-import { useMutation, UseMutationOptions, useQuery, useQueryClient, UseQueryOptions } from '@tanstack/react-query';
+import {
+  useMutation,
+  UseMutationOptions,
+  useQuery,
+  useQueryClient,
+  UseQueryOptions,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { InviteType } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
+
+function invalidateOrganizationInviteeSearch(queryClient: QueryClient, organizationId?: string) {
+  return queryClient.invalidateQueries({
+    queryKey: ['users'],
+    predicate: query => {
+      const parameters = query.queryKey[1];
+      return (
+        typeof parameters === 'object' &&
+        parameters !== null &&
+        'pendingInviteOrganizationId' in parameters &&
+        (organizationId === undefined || parameters.pendingInviteOrganizationId === organizationId)
+      );
+    },
+  });
+}
 
 interface DataInput {
   description?: string | null;
@@ -65,8 +87,9 @@ export function useShareDocument({
 
   return useMutation({
     mutationFn: async (data: DataInput) => await shareDocument(data),
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       queryClient.invalidateQueries({ queryKey: ['invites/share'] });
+      if (variables.type === InviteType.Organization) invalidateOrganizationInviteeSearch(queryClient, variables.id);
       if (onSuccess) {
         onSuccess();
       } else {
@@ -110,6 +133,7 @@ export function useAcceptDocument({
           toast.success('Successfully joined the project');
           break;
         case InviteType.Organization:
+          invalidateOrganizationInviteeSearch(queryClient, result.documentId);
           queryClient.invalidateQueries({ queryKey: ['organizations', result.documentId] });
           queryClient.invalidateQueries({ queryKey: ['users', 'organization', result.documentId] });
           toast.success('Successfully joined the organization');
@@ -150,6 +174,7 @@ export function useRefuseDocument({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invites/refuse'] });
       queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] });
+      invalidateOrganizationInviteeSearch(queryClient);
       toast.success('Document share refused successfully');
       if (onSuccess) onSuccess();
     },
@@ -164,19 +189,21 @@ export function useRefuseDocument({
 
 export const useDeleteInvite = (options?: UseMutationOptions<void, Error, { id: string }>) => {
   const { onSuccess, onError } = options || {};
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async ({ id }: { id: string }) => {
       await api.delete(`/api/invites/${id}`);
-    },
-    onSuccess: (...args) => {
-      if (onSuccess) onSuccess(...args);
-      toast.success('Invite deleted successfully');
     },
     onError: (...args) => {
       if (onError) onError(...args);
       toast.error('Failed to delete invite');
     },
     ...options,
+    onSuccess: (...args) => {
+      invalidateOrganizationInviteeSearch(queryClient);
+      if (onSuccess) return onSuccess(...args);
+      toast.success('Invite deleted successfully');
+    },
   });
 };
 
@@ -185,6 +212,7 @@ export const useCancelInvite = (callbacks: {
   onError?: (err: Error) => void;
   onSettled?: () => void;
 }) => {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (params: { id: string; type: InviteType; email?: string; userId?: string }) => {
       // Deliberately the raw InviteType, not the lowercase alias GET/POST use: static routes such
@@ -194,7 +222,8 @@ export const useCancelInvite = (callbacks: {
         data: { email: params.email, userId: params.userId },
       });
     },
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
+      if (variables.type === InviteType.Organization) invalidateOrganizationInviteeSearch(queryClient, variables.id);
       if (callbacks.onSuccess) callbacks.onSuccess();
     },
     onError: err => {

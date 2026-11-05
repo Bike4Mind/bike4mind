@@ -71,6 +71,8 @@ export const createInvite = async (
   let doc: IFabFileDocument | ISessionDocument | IOrganizationDocument | IGroupDocument | IProjectDocument | null =
     null;
   let name: string | undefined = '';
+  let organizationForInvite: IOrganizationDocument | null = null;
+  let pendingOrganizationRecipients: string[] = [];
 
   switch (type) {
     case InviteType.FabFile:
@@ -81,11 +83,14 @@ export const createInvite = async (
       doc = await db.sessions.shareable.findShareAccessById(user, id);
       name = doc?.name;
       break;
-    case InviteType.Organization:
-      doc = await inviteToOrg(user, { id, recipients }, db);
-
+    case InviteType.Organization: {
+      const organizationInvite = await inviteToOrg(user, { id, recipients }, db);
+      organizationForInvite = organizationInvite.organization;
+      doc = organizationForInvite;
+      pendingOrganizationRecipients = organizationInvite.pendingRecipients;
       name = doc?.name;
       break;
+    }
     case InviteType.Group: {
       if (!rest.permissions) throw new BadRequestError('Invalid invite group request');
       const group = await db.groups.findById(id);
@@ -233,6 +238,19 @@ export const createInvite = async (
     }
   }
 
+  if (organizationForInvite) {
+    pending = Array.from(new Set(pending.map(email => email.trim().toLowerCase())));
+    const alreadyInvited = new Set(pendingOrganizationRecipients.map(email => email.trim().toLowerCase()));
+    if (pending.some(email => alreadyInvited.has(email))) {
+      throw new BadRequestError('A recipient already has a pending organization invitation');
+    }
+    // The owner holds a seat outside users[].
+    const totalUsers = organizationForInvite.users.length + 1;
+    if (totalUsers + pendingOrganizationRecipients.length + pending.length > organizationForInvite.seats) {
+      throw new BadRequestError('Organization is full');
+    }
+  }
+
   // Only an address the inviter typed may be shown back to them; anything resolved from an id or a
   // username is withheld by the sharer-facing invite views. Recorded against `pending` so a typed
   // address that matched nobody is not listed.
@@ -295,27 +313,16 @@ const inviteToOrg = async (
   if (!isOrgMember(user, organization)) throw new BadRequestError('Organization not found');
   assertCanManageOrgGroups(user, organization);
 
-  // We add 1 to include the owner of the organization
-  const totalUsers = (organization.users.length ?? 0) + 1;
-
-  if (totalUsers + params.recipients.length > organization.seats) {
-    throw new BadRequestError('Organization is full');
-  }
-
   const invites = await db.invites.findAllByDocumentId(organization.id);
   const now = new Date();
-  const pending = invites
+  const pendingRecipients = invites
     .filter(
       invite =>
         invite.type === InviteType.Organization &&
         invite.remaining > 0 &&
         (!invite.expiresAt || new Date(invite.expiresAt) > now)
     )
-    .reduce((count, invite) => count + (invite.recipients?.pending?.length ?? 0), 0);
+    .flatMap(invite => invite.recipients?.pending ?? []);
 
-  if (totalUsers + pending + params.recipients.length > organization.seats) {
-    throw new BadRequestError('Organization is full');
-  }
-
-  return organization;
+  return { organization, pendingRecipients };
 };

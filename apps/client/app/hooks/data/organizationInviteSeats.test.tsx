@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -20,6 +20,10 @@ beforeEach(() => {
   get.mockReset();
   organizationUsers.mockReset();
   organizationUsers.mockReturnValue({ data: [{ id: 'member' }, { id: 'owner' }] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('organization invitation seats', () => {
@@ -47,6 +51,30 @@ describe('organization invitation seats', () => {
     expect(result.current.currentSeats).toBe(4);
     expect(result.current.availableSeats).toBe(1);
     expect(get).toHaveBeenCalledWith('/api/organizations/organization/invites');
+  });
+
+  it('drops a cached invitation after expiry on rerender without refetching', async () => {
+    const now = new Date('2026-11-05T00:00:00Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    get.mockResolvedValue({
+      data: [
+        {
+          id: 'expiring',
+          remaining: 1,
+          expiresAt: '2026-11-05T00:01:00Z',
+          recipients: { pending: ['one@example.test'] },
+        },
+      ],
+    });
+    const { result, rerender } = renderHook(() => useOrganizationInvites('organization'), { wrapper: createWrapper() });
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+
+    vi.setSystemTime(new Date(now.getTime() + 60_000));
+    rerender();
+
+    expect(result.current.data).toEqual([]);
+    expect(get).toHaveBeenCalledTimes(1);
   });
 
   it('does not request invitations without an organization', () => {

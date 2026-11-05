@@ -9,13 +9,14 @@ import OrganizationMembers from './Member';
 
 const mocks = vi.hoisted(() => ({
   share: vi.fn(),
+  search: vi.fn(),
   cancel: vi.fn(),
   invitations: [] as { id: string; recipients: { pending: string[] } }[],
   viewerId: 'viewer',
   viewer: undefined as { id: string; isAdmin: boolean } | null | undefined,
   members: [] as { id: string; name: string }[],
   pending: [] as { id: string; name: string }[],
-  searchUsers: [] as { id: string; name: string; username: string; email?: string }[],
+  searchUsers: [] as { id: string; name: string; username?: string; pendingInvite?: boolean }[],
   seats: { maxSeats: 0, currentSeats: 0, availableSeats: 0 },
 }));
 
@@ -27,7 +28,10 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => ({ data: mocks.members }),
   useGetPendingOrganizationUsers: () => ({ data: mocks.pending }),
-  useGetUsers: () => ({ data: { users: mocks.searchUsers }, isFetching: false }),
+  useGetUsers: (parameters: unknown) => {
+    mocks.search(parameters);
+    return { data: { users: mocks.searchUsers }, isFetching: false };
+  },
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({
   useShareDocument: () => ({ mutate: mocks.share, isPending: false }),
@@ -280,6 +284,7 @@ describe('OrganizationMembers email invitations', () => {
     mocks.invitations = [];
     mocks.seats = { maxSeats: 3, currentSeats: 1, availableSeats: 2 };
     mocks.share.mockClear();
+    mocks.search.mockClear();
     mocks.cancel.mockClear();
   });
 
@@ -333,15 +338,26 @@ describe('OrganizationMembers email invitations', () => {
     expect(mocks.share).toHaveBeenCalledWith(expect.objectContaining({ recipients: ['expired-user'] }));
   });
 
-  it.each(['active-user', 'ACTIVE@EXAMPLE.TEST'])('keeps an active invitation to %s pending in search', recipient => {
-    mocks.searchUsers = [
-      { id: 'active-user', name: 'Active User', username: 'active-user', email: 'active@example.test' },
-    ];
-    mocks.invitations = [{ id: 'active', recipients: { pending: [recipient] } }];
+  it('keeps an active invitation to a registered user pending without exposing their email', () => {
+    mocks.searchUsers = [{ id: 'active-user', name: 'Active User', pendingInvite: true }];
+    mocks.invitations = [{ id: 'active', recipients: { pending: ['ACTIVE@EXAMPLE.TEST'] } }];
     renderMembers(buildOrg({}));
     const candidate = screen.getByTestId('candidate-active-user');
     expect(candidate).toHaveAttribute('data-invite-status', 'pending');
     expect(candidate).toBeDisabled();
+  });
+
+  it('does not offer another invitation to an already pending email', async () => {
+    mocks.invitations = [{ id: 'pending', recipients: { pending: ['NEW@EXAMPLE.TEST'] } }];
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('search-email'));
+    await waitFor(() => {
+      expect(mocks.search).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: 'new@example.test', pendingInviteOrganizationId: 'org1' })
+      );
+    });
+    expect(screen.queryByTestId('organization-invite-by-email-btn')).toBeNull();
+    expect(mocks.share).not.toHaveBeenCalled();
   });
 
   it('offers no email invitation when all seats are reserved', () => {
