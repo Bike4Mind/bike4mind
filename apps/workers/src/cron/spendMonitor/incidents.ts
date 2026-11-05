@@ -81,7 +81,8 @@ const alreadyEvaluated = (alert: SpendAlertRecord, windowEnd: Date): boolean =>
  * Pure transition of the active incidents given the breaches of the window ending at `windowEnd`. An
  * incident already evaluated for that window is skipped (a Lambda retry or an overlapping run), but
  * still blocks a duplicate open. A spike incident whose scope now carries a ceiling breach, and any key
- * in `superseded`, resolves silently. A resolve patch does not clear openKey: the caller must also unset it
+ * in `superseded`, resolves silently; a spike does not open while its scope's ceiling incident stays active.
+ * A resolve patch does not clear openKey: the caller must also unset it
  * so the key frees up for the next incident.
  */
 export function decideIncidents(
@@ -111,8 +112,16 @@ export function decideIncidents(
     decisions.push(breach ? decideForBreach(alert, breach, windowEnd) : decideForClearRun(alert, now, windowEnd));
   }
 
+  const resolvingIds = new Set(decisions.flatMap(d => (d.kind === 'resolve' ? [d.id] : [])));
+  const activeCeilingScopes = new Set(
+    active
+      .filter(alert => CEILING_RULES.has(alert.rule) && !resolvingIds.has(alert.id))
+      .map(alert => `${alert.scopeType}:${alert.scopeId}`)
+  );
+
   for (const [key, breach] of breachesByKey) {
     if (activeKeys.has(key)) continue;
+    if (SPIKE_RULES.has(breach.rule) && activeCeilingScopes.has(`${breach.scopeType}:${breach.scopeId}`)) continue;
     decisions.push({
       kind: 'open',
       alert: {

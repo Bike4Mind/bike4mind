@@ -293,6 +293,30 @@ describe('decideIncidents', () => {
       expect(decision).toMatchObject({ kind: 'update', id: 'a1' });
     });
 
+    it('does not open a spike while the same scope still has an active ceiling incident', () => {
+      const ceilingAlert = active({ id: 'a2', rule: 'account_ceiling', openKey: 'account_ceiling:User:u1' });
+      const decisions = decideIncidents([ceilingAlert], [breach()], now, windowEnd);
+
+      expect(decisions).toEqual([
+        expect.objectContaining({ kind: 'update', id: 'a2', patch: expect.objectContaining({ clearRuns: 1 }) }),
+      ]);
+    });
+
+    it('opens the spike once the ceiling incident resolves', () => {
+      const ceilingAlert = active({
+        id: 'a2',
+        rule: 'account_ceiling',
+        openKey: 'account_ceiling:User:u1',
+        clearRuns: 1,
+      });
+      const decisions = decideIncidents([ceilingAlert], [breach()], now, windowEnd);
+
+      expect(decisions).toEqual([
+        expect.objectContaining({ kind: 'resolve', id: 'a2' }),
+        expect.objectContaining({ kind: 'open', alert: expect.objectContaining({ rule: 'account_spike' }) }),
+      ]);
+    });
+
     it('writes viaKeys into the context on open and on a breach patch', () => {
       const withKeys = { ...ceiling, viaKeys: ['ci-key'] };
       const [opened] = decideIncidents([], [withKeys], now, windowEnd);

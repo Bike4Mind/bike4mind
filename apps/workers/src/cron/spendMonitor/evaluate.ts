@@ -213,9 +213,24 @@ const PAYER_RULE: Partial<Record<SpendRuleId, SpendRuleId>> = {
 };
 const KEY_RULES: SpendRuleId[] = ['apikey_spike', 'apikey_ceiling'];
 
+/** True while the payer's incident that already folded this key is still active (clearing or not). */
+const payerIncidentNamesKey = (
+  active: SpendAlertRecord[],
+  payerType: string,
+  payerId: string,
+  keyName: string
+): boolean =>
+  active.some(
+    alert =>
+      alert.scopeType === payerType &&
+      alert.scopeId === payerId &&
+      Array.isArray(alert.context.viaKeys) &&
+      (alert.context.viaKeys as unknown[]).includes(keyName)
+  );
+
 /**
  * Drops an api key breach when its paying user or organization breached the same rule kind this run,
- * naming the key on the payer's breach instead. Best effort: a failed lookup leaves the breaches as they were.
+ * naming the key on the payer's breach instead, or while a payer incident that already names the key is active. Best effort: a failed lookup leaves the breaches as they were.
  */
 async function foldKeyBreaches(
   breaches: SpendBreach[],
@@ -241,12 +256,16 @@ async function foldKeyBreaches(
       const scope = resolved.get(scopeMapKey(keyBreach.scopeType, keyBreach.scopeId));
       const payerRule = PAYER_RULE[keyBreach.rule];
       if (!scope?.payerId || scope.payerType === 'unknown' || !payerRule) continue;
+      const keyName = scope.name ?? keyBreach.scopeId;
       const payer = breaches.find(
         b => b.rule === payerRule && b.scopeType === scope.payerType && b.scopeId === scope.payerId
       );
-      if (!payer) continue;
+      if (payer) {
+        viaKeys.set(payer, [...(viaKeys.get(payer) ?? []), keyName]);
+      } else if (!payerIncidentNamesKey(active, scope.payerType, scope.payerId, keyName)) {
+        continue;
+      }
       folded.add(keyBreach);
-      viaKeys.set(payer, [...(viaKeys.get(payer) ?? []), scope.name ?? keyBreach.scopeId]);
       for (const rule of KEY_RULES) {
         const key = spendAlertOpenKey(rule, keyBreach.scopeType, keyBreach.scopeId);
         if (activeKeys.has(key)) superseded.add(key);
