@@ -250,6 +250,67 @@ describe('permanent personal-content purge', () => {
     ).toBeNull();
   });
 
+  it('removes provider keys, project-minted grants and Slack selections of removed agents', async () => {
+    const projectId = new mongoose.Types.ObjectId();
+    const otherProjectId = new mongoose.Types.ObjectId();
+    const orgFileId = new mongoose.Types.ObjectId();
+    const orgNotebookId = new mongoose.Types.ObjectId();
+    const agentId = new mongoose.Types.ObjectId();
+    const orgAgentId = new mongoose.Types.ObjectId();
+    const memberId = new mongoose.Types.ObjectId().toString();
+    await collection('ApiKey').insertMany([
+      { userId: ownerId, type: 'openai', apiKey: 'ciphertext', deletedAt: new Date() },
+      { userId: otherOwnerId, type: 'openai', apiKey: 'other ciphertext' },
+    ]);
+    await collection('Project').insertMany([
+      { _id: projectId, userId: ownerId, name: 'shared project', users: [{ userId: memberId }] },
+      { _id: otherProjectId, userId: otherOwnerId, name: 'other project' },
+    ]);
+    const grants = [
+      { userId: memberId, projectId: String(projectId) },
+      { userId: memberId, projectId: String(otherProjectId) },
+      { userId: memberId },
+    ];
+    await collection('FabFile').insertOne({
+      _id: orgFileId,
+      userId: otherOwnerId,
+      organizationId: 'org-1',
+      users: grants,
+    });
+    await collection(Session.modelName).insertOne({
+      _id: orgNotebookId,
+      userId: otherOwnerId,
+      organizationId: 'org-1',
+      users: grants,
+    });
+    await collection('Agent').insertMany([
+      { _id: agentId, userId: ownerId, name: 'personal agent', deletedAt: new Date() },
+      { _id: orgAgentId, userId: ownerId, organizationId: 'org-1', name: 'org agent' },
+    ]);
+    await collection('User').insertMany([
+      { email: 'a@example.test', slackSettings: { customAgentId: String(agentId) } },
+      { email: 'b@example.test', slackSettings: { customAgentId: String(orgAgentId) } },
+    ]);
+
+    await purgeAccountContent(ownerId, { logger, assertLease });
+    await purgeAccountContent(ownerId, { logger, assertLease });
+
+    expect(await collection('ApiKey').countDocuments({ userId: ownerId })).toBe(0);
+    expect(await collection('ApiKey').countDocuments({ userId: otherOwnerId })).toBe(1);
+    expect(await collection('Project').findOne({ _id: projectId })).toBeNull();
+    const survivingGrants = [{ userId: memberId, projectId: String(otherProjectId) }, { userId: memberId }];
+    expect(await collection('FabFile').findOne({ _id: orgFileId })).toMatchObject({ users: survivingGrants });
+    expect(await collection(Session.modelName).findOne({ _id: orgNotebookId })).toMatchObject({
+      users: survivingGrants,
+    });
+    expect(await collection('Agent').findOne({ _id: agentId })).toBeNull();
+    expect(await collection('Agent').findOne({ _id: orgAgentId })).not.toBeNull();
+    expect(await collection('User').findOne({ email: 'a@example.test' })).toMatchObject({ slackSettings: {} });
+    expect(await collection('User').findOne({ email: 'b@example.test' })).toMatchObject({
+      slackSettings: { customAgentId: String(orgAgentId) },
+    });
+  });
+
   it('keeps the notebook and messages discoverable after storage failure, then resumes idempotently', async () => {
     const notebookId = new mongoose.Types.ObjectId();
     await collection(Session.modelName).insertOne({ _id: notebookId, userId: ownerId });
