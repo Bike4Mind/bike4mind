@@ -97,7 +97,11 @@ describe('checkCuratedV2', () => {
     expect(await checkCuratedV2(root)).toBeNull();
 
     await editV3(root, doc => doc.v2Channel.changelog.unshift(item(6)));
-    await expect(bumpCuratedV2(root)).rejects.toThrow(/has not changed since sequence 5/);
+    const unchanged =
+      'the v2 content has not changed since sequence 5; remove the v2Channel.changelog item for sequence 6';
+    expect((await generateCuratedV2(root)).problem).toBe(unchanged);
+    expect(await checkCuratedV2(root)).toBe(unchanged);
+    await expect(bumpCuratedV2(root)).rejects.toThrow(unchanged);
     await editV3(root, doc => {
       doc.v2Channel.changelog.shift();
       Object.assign(doc.v2Channel.tiers[2].picks[0], { entry: 'gemma-4-12b', build: 'qat-q4-0' });

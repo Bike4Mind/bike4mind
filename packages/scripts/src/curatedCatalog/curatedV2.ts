@@ -32,18 +32,43 @@ async function formatJson(value: unknown, configFile: string): Promise<string> {
   return format(JSON.stringify(value), { ...(await resolveConfig(configFile)), parser: 'json' });
 }
 
+type V2Channel = NonNullable<HubManifestV3Input['v2Channel']>;
+
+function recordedHash(channel: V2Channel, sequence: number): string | undefined {
+  const key = String(sequence);
+  return Object.hasOwn(channel.contentSha256, key) ? channel.contentSha256[key] : undefined;
+}
+
+/** What --bump sets: the next sequence, dated by the changelog item that names it. */
+function moveTo(channel: V2Channel, sequence: number, date: string): void {
+  channel.sequence = sequence;
+  channel.updatedAt = `${date}T00:00:00Z`;
+}
+
+const unchangedSince = (sequence: number): string =>
+  `the v2 content has not changed since sequence ${sequence}; remove the v2Channel.changelog item for sequence ${sequence + 1}`;
+
 /** The v2 file generated from the v3 list under `root`; rejects when the v3 file is unreadable or invalid. */
 export async function generateCuratedV2(root: string = REPO_ROOT): Promise<Generated> {
   const v3: HubManifestV3Input = JSON.parse(await readFile(path.join(root, CATALOG_V3_PATH), 'utf8'));
   // A changelog item for the next sequence fails the v2 schema until --bump moves the sequence to it.
   const channel = v3.v2Channel;
-  if (channel && typeof channel.sequence === 'number' && channel.changelog?.[0]?.sequence === channel.sequence + 1)
-    return { text: '', problem: `run ${BUMP} to move v2Channel to sequence ${channel.sequence + 1}` };
+  const pending = channel?.changelog?.[0];
+  if (channel && typeof channel.sequence === 'number' && pending?.sequence === channel.sequence + 1) {
+    const next = channel.sequence + 1;
+    const moved = structuredClone(channel);
+    moveTo(moved, next, pending.date);
+    const sha = curatedV2Sha256(curatedV2FromV3({ ...v3, v2Channel: moved }));
+    const problem =
+      recordedHash(channel, channel.sequence) === sha
+        ? unchangedSince(channel.sequence)
+        : `run ${BUMP} to move v2Channel to sequence ${next}`;
+    return { text: '', problem };
+  }
   const v2 = curatedV2FromV3(v3);
   const text = await formatJson(v2, path.join(root, CATALOG_PATH));
   const sequence = v2.sequence ?? 0;
-  const hashes = channel?.contentSha256 ?? {};
-  const recorded = Object.hasOwn(hashes, String(sequence)) ? hashes[String(sequence)] : undefined;
+  const recorded = channel && recordedHash(channel, sequence);
   if (recorded === curatedV2Sha256(v2)) return { text, problem: null };
   const what =
     recorded === undefined
@@ -62,15 +87,14 @@ export async function bumpCuratedV2(root: string = REPO_ROOT): Promise<number> {
   const v3: HubManifestV3Input = JSON.parse(source);
   const channel = v3.v2Channel;
   if (!channel) throw new Error('the v3 list has no v2Channel');
-  const previous = String(channel.sequence);
-  const next = channel.sequence + 1;
+  const previous = channel.sequence;
+  const next = previous + 1;
   const item = channel.changelog[0];
   if (item?.sequence !== next) throw new Error(`add a v2Channel.changelog item for sequence ${next} first`);
-  channel.sequence = next;
-  channel.updatedAt = `${item.date}T00:00:00Z`;
+  const recorded = recordedHash(channel, previous);
+  moveTo(channel, next, item.date);
   const sha = curatedV2Sha256(curatedV2FromV3(v3));
-  if (Object.hasOwn(channel.contentSha256, previous) && channel.contentSha256[previous] === sha)
-    throw new Error(`the v2 content has not changed since sequence ${previous}`);
+  if (recorded === sha) throw new Error(unchangedSince(previous));
   channel.contentSha256 = { ...channel.contentSha256, [String(next)]: sha };
 
   // Edits only the three v2Channel fields in place, so the rest of the hand-formatted v3 file keeps its layout.
