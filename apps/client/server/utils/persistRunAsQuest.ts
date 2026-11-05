@@ -187,23 +187,27 @@ export async function persistRunAsQuest(
     // is already done, so re-firing on every run is cheap. Dynamic import
     // on the event-bus module avoids a top-level dependency cycle with
     // queue-handler imports.
-    try {
-      const { SessionEvents } = await import('@server/utils/eventBus');
-      await Promise.all([
-        SessionEvents.AutoName.publish({ sessionId: execution.sessionId, userId: execution.userId }),
-        SessionEvents.Summarize.publish({
+    // Not on loop runs: the loop owns its notebook's name, and these jobs bill outside the run's
+    // recorded cost, so loop spend would undercount the user's real debit.
+    if (!execution.loopId) {
+      try {
+        const { SessionEvents } = await import('@server/utils/eventBus');
+        await Promise.all([
+          SessionEvents.AutoName.publish({ sessionId: execution.sessionId, userId: execution.userId }),
+          SessionEvents.Summarize.publish({
+            sessionId: execution.sessionId,
+            userId: execution.userId,
+            callTagging: true,
+            trigger: 'earlyMilestone',
+          }),
+        ]);
+      } catch (summarizeErr) {
+        logger.warn('[persistRunAsQuest] session naming/summary dispatch failed - non-fatal', {
+          executionId,
           sessionId: execution.sessionId,
-          userId: execution.userId,
-          callTagging: true,
-          trigger: 'earlyMilestone',
-        }),
-      ]);
-    } catch (summarizeErr) {
-      logger.warn('[persistRunAsQuest] session naming/summary dispatch failed — non-fatal', {
-        executionId,
-        sessionId: execution.sessionId,
-        error: summarizeErr instanceof Error ? summarizeErr.message : String(summarizeErr),
-      });
+          error: summarizeErr instanceof Error ? summarizeErr.message : String(summarizeErr),
+        });
+      }
     }
   } catch (err) {
     logger.error('[persistRunAsQuest] failed to write Quest — chat history will be missing this run', {
