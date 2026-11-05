@@ -110,6 +110,8 @@ vi.mock('@server/analytics/signupEvents', () => ({
 }));
 const { reverseReward } = vi.hoisted(() => ({ reverseReward: vi.fn() }));
 vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: reverseReward }));
+const { reverseStanding } = vi.hoisted(() => ({ reverseStanding: vi.fn() }));
+vi.mock('@server/billing/purchaseReversal', () => ({ reversePurchaseStanding: reverseStanding }));
 vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
@@ -633,6 +635,21 @@ describe('charge.refunded - inviter reward', () => {
   it('falls back to the charge amount when nothing was captured', async () => {
     await deliver(refundedCharge({ amount_captured: 0 }));
     expect(reverseReward).toHaveBeenCalledWith(expect.objectContaining({ amountCaptured: 3000 }));
+  });
+
+  it('reverses the purchase standing only once the whole charge is refunded', async () => {
+    await deliver(refundedCharge({ refunded: false }));
+    expect(reverseStanding).not.toHaveBeenCalled();
+
+    await deliver(refundedCharge({ refunded: true, amount_refunded: 3000 }));
+    expect(reverseStanding).toHaveBeenCalledExactlyOnceWith({ paymentIntentId: 'pi_1', reason: 'refunded' }, logger);
+  });
+
+  it('still runs the payer-side refund steps when the standing reversal fails, then fails the event', async () => {
+    reverseStanding.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(refundedCharge({ refunded: true }))).rejects.toThrow('mongo down');
+    expect(mocks.findByPaymentIntentId).toHaveBeenCalledWith('pi_1');
   });
 
   it('leaves the reward alone when the charge has no payment intent', async () => {

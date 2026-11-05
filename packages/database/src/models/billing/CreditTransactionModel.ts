@@ -14,7 +14,9 @@ import {
   AI_USAGE_TRANSACTION_TYPES,
   UNCLASSIFIED_SOURCE,
   CREDIT_ADD_TRANSACTION_TYPES,
+  PURCHASE_REVERSAL_REASONS,
   type CreditTransactionType,
+  type PurchaseReversalReason,
 } from '@bike4mind/common';
 
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
@@ -79,6 +81,9 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
     },
     stripePaymentIntentId: { type: String, required: false },
     packageId: { type: String, required: false },
+    // Set when the purchase was fully refunded or lost a dispute (see server/billing/purchaseReversal.ts in apps/client).
+    reversedAt: { type: Date, required: false },
+    reversalReason: { type: String, required: false, enum: [...PURCHASE_REVERSAL_REASONS] },
 
     // Usage transaction fields
     model: { type: String, required: false },
@@ -252,6 +257,32 @@ export class CreditTransactionRepository
 
   async updateTransactionStatus(paymentIntentId: string, status: CreditPurchaseStatus) {
     return this.model.findOneAndUpdate({ stripePaymentIntentId: paymentIntentId }, { status }, { new: true });
+  }
+
+  /**
+   * Marks a purchase row reversed, keeping the first reversal's timestamp and reason. Returns the row even
+   * when it was already reversed, so a webhook redelivered after a partial failure still reaches the
+   * stamp revocation; null when no purchase row carries this payment intent.
+   */
+  async markPurchaseReversed(
+    paymentIntentId: string,
+    reason: PurchaseReversalReason
+  ): Promise<ICreditTransactionDocument | null> {
+    const marked = await this.model.findOneAndUpdate(
+      { stripePaymentIntentId: paymentIntentId, type: 'purchase', reversedAt: null },
+      { $set: { reversedAt: new Date(), reversalReason: reason } },
+      { new: true }
+    );
+    return marked ?? this.model.findOne({ stripePaymentIntentId: paymentIntentId, type: 'purchase' });
+  }
+
+  /** Any completed purchase of this owner's that was never refunded or lost to a dispute. */
+  async findUnreversedPurchase(
+    ownerId: string,
+    ownerType: CreditHolderType
+  ): Promise<ICreditTransactionDocument | null> {
+    // `reversedAt: null` also matches rows written before the field existed.
+    return this.model.findOne({ ownerId, ownerType, type: 'purchase', status: 'completed', reversedAt: null });
   }
 
   async findByOwnerWithFilters(

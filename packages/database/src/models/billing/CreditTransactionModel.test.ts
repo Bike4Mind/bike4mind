@@ -624,3 +624,48 @@ describe('admin ledger repository methods', () => {
     });
   });
 });
+
+describe('purchase reversal', () => {
+  const USER = 'user-1';
+  const purchase = (r: Record<string, unknown>) => ({
+    ownerId: USER,
+    ownerType: CreditHolderType.User,
+    type: 'purchase',
+    status: 'completed',
+    amount: 1000,
+    ...r,
+  });
+
+  it('marks a purchase reversed once and keeps the first reason on redelivery', async () => {
+    await seed([purchase({ stripePaymentIntentId: 'pi_1' })]);
+
+    const first = await creditTransactionRepository.markPurchaseReversed('pi_1', 'refunded');
+    const again = await creditTransactionRepository.markPurchaseReversed('pi_1', 'dispute_lost');
+
+    expect(first?.reversalReason).toBe('refunded');
+    expect(again?.reversalReason).toBe('refunded');
+    expect(again?.reversedAt?.getTime()).toBe(first?.reversedAt?.getTime());
+  });
+
+  it('returns null when no purchase row carries the payment intent', async () => {
+    await seed([
+      { ownerId: USER, ownerType: CreditHolderType.User, type: 'subscription', stripePaymentIntentId: 'pi_s' },
+    ]);
+
+    expect(await creditTransactionRepository.markPurchaseReversed('pi_s', 'refunded')).toBeNull();
+    expect(await creditTransactionRepository.markPurchaseReversed('pi_none', 'refunded')).toBeNull();
+  });
+
+  it('counts a legacy row without the field as unreversed and skips reversed and failed rows', async () => {
+    await seed([
+      purchase({ stripePaymentIntentId: 'pi_rev', reversedAt: day(2), reversalReason: 'refunded' }),
+      purchase({ stripePaymentIntentId: 'pi_fail', status: 'failed' }),
+    ]);
+    expect(await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.User)).toBeNull();
+
+    await seed([purchase({ stripePaymentIntentId: 'pi_legacy' })]);
+    const found = await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.User);
+    expect(found?.stripePaymentIntentId).toBe('pi_legacy');
+    expect(await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.Organization)).toBeNull();
+  });
+});
