@@ -637,6 +637,10 @@ function LaunchSection({
               ? 'Ollama reads these when it starts, for every model it loads. A q8_0 or q4_0 cache uses less memory and needs flash attention.'
               : 'llama-server serves every GGUF file in the models folder and loads each one when a chat first asks for it.'}
           </Typography>
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-spill-hint">
+            On an NVIDIA or AMD GPU that shares system memory, a model that outgrows the GPU&apos;s share uses more
+            system memory instead of failing to load. To turn that off, start Desktop with B4M_DISABLE_GPU_SPILL=1.
+          </Typography>
           {prefilled(launch) && launch.prefill && (
             <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-prefilled">
               {launch.owner === 'other'
