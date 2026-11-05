@@ -3212,9 +3212,7 @@ export class ChatService {
                 ...generationField,
                 ...(maxTokens ? { maxTokens } : {}),
                 ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
-                ...(modelOption?.supportsTools === false && offeredTools(roots).length > 0
-                  ? { toolsUnsupported: true as const }
-                  : {}),
+                ...(modelOption?.supportsTools === false ? { toolsUnsupported: true as const } : {}),
               },
               onCompletionEvent,
               controller.signal,

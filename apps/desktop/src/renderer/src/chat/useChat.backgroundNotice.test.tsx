@@ -80,6 +80,16 @@ describe('a context notice for a conversation that is not open', () => {
     expect(conversation.notice).toBeNull();
   });
 
+  it('keeps every distinct notice that arrived while it was away', async () => {
+    await act(async () => root.render(<Harness id="open" />));
+    await act(async () => emit({ type: 'context-notice', sessionId: 'away', message: 'no tools' }));
+    await act(async () => emit({ type: 'context-notice', sessionId: 'away', message: 'context grew' }));
+    await act(async () => emit({ type: 'context-notice', sessionId: 'away', message: 'context grew' }));
+
+    await act(async () => root.render(<Harness id="away" />));
+    expect(conversation.notice).toBe('no tools\ncontext grew');
+  });
+
   it('is dropped when the conversation is deleted', async () => {
     await act(async () => root.render(<Harness id="open" />));
     await act(async () => emit(noticeFor('gone')));

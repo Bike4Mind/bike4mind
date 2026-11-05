@@ -347,6 +347,7 @@ export class OllamaLocal {
       ? (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }))
       : [];
     const offeredTools = request.toolsUnsupported === true || (request.tools?.length ?? 0) > 0;
+    // A switch through a hosted model or another server's Ollama keeps the told state; the picker's "No tools" label still shows.
     if (canUseTools && request.sessionId) {
       this.toldNoTools.delete(request.sessionId);
     } else if (offeredTools && onNotice && request.sessionId && this.toldNoTools.get(request.sessionId) !== model) {

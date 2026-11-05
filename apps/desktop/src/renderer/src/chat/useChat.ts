@@ -73,6 +73,11 @@ export interface SessionPlacement {
 /** Latest context notice per conversation that was not open when it arrived; shown when it opens. */
 const backgroundNotices = new Map<string, string>();
 
+function joinNotices(current: string | undefined, next: string): string {
+  if (!current) return next;
+  return current.split('\n').includes(next) ? current : `${current}\n${next}`;
+}
+
 export function useSessions(): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -808,7 +813,7 @@ export function useConversation(
         setSettledTurns(count => count + 1);
       }
       if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
-        backgroundNotices.set(event.sessionId, event.message);
+        backgroundNotices.set(event.sessionId, joinNotices(backgroundNotices.get(event.sessionId), event.message));
         return;
       }
       if (event.sessionId !== activeSessionId.current) return;
@@ -885,7 +890,7 @@ export function useConversation(
       }
 
       if (event.type === 'context-notice') {
-        setNotice(event.message);
+        setNotice(current => joinNotices(current ?? undefined, event.message));
         return;
       }
 
