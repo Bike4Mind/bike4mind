@@ -34,15 +34,19 @@ describe('llm-settings v7 -> v8 migration (retired gpt-image-1)', () => {
         model: ImageModels.GPT_IMAGE_1,
         imageModel: ImageModels.GPT_IMAGE_1,
         lastUsedImageModel: ImageModels.GPT_IMAGE_1,
+        imageEditModel: ImageModels.GPT_IMAGE_1,
+        lastUsedImageEditModel: ImageModels.GPT_IMAGE_1,
       },
       7
     );
 
-    const { model, imageModel, lastUsedImageModel } = useLLM.getState();
-    expect({ model, imageModel, lastUsedImageModel }).toEqual({
+    const { model, imageModel, lastUsedImageModel, imageEditModel, lastUsedImageEditModel } = useLLM.getState();
+    expect({ model, imageModel, lastUsedImageModel, imageEditModel, lastUsedImageEditModel }).toEqual({
       model: ImageModels.GPT_IMAGE_2,
       imageModel: ImageModels.GPT_IMAGE_2,
       lastUsedImageModel: ImageModels.GPT_IMAGE_2,
+      imageEditModel: ImageModels.GPT_IMAGE_2,
+      lastUsedImageEditModel: ImageModels.GPT_IMAGE_2,
     });
   });
 

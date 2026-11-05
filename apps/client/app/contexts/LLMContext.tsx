@@ -9,11 +9,11 @@ import {
   LLMModelConfig,
   B4MLLMToolsList,
   IImageGenerationTemplateDocument,
-  LEGACY_IMAGE_MODEL_MAP,
   isImageModel,
   isModelDeprecated,
   requiresImageInput,
   FIXED_TEMPERATURE_MODELS,
+  resolveLegacyImageModel,
 } from '@bike4mind/common';
 import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { toast } from 'sonner';
@@ -349,11 +349,14 @@ export const useLLM = create(
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
           // `model` too: picking an image model as primary writes its id there (see setLLM).
-          for (const key of ['model', 'imageModel', 'lastUsedImageModel'] as const) {
-            const value = state[key];
-            if (typeof value === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_MAP, value)) {
-              state[key] = LEGACY_IMAGE_MODEL_MAP[value];
-            }
+          for (const key of [
+            'model',
+            'imageModel',
+            'lastUsedImageModel',
+            'imageEditModel',
+            'lastUsedImageEditModel',
+          ] as const) {
+            if (typeof state[key] === 'string') state[key] = resolveLegacyImageModel(state[key]);
           }
         };
         // Migration v0->v1: clean up invalid tools like 'confluence_search'
