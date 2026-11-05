@@ -10,6 +10,7 @@ import Typography from '@mui/joy/Typography';
 import { useCallback, useLayoutEffect, useState, type RefObject } from 'react';
 import { CloseIcon, CubeIcon } from './icons';
 import type { ModelEngine } from './model3d/useModelEngine';
+import { ModelClips } from './model3d/ModelClips';
 import { ModelJoints } from './model3d/ModelJoints';
 import { ModelViewport } from './model3d/ModelViewport';
 import {
@@ -79,11 +80,14 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
     };
   }, [conversation, pane]);
 
-  const { state, status, error, object, summary, params, unsaved, joints, jointAngles } = engine;
+  const { state, status, error, object, summary, params, unsaved, joints, jointAngles, clips } = engine;
   const [wireframe, setWireframe] = useState(false);
   // Keyed to the file, so opening another model never keeps a stale highlight.
   const [picked, setPicked] = useState<{ path: string | null; name: string } | null>(null);
   const pickedName = picked && picked.path === state.path ? picked.name : null;
+  // Keyed to the file like `picked`, so another file opens at rest.
+  const [playing, setPlaying] = useState<{ path: string | null; clip: string } | null>(null);
+  const playingClip = playing && playing.path === state.path && clips.includes(playing.clip) ? playing.clip : null;
   const pickPart = (part: string | null) => {
     // A second click on the picked part, or a click on empty space, clears it without adding text.
     if (part === null || part === pickedName) {
@@ -200,6 +204,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               pose={jointAngles}
               picked={pickedName}
               onPick={pickPart}
+              clip={playingClip}
             />
             {status === 'building' && !object && (
               <Stack alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0 }}>
@@ -290,6 +295,13 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
         </Stack>
       )}
 
+      {clips.length > 0 && (
+        <ModelClips
+          clips={clips}
+          playing={playingClip}
+          onPlay={clip => setPlaying(clip === null ? null : { path: state.path, clip })}
+        />
+      )}
       {joints.length > 0 && (
         <ModelJoints
           joints={joints}

@@ -70,6 +70,57 @@ describe('exportGlb', () => {
 });
 
 describe('loadAsset (stl)', () => {
+  describe('shading and materials', () => {
+    const ball = (extra: Partial<ModelPartMesh> = {}): ModelPartMesh => {
+      const sphere = new THREE.SphereGeometry(10, 16, 12);
+      return {
+        name: 'knob',
+        color: '#c9a227',
+        positions: new Float32Array(sphere.getAttribute('position').array),
+        indices: new Uint32Array(sphere.getIndex()!.array),
+        ...extra,
+      };
+    };
+    const normalsOf = async (part: ModelPartMesh) => {
+      const bytes = await exportGlb(buildModelObject([part], 'mm'));
+      const loaded = await new GLTFLoader().parseAsync(bytes.slice().buffer, '');
+      const mesh = loaded.scene.getObjectByName(part.name) as THREE.Mesh;
+      return { mesh, normals: (mesh.geometry as THREE.BufferGeometry).getAttribute('normal') };
+    };
+
+    it('writes one normal per face for a faceted part, so an engine shades it low-poly', async () => {
+      const { normals } = await normalsOf(box('body', 60, 40, 30));
+      for (let index = 0; index < normals.count; index++) {
+        const components = [normals.getX(index), normals.getY(index), normals.getZ(index)].map(Math.abs);
+        // A box face's normal is one axis: no corner-averaged diagonals.
+        expect(components.filter(value => value > 0.999)).toHaveLength(1);
+      }
+    });
+
+    it('blends normals across a smooth part, so neighbours at a vertex agree', async () => {
+      const flat = (await normalsOf(ball())).normals;
+      const smooth = (await normalsOf(ball({ smooth: true }))).normals;
+      // Each triangle's three normals are equal when faceted and differ when blended.
+      const spread = (attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute) => {
+        let total = 0;
+        for (let index = 0; index < attribute.count; index += 3) {
+          const a = new THREE.Vector3().fromBufferAttribute(attribute, index);
+          total += a.distanceTo(new THREE.Vector3().fromBufferAttribute(attribute, index + 1));
+        }
+        return total;
+      };
+      expect(spread(flat)).toBeCloseTo(0);
+      expect(spread(smooth)).toBeGreaterThan(1);
+    });
+
+    it('keeps metalness and roughness in the GLB material', async () => {
+      const { mesh } = await normalsOf(ball({ metalness: 1, roughness: 0.4 }));
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      expect(material.metalness).toBeCloseTo(1);
+      expect(material.roughness).toBeCloseTo(0.4);
+    });
+  });
+
   it('round-trips an exported STL as millimetres', async () => {
     const summary = summarizeObject(await loadAsset('stl', partsToStl([box('a', 10, 20, 30)])));
     expect(summary.units).toBe('mm');
@@ -168,6 +219,12 @@ describe('part pivots and parents', () => {
 
     it('names the open pose after each range end', () => {
       expect(openPose(buildModelObject(jointed(), 'mm'))).toEqual({ lid: 90 });
+    });
+
+    it('keeps the clips when the GLB is opened as an asset', async () => {
+      const loaded = await loadAsset('glb', await exportGlb(buildModelObject(jointed(), 'mm')));
+      expect(loaded.animations.map(clip => clip.name)).toEqual(['lid']);
+      expect(loaded.clone(true).animations).toHaveLength(1);
     });
 
     it('exports at rest even when posed, with a clip per joint that opens it', async () => {

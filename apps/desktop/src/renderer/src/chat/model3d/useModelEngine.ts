@@ -42,6 +42,8 @@ export type ModelEngine = {
   joints: ModelJoint[];
   /** Slider angles in degrees by part name; the viewer's pose only, never written or exported. */
   jointAngles: Record<string, number>;
+  /** Animation names in an opened GLB or glTF, for the pane's play buttons. Empty for model files. */
+  clips: string[];
   setJointAngles(angles: Record<string, number>): void;
   previewParam(key: string, value: number): void;
   commitParam(key: string, value: number): Promise<void>;
@@ -85,6 +87,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
   const [params, setParams] = useState<Record<string, ModelParam>>({});
   const [unsaved, setUnsaved] = useState<string[]>([]);
   const [joints, setJoints] = useState<ModelJoint[]>([]);
+  const [clips, setClips] = useState<string[]>([]);
   const [jointAngles, setJointAnglesState] = useState<Record<string, number>>({});
   const posedPath = useRef<string | null>(null);
   const engine = useRef<EngineFrame | null>(null);
@@ -155,6 +158,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
     const nextSummary = summarizeParts(outcome.parts, outcome.params, outcome.units);
     partsRef.current = outcome.parts;
     setJoints(jointsOf(outcome.parts));
+    setClips([]);
     setObject(next);
     setSummary(nextSummary);
     setParams(outcome.params);
@@ -182,6 +186,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
       setSummary(null);
       setParams({});
       setJoints([]);
+      setClips([]);
       partsRef.current = null;
       return;
     }
@@ -206,6 +211,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
         const loadedSummary = summarizeObject(loaded);
         partsRef.current = null;
         setJoints([]);
+        setClips(loaded.animations.map(clip => clip.name));
         setObject(loaded);
         setSummary(loadedSummary);
         setParams({});
@@ -289,6 +295,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
     unsaved,
     joints,
     jointAngles,
+    clips,
     setJointAngles,
     previewParam,
     commitParam,

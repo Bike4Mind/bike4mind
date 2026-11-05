@@ -15,17 +15,20 @@ vi.mock('./model3d/ModelViewport', () => ({
     pose,
     picked,
     onPick,
+    clip,
   }: {
     dimmed: boolean;
     pose: Record<string, number>;
     picked: string | null;
     onPick: (name: string | null) => void;
+    clip: string | null;
   }) => (
     <div
       data-testid="model-pane-viewport"
       data-dimmed={String(dimmed)}
       data-pose={JSON.stringify(pose)}
       data-picked={picked ?? ''}
+      data-clip={clip ?? ''}
     >
       <button data-testid="pick-lid" onClick={() => onPick('lid')} />
       <button data-testid="pick-none" onClick={() => onPick(null)} />
@@ -63,6 +66,7 @@ function engine(overrides: Partial<ModelEngine> = {}): ModelEngine {
     unsaved: [],
     joints: [],
     jointAngles: {},
+    clips: [],
     setJointAngles: vi.fn(),
     previewParam: vi.fn(),
     commitParam: vi.fn(async () => {}),
@@ -205,6 +209,25 @@ describe('ModelPane', () => {
     act(() => byTestId('pick-none')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
     expect(onPickPart).toHaveBeenCalledTimes(2);
+  });
+
+  it('plays one animation of an opened GLB at a time', () => {
+    const glb = {
+      ...BUILT,
+      state: { path: '/project/chest.glb', kind: 'glb' as const, generation: 3, source: null, missing: false },
+      clips: ['lid', 'drawer'],
+    };
+    render(engine(BUILT));
+    expect(byTestId('model-pane-clips')).toBeNull();
+    render(engine(glb));
+    act(() => byTestId('model-pane-clip-lid')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('lid');
+    expect(byTestId('model-pane-clip-lid')?.textContent).toBe('Stop');
+    act(() => byTestId('model-pane-clip-drawer')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('drawer');
+    expect(byTestId('model-pane-clip-lid')?.textContent).toBe('Play');
+    act(() => byTestId('model-pane-clip-drawer')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('');
   });
 
   it('drops the highlight when another file opens', () => {

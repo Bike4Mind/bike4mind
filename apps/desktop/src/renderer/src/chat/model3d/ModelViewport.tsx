@@ -18,6 +18,8 @@ type Props = {
   picked: string | null;
   /** A click (not an orbit drag) on a part, or on empty space (null). */
   onPick: (name: string | null) => void;
+  /** An opened asset's animation to play on a loop, by name; null shows it at rest. */
+  clip: string | null;
 };
 
 /** Pointer travel, in CSS px, under which a press and release is a click rather than an orbit. */
@@ -64,7 +66,7 @@ function gridFor(object: THREE.Object3D, dark: boolean): THREE.GridHelper {
 }
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
-export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose, picked, onPick }: Props) {
+export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose, picked, onPick, clip }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
   const framedFor = useRef<string | null>(null);
@@ -88,7 +90,7 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose,
     element.appendChild(renderer.domElement);
     renderer.domElement.dataset.testid = 'model-pane-canvas';
     const scene = new THREE.Scene();
-    addLights(scene);
+    const environment = addLights(scene, renderer);
     const content = new THREE.Group();
     scene.add(content);
     const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
@@ -144,6 +146,7 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose,
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       renderer.domElement.removeEventListener('pointerup', onPointerUp);
       controls.dispose();
+      environment.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       viewer.current = null;
@@ -196,6 +199,36 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose,
     highlightPart(shownCopy.current, picked);
     viewer.current.render();
   }, [picked]);
+
+  // Declared after the rebuild effect, so on a new object it runs against the fresh copy.
+  useEffect(() => {
+    const current = viewer.current;
+    const shown = shownCopy.current;
+    const animation = clip === null ? undefined : shown?.animations.find(entry => entry.name === clip);
+    if (!current || !shown || !animation) return;
+    // The mixer leaves nodes where the clip last put them; put them back when playback stops.
+    const rest = new Map<THREE.Object3D, [THREE.Vector3, THREE.Quaternion, THREE.Vector3]>();
+    shown.traverse(node => rest.set(node, [node.position.clone(), node.quaternion.clone(), node.scale.clone()]));
+    const mixer = new THREE.AnimationMixer(shown);
+    mixer.clipAction(animation).play();
+    const clock = new THREE.Clock();
+    let frame = requestAnimationFrame(function step() {
+      mixer.update(clock.getDelta());
+      current.render();
+      frame = requestAnimationFrame(step);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      mixer.stopAllAction();
+      mixer.uncacheRoot(shown);
+      for (const [node, [position, quaternion, scale]] of rest) {
+        node.position.copy(position);
+        node.quaternion.copy(quaternion);
+        node.scale.copy(scale);
+      }
+      current.render();
+    };
+  }, [clip, object]);
 
   return <Box ref={host} sx={{ position: 'absolute', inset: 0 }} data-testid="model-pane-viewport" />;
 }

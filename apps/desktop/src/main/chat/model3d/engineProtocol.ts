@@ -140,6 +140,9 @@ function partsOf(result, Manifold) {
       if (Array.isArray(entry.axis)) part.axis = entry.axis.map(Number);
       if (Array.isArray(entry.range)) part.range = entry.range.map(Number);
       if (entry.motion !== undefined) part.motion = String(entry.motion);
+      if (entry.metalness !== undefined) part.metalness = Number(entry.metalness);
+      if (entry.roughness !== undefined) part.roughness = Number(entry.roughness);
+      if (entry.smooth !== undefined) part.smooth = typeof entry.smooth === 'boolean' ? entry.smooth : String(entry.smooth);
     }
     return part;
   });

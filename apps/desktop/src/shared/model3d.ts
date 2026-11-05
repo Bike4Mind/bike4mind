@@ -37,6 +37,12 @@ export type ModelPartMesh = {
   range?: [number, number];
   /** How a joint moves: turns about its pivot (the default) or slides along its axis. */
   motion?: ModelMotion;
+  /** glTF PBR, 0..1: 1 for bare metal (brass, iron). Absent means a non-metal. */
+  metalness?: number;
+  /** glTF PBR, 0..1: 0 is mirror-glossy, 1 fully matte. Absent means fairly matte (0.75). */
+  roughness?: number;
+  /** Shades curved faces smoothly (a barrel, a knob) while keeping sharp edges; absent means faceted. */
+  smooth?: boolean;
 };
 
 export const MODEL_MOTIONS = ['turn', 'slide'] as const;
@@ -183,6 +189,17 @@ export function formatModelSummary(report: ModelBuildReport, glbPath?: string): 
 const isNumbers = (value: unknown, length: number): boolean =>
   Array.isArray(value) && value.length === length && value.every(Number.isFinite);
 
+function partMaterialError(part: ModelPartMesh): string | null {
+  for (const key of ['metalness', 'roughness'] as const) {
+    const value = part[key];
+    if (value !== undefined && !(Number.isFinite(value) && value >= 0 && value <= 1))
+      return `Part "${part.name}" has a ${key} that is not a number from 0 to 1.`;
+  }
+  if (part.smooth !== undefined && typeof part.smooth !== 'boolean')
+    return `Part "${part.name}" has a smooth that is not true or false.`;
+  return null;
+}
+
 function partJointError(part: ModelPartMesh): string | null {
   const name = `Part "${part.name}"`;
   if (part.axis === undefined && part.range === undefined && part.motion === undefined) return null;
@@ -214,8 +231,8 @@ export function partTreeError(parts: ModelPartMesh[]): string | null {
     if (part.pivot && !(part.pivot.length === 3 && part.pivot.every(Number.isFinite))) {
       return `Part "${part.name}" has a pivot that is not three numbers [x, y, z].`;
     }
-    const jointError = partJointError(part);
-    if (jointError) return jointError;
+    const partError = partJointError(part) ?? partMaterialError(part);
+    if (partError) return partError;
     if (part.parent === undefined) continue;
     if (part.parent === part.name) return `Part "${part.name}" cannot be its own parent.`;
     const count = counts.get(part.parent) ?? 0;

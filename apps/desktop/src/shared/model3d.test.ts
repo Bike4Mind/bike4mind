@@ -120,6 +120,18 @@ describe('partTreeError', () => {
     expect(partTreeError(parts)).toContain(message);
   });
 
+  it.each([
+    [part('knob', { metalness: 1.5 }), 'metalness that is not a number from 0 to 1'],
+    [part('knob', { roughness: Number.NaN }), 'roughness that is not a number from 0 to 1'],
+    [part('knob', { smooth: 'yes' as unknown as boolean }), 'smooth that is not true or false'],
+  ])('refuses a material %#', (bad, message) => {
+    expect(partTreeError([bad])).toContain(message);
+  });
+
+  it('accepts a metal, smooth part', () => {
+    expect(partTreeError([part('knob', { metalness: 1, roughness: 0.4, smooth: true })])).toBeNull();
+  });
+
   it('accepts a slide without a pivot', () => {
     expect(partTreeError([part('drawer', { motion: 'slide', axis: [0, -1, 0], range: [0, 40] })])).toBeNull();
   });

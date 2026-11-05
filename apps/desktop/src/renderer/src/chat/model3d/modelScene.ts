@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import {
   describeJoints,
@@ -21,6 +23,24 @@ import {
 
 export const DEFAULT_PART_COLOR = '#b0b7c3';
 
+/** Faces meeting at less than this stay blended on a smooth part; sharper edges stay crisp. */
+const SMOOTH_CREASE = THREE.MathUtils.degToRad(40);
+
+/**
+ * Normals are what an engine shades the GLB with (`flatShading` is the viewer's only), so a faceted
+ * part gets one normal per face and a smooth one blends the faces that meet under the crease angle.
+ */
+function shadedGeometry(geometry: THREE.BufferGeometry, smooth: boolean, units: ModelUnits): THREE.BufferGeometry {
+  if (!smooth) {
+    const faceted = geometry.toNonIndexed();
+    faceted.computeVertexNormals();
+    return faceted;
+  }
+  // toCreasedNormals welds positions to 0.01 units: fine in mm, a centimetre in metres, so work in mm.
+  const toMm = units === 'm' ? 1000 : 1;
+  return toCreasedNormals(geometry.scale(toMm, toMm, toMm), SMOOTH_CREASE).scale(1 / toMm, 1 / toMm, 1 / toMm);
+}
+
 /**
  * The object the viewer, exports and screenshots share. `userData.units` records the model units.
  *
@@ -39,15 +59,14 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
     geometry.setAttribute('position', new THREE.BufferAttribute(part.positions.slice(), 3));
     geometry.setIndex(new THREE.BufferAttribute(part.indices, 1));
     geometry.translate(-pivot[0], -pivot[1], -pivot[2]);
-    geometry.computeVertexNormals();
     const material = new THREE.MeshStandardMaterial({
       color: new THREE.Color(part.color || DEFAULT_PART_COLOR),
-      flatShading: true,
-      roughness: 0.75,
-      metalness: 0.05,
+      flatShading: !part.smooth,
+      roughness: part.roughness ?? 0.75,
+      metalness: part.metalness ?? 0.05,
     });
     material.name = part.name;
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(shadedGeometry(geometry, part.smooth === true, units), material);
     mesh.name = part.name;
     return mesh;
   });
@@ -296,6 +315,8 @@ export async function loadAsset(kind: Exclude<ModelKind, 'model'>, bytes: Uint8A
   }
   const gltf = await new GLTFLoader().parseAsync(buffer, '');
   root.add(gltf.scene);
+  // Kept on the root (Object3D.clone copies `animations`), so the viewer's copy can play them.
+  root.animations = gltf.animations;
   root.userData.units = 'm';
   return root;
 }
@@ -349,14 +370,26 @@ export function frameCamera(
   return sphere.center.clone();
 }
 
-export function addLights(scene: THREE.Scene): void {
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.6));
+/**
+ * Lights plus a neutral studio environment. Metal has no colour of its own, only what it reflects,
+ * so without an environment a `metalness: 1` part renders near black; engines and glTF viewers
+ * always supply one. Returns the environment texture for the caller to dispose with the renderer.
+ */
+export function addLights(scene: THREE.Scene, renderer: THREE.WebGLRenderer): THREE.Texture {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  pmrem.dispose();
+  scene.environment = environment;
+  // The environment already lights every side, so the direct lights only add shape and highlights.
+  scene.environmentIntensity = 0.7;
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 0.8));
   const key = new THREE.DirectionalLight(0xffffff, 2.2);
   key.position.set(3, 5, 4);
   scene.add(key);
   const fill = new THREE.DirectionalLight(0xffffff, 0.6);
   fill.position.set(-4, 2, -3);
   scene.add(fill);
+  return environment;
 }
 
 const TILE = 512;
@@ -380,7 +413,7 @@ export async function renderContactSheet(
     renderer.setSize(TILE, TILE, false);
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(dark ? '#1f2329' : '#f4f5f7');
-    addLights(scene);
+    const environment = addLights(scene, renderer);
     const subject = root.clone(true);
     poseJoints(subject, angles);
     scene.add(subject);
@@ -402,6 +435,7 @@ export async function renderContactSheet(
       context.strokeStyle = dark ? '#3a4048' : '#d5d8dd';
       context.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
     });
+    environment.dispose();
     const blob = await new Promise<Blob | null>(resolve => sheet.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('The screenshot could not be encoded.');
     return new Uint8Array(await blob.arrayBuffer());
