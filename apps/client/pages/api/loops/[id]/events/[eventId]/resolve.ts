@@ -6,6 +6,7 @@ import { BadRequestError } from '@bike4mind/utils';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
 import { makeDueIfReady, unsureReason, unsureRow } from '@server/utils/loopTickets';
+import { requestLoopDispatch } from '@server/utils/loopDispatch';
 
 /**
  * The owner's answer to a question a loop run asked with `loop_ticket_unsure`. `resumed` (with the answer as
@@ -69,7 +70,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
         await loopEventRepository.reopenAsked(resolved.id, now).catch(() => undefined);
         throw error;
       }
-      if (reopened) await makeDueIfReady(loop, now);
+      if (reopened) {
+        await makeDueIfReady(loop, now);
+        await requestLoopDispatch(loop.id, req.logger);
+      }
       // `ticketSkipped` tells the owner the answer was saved but the ticket was left as it is.
       if (ticketSkipped) return res.json({ ...unsureRow(resolved), ticketSkipped });
     }

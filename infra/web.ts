@@ -56,6 +56,7 @@ import {
   lakeMemoryQueueDLQ,
   riskEvidenceQueue,
   riskEvidenceQueueDLQ,
+  loopDispatchQueue,
   lakeInconsistencyModelQueue,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
@@ -314,6 +315,8 @@ export const web = new sst.aws.Nextjs(
       // apps/client/server/auth/riskEvidence.ts reads Resource.riskEvidenceQueue.url directly to enqueue
       // refreshes; via sourceQueueUrls alone the key would not resolve on the Resource proxy.
       riskEvidenceQueue,
+      // Loop routes ask for an immediate dispatch (requestLoopDispatch); absent off the loop scheduler's stages.
+      ...(loopDispatchQueue ? [loopDispatchQueue] : []),
     ],
     permissions: [
       {

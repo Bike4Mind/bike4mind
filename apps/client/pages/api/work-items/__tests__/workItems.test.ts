@@ -55,6 +55,9 @@ vi.mock('@bike4mind/database', () => ({
 const verifyOrgAccess = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
+const requestLoopDispatch = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/loopDispatch', () => ({ requestLoopDispatch }));
+
 currentModule.name = 'collection';
 await import('@pages/api/work-items/index');
 currentModule.name = 'item';
@@ -444,7 +447,22 @@ describe('loop tickets through the work-items routes', () => {
     await result;
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ loopId: LOOP, stage: 'todo', status: 'open' }));
     expect(loopRepo.makeDueNow).toHaveBeenCalledWith(LOOP, expect.any(Date));
+    expect(requestLoopDispatch).toHaveBeenCalledWith(LOOP, undefined);
     expect(res._getStatusCode()).toBe(201);
+  });
+
+  it('a stage move asks for a dispatch after the write, and a plain work item never does', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
+    await call('item', 'patch', { query: { id: OID_A }, body: { stage: 'doing' } }).result;
+    expect(requestLoopDispatch).toHaveBeenCalledWith(LOOP, undefined);
+    expect(requestLoopDispatch.mock.invocationCallOrder[0]).toBeGreaterThan(
+      repo.updateForUser.mock.invocationCallOrder[0]
+    );
+
+    requestLoopDispatch.mockClear();
+    repo.findByIdForUser.mockResolvedValue(item());
+    await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+    expect(requestLoopDispatch).not.toHaveBeenCalled();
   });
 
   it('creating into the last stage closes the ticket', async () => {

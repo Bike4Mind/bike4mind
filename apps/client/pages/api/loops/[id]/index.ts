@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/database';
 import { ILoop, ILoopWithUsage, startOfUtcDay } from '@bike4mind/common';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { requestLoopDispatch } from '@server/utils/loopDispatch';
 import {
   assertLoopsEnabled,
   LOOP_RATE_LIMIT,
@@ -117,6 +118,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const guard = patch.stageConfig !== undefined ? { stages: existing.stages } : undefined;
     const updated = await loopRepository.updateForUser(id, req.user!.id, patch, existing.status, guard);
     if (!updated) throw new ConflictError('Loop changed while saving; reload and try again');
+    // Started or resumed: a no-op if its next run is not due yet.
+    if (updated.status === 'live' && existing.status !== 'live') await requestLoopDispatch(id, req.logger);
     res.json(updated);
   })
   .delete(async (req, res) => {

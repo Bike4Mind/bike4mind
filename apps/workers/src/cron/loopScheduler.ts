@@ -36,7 +36,8 @@ import {
   UNSURE_PREFIX,
 } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
-import { canPayAgain, iterationPrice, loopAdmission } from '@server/utils/loopBudget';
+import { canPayAgain, iterationPrice, loopAdmission, MAX_ACTIVE_LOOP_RUNS } from '@server/utils/loopBudget';
+import { pushLoopChanged } from '@server/utils/loopDispatch';
 import { releaseExpiredRunnerLeases } from '@server/utils/loopRunner';
 import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from '@server/utils/loopMemory';
 import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
@@ -48,11 +49,6 @@ export const MAX_DISPATCH_PER_TICK = 25;
 export const MAX_CONSECUTIVE_FAILURES = 3;
 /** Resumed unsure runs folded per tick; the rest wait for the next one. */
 export const MAX_RESUMED_FOLDS_PER_TICK = 100;
-/**
- * Loop runs in flight at once across all users. Loop and interactive runs share the AgentExecutor's
- * `reserved` concurrency (infra/agentExecutor.ts); keep this well below it so interactive runs keep most slots.
- */
-export const MAX_ACTIVE_LOOP_RUNS = 4;
 /** Due loops claimed per tick, started or not (a deferred or paused loop does not use a run slot). */
 export const MAX_CLAIMS_PER_TICK = 100;
 /** ponytail: tickets parked on dependencies reopened per tick across all users; the rest wait for later ticks. */
@@ -76,7 +72,7 @@ const DAY_MS = 24 * HOUR_MS;
 export const BUDGET_PAUSE_REASON = 'Daily budget reached; resumes 00:00 UTC';
 export { USER_BUDGET_PAUSE_REASON };
 export { TICKET_RUNS_PER_STAGE, ticketRunLimit } from '@server/utils/loopTickets';
-export { pacedAllowance, pacedReadyAt, runCreditCap } from '@server/utils/loopBudget';
+export { MAX_ACTIVE_LOOP_RUNS, pacedAllowance, pacedReadyAt, runCreditCap } from '@server/utils/loopBudget';
 export { LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES } from '@server/utils/loopMemory';
 
 export const median = (values: number[]): number => {
@@ -126,8 +122,9 @@ export function backoffMinutes(intervalMinutes: number, idleStreak: number): num
  * Loop scheduler (5-minute cron). Each tick first folds finished runs back into their
  * loops (and resumed unsure runs back into their tickets), then claims due `live` loops
  * and dispatches each as a headless agent execution.
- * The executor knows nothing of loops: completion is observed here, by polling the
- * execution doc, the same pull-based approach as QuestMaster v5's reconcileQuestNodes.
+ * Completion is observed here, by polling the execution doc, the same pull-based approach as
+ * QuestMaster v5's reconcileQuestNodes. Events (a ticket moved, a run ended, Run now) also start
+ * a loop within seconds through `dispatchLoopNow`; the tick is the sweep for whatever they miss.
  */
 export async function handler(_event: never, context: Context) {
   const logger = new Logger().withMetadata({
@@ -153,7 +150,7 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
 
   for (const loop of await loopRepository.listAutoPaused()) {
     try {
-      await resumeIfDue(loop, now);
+      if (await resumeIfDue(loop, now)) await pushLoopChanged(loop.userId, loop.id, logger);
     } catch (error) {
       logger.error(`[Loops] Failed to auto-resume loop ${loop.id}`, error as Error);
     }
@@ -163,7 +160,7 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
   // users would hold back newer folds; page past skipped events if that ever happens.
   for (const event of await loopEventRepository.listResumedUnfolded(MAX_RESUMED_FOLDS_PER_TICK)) {
     try {
-      await foldResumedRun(event, now);
+      if (await foldResumedRun(event, now)) await pushLoopChanged(event.userId, event.loopId, logger);
     } catch (error) {
       logger.error(`[Loops] Failed to fold resumed run ${event.executionId}`, error as Error);
     }
@@ -175,6 +172,9 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
     } catch (error) {
       logger.error(`[Loops] Failed to reconcile loop ${loop.id}`, error as Error);
     }
+    // ponytail: pushes every in-flight loop each tick, folded or not (at most MAX_ACTIVE_LOOP_RUNS cloud runs
+    // plus desktop runs, one small refetch each per open page); have reconcileLoop report a fold if it matters.
+    await pushLoopChanged(loop.userId, loop.id, logger);
   }
 
   // Before dispatch, so a reopened ticket at the top of its loop runs this tick.
@@ -200,6 +200,44 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
 
   // Last, so notices reflect this tick's state changes.
   await syncLoopNotices(logger).catch(error => logger.error('[Loops] Notice sync failed', error as Error));
+}
+
+/**
+ * Event-driven dispatch, from the loop dispatch queue (apps/workers/src/queueHandlers/loopDispatch.ts): folds
+ * the loop's finished run, then starts its next run if the loop is due and a run slot is free. The claim
+ * (`claimDueById`, the tick's lease) is the only gate, so the tick and any number of events never start one
+ * loop twice. A no-op when nothing is due. Skips the tick's per-owner round-robin; the global cap still holds.
+ */
+export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger): Promise<void> {
+  if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) return;
+  const loop = await loopRepository.findById(loopId);
+  if (!loop) return;
+
+  let changed = false;
+  if (loop.activeExecutionId) {
+    try {
+      await reconcileLoop(loop, now);
+    } catch (error) {
+      logger.error(`[Loops] Failed to reconcile loop ${loop.id}`, error as Error);
+    }
+    changed = !(await loopRepository.findById(loopId))?.activeExecutionId;
+  }
+
+  // ponytail: count-then-claim is not atomic, so concurrent events and the tick can overshoot the cap by the
+  // consumer's concurrency (infra/cron.ts, loopDispatchQueue); an atomic in-flight counter is the upgrade.
+  if (MAX_ACTIVE_LOOP_RUNS - (await loopRepository.countInFlight()) > 0) {
+    const claimed = await loopRepository.claimDueById(loopId, now, LOOP_LEASE_MS);
+    if (claimed) {
+      changed = true;
+      try {
+        await dispatchLoop(claimed, now, logger);
+      } catch (error) {
+        logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
+      }
+    }
+  }
+
+  if (changed) await pushLoopChanged(loop.userId, loop.id, logger);
 }
 
 /** Reopens tickets whose `blockedOn` condition now holds, and makes their loops due. Never touches a plain block. */
@@ -244,6 +282,8 @@ async function dispatchDue(
     } catch (error) {
       logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
     }
+    // Started, paused or deferred: each shows on the loop page.
+    await pushLoopChanged(loop.userId, loop.id, logger);
   }
   // Stopping at MAX_CLAIMS_PER_TICK is not the run cap, so it does not count as capped.
   return { claimed, capped: started >= allowance };
@@ -521,12 +561,16 @@ async function parkUnsure(
  * Folds a run its owner resumed from the gate back into its ticket once the run ends, as `reconcileLoop`
  * does for a loop's active run, but without touching the loop's memory, run count or failure count:
  * only the active run feeds those. A resumed run that pauses again is parked under a new event.
+ * Returns whether its ticket changed.
  */
-async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
+async function foldResumedRun(event: ILoopEvent, now: Date): Promise<boolean> {
   const executionId = event.executionId;
   const loop = await loopRepository.findById(event.loopId);
   // Resumed before any tick detached it, the run is still the loop's active run and reconcileLoop folds it.
-  if (!loop || loop.activeExecutionId === executionId) return loopEventRepository.markFolded(event.id, now);
+  if (!loop || loop.activeExecutionId === executionId) {
+    await loopEventRepository.markFolded(event.id, now);
+    return false;
+  }
 
   const execution = await agentExecutionRepository.findById(executionId);
   const ticket = await workItemRepository.findByExecutionId(executionId);
@@ -534,14 +578,14 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
   if (execution && ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status)) {
     const gate = execution.pendingGate;
     if (execution.status === 'paused' && gate) {
-      if (new Date(gate.requestedAt).getTime() === new Date(event.requestedAt).getTime()) return;
+      if (new Date(gate.requestedAt).getTime() === new Date(event.requestedAt).getTime()) return false;
       await parkUnsure(loop.id, execution, executionId, gate, ticket);
       await loopEventRepository.markFolded(event.id, now);
-      return;
+      return true;
     }
     // Same stale rule as reconcileLoop, so a resumed run whose executor died does not hold its ticket forever.
-    if (WAITING_ON_CHILDREN.includes(execution.status)) return;
-    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return;
+    if (WAITING_ON_CHILDREN.includes(execution.status)) return false;
+    if (now.getTime() - new Date(execution.updatedAt).getTime() < STALE_ACTIVE_MS) return false;
   }
 
   if (ticket) {
@@ -560,6 +604,7 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
   }
   await loopEventRepository.markFolded(event.id, now);
   if (ticket) await makeDueIfReady(loop, now);
+  return true;
 }
 
 /**
@@ -567,12 +612,13 @@ async function foldResumedRun(event: ILoopEvent, now: Date): Promise<void> {
  * passed, a credit pause once the account the executor bills can pay again. Logs each resume; the notice
  * sweep resolves the pause notice at the end of the tick.
  */
-async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
+async function resumeIfDue(loop: ILoop, now: Date): Promise<boolean> {
   const kind = loop.autoResume!;
   // Priced like admit, on the model the next run will use, so a stage-model loop does not resume only to re-pause.
   const canPay = () => canPayAgain(loop, async () => iterationPrice(loop, await nextRunModel(loop)));
-  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPay())) return;
-  if (!(await loopRepository.resumeAutoPaused(loop.id, kind, now)) || !loop.lastExecutionId) return;
+  if (kind === 'budget' ? !loop.nextRunAt || new Date(loop.nextRunAt) > now : !(await canPay())) return false;
+  if (!(await loopRepository.resumeAutoPaused(loop.id, kind, now))) return false;
+  if (!loop.lastExecutionId) return true;
   await loopEventRepository.recordAutoResumed({
     loopId: loop.id,
     userId: loop.userId,
@@ -580,6 +626,7 @@ async function resumeIfDue(loop: ILoop, now: Date): Promise<void> {
     reason: kind === 'budget' ? 'Daily budget reset' : 'Credits available again',
     requestedAt: now,
   });
+  return true;
 }
 
 /** Pauses a claimed loop until its owner (or the scheduler, by `autoResume`) sets it live again. */

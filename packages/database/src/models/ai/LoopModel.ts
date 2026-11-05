@@ -95,6 +95,26 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result?.toJSON() ?? null;
   }
 
+  /**
+   * `claimDue` for one loop: the event-driven dispatch's only gate, so it and the scheduler tick can never
+   * both start the loop. A per-loop run capacity would change this filter (and `claimDue`'s) together.
+   */
+  async claimDueById(id: string, now: Date, leaseMs: number): Promise<ILoop | null> {
+    if (!mongoose.isValidObjectId(id)) return null;
+    const result = await this.loopModel.findOneAndUpdate(
+      {
+        _id: id,
+        status: 'live',
+        nextRunAt: { $lte: now },
+        activeExecutionId: { $exists: false },
+        $or: [{ leaseUntil: { $exists: false } }, { leaseUntil: { $lt: now } }],
+      },
+      { $set: { leaseUntil: new Date(now.getTime() + leaseMs) } },
+      { new: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
   async releaseLease(id: string): Promise<void> {
     await this.loopModel.updateOne({ _id: id }, { $unset: { leaseUntil: '' } });
   }

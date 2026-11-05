@@ -40,6 +40,7 @@ const repo = vi.hoisted(() => ({
   create: vi.fn(),
   removeFromOversees: vi.fn(),
   makeDueNow: vi.fn(),
+  countInFlight: vi.fn(),
 }));
 const tickets = vi.hoisted(() => ({
   softDeleteByLoop: vi.fn(),
@@ -85,6 +86,15 @@ vi.mock('@bike4mind/server-utils/utils/orgAccess', () => ({ verifyOrgAccess }));
 
 const getOrCreateSession = vi.hoisted(() => vi.fn());
 vi.mock('@server/managers/sessionCrud', () => ({ getOrCreateSession }));
+
+const dispatch = vi.hoisted(() => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
+vi.mock('@server/utils/loopDispatch', () => dispatch);
+
+const loopAdmission = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/loopBudget', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/utils/loopBudget')>()),
+  loopAdmission,
+}));
 
 const resolveDefaultChatModel = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/chatCompletionDefaults', () => ({ resolveDefaultChatModel }));
@@ -146,6 +156,8 @@ beforeEach(() => {
   settings.LoopsDailyCreditsPerUser = 0;
   users.findById.mockResolvedValue({});
   executions.sumLoopCreditsForUser.mockResolvedValue(0);
+  repo.countInFlight.mockResolvedValue(0);
+  loopAdmission.mockResolvedValue({ ok: true });
 });
 
 it.each(['collection', 'item', 'run', 'budget'])('%s route refuses API keys (jwtOnly)', mod => {
@@ -339,6 +351,23 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(patch).toMatchObject({ status: 'live', consecutiveFailures: 0 });
   });
 
+  it.each(['error', 'needs_you'])('%s -> live runs now, not an interval after the last run', async from => {
+    const before = Date.now();
+    const patch = await patchStatus({ status: from, lastRunAt: new Date() }, 'live');
+    expect(patch.nextRunAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(patch.nextRunAt.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+  });
+
+  it('asks for a dispatch only when the loop goes live', async () => {
+    await patchStatus({ status: 'paused' }, 'live');
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledTimes(1);
+
+    vi.clearAllMocks();
+    await patchStatus({ status: 'live' }, 'paused');
+    expect(dispatch.requestLoopDispatch).not.toHaveBeenCalled();
+  });
+
   it('live -> paused', async () => {
     expect(await patchStatus({ status: 'live' }, 'paused')).toMatchObject({ status: 'paused' });
   });
@@ -436,15 +465,48 @@ describe('PATCH /api/loops/:id status transitions', () => {
 });
 
 describe('POST /api/loops/:id/run', () => {
-  it('makes a live loop due now', async () => {
+  const run = async (fields: Record<string, unknown> = {}) => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ status: 'live', stages: ['todo', 'done'] }));
-    await call('run', 'post', { query: { id: OID } }).result;
+    repo.updateForUser.mockImplementation(async (_id: string, _u: string, patch: Record<string, unknown>) =>
+      loop({ status: 'live', ...fields, ...patch })
+    );
+    const { res, result } = call('run', 'post', { query: { id: OID } });
+    await result;
+    return res._getJSONData();
+  };
+
+  it('makes a live loop due now and asks for a dispatch', async () => {
+    const body = await run();
     expect(repo.updateForUser).toHaveBeenCalledWith(
       OID,
       'u1',
       { nextRunAt: expect.any(Date), idleStreak: 0, idleResetAt: expect.any(Date) },
       'live'
     );
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+    expect(body).not.toHaveProperty('waitingReason');
+  });
+
+  it.each([
+    ['a run is in flight', { activeExecutionId: 'x1' }, () => undefined, /Already running/],
+    ['every run slot is busy', {}, () => repo.countInFlight.mockResolvedValue(4), /run slots are busy/],
+    [
+      'the loop budget is spent',
+      {},
+      () => loopAdmission.mockResolvedValue({ ok: false, kind: 'loop_budget' }),
+      /daily budget is spent/,
+    ],
+    [
+      'pacing defers it',
+      {},
+      () => loopAdmission.mockResolvedValue({ ok: false, kind: 'paced', readyAt: new Date('2026-11-05T14:30:00Z') }),
+      /Paced.*14:30 UTC/,
+    ],
+  ])('says why it waits when %s, and still asks for a dispatch', async (_case, fields, arrange, reason) => {
+    arrange();
+    const body = await run(fields);
+    expect(body.waitingReason).toMatch(reason);
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
   });
 
   it('is a 409 when the loop stopped being live mid-request', async () => {
@@ -1048,6 +1110,7 @@ describe('POST /api/loops/:id/events/:eventId/resolve', () => {
       loopId: OID,
     });
     expect(repo.makeDueNow).toHaveBeenCalledWith(OID, expect.any(Date));
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ source: 'asked', resolution: { outcome: 'resumed', note: 'EU' } });
     expect(res._getJSONData()).not.toHaveProperty('userId');

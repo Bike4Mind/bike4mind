@@ -12,6 +12,7 @@ import {
   makeDueIfReady,
   ticketMovePatch,
 } from '@server/utils/loopTickets';
+import { requestLoopDispatch } from '@server/utils/loopDispatch';
 import {
   parseStatusFilter,
   validateWorkItemDependencies,
@@ -119,7 +120,10 @@ const handler = baseApi()
       ...(ticket?.blockedOn && { blockedOn: ticket.blockedOn }),
     } as Omit<IWorkItem, 'id' | 'createdAt' | 'updatedAt'>);
 
-    if (loop) await makeDueIfReady(loop);
+    if (loop) {
+      await makeDueIfReady(loop);
+      await requestLoopDispatch(loop.id, req.logger);
+    }
     res.status(201).json(created);
   });
 

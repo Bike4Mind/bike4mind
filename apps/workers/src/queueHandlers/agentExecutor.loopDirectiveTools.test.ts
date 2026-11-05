@@ -24,6 +24,8 @@ vi.mock('@bike4mind/database', () => ({
   workItemRepository: items,
   adminSettingsRepository: { getSettingsValue: async () => true },
 }));
+const dispatch = vi.hoisted(() => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
+vi.mock('@server/utils/loopDispatch', () => dispatch);
 
 import {
   buildLoopDirectiveTools,
@@ -337,11 +339,17 @@ describe('overseer actions', () => {
       expect(loops.makeDueNow).toHaveBeenCalledWith(WORKER, expect.any(Date));
       expect(directives.create).toHaveBeenCalledWith(actionRow('run_now', 'Run now'));
       expect(loops.updateForUser).not.toHaveBeenCalled();
+      expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(WORKER, expect.anything());
+      expect(dispatch.pushLoopChanged).toHaveBeenCalledWith('u1', WORKER, expect.anything());
+      expect(result.note).toMatch(/within seconds/);
+      expect(result.note).not.toMatch(/5 minutes|scheduler tick/);
     });
 
     it('still succeeds with a run in flight, and says so', async () => {
       workerOverrides = { activeExecutionId: 'x-worker' };
-      expect(JSON.parse(await act('loop_run_now'))).toMatchObject({ running: true });
+      const result = JSON.parse(await act('loop_run_now'));
+      expect(result).toMatchObject({ running: true });
+      expect(result.note).toMatch(/when this one ends/);
     });
 
     it.each(['paused', 'needs_you', 'error', 'draft'])('refuses a %s loop', async status => {
@@ -349,6 +357,7 @@ describe('overseer actions', () => {
       expect(await act('loop_run_now')).toBe(`Error: loop is ${status}; only a live loop can be run now`);
       expect(loops.makeDueNow).not.toHaveBeenCalled();
       expect(directives.create).not.toHaveBeenCalled();
+      expect(dispatch.requestLoopDispatch).not.toHaveBeenCalled();
     });
 
     it('refuses an unwatched loop, a missing reason, and the 6th action of a run', async () => {
@@ -366,7 +375,7 @@ describe('overseer actions', () => {
     it.each(['error', 'needs_you'])(
       'sets a watched %s loop live, resets failures and logs a resume row',
       async status => {
-        workerOverrides = { status, statusReason: 'Run failed', consecutiveFailures: 3 };
+        workerOverrides = { status, statusReason: 'Run failed', consecutiveFailures: 3, lastRunAt: new Date() };
         expect(JSON.parse(await act('loop_resume'))).toMatchObject({ id: 'd-new', loopId: WORKER, status: 'live' });
         const [id, userId, patch, expected] = loops.updateForUser.mock.calls[0];
         expect([id, userId, expected]).toEqual([WORKER, 'u1', status]);
@@ -380,6 +389,9 @@ describe('overseer actions', () => {
         });
         expect(directives.create).toHaveBeenCalledWith(actionRow('resume', `Resume (was ${status}: Run failed)`));
         expect(directives.countActionsSince).toHaveBeenCalledWith(WORKER, 'resume', expect.any(Date));
+        // Restarted from a stop, it runs now rather than an interval after its last run, and is dispatched.
+        expect(patch.nextRunAt.getTime()).toBeLessThanOrEqual(Date.now());
+        expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(WORKER, expect.anything());
       }
     );
 
@@ -404,6 +416,7 @@ describe('overseer actions', () => {
       directives.countActionsSince.mockResolvedValue(1);
       expect(await act('loop_resume')).toBe('Error: already resumed in the last 24 h; leave it to the owner');
       expect(loops.updateForUser).not.toHaveBeenCalled();
+      expect(dispatch.requestLoopDispatch).not.toHaveBeenCalled();
     });
 
     it('reports a lost race with the owner as a conflict and logs nothing', async () => {

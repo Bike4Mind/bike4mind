@@ -29,7 +29,9 @@ const h = vi.hoisted(() => ({
   startAgentExecution: vi.fn(),
   getAvailableModels: vi.fn(),
   nextIterationCredits: vi.fn(),
+  pushLoopChanged: vi.fn(),
 }));
+vi.mock('@server/utils/loopDispatch', () => ({ pushLoopChanged: h.pushLoopChanged, requestLoopDispatch: vi.fn() }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: h.startAgentExecution }));
@@ -44,7 +46,9 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 
 import {
   BUDGET_PAUSE_REASON,
+  dispatchLoopNow,
   LOOP_LEASE_MS,
+  MAX_ACTIVE_LOOP_RUNS,
   MAX_CONSECUTIVE_FAILURES,
   runLoopSchedulerTick,
   USER_BUDGET_PAUSE_REASON,
@@ -90,6 +94,7 @@ afterEach(async () => {
   h.startAgentExecution.mockReset();
   h.getAvailableModels.mockReset();
   h.nextIterationCredits.mockReset();
+  h.pushLoopChanged.mockReset();
 });
 
 const createLoop = async (overrides: Record<string, unknown> = {}) =>
@@ -1884,5 +1889,122 @@ describe('runLoopSchedulerTick - liveness', () => {
         expect(await ticketOf(t.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
       }
     });
+  });
+});
+
+describe('dispatchLoopNow', () => {
+  const createTicket = async (loopId: string, overrides: Record<string, unknown> = {}) =>
+    (
+      await WorkItem.create({
+        userId: 'user-1',
+        loopId,
+        title: 'Write the summary',
+        stage: 'todo',
+        status: 'open',
+        dependencies: [],
+        ...overrides,
+      })
+    ).toJSON();
+  const ticketOf = async (id: string) => (await WorkItem.findById(id))!.toJSON();
+  const LATER = new Date(NOW.getTime() + 60 * 60_000);
+
+  it('starts a due live loop on its ready ticket and pushes the change to its page', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-1' });
+    expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
+  });
+
+  it('is a no-op for a loop that is not due, with no push', async () => {
+    const loop = await createLoop({ nextRunAt: LATER });
+    await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(h.pushLoopChanged).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when EnableLoops is off', async () => {
+    vi.mocked(adminSettingsRepository.getSettingsValue).mockResolvedValue(false as never);
+    const loop = await createLoop({ activeExecutionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-0' });
+  });
+
+  it('starts nothing while every loop run slot is taken', async () => {
+    for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS; i++)
+      await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
+    const loop = await createLoop();
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+  });
+
+  it('folds a finished run, advances its ticket and starts the next run in the same call', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing', status: 'in_progress', executionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-1', runCount: 1 });
+  });
+
+  it('never starts a run on a desktop-stage ticket', async () => {
+    const loop = await createLoop({
+      stages: ['todo', 'review', 'done'],
+      stageConfig: [{ stage: 'review', runner: 'desktop' }],
+    });
+    const ticket = await createTicket(loop.id, { stage: 'review' });
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    // The loop still runs, as a plain goal run; the desktop ticket waits for its runner.
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(h.startAgentExecution.mock.calls[0][0].query).not.toContain('Ticket id:');
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'open' });
+  });
+
+  it('with the tick and events firing together, starts one run and claims the ticket once', async () => {
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+
+    await Promise.all([
+      runLoopSchedulerTick(NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+    ]);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
+  });
+
+  it('with the tick and events firing together on a finished run, folds it once and starts one next run', async () => {
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    const ticket = await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+
+    await Promise.all([
+      runLoopSchedulerTick(NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+      dispatchLoopNow(loop.id, NOW, logger),
+    ]);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing', status: 'in_progress', executionId: 'exec-1' });
+    expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-1', runCount: 1 });
   });
 });
