@@ -1,6 +1,8 @@
-import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { lstat, readFile, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Node } from 'web-tree-sitter';
+import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
 import { resolveOperand } from './paths';
 import { own } from '@shared/ownKeys';
 
@@ -12,6 +14,8 @@ import { own } from '@shared/ownKeys';
 export interface InPlaceWrites {
   files: string[];
   trees: string[];
+  /** Whether what it writes may include symlinks: an extracted archive, an applied diff or a checkout. */
+  links?: boolean;
 }
 
 const MAX_PATCH_BYTES = 2 * 1024 * 1024;
@@ -197,12 +201,14 @@ function inPlaceEdit(program: string, args: readonly string[]): string[] {
 function tarTrees(args: readonly string[]): string[] {
   const rest = [...args];
   let extract = false;
+  let absolute = false;
   let directory: string | undefined;
   const members: string[] = [];
   const takeShort = (letters: string, attached: boolean): void => {
     for (let index = 0; index < letters.length; index++) {
       const letter = letters[index];
       if (letter === 'x') extract = true;
+      if (letter === 'P') absolute = true;
       if (!TAR_VALUED.includes(letter)) continue;
       const tail = letters.slice(index + 1);
       const value = attached && tail ? tail : rest.shift();
@@ -219,6 +225,8 @@ function tarTrees(args: readonly string[]): string[] {
     } else if (arg.startsWith('--')) {
       const [name, value] = arg.slice(2).split(/=(.*)/s);
       if (name === 'extract' || name === 'get') extract = true;
+      // No other tar long option starts with `ab`, so getopt_long takes `--ab` and longer for it.
+      if (name.length >= 2 && 'absolute-names'.startsWith(name)) absolute = true;
       if (name === 'directory') directory = value ?? rest.shift();
       else if (value === undefined && ['file', 'files-from', 'exclude-from', 'blocking-factor'].includes(name)) {
         rest.shift();
@@ -230,12 +238,16 @@ function tarTrees(args: readonly string[]): string[] {
     }
   }
   if (!extract) return [];
+  // Members keep a leading `/` and `..`, so the archive may write anywhere.
+  if (absolute) return ['/'];
   const base = directory ?? '.';
   return members.length > 0 ? members.map(member => memberIn(base, member)) : [base];
 }
 
 function unzipTrees(args: readonly string[]): string[] {
   if (args.some(arg => /[lptcZz]/.test(shortCluster(arg).replace(/d.*$/, '')))) return [];
+  // `-:` keeps `../` in member names.
+  if (args.some(arg => shortCluster(arg).replace(/d.*$/, '').includes(':'))) return ['/'];
   const directory = optionValue(args, '-d', null);
   const words: string[] = [];
   let excluding = false;
@@ -332,18 +344,96 @@ async function patchWrites(args: readonly string[], node: Node, cwd: string): Pr
   };
 }
 
-/** The folder holding `.git` at or above `directory`, else `directory` itself. */
-export async function repositoryRoot(directory: string): Promise<string> {
+/** The folder holding `.git` at or above `directory`, else null. */
+export async function findRepositoryRoot(directory: string): Promise<string | null> {
   for (let current = directory; ; current = dirname(current)) {
     if (await stat(join(current, '.git')).catch(() => null)) return current;
-    if (dirname(current) === current) return directory;
+    if (dirname(current) === current) return null;
   }
+}
+
+/**
+ * What `git rev-parse --show-toplevel` prints from `directory`, or null when it is in no repository or a
+ * config there may move the work tree (`core.worktree`, an include the scan does not follow).
+ */
+export async function repositoryToplevel(directory: string): Promise<string | null> {
+  const root = await findRepositoryRoot(directory);
+  if (root === null) return null;
+  const dotGit = join(root, '.git');
+  let gitDir = dotGit;
+  if ((await stat(dotGit).catch(() => null))?.isFile()) {
+    const pointer = /^gitdir:\s*(.+?)\s*$/m.exec((await readSmall(dotGit)) ?? '');
+    if (!pointer?.[1]) return null;
+    gitDir = resolve(root, pointer[1]);
+  }
+  const configs = [join(gitDir, 'config')];
+  const common = (await readSmall(join(gitDir, 'commondir')))?.trim();
+  if (common) configs.push(join(resolve(gitDir, common), 'config'));
+  for (const config of configs) {
+    const text = await readFile(config, 'utf8').catch((error: NodeJS.ErrnoException) =>
+      error.code === 'ENOENT' ? '' : null
+    );
+    if (text === null || /worktree|include/i.test(text)) return null;
+  }
+  return realpath(root).catch(() => null);
+}
+
+/** The folder holding `.git` at or above `directory`, else `directory` itself. */
+export async function repositoryRoot(directory: string): Promise<string> {
+  return (await findRepositoryRoot(directory)) ?? directory;
+}
+
+/** git subcommands that may rewrite any tracked file, given the arguments that make them do so. */
+const WHOLE_TREE_GIT: Readonly<Record<string, (args: readonly string[]) => boolean>> = {
+  'checkout-index': () => true,
+  switch: () => true,
+  merge: () => true,
+  'cherry-pick': () => true,
+  am: () => true,
+  pull: () => true,
+  rebase: () => true,
+  revert: () => true,
+  bisect: () => true,
+  stash: args => !['list', 'show', 'create'].includes(args[0] ?? ''),
+  reset: args => args.some(arg => ['--hard', '--merge', '--keep'].includes(arg)),
+  'read-tree': args => args.includes('-u'),
+};
+
+/**
+ * The `.claude` folders a repository tracks or holds at its top, which a whole-tree git write may rewrite.
+ * A listing that fails or overruns counts as one at the top.
+ */
+async function repositorySettings(root: string): Promise<string[]> {
+  const top = join(root, '.claude');
+  if (await lstat(top).catch(() => null)) return [top];
+  const env = await gitCommandEnv(root);
+  const command = await gitCommand(
+    root,
+    hostGitArgs(['-C', gitArgumentPath(root, root), 'ls-files', '-z', '--', '.claude', '*/.claude/*'], root)
+  );
+  if (!command) return [top];
+  const listed = await new Promise<string | null>(resolve => {
+    execFile(
+      command.file,
+      command.args,
+      { env, timeout: quickGitTimeout(env), maxBuffer: 1024 * 1024, windowsHide: true },
+      (error, stdout) => resolve(error ? null : stdout)
+    );
+  });
+  if (listed === null) return [top];
+  const folders = new Set<string>();
+  for (const path of listed.split('\0')) {
+    const at = path.split('/').indexOf('.claude');
+    if (at !== -1) folders.add(join(root, ...path.split('/').slice(0, at + 1)));
+  }
+  return [...folders];
 }
 
 /** `git apply` names paths from the top of the repository, so each is recorded there and from `cwd`. */
 async function gitApplyWrites(args: readonly string[], node: Node, cwd: string): Promise<InPlaceWrites> {
   const reportOnly = args.some(arg => ['--check', '--stat', '--numstat', '--summary'].includes(arg));
-  if ((reportOnly && !args.includes('--apply')) || args.includes('--cached')) return { files: [], trees: [] };
+  // `--cached` writes only the index, which a later checkout copies out, so its paths count as written too.
+  if (reportOnly && !args.includes('--apply')) return { files: [], trees: [] };
   const prefix = optionValue(args, null, '--directory') ?? '';
   const root = await repositoryRoot(resolveOperand(cwd));
   const patches = operands(args, '');
@@ -393,10 +483,11 @@ function gitSubcommand(args: readonly string[], cwd: string): { sub: string; res
  * `git checkout -- <path>` / `git restore`. `tokens` are unquoted, program first.
  */
 export async function inPlaceWrites(tokens: readonly string[], node: Node, cwd: string): Promise<InPlaceWrites> {
-  const { files, trees } = await writesOf(tokens, node, cwd);
+  const { files, trees, links } = await writesOf(tokens, node, cwd);
   return {
     files: files.filter(path => !hasGlob(path)),
     trees: [...trees, ...files.filter(hasGlob).map(treeOf)],
+    ...(links ? { links } : {}),
   };
 }
 
@@ -404,24 +495,31 @@ async function writesOf(tokens: readonly string[], node: Node, cwd: string): Pro
   const [executable, ...args] = tokens;
   const program = basename(executable ?? '');
   const none: InPlaceWrites = { files: [], trees: [] };
-  if (program === 'patch') return patchWrites(args, node, cwd);
-  if (program === 'tar' || program === 'bsdtar') return { files: [], trees: tarTrees(args) };
-  if (program === 'unzip') return { files: [], trees: unzipTrees(args) };
+  const extracted = (trees: string[]): InPlaceWrites => ({ files: [], trees, links: true });
+  if (program === 'patch') return { ...(await patchWrites(args, node, cwd)), links: true };
+  if (program === 'tar' || program === 'bsdtar') return extracted(tarTrees(args));
+  if (program === 'unzip') return extracted(unzipTrees(args));
   if (/^7zz?a?$/.test(program) && (args[0] === 'x' || args[0] === 'e')) {
+    if (args.includes('-spf')) return extracted(['/']);
     const output = args.find(arg => arg.startsWith('-o'))?.slice(2);
-    return { files: [], trees: [output || '.'] };
+    return extracted([output || '.']);
   }
   if (program === 'cpio' && args.some(arg => shortCluster(arg).includes('i') || arg === '--extract')) {
-    return { files: [], trees: [optionValue(args, '-D', '--directory') ?? '.'] };
+    // cpio keeps an absolute member name unless told not to.
+    if (!args.includes('--no-absolute-filenames')) return extracted(['/']);
+    return extracted([optionValue(args, '-D', '--directory') ?? '.']);
   }
   if (own(DECOMPRESSORS, program)) return { files: decompressed(program, args), trees: [] };
   if (program === 'git') {
     const git = gitSubcommand(args, cwd);
     if (!git) return none;
     const relocate = (path: string): string => resolveOperand(git.cwd, path);
-    if (git.sub === 'apply') return gitApplyWrites(git.rest, node, git.cwd);
-    if (git.sub === 'checkout' || git.sub === 'restore') {
-      return { files: [], trees: gitRestoreTrees(git.sub, git.rest).map(relocate) };
+    if (git.sub === 'apply') return { ...(await gitApplyWrites(git.rest, node, git.cwd)), links: true };
+    const restored = git.sub === 'checkout' || git.sub === 'restore' ? gitRestoreTrees(git.sub, git.rest) : [];
+    if (restored.length > 0) return extracted(restored.map(relocate));
+    // A branch checkout and the like rewrite whatever the repository tracks; only its settings folders are recorded.
+    if (git.sub === 'checkout' || own(WHOLE_TREE_GIT, git.sub)?.(git.rest)) {
+      return { files: await repositorySettings(await repositoryRoot(git.cwd)), trees: [] };
     }
     return none;
   }

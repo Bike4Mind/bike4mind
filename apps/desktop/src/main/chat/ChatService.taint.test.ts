@@ -581,6 +581,8 @@ describe('ChatService untrusted content in a reply', () => {
     ];
 
     it.each(cases)('%s runs %s unasked in a tainted reply', async (rule, _label, [name, input]) => {
+      // A whole-tree git write is left to the rules only in a repository that tracks no .claude folder.
+      if (rule.startsWith('Bash(git')) execFileSync('git', ['-C', root, 'init', '-q']);
       rules = allowRules([rule]);
       const id = await session('auto');
       await reply(id, [fetch, [name, name === 'bash_execute' ? { ...input, cwd: root } : input]]);
