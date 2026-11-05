@@ -440,6 +440,95 @@ describe('PermissionRuleSet', () => {
     expect(decide(set, bash)).toBe('allow');
   });
 
+  describe('a shell command beside a protected folder inside the shared one', () => {
+    let base: string;
+    let directory: string;
+    const allow = [
+      'Bash(rm:*)',
+      'Bash(mv:*)',
+      'Bash(ln:*)',
+      'Bash(unlink:*)',
+      'Bash(cat:*)',
+      'Bash(ls:*)',
+      'Bash(echo:*)',
+      'Bash(git commit:*)',
+    ];
+
+    beforeEach(async () => {
+      base = await realpath(await mkdtemp(join(tmpdir(), 'permission-shell-')));
+      directory = join(base, 'dir');
+      await mkdir(join(directory, 'app-data'), { recursive: true });
+      await mkdir(join(directory, 'src'));
+      await writeFile(join(directory, 'payload'), '{}');
+      await writeFile(join(directory, 'app-data', 'file'), '{}');
+      await symlink(join(directory, 'payload'), join(directory, 'app-data', 'lnk'));
+    });
+
+    afterEach(async () => {
+      await rm(base, { recursive: true, force: true });
+    });
+
+    const decideScript = async (script: string, cwd = directory): Promise<string | null> => {
+      const scan = await scanShell(script, cwd, [directory]);
+      if (!scan) throw new Error(`Expected ${script} to parse`);
+      return decide(set({ allow }, [join(directory, 'app-data')]), {
+        tool: 'bash_execute',
+        shell: { script, ...scan },
+      });
+    };
+
+    it.each(['rm app-data/file', 'rm app-data/sub/../file'])('asks for %s', async script => {
+      expect(await decideScript(script)).toBeNull();
+    });
+
+    it.each(['rm app-data/lnk', 'mv app-data/lnk moved', 'ln -sf payload app-data/lnk', 'unlink app-data/lnk'])(
+      'asks for %s, which acts on the link inside the protected folder',
+      async script => {
+        expect(await decideScript(script)).toBeNull();
+      }
+    );
+
+    it.each(['rm app-d?ta/file', 'rm app-*/file', 'rm */file', 'rm -r app-d*', 'cat app-d?ta/file'])(
+      'asks for %s, whose glob may reach the protected folder',
+      async script => {
+        expect(await decideScript(script)).toBeNull();
+      }
+    );
+
+    it.each([
+      'rm "$PWD/app-data/file"',
+      'rm `pwd`/app-data/file',
+      'X=app-data; rm $X/file',
+      'cd "$PWD/app-data" && rm file',
+      'cat < "$PWD/app-data/file"',
+    ])('asks for %s, whose operand a variable or substitution decides', async script => {
+      expect(await decideScript(script)).toBeNull();
+    });
+
+    it.each(['rm payload', 'rm src/x.ts', 'ls src/*.ts', 'cat "app-d?ta/file"', "cat '$x'", 'mv payload src/moved'])(
+      'still allows %s',
+      async script => {
+        expect(await decideScript(script)).toBe('allow');
+      }
+    );
+
+    it.each([
+      'rm "$PWD/../app-data/file"',
+      'rm $(echo ..)/app-data/file',
+      'cd "$PWD/../app-data" && rm file',
+      'cat < "$PWD/../app-data/file"',
+    ])('asks for %s from a folder that holds no protected one', async script => {
+      expect(await decideScript(script, join(directory, 'src'))).toBeNull();
+    });
+
+    it.each(['git commit -m "$(cat msg)"', 'echo "$X"', 'echo hi'])(
+      'still allows %s, whose expanded argument names no path, by its prefix rule',
+      async script => {
+        expect(await decideScript(script, join(directory, 'src'))).toBe('allow');
+      }
+    );
+  });
+
   describe('when a path cannot be resolved', () => {
     let base: string;
     let rules: PermissionRuleSet;

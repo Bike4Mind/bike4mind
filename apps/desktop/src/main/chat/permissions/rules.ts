@@ -267,6 +267,8 @@ export interface PermissionSubject {
     commands: readonly ShellSubjectCommand[];
     directories: readonly string[];
     paths?: readonly string[];
+    /** Folders a glob or an expanded operand reaches anything under: a protected folder within or below one is reached. */
+    globFolders?: readonly string[];
     /** Paths in a WSL distro no root is in: no allow rule covers a call that names one. */
     ungranted?: readonly string[];
   };
@@ -446,6 +448,7 @@ export class PermissionRuleSet {
       if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(caseFolded(path)))) {
         return null;
       }
+      if (subject.shell.globFolders?.some(folder => this.isProtectedFolder(folder))) return null;
       if (!directories.every(directory => this.coversFolder(directory))) return null;
       let first: CompiledRule | null = null;
       for (const command of commands) {

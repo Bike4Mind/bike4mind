@@ -1,6 +1,6 @@
 import { stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, posix, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import {
   PACKAGE_VALUE_OPTIONS,
@@ -48,6 +48,8 @@ export interface ShellScan {
   commands: ShellCommand[];
   /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
   paths?: string[];
+  /** Folders a glob or an expanded operand reaches anything under, so a protected folder within or below one is reached. */
+  globFolders?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
   /** Paths in a WSL distro no root is in, named without reading them: asked every time, never offered as a grant. */
@@ -312,6 +314,28 @@ function globPrefix(text: string): string | null {
   const match = /[?*[]/.exec(text);
   if (!match) return text;
   return match.index === 0 ? null : text.slice(0, match.index);
+}
+
+const singleQuoted = (raw: string): boolean => /^'[^']*'$/.test(raw);
+
+interface ReadOperand {
+  /** The path the operand names, or for a glob or an expansion the folder it expands under. */
+  path: string;
+  /** Where the glob or expansion starts, or null when `path` is the whole operand. */
+  start: number | null;
+  /** A variable or command substitution decides the operand. */
+  unread: boolean;
+}
+
+/**
+ * How the scan reads one operand, `text` being it with quotes removed and `~` expanded. A single-quoted
+ * word is literal, and a double-quoted one expands variables but no glob.
+ */
+function readOperand(raw: string, text: string, dirnameOf: (path: string) => string): ReadOperand {
+  const start = singleQuoted(raw) ? -1 : text.search(/^"[^"]*"$/.test(raw) ? /[$`]/ : /[?*[$`]/);
+  if (start === -1) return { path: text, start: null, unread: false };
+  // As compileRule does: a partial name is a match inside its folder, and `x/` names `x` itself.
+  return { path: dirnameOf(`${text.slice(0, start)}x`), start, unread: /[$`]/.test(text.slice(start)) };
 }
 
 /**
@@ -1667,6 +1691,28 @@ export function inUngrantedDistro(path: string, roots: readonly string[]): boole
 }
 
 /**
+ * Where an operand itself sits, a final link unfollowed: its parent's physical path plus its name.
+ * `rm`, `mv`, `ln -sf` and `unlink` act on the link, not its target. Throws when a parent cannot be resolved.
+ */
+async function ownPlaces(
+  operand: string,
+  cwd: string,
+  roots: readonly string[],
+  reader: OperandReader = 'program'
+): Promise<string[]> {
+  const rules = reader === 'windows' ? win32 : operandRules(cwd);
+  const name = rules.basename(operand);
+  if (name === '' || name === '.' || name === '..') return [];
+  const places: string[] = [];
+  for (const { lexical, physical } of await operandPlaces(rules.dirname(operand), roots, cwd, reader)) {
+    if (inUngrantedDistro(lexical, roots) || (physical === null && onAnotherComputer(lexical))) continue;
+    if (physical === null) throw new PathAccessDenied(operand);
+    places.push(join(physical, name));
+  }
+  return places;
+}
+
+/**
  * Every simple command a shell script would run, and every directory outside the project it
  * names. Null when the script does not parse, which the caller treats as a reason to ask.
  *
@@ -1694,6 +1740,9 @@ export async function scanShell(
     const allowed = [...roots, ...temp];
     const commands: ShellCommand[] = [];
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
+    const globFolders = new Set<string>();
+    // Path operands (file commands, redirects, cd) a variable or substitution decides; their command is never coverable.
+    let unreadOperands = 0;
     const directories = new Set<string>();
     const ungranted = new Set<string>();
     const envFiles = new Set<string>();
@@ -1722,21 +1771,29 @@ export async function scanShell(
       probe = false,
       reader: OperandReader = 'program'
     ): Promise<string | null> => {
-      const written = expand(unquote(raw));
+      const written = singleQuoted(raw) ? raw.slice(1, -1) : expand(unquote(raw));
       const [device, text] = reader === 'windows' ? windowsDevicePath(written) : ['', written];
-      const glob = globPrefix(text);
-      if (!glob || isDynamic(glob)) return null;
-      const prefix = device + glob;
+      if (text === '') return null;
+      const rules = reader === 'windows' ? win32 : operandRules(cwd);
+      const operand = readOperand(raw, text, rules.dirname);
+      if (operand.unread) unreadOperands++;
+      const prefix = device + operand.path;
+      const named = operand.start === null ? prefix : device + text.slice(0, operand.start);
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
-      const stays = text === glob || (!text.slice(glob.length).includes('.') && !glob.endsWith('.'));
+      const stays =
+        operand.start === null || (!operand.unread && !text.slice(operand.start).includes('.') && !named.endsWith('.'));
       const places = await operandPlaces(prefix, allowed, cwd, reader);
+      let own = false;
       for (const { lexical, physical, inside } of places) {
         if (inUngrantedDistro(lexical, allowed)) {
           // Outside without a look: reading it over the share would start that distro.
           ungranted.add(lexical);
         } else if (inside && physical !== null) {
           paths.add(physical);
+          if (operand.start === null) own = true;
+          else globFolders.add(physical);
         } else {
+          if (operand.start !== null) globFolders.add(lexical);
           paths.add(lexical);
           // Named without a look, so the scan opens no connection to that computer.
           if (physical === null && onAnotherComputer(lexical)) {
@@ -1744,11 +1801,12 @@ export async function scanShell(
             continue;
           }
           paths.add(await realpathNearest(lexical));
-          if (probe && stays && (await isToolchainPath(prefix, cwd, home))) continue;
+          if (probe && stays && (await isToolchainPath(named, cwd, home))) continue;
           const isDirectory = (await stat(lexical).catch(() => null))?.isDirectory() === true;
           directories.add(isDirectory ? lexical : dirname(lexical));
         }
       }
+      if (own) for (const place of await ownPlaces(prefix, cwd, allowed, reader)) paths.add(place);
       const landed = places[0];
       return landed?.inside && landed.physical !== null ? landed.physical : (landed?.lexical ?? null);
     };
@@ -1756,6 +1814,7 @@ export async function scanShell(
     const state = { cwd: startDirectory, previous: startDirectory, stack: [] as string[] };
 
     const run = async (node: Node): Promise<void> => {
+      const unreadBefore = unreadOperands;
       for (const child of node.children) {
         if (child && child.type !== 'command_name') await visit(child);
       }
@@ -1770,7 +1829,10 @@ export async function scanShell(
       for (const tree of inPlace.trees) noteWrite(tree, writtenTrees);
 
       if (CHANGES_DIRECTORY.has(program)) {
-        await changeDirectory(program, rest);
+        // Later operands resolve against a folder the scan cannot name, so no prefix rule covers the script.
+        if (await changeDirectory(program, rest)) {
+          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+        }
         return;
       }
 
@@ -1798,14 +1860,15 @@ export async function scanShell(
       // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
       // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
       const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
-      commands.push({
+      const entry: ShellCommand = {
         text: normalised.join(' '),
         always: `${arityPrefix(normalised).join(' ')} *`,
         coverable,
         // A harmless assignment stays in `words` so a deny or ask rule naming it still matches.
         words: coverable ? [...assignments.map(child => child?.text ?? ''), ...tokens].join(' ') : original,
         ...(opaque ? { opaque } : {}),
-      });
+      };
+      commands.push(entry);
       const reason = outboundReason(tokens, readsStdin(node));
       if (reason) {
         outbound.add(reason);
@@ -1862,49 +1925,68 @@ export async function scanShell(
           }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
-          const prefix = globPrefix(expand(unquote(value)));
-          if (!prefix || isDynamic(prefix)) continue;
+          const text = singleQuoted(value) ? value.slice(1, -1) : expand(unquote(value));
+          if (text === '') continue;
+          // Not counted as unread: an argument here is often no path at all (`git commit -m "$(cat msg)"`).
+          const operand = readOperand(value, text, operandRules(state.cwd).dirname);
+          const prefix = operand.path;
+          const record = (physical: string): void => {
+            paths.add(physical);
+            if (operand.start !== null) globFolders.add(physical);
+          };
           const targets = operandTargets(state.cwd, prefix);
           const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
           for (const target of unreachable) ungranted.add(target);
           if (!here) {
             if (unreachable.length === 0) {
-              paths.add(await resolveWithinRootsPhysically(prefix, [parse(targets[0] ?? prefix).root], state.cwd));
+              const volume = [parse(targets[0] ?? prefix).root];
+              record(await resolveWithinRootsPhysically(prefix, volume, state.cwd));
+              const own = operand.start === null ? await ownPlaces(prefix, state.cwd, volume) : [];
+              for (const place of own) paths.add(place);
             }
             continue;
           }
           // A WSL folder's command reads its operands against its own distro. A Windows path or a granted other
           // distro is not on that filesystem and is left unread; one that is and fails fails the scan.
-          for (const { lexical, physical, inside } of await operandPlaces(prefix, [wslUncPath(here, '/')], state.cwd)) {
+          const distro = [wslUncPath(here, '/')];
+          for (const { lexical, physical, inside } of await operandPlaces(prefix, distro, state.cwd)) {
             if (wslLocation(lexical)?.distro.toLowerCase() !== here.distro.toLowerCase()) continue;
             if (!inside || physical === null) throw new PathAccessDenied(prefix);
-            paths.add(physical);
+            record(physical);
           }
+          if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) paths.add(place);
         }
-        return;
+      } else {
+        const probe = READ_PROBES.has(program) && containedCommand(tokens);
+        for (const arg of rest) {
+          if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
+          await check(arg, state.cwd, probe);
+        }
       }
-      const probe = READ_PROBES.has(program) && containedCommand(tokens);
-      for (const arg of rest) {
-        if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
-        await check(arg, state.cwd, probe);
-      }
+      if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original });
     };
 
-    const changeDirectory = async (program: string, rest: string[]): Promise<void> => {
+    /** True when a glob or an expansion leaves the folder it moves to unknown. */
+    const changeDirectory = async (program: string, rest: string[]): Promise<boolean> => {
       if (program === 'popd') {
         const back = state.stack.pop();
         if (back) {
           state.previous = state.cwd;
           state.cwd = back;
         }
-        return;
+        return false;
       }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
+      const unknown =
+        target !== undefined &&
+        target !== '-' &&
+        readOperand(target, expand(unquote(target)), operandRules(state.cwd).dirname).start !== null;
       const next = target === '-' ? state.previous : await check(target ?? '~', state.cwd, false, 'shell');
-      if (next === null) return;
+      if (next === null) return unknown;
       if (program === 'pushd') state.stack.push(state.cwd);
       state.previous = state.cwd;
       state.cwd = next;
+      return unknown;
     };
 
     // Every reading is kept: a write recorded at a place the command never wrote only asks more often.
@@ -2003,6 +2085,14 @@ export async function scanShell(
           commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         }
       }
+      if (node.type === 'redirected_statement') {
+        const before = unreadOperands;
+        for (const child of node.children) if (child) await visit(child);
+        if (unreadOperands > before) {
+          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+        }
+        return;
+      }
       if (node.type === 'file_redirect') {
         for (const child of node.children) if (child && child.type !== 'file_descriptor') await visit(child);
         return redirect(node);
@@ -2026,6 +2116,7 @@ export async function scanShell(
     return {
       commands,
       paths: [...paths],
+      ...(globFolders.size > 0 ? { globFolders: [...globFolders] } : {}),
       directories: [...directories],
       ungranted: [...ungranted],
       envFiles: [...envFiles],

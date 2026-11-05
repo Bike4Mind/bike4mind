@@ -509,6 +509,7 @@ export async function shellApproval(
       })),
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],
+      ...(scan.globFolders ? { globFolders: scan.globFolders } : {}),
       ungranted: unreachable,
     },
   };

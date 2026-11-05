@@ -724,6 +724,8 @@ export interface ApprovalAlways {
   directories: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
+  /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */
+  globFolders?: readonly string[];
   /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
   ungranted?: readonly string[];
 }
