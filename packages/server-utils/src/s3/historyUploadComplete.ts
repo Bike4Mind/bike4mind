@@ -1,4 +1,4 @@
-import { IChatHistoryItem, InboxType, ISession } from '@bike4mind/common';
+import { describeImportHistoryFailure, IChatHistoryItem, InboxType, ISession } from '@bike4mind/common';
 import { importHistoryService } from '@bike4mind/services';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
@@ -224,7 +224,7 @@ export const dispatch = withContext(async (event, context, logger) => {
       await inboxRepository.createInboxMessage({
         type: InboxType.COMMON,
         title: 'LLM history import Failed',
-        message: `Your ${source} import failed, please try again later and/or contact support`,
+        message: `Your ${source} import failed. ${describeImportHistoryFailure(err instanceof Error ? err.message : undefined).message}`,
         receiverId: userId,
         userId,
       });

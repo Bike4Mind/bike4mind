@@ -46,7 +46,11 @@ vi.mock('@bike4mind/services', () => ({
     importHistory: h.importHistory,
   },
 }));
-vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' } }));
+vi.mock('@bike4mind/common', async () => {
+  const { describeImportHistoryFailure } =
+    await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return { InboxType: { COMMON: 'common' }, describeImportHistoryFailure };
+});
 vi.mock('../utils/importHistoryProgress', () => ({
   updateImportProgress: vi.fn(),
   markImportComplete: h.markImportComplete,
@@ -115,5 +119,33 @@ describe('historyUploadComplete completion counts', () => {
 
     const stats = h.markImportComplete.mock.calls[0][2] as { processedItems: number; totalItems: number };
     expect(stats).toEqual({ processedItems: 1, totalItems: 1, skippedItems: 0 });
+  });
+});
+
+describe('historyUploadComplete failure message', () => {
+  it('tells the user why the import failed, without the raw error', async () => {
+    h.jobCreate.mockResolvedValue({ id: 'job-1' });
+    h.importHistory.mockRejectedValue(new Error('conversations.json not found in archive'));
+
+    await run();
+
+    const failure = h.createInboxMessage.mock.calls
+      .map(([msg]) => msg as { title: string; message: string })
+      .find(msg => msg.title === 'LLM history import Failed');
+    expect(failure?.message).toContain("isn't a ChatGPT or Claude export");
+    expect(failure?.message).not.toContain('conversations.json');
+  });
+
+  it('falls back to a generic reason for an unrecognized error', async () => {
+    h.jobCreate.mockResolvedValue({ id: 'job-1' });
+    h.importHistory.mockRejectedValue(new Error('connect ECONNRESET 10.0.0.1:27017'));
+
+    await run();
+
+    const failure = h.createInboxMessage.mock.calls
+      .map(([msg]) => msg as { title: string; message: string })
+      .find(msg => msg.title === 'LLM history import Failed');
+    expect(failure?.message).toContain('Something went wrong during the import');
+    expect(failure?.message).not.toContain('ECONNRESET');
   });
 });

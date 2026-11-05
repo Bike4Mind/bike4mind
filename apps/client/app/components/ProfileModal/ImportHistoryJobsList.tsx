@@ -24,6 +24,7 @@ import {
   useImportHistoryJobWebSocket,
 } from '@client/app/hooks/data/importHistoryJobs';
 import { IImportHistoryJob } from '@bike4mind/database/content';
+import { describeImportHistoryFailure } from '@bike4mind/common';
 
 const formatRelativeTime = (date: Date): string => {
   const now = new Date();
@@ -52,6 +53,9 @@ const ImportHistoryJobRow: FC<{ job: IImportHistoryJob }> = ({ job }) => {
   const currentStep = liveProgress?.currentStep || job.currentStep;
   const processedItems = liveProgress?.processedItems || job.processedItems;
   const totalItems = liveProgress?.totalItems || job.totalItems;
+  // A failed job's currentStep is whatever step it died on, so show the mapped reason instead.
+  const failure =
+    status === 'failed' ? describeImportHistoryFailure(liveProgress?.errorMessage ?? job.errorMessage) : null;
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -113,26 +117,36 @@ const ImportHistoryJobRow: FC<{ job: IImportHistoryJob }> = ({ job }) => {
         </Chip>
       </td>
       <td>
-        <Stack spacing={0.5} sx={{ minWidth: 200 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Typography level="body-xs">{currentStep}</Typography>
-            <Typography level="body-xs" fontWeight="md">
-              {progress}%
-            </Typography>
-          </Box>
-          <LinearProgress determinate value={progress} size="sm" color={getStatusColor(status) as any} />
-          {totalItems > 0 && (
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {processedItems}/{totalItems} items
-            </Typography>
-          )}
-        </Stack>
+        {failure ? (
+          <Typography
+            level="body-xs"
+            sx={{ color: 'danger.plainColor', minWidth: 200 }}
+            data-testid={`import-job-failure-reason-${job.id}`}
+          >
+            {failure.message}
+          </Typography>
+        ) : (
+          <Stack spacing={0.5} sx={{ minWidth: 200 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Typography level="body-xs">{currentStep}</Typography>
+              <Typography level="body-xs" fontWeight="md">
+                {progress}%
+              </Typography>
+            </Box>
+            <LinearProgress determinate value={progress} size="sm" color={getStatusColor(status) as any} />
+            {totalItems > 0 && (
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                {processedItems}/{totalItems} items
+              </Typography>
+            )}
+          </Stack>
+        )}
       </td>
       <td>
         <Typography level="body-sm">{formatFileSize(job.fileSize)}</Typography>
       </td>
       <td>
-        {status === 'failed' && (
+        {failure?.retryable && (
           <Tooltip title="Retry import">
             <IconButton
               size="sm"

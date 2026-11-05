@@ -213,4 +213,5 @@ export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
 
 export * from './preferenceArena';
 export * from './ipBlock';
+export * from './importHistoryFailure';
 export { regionalPersonalEmailProviders } from './organizationUtils';
