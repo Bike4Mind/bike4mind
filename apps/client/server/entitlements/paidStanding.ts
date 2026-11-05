@@ -1,4 +1,5 @@
 import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
+import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 
 /**
@@ -29,11 +30,11 @@ export function hasPaidSubscription(activeSubscriptions: readonly { priceId: str
  * status only: a credit purchase (`lastCreditsPurchasedAt`) is sticky and never confers these, so the
  * grant ends the moment the last active paid subscription lapses.
  */
-export const SUBSCRIBER_ENTITLEMENT_KEYS: readonly string[] = ['questmaster:pro'];
+export const SUBSCRIBER_ENTITLEMENT_KEYS: readonly EntitlementKey[] = ['questmaster:pro'];
 
 export function entitlementsForPaidSubscription(
   activeSubscriptions: readonly { priceId: string }[]
-): readonly string[] {
+): readonly EntitlementKey[] {
   return hasPaidSubscription(activeSubscriptions) ? SUBSCRIBER_ENTITLEMENT_KEYS : [];
 }
 
@@ -45,9 +46,21 @@ export function priceAffectsEntitlements(priceId: string): boolean {
   return entitlementsForPriceIds([priceId]).size > 0 || hasPaidSubscription([{ priceId }]);
 }
 
+/** Paid standing and the subscriber keys from one pass over the subscriptions, for callers that need both. */
+export function resolvePaidStanding(
+  user: PaidStandingUser,
+  activeSubscriptions: readonly { priceId: string }[]
+): { holdsPaidStanding: boolean; subscriberKeys: readonly EntitlementKey[] } {
+  const paidSubscription = hasPaidSubscription(activeSubscriptions);
+  return {
+    holdsPaidStanding: hasPurchasedCredits(user) || paidSubscription,
+    subscriberKeys: paidSubscription ? SUBSCRIBER_ENTITLEMENT_KEYS : [],
+  };
+}
+
 export function holdsPaidStanding(
   user: PaidStandingUser,
   activeSubscriptions: readonly { priceId: string }[]
 ): boolean {
-  return hasPurchasedCredits(user) || hasPaidSubscription(activeSubscriptions);
+  return resolvePaidStanding(user, activeSubscriptions).holdsPaidStanding;
 }
