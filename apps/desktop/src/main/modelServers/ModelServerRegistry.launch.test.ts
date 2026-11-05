@@ -471,6 +471,51 @@ describe('ModelServerRegistry launching servers', () => {
     await expect(registry.startServer('local')).rejects.toThrow('could not find Ollama');
   });
 
+  it('cannot start an Ollama it cannot find, says why, and looks again later', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValueOnce({
+        problem: 'Desktop could not find Ollama on this computer.',
+      });
+      await registry.check('local');
+      expect((await local(registry)).launch).toMatchObject({
+        owner: 'none',
+        canStart: false,
+        problem: 'Desktop could not find Ollama on this computer.',
+      });
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_000);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      expect((await local(registry)).launch).toMatchObject({ canStart: true, problem: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not offer Start until it has looked for Ollama, and settles a slow look in the background', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers, changed } = setup();
+      let found: (value: { path: string }) => void = () => {};
+      vi.mocked(launchers.program).mockReturnValueOnce(new Promise(resolve => (found = resolve)));
+      const checked = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await checked;
+      expect((await local(registry)).launch).toMatchObject({ canStart: false, problem: null });
+
+      changed.mockClear();
+      found({ path: '/opt/fake/bin' });
+      await vi.waitFor(async () => expect((await local(registry)).launch).toMatchObject({ canStart: true }));
+      expect(changed).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stops what it started when a server is removed, and everything on quit', async () => {
     const { registry, handles } = setup();
     const [, added] = await registry.add({

@@ -82,6 +82,9 @@ const LOCAL_TIMEOUT_MS = 1_500;
 export const HEALTH_INTERVAL_MS = 60_000;
 const RECHECK_AFTER_MS = 10_000;
 const OBSERVE_TTL_MS = 5 * 60_000;
+/** How often an Ollama Desktop could start is looked for on this computer, and how long a check waits on it. */
+const PROGRAM_TTL_MS = 30_000;
+const PROGRAM_WAIT_MS = 2_000;
 /** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
 const RESOLVE_TIMEOUT_MS = 5_000;
 /** How long a picker load waits on a down server's check before listing its last models. */
@@ -200,6 +203,9 @@ interface LaunchState {
   lastObserved: Record<string, string> | null;
   /** The cache type and flash attention sizing last used, so a change can expire what was sized with the old ones. */
   sizedWith: string;
+  /** Why Desktop has no Ollama program to start: null when it found one, undefined until it has looked. */
+  missingOllama: string | null | undefined;
+  programAt: number;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -963,19 +969,21 @@ export class ModelServerRegistry {
     const busy = this.supervisor.busy(id);
     const settingsProblem = launchSettingsProblem(settings, target.runtime);
     const lastObserved = target.runtime === 'ollama' ? (this.launchStates.get(id)?.lastObserved ?? null) : null;
+    const missingOllama =
+      target.runtime === 'ollama' && owner === 'none' ? this.launchStates.get(id)?.missingOllama : null;
     return {
       runtime: target.runtime,
       owner,
       busy,
       settings,
       pendingRestart: !!owned && !sameLaunch(owned.settings, settings),
-      canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem,
+      canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem && missingOllama === null,
       problem:
         owner === 'remote'
           ? null
           : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
             ? portHeldMessage(target.port)
-            : (this.supervisor.problem(id) ?? settingsProblem),
+            : (this.supervisor.problem(id) ?? settingsProblem ?? missingOllama ?? null),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
@@ -1034,7 +1042,26 @@ export class ModelServerRegistry {
       state.observedAt = Date.now();
       state.observedVersion = target.health.version;
     }
+    if (target.runtime === 'ollama' && owner === 'none') await this.findOllama(id, state);
     this.sizingChanged(id);
+  }
+
+  /** Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS; a slow look settles in the background. */
+  private findOllama(id: string, state: LaunchState): Promise<void> {
+    if (Date.now() - state.programAt < PROGRAM_TTL_MS) return Promise.resolve();
+    state.programAt = Date.now();
+    const look = this.supervisor
+      .program('ollama', this.launchSettings(id))
+      .then(
+        found => ('problem' in found ? found.problem : null),
+        (error: unknown) => (error instanceof Error ? error.message : String(error))
+      )
+      .then(missing => {
+        if (state.missingOllama === missing) return;
+        state.missingOllama = missing;
+        this.emit();
+      });
+    return within(look, PROGRAM_WAIT_MS, undefined);
   }
 
   private launchState(id: string): LaunchState {
@@ -1047,6 +1074,8 @@ export class ModelServerRegistry {
         observedVersion: null,
         lastObserved: null,
         sizedWith: sizingKey(undefined, undefined),
+        missingOllama: undefined,
+        programAt: 0,
       };
       this.launchStates.set(id, state);
     }
