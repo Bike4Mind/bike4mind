@@ -595,6 +595,29 @@ export interface McpApiKeyUpdate {
   last4: string;
 }
 
+/**
+ * The discovered OAuth configuration of a connection (endpoints, client identity). Never carries tokens;
+ * optional fields left out are cleared, so a re-discovery cannot leave a stale endpoint behind.
+ */
+export type McpOAuthConfigUpdate = Pick<
+  IMcpConnectionOAuth,
+  'resource' | 'issuer' | 'authorizationServerUrl' | 'clientMode'
+> &
+  Partial<
+    Pick<
+      IMcpConnectionOAuth,
+      | 'resourceMetadataUrl'
+      | 'tokenEndpoint'
+      | 'revocationEndpoint'
+      | 'registrationEndpoint'
+      | 'tokenEndpointAuthMethod'
+      | 'issParameterSupported'
+      | 'clientRegistrationId'
+      | 'manualClientIdEnc'
+      | 'manualClientSecretEnc'
+    >
+  > & { scopes: string[] };
+
 export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnectionDocument> {
   /**
    * Creates a user connection only if the owner stays within `cap`. Count-then-insert races, so it
@@ -607,10 +630,20 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
   ): Promise<IMcpConnectionDocument>;
   /** Replaces the API key of an `api_key` connection; null when not found, not the owner's, or another kind. */
   setApiKey(id: string, owner: McpConnectionOwner, apiKey: McpApiKeyUpdate): Promise<IMcpConnectionDocument | null>;
+  /**
+   * Writes the OAuth configuration and flips the kind to `oauth`; allowed from `none` or `oauth` only.
+   * Null when not found, not the owner's, or an API-key connection. Never touches tokens or the status.
+   */
+  setOAuthConfig(
+    id: string,
+    owner: McpConnectionOwner,
+    config: McpOAuthConfigUpdate
+  ): Promise<IMcpConnectionDocument | null>;
   /** The probe met a 401: `pending_auth`, the challenge kept for OAuth, `lastError` saying why. */
   setPendingAuth(
     id: string,
-    challenge: { resourceMetadataUrl?: string; scope?: string; message: string }
+    challenge: { resourceMetadataUrl?: string; scope?: string; message: string },
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   findByIdForOwner(id: string, owner: McpConnectionOwner): Promise<IMcpConnectionDocument | null>;
   /** Includes the `*Enc` fields. Only for the token manager and the call path, never a response. */
@@ -671,12 +704,16 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
    * `pending_auth` leaves `lastError` as the reason to reconnect (clearOAuthTokens is the exception).
    */
   setStatus(id: string, status: 'connected' | 'pending_auth'): Promise<IMcpConnectionDocument | null>;
-  /** A failure status records why; an API-key snapshot prevents stale requests undoing rotation. */
+  /**
+   * A failure status records why; an API-key or access-token snapshot (null: none stored) prevents a stale request
+   * overwriting a rotation or a reconnect.
+   */
   setStatus(
     id: string,
     status: 'error' | 'needs_reconnect',
     lastError: McpConnectionLastErrorInput,
-    expectedApiKeyValueEnc?: string | null
+    expectedApiKeyValueEnc?: string | null,
+    expectedAccessTokenEnc?: string | null
   ): Promise<IMcpConnectionDocument | null>;
   /**
    * Store refreshed tokens and drop the lease in one write, only while `holder` still owns it.
@@ -704,6 +741,15 @@ export interface IMcpConnectionRepository extends IBaseRepository<IMcpConnection
     ttlMs?: number
   ): Promise<McpRefreshLeaseResult>;
   releaseRefreshLease(id: string, holder: string): Promise<boolean>;
+  /**
+   * `needs_reconnect` with `lastError`, only while `holder` still holds the refresh lease; null otherwise, so
+   * a refresh that outlived its lease cannot overwrite a grant another holder just stored.
+   */
+  setNeedsReconnectIfHolder(
+    id: string,
+    holder: string,
+    lastError: McpConnectionLastErrorInput
+  ): Promise<IMcpConnectionDocument | null>;
   deleteForOwner(id: string, owner: McpConnectionOwner): Promise<boolean>;
 }
 
@@ -752,4 +798,11 @@ export interface IMcpOAuthClientRegistrationRepository extends IBaseRepository<I
   upsert(registration: IMcpOAuthClientRegistration): Promise<IMcpOAuthClientRegistrationDocument>;
   /** Includes `clientSecretEnc` and `registrationAccessTokenEnc`. */
   findByIssuerAndRedirect(issuer: string, redirectUri: string): Promise<IMcpOAuthClientRegistrationDocument | null>;
+  /** Includes `clientSecretEnc`; a registration whose secret has expired reads as a miss. */
+  findByIdWithCredentials(id: string): Promise<IMcpOAuthClientRegistrationDocument | null>;
+  /**
+   * Stores the registration unless (issuer, redirectUri) already has a live one, and returns the row that
+   * is stored either way, so racing first registrations converge on one client instead of overwriting.
+   */
+  registerIfAbsent(registration: IMcpOAuthClientRegistration): Promise<IMcpOAuthClientRegistrationDocument | null>;
 }

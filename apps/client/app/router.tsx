@@ -5,6 +5,7 @@ import { beaconPage, startPageBeacon } from '@client/app/utils/pageBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
 import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
 import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
+import { captureMcpOAuthCallbackSearch, requireMcpOAuthCallbackSession } from '@client/app/utils/mcpOAuthCallback';
 import {
   createRouter,
   createRoute,
@@ -22,6 +23,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
+import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -110,9 +112,11 @@ const SlackErrorPage = lazy(() => import('./routes/integrations/slack/error'));
 const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
 const DesktopDownloadPage = lazy(() => import('./routes/desktop'));
 const ArenaPage = lazy(() => import('./routes/arena'));
+const McpOAuthCallbackPage = lazy(() => import('./routes/integrations/mcp-oauth-callback'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
+const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
@@ -1033,6 +1037,18 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
+// Where a custom MCP connector's authorization server redirects back; the page posts the one-time parameters to the API.
+const mcpOAuthCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/integrations/mcp-oauth-callback',
+  beforeLoad: ({ location }) => requireMcpOAuthCallbackSession(location),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <McpOAuthCallbackPage />
+    </Suspense>
+  ),
+});
+
 // Data-lake GitHub App return: its OAuth Callback URL points here, and with OAuth-during-install on, the install return lands here too.
 const gitHubLakeCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1310,6 +1326,25 @@ const desktopDownloadRoute = createRoute({
   ),
 });
 
+// BedrockNews Headword credit claim - no layout; the page sends signed-out visitors to /login itself
+const bedrockNewsClaimRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/partners/bedrocknews/claim',
+  // The ticket is moved out of the URL first so a consent redirect never carries it in its return path.
+  beforeLoad: ({ location, search }) => {
+    takeTicket(search.ticket);
+    return enforceConsentRedirect({ pathname: location.pathname, searchStr: '', hash: '' });
+  },
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <BedrockNewsClaimPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): { ticket?: string } => ({
+    ticket: optionalStringParam(search, 'ticket'),
+  }),
+});
+
 // OAuth Authorization endpoint - no layout, public
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1403,6 +1438,7 @@ const routeTree = rootRoute.addChildren([
   verifyEmailChangeRoute,
   adminEmergencyRoute,
   googleDriveCallbackRoute,
+  mcpOAuthCallbackRoute,
   gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
@@ -1424,6 +1460,7 @@ const routeTree = rootRoute.addChildren([
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
+  bedrockNewsClaimRoute,
 ]);
 
 // createBrowserHistory() monkey-patches window.history.pushState/replaceState to detect
@@ -1446,6 +1483,7 @@ captureUtmParams();
 
 // Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
 captureGitHubLakeCallbackSearch();
+captureMcpOAuthCallbackSearch();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above. It also takes a

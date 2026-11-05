@@ -34,14 +34,14 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1009 routes: 68 contracted, 9 aliases of another route, 231 with no static caller in `apps/client/app`.
+1016 routes: 68 contracted, 9 aliases of another route, 236 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [...unmatchedApiPath] | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 266 | 0 | 201 | 58 | 0 | 7 | 41 |
+| admin | 273 | 0 | 203 | 63 | 0 | 7 | 46 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -351,6 +351,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/shadow-detections/verdict` | POST | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
 | `/api/admin/signup-anomaly` | GET | jwt | - | no | - | 1: `hooks/data/admin.ts` |
 | `/api/admin/signup-domain-holds` | GET, POST | jwt | `admin:*` | no | - | 1: `components/admin/SignupDomainHoldsTab.tsx` |
+| `/api/admin/signup-grants/bulk-block` | POST | jwt | - | no | - | 0 |
+| `/api/admin/signup-grants/bulk-unblock` | POST | jwt | - | no | - | 0 |
 | `/api/admin/signup-risk-reviews` | GET, POST | jwt | `admin:*` | no | - | 1: `hooks/data/signupRiskReviews.ts` |
 | `/api/admin/signup-timeseries` | GET | jwt | - | no | - | 1: `components/admin/Signups/useSignupTimeseries.ts` |
 | `/api/admin/slack-app/create` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/CreateSlackAppModal.tsx` |
@@ -400,6 +402,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/List/useAdminUsersList.ts` |
 | `/api/admin/users/[userId]/activity` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminUserActivity.ts` |
 | `/api/admin/users/[userId]/api-key-trust` | POST | jwt | - | no | - | 0 |
+| `/api/admin/users/[userId]/block-signup-grant` | POST | jwt | - | no | - | 0 |
 | `/api/admin/users/[userId]/compliance` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/userCompliance.ts` |
 | `/api/admin/users/[userId]/credit-history` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/adminUserActivity.ts` |
 | `/api/admin/users/[userId]/credit-ledger` | GET | jwt | - | no | - | 0 |
@@ -413,6 +416,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users/[userId]/new-account-spend-cap` | POST | jwt | - | no | - | 0 |
 | `/api/admin/users/[userId]/notes` | GET, POST, PATCH | jwt | - | no | - | 1: `hooks/data/adminUserNotes.ts` |
 | `/api/admin/users/[userId]/profile` | any | handler | - | no | - | 1: `components/admin/Users/Profile/actions/EditProfileDialog.tsx` |
+| `/api/admin/users/[userId]/release-held-signup-grant` | POST | jwt | - | no | - | 0 |
 | `/api/admin/users/[userId]/resend-email-change` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
 | `/api/admin/users/[userId]/resend-verification` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
 | `/api/admin/users/[userId]/revoke-api-keys` | POST | jwt | - | no | - | 0 |
@@ -427,6 +431,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users/[userId]/support-access` | GET | jwt | `admin:*` | no | - | 1: `components/admin/Users/Profile/tabs/SupportAccessHistory.tsx` |
 | `/api/admin/users/[userId]/tags` | PATCH | jwt | - | no | - | 1: `components/admin/Users/Profile/actions/useAdminUserTagsUpdate.ts` |
 | `/api/admin/users/[userId]/timeline` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/unblock-signup-grant` | POST | jwt | - | no | - | 0 |
 | `/api/admin/users/[userId]/unlock-signup-grant` | POST | jwt | - | no | - | 0 |
 | `/api/admin/users/[userId]/unverify-email` | POST | jwt+key | `admin:*` | no | - | 1: `components/admin/EmailVerificationTab.tsx` |
 | `/api/admin/users/[userId]/user-api-keys` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/userApiKeys.ts` |

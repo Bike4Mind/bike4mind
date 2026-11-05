@@ -1019,7 +1019,13 @@ export interface ChatModelOption {
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
   /** The generation settings this model takes, built in main; see shared/generation.ts. */
   controls?: ModelControls;
-  /** A local model whose name matches a reviewed curated build, on any local server: its family's recommended sampling. */
+  /** An Ollama model's weights blob sha256, from /api/show; ties a copy under another name to its curated build. */
+  modelBlob?: string;
+  /** An Ollama model with an ADAPTER layer; it matches no curated build. */
+  hasAdapter?: boolean;
+  /** An Ollama model's Modelfile PARAMETER lines, from /api/show; a model that sets its own sampling keeps it. */
+  modelParameters?: string;
+  /** A local model that matches a curated build, on any local server: its family's recommended sampling. */
   catalogSampling?: CatalogSampling;
 }
 

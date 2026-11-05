@@ -15,6 +15,8 @@ import {
   signupGrantReleaseRepository,
   SignupGrantBudgetDayModel,
   AdminSettings,
+  AdminAuditLogModel,
+  adminAuditLogRepository,
 } from '@bike4mind/database';
 import {
   createMongoReplSet,
@@ -90,6 +92,7 @@ beforeAll(async () => {
   await HeldCreditRewardModel.createCollection();
   await HeldCreditRewardModel.syncIndexes();
   await AdminSettings.createCollection();
+  await AdminAuditLogModel.createCollection();
   await CreditTransaction.collection.createIndex({ transactionId: 1 }, { unique: true, sparse: true });
   await User.collection.createIndex(
     { freeCreditClaimEmail: 1 },
@@ -101,7 +104,14 @@ afterAll(async () => {
   await server?.stop();
 });
 beforeEach(async () => {
-  for (const model of [User, CreditTransaction, SignupGrantBudgetDayModel, HeldCreditRewardModel, AdminSettings])
+  for (const model of [
+    User,
+    CreditTransaction,
+    SignupGrantBudgetDayModel,
+    HeldCreditRewardModel,
+    AdminSettings,
+    AdminAuditLogModel,
+  ])
     await model.collection.deleteMany({});
   for (const key of Object.keys(config)) delete config[key];
   Object.assign(config, {
@@ -447,7 +457,7 @@ describe('a block or unblock whose reward write fails once', () => {
     });
   };
 
-  it('keeps the flag set and the rewards held, defers them at release, and a repeat block pauses them', async () => {
+  it('rolls back the flag when pausing rewards fails, then applies a repeat block', async () => {
     config.signupGrantTricklePoolDaily = '0';
     const user = await makeGrantUser();
     await creditService.payCreditReward(reward(user.id, 'projects'), rewardAdapters);
@@ -455,27 +465,17 @@ describe('a block or unblock whose reward write fails once', () => {
     await expect(
       userService.blockSignupGrant(user.id, { ...blockAdapters, heldRewards: failingOnce('pauseForUser') })
     ).rejects.toThrow('pauseForUser failed');
-    expect((await rawUser(user.id))?.signupGrant.blocked).toBeDefined();
+    expect((await rawUser(user.id))?.signupGrant.blocked).toBeUndefined();
     expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'held' });
-
-    config.signupGrantTricklePoolDaily = '1000';
-    expect(await creditService.releaseHeldCreditRewards(rewardAdapters, { limit: 10 })).toMatchObject({
-      deferred: 1,
-      voided: 0,
-      paid: 0,
-    });
-    expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'held' });
-    expect(await balance(user.id)).toBe(0);
 
     expect(await userService.blockSignupGrant(user.id, blockAdapters)).toMatchObject({
-      outcome: 'noop',
-      reason: 'already_blocked',
+      outcome: 'applied',
       rewardsAffected: 1,
     });
     expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'paused' });
   });
 
-  it('keeps the flag lifted and the rewards paused, and a repeat unblock resumes them', async () => {
+  it('rolls back the flag when resuming rewards fails, then applies a repeat unblock', async () => {
     config.signupGrantTricklePoolDaily = '0';
     const user = await makeGrantUser();
     await creditService.payCreditReward(reward(user.id, 'projects'), rewardAdapters);
@@ -484,12 +484,11 @@ describe('a block or unblock whose reward write fails once', () => {
     await expect(
       userService.unblockSignupGrant(user.id, { ...blockAdapters, heldRewards: failingOnce('resumeForUser') })
     ).rejects.toThrow('resumeForUser failed');
-    expect((await rawUser(user.id))?.signupGrant.blocked).toBeUndefined();
+    expect((await rawUser(user.id))?.signupGrant.blocked).toBeDefined();
     expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'paused' });
 
     expect(await userService.unblockSignupGrant(user.id, blockAdapters)).toMatchObject({
-      outcome: 'noop',
-      reason: 'not_blocked',
+      outcome: 'applied',
       rewardsAffected: 1,
     });
     expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({ status: 'held' });
@@ -498,6 +497,69 @@ describe('a block or unblock whose reward write fails once', () => {
     expect(await creditService.releaseHeldCreditRewards(rewardAdapters, { limit: 10 })).toMatchObject({ paid: 1 });
     expect(await balance(user.id)).toBe(100);
   });
+
+  it.each(['block', 'unblock'] as const)(
+    'rolls back a failed bulk %s after its reward write, so a retry still returns undo ids',
+    async action => {
+      config.signupGrantTricklePoolDaily = '0';
+      const user = await makeGrantUser();
+      await creditService.payCreditReward(reward(user.id, 'projects'), rewardAdapters);
+      if (action === 'unblock') await userService.blockSignupGrant(user.id, blockAdapters);
+      const before = await rawUser(user.id);
+      const auditFor = (userId: string) => async () => {
+        await adminAuditLogRepository.append({
+          occurredAt: new Date(),
+          action: action === 'block' ? 'user.credits.grant_blocked' : 'user.credits.grant_unblocked',
+          category: 'credits',
+          severity: 'notice',
+          actor: { kind: 'user', scope: 'platform', userId: 'synthetic-admin', name: 'Admin', wasAdmin: true },
+          target: { kind: 'user', id: userId, displayName: 'Synthetic User' },
+          summary: 'Changed signup grant block',
+          context: { source: 'admin_ui' },
+        });
+      };
+      const method = action === 'block' ? 'pauseForUser' : 'resumeForUser';
+      const failingRewards = {
+        ...heldCreditRewardRepository,
+        [method]: async (userId: string) => {
+          await heldCreditRewardRepository[method](userId);
+          throw new Error('reward write failed');
+        },
+      };
+      const logger = { error: vi.fn() };
+      const failed = await userService.bulkSetSignupGrantBlock(
+        { action, userIds: [user.id] },
+        { ...blockAdapters, heldRewards: failingRewards, logger, auditFor }
+      );
+
+      expect(failed.results).toEqual([{ userId: user.id, outcome: 'failed' }]);
+      expect(failed.undoUserIds).toEqual([]);
+      const unchanged = await rawUser(user.id);
+      expect(!!unchanged?.signupGrant.blocked).toBe(action === 'unblock');
+      expect(unchanged?.signupGrantHeldReason).toEqual(before?.signupGrantHeldReason);
+      expect(unchanged?.tags).toEqual(before?.tags);
+      expect(await AdminAuditLogModel.countDocuments({ 'target.id': user.id })).toBe(0);
+      expect(await HeldCreditRewardModel.findOne({ userId: user.id }).lean()).toMatchObject({
+        status: action === 'block' ? 'held' : 'paused',
+      });
+      expect(logger.error).toHaveBeenCalledOnce();
+
+      const applied = await userService.bulkSetSignupGrantBlock(
+        { action, userIds: [user.id] },
+        { ...blockAdapters, logger, auditFor }
+      );
+      expect(applied.results).toEqual([{ userId: user.id, outcome: 'applied', rewardsAffected: 1 }]);
+      expect(applied.undoUserIds).toEqual([user.id]);
+      expect(await AdminAuditLogModel.countDocuments({ 'target.id': user.id })).toBe(1);
+
+      const undone = await userService.bulkSetSignupGrantBlock(
+        { action: action === 'block' ? 'unblock' : 'block', userIds: applied.undoUserIds },
+        { ...blockAdapters, logger }
+      );
+      expect(undone.results[0]?.outcome).toBe('applied');
+      expect(!!(await rawUser(user.id))?.signupGrant.blocked).toBe(action === 'unblock');
+    }
+  );
 });
 
 describe('the schedule paths while blocked, with the protection production passes', () => {
