@@ -104,13 +104,10 @@ export function renderPassphraseShell(): string {
   }
   var revealTimer = setTimeout(revealForm, FORM_REVEAL_MS);
 
-  // Loop breaker: a proof cookie that does not stick (blocked, or dropped between the 204 and the
-  // reload) would otherwise re-serve this shell, mint again and reload again, bounded only by the
-  // 60/min rate limit. The sentinel is armed with a timestamp ONLY on a 204, right before the
-  // reload, and consumed here. Only a load that follows that reload within SENTINEL_FRESH_MS
-  // counts as "the cookie did not stick". A stale or leftover sentinel (the proof cookie expired
-  // hours later in the same tab, or an earlier attempt failed) must NOT disable the bypass: it
-  // lives in sessionStorage, so it survives every refresh of the tab.
+  // Loop breaker: the sentinel is written only on a 204 and consumed here, so only a load within
+  // SENTINEL_FRESH_MS of that reload means "the cookie did not stick". sessionStorage survives
+  // refreshes, so a stale sentinel must not disable the bypass. Tradeoff: if every reload cycle
+  // takes longer than the window, the mint/reload repeats, bounded only by the 60/min rate limit.
   var SENTINEL = 'b4m-pp-minted-' + location.pathname;
   var SENTINEL_FRESH_MS = 15000;
   var mintedAt = 0;
