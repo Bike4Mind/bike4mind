@@ -3,29 +3,37 @@ import { AUTO_CONTAINMENT_MODES } from './settings';
 
 /**
  * Automated containment decisions: what the executor decided for one shadow detection from its abuse
- * assessment, one record per detection. Shadow-mode records are graded against the detection's admin
+ * assessment, one record per (detection, revision): a campaign detection that gains members after a
+ * decision gets a new one covering only the new members. Shadow-mode records are graded against the detection's admin
  * verdict (shadowDetection.ts), so the precision of automated containment is measured before it is
  * enforced. Produced by apps/client/server/security/autoContainment; stored in the
  * AutoContainmentDecision collection (packages/database).
  */
 
 export const AUTO_CONTAINMENT_OUTCOMES = [
-  /** Enforce mode: claimed and the Contain path is running; a row left here means the run died. */
+  /**
+   * Claimed and still running. A row left here past the stale window means the run died; the next
+   * run on the detection reclaims and retries it (as it does a time-budget-partial Contain).
+   */
   'pending',
   /** Shadow mode: would have contained the accounts. */
   'would_contain',
   /** Enforce mode: the accounts were contained. */
   'contained',
-  /** The per-hour cap was spent; nothing was done and an admin should look. */
+  /** The per-hour cap was spent; nothing was done. Re-evaluated by the first run after the window resets. */
   'capped',
-  /** Enforce mode: the Contain path failed for at least one account. */
+  /** Enforce mode: the Contain path failed for at least one account, or no account was eligible. */
   'failed',
+  /** Enforce mode: an admin ruled on the detection after the decision and before the Contain ran. */
+  'withdrawn',
 ] as const;
 export type AutoContainmentOutcome = (typeof AUTO_CONTAINMENT_OUTCOMES)[number];
 
 export const autoContainmentDecisionItemSchema = z.object({
   id: z.string(),
   detectionId: z.string(),
+  /** The detection revision decided; a later revision is decided again for its new members only. */
+  revision: z.number().int(),
   assessmentId: z.string(),
   mode: z.enum(AUTO_CONTAINMENT_MODES).exclude(['off']),
   outcome: z.enum(AUTO_CONTAINMENT_OUTCOMES),

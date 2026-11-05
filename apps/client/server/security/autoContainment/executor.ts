@@ -27,16 +27,23 @@ import { decideContainment, type AutoContainmentSkipReason } from './policy';
  *
  * - autoContainmentConfig.mode gates it: off does nothing, shadow (the default) records the decision
  *   and changes no account, enforce contains.
- * - One decision per detection (the AutoContainmentDecision unique index), so a re-sweep or a cached
- *   judgment never acts twice; an admin verdict on the detection always wins.
- * - A fixed one-hour window caps decisions in both modes; over it, the decision is recorded `capped`
- *   for an admin. Shadow grading reads these records against the detections' admin verdicts.
+ * - One decision per (detection, revision), so a re-sweep or a cached judgment never acts twice; a
+ *   campaign detection that gains members after a decision is decided again for the new members only.
+ *   An admin verdict on the detection always wins, re-read right before the Contain runs.
+ * - The decision is claimed (inserted `pending`) before an hourly slot is taken, so a run that loses
+ *   the claim spends nothing. A fixed one-hour window per mode caps decisions; over it, the decision
+ *   is recorded `capped` and is re-evaluated after the window resets. Shadow grading reads these
+ *   records against the detections' admin verdicts.
+ * - A claim left `pending` past STALE_PENDING_MS (the run died, or the Contain ran out of time budget)
+ *   is reclaimed and retried with the same idempotency key; the bulk path skips users already contained.
  * - Reversal is the user profile's Unsuspend; keys stay revoked (the user mints new ones), as after
  *   any suspension.
  */
 
 const HOUR_MS = 60 * 60 * 1000;
-const HOURLY_KEY = 'autoContainment:decisions';
+// ms. Past the bulk path's IDEMPOTENCY_TTL_MS (10 min), so a retry re-executes rather than replaying a partial result.
+export const STALE_PENDING_MS = 15 * 60 * 1000;
+const hourlyKey = (mode: AutoContainmentDecisionItem['mode']) => `autoContainment:decisions:${mode}`;
 export const AUTO_CONTAINMENT_ACTOR = 'auto-containment';
 // Stands in for the admin id the bulk path records (revokedBy, ledger metadata, undo record).
 export const AUTO_CONTAINMENT_ACTOR_ID = `system:${AUTO_CONTAINMENT_ACTOR}`;
@@ -53,9 +60,9 @@ export type ContainRequest = {
 export type AutoContainmentDeps = {
   loadConfig: () => Promise<AutoContainmentConfig>;
   findDetection: (id: string) => Promise<ShadowDetectionItem | null>;
-  decisions: Pick<typeof autoContainmentDecisionRepository, 'findByDetectionId' | 'recordOnce' | 'finish'>;
-  /** Takes one decision from the hourly window; false when it is spent. */
-  takeHourlySlot: (maxPerHour: number) => Promise<boolean>;
+  decisions: Pick<typeof autoContainmentDecisionRepository, 'listForDetection' | 'recordOnce' | 'reclaim' | 'finish'>;
+  /** Takes one decision from the mode's hourly window; false when it is spent. */
+  takeHourlySlot: (mode: AutoContainmentDecisionItem['mode'], maxPerHour: number) => Promise<boolean>;
   contain: (request: ContainRequest) => Promise<AdminUsersBulkResult | null>;
   now: () => Date;
   logger: Pick<Logger, 'info' | 'warn' | 'error'>;
@@ -99,20 +106,77 @@ export const liveAutoContainmentDeps = (logger: Logger): AutoContainmentDeps => 
   loadConfig: loadAutoContainmentConfig,
   findDetection: id => shadowDetectionRepository.findById(id),
   decisions: autoContainmentDecisionRepository,
-  takeHourlySlot: async maxPerHour =>
+  takeHourlySlot: async (mode, maxPerHour) =>
     maxPerHour > 0 &&
-    (await cacheRepository.tryIncrementWithinLimitFixedWindow(HOURLY_KEY, maxPerHour, HOUR_MS)).success,
+    (await cacheRepository.tryIncrementWithinLimitFixedWindow(hourlyKey(mode), maxPerHour, HOUR_MS)).success,
   contain: containAsSystem(logger),
   now: () => new Date(),
   logger,
 });
 
-const failureText = (result: AdminUsersBulkResult): string | null => {
+type Finished = Pick<AutoContainmentDecisionItem, 'outcome' | 'batchId' | 'error'>;
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
+
+/** How a Contain run ends up on the decision. A time-budget partial stays `pending`, so it is retried. */
+const finishedFrom = (result: AdminUsersBulkResult | null): Finished => {
+  if (!result) return { outcome: 'failed', batchId: null, error: 'no eligible accounts (admins or deleted)' };
   if (result.failed.length > 0)
-    return `${result.failed.length} account(s) failed: ${result.failed[0].error}`.slice(0, 300);
-  if (result.partial) return `${result.remaining} account(s) not attempted (time budget)`;
-  return null;
+    return {
+      outcome: 'failed',
+      batchId: result.batchId,
+      error: `${result.failed.length} account(s) failed: ${result.failed[0].error}`.slice(0, 300),
+    };
+  if (result.partial)
+    return {
+      outcome: 'pending',
+      batchId: result.batchId,
+      error: `${result.remaining} account(s) not attempted (time budget); retried after the stale window`,
+    };
+  return { outcome: 'contained', batchId: result.batchId, error: null };
 };
+
+/**
+ * The decision this run owns for the detection's current revision: a fresh claim, or one an earlier
+ * run left unfinished. Null when the revision is already decided, or every account on it already is.
+ */
+async function claimDecision(
+  assessment: AbuseAssessmentItem,
+  detection: ShadowDetectionItem,
+  decided: { userIds: string[]; reason: string },
+  mode: AutoContainmentDecisionItem['mode'],
+  deps: AutoContainmentDeps
+): Promise<{ decision: AutoContainmentDecisionItem; retried: boolean } | null> {
+  const now = deps.now();
+  const prior = await deps.decisions.listForDetection(detection.id);
+  const current = prior.find(row => row.revision === detection.revision);
+  if (current) {
+    const reclaimed = await deps.decisions.reclaim(current.id, {
+      staleBefore: new Date(now.getTime() - STALE_PENDING_MS),
+      cappedBefore: new Date(now.getTime() - HOUR_MS),
+      now,
+      mode,
+    });
+    return reclaimed ? { decision: reclaimed, retried: current.outcome === 'pending' } : null;
+  }
+  const covered = new Set(prior.flatMap(row => row.userIds));
+  const userIds = decided.userIds.filter(userId => !covered.has(userId));
+  if (userIds.length === 0) return null;
+  const recorded = await deps.decisions.recordOnce({
+    detectionId: detection.id,
+    revision: detection.revision,
+    assessmentId: assessment.id,
+    mode,
+    outcome: 'pending',
+    userIds,
+    confidence: assessment.confidence ?? 0,
+    reason: decided.reason,
+    batchId: null,
+    error: null,
+    decidedAt: now,
+  });
+  return recorded ? { decision: recorded, retried: false } : null;
+}
 
 /** Decides, and in enforce mode acts on, one assessment. Throws only on a database failure. */
 export async function applyAutoContainment(
@@ -124,63 +188,60 @@ export async function applyAutoContainment(
   const detection = await deps.findDetection(assessment.detectionId);
   if (!detection) return { status: 'skipped', reason: 'detection_not_found' };
 
-  const decision = decideContainment({ assessment, detection, config });
-  if (decision.kind === 'skip') return { status: 'skipped', reason: decision.why };
-  // Before taking a slot, so a detection already decided never spends the hour's budget.
-  if (await deps.decisions.findByDetectionId(detection.id)) return { status: 'skipped', reason: 'already_decided' };
+  const decided = decideContainment({ assessment, detection, config });
+  if (decided.kind === 'skip') return { status: 'skipped', reason: decided.why };
 
   const mode = config.mode;
-  const base = {
-    detectionId: detection.id,
-    assessmentId: assessment.id,
-    mode,
-    userIds: decision.userIds,
-    confidence: assessment.confidence ?? 0,
-    reason: decision.reason,
-    batchId: null,
-    error: null,
-    decidedAt: deps.now(),
-  };
-  const capped = !(await deps.takeHourlySlot(config.maxPerHour));
-  const outcome = capped ? 'capped' : mode === 'shadow' ? 'would_contain' : 'pending';
-  const recorded = await deps.decisions.recordOnce({ ...base, outcome });
-  if (!recorded) return { status: 'skipped', reason: 'already_decided' };
-
+  const claim = await claimDecision(assessment, detection, decided, mode, deps);
+  if (!claim) return { status: 'skipped', reason: 'already_decided' };
+  const { decision } = claim;
   const logMeta = {
     detectionId: detection.id,
+    revision: detection.revision,
     assessmentId: assessment.id,
     mode,
-    outcome,
     accounts: decision.userIds.length,
   };
-  if (outcome !== 'pending') {
+  if (claim.retried) deps.logger.warn('[AUTO_CONTAINMENT] retrying a decision a run left pending', logMeta);
+
+  const settle = async (finished: Finished): Promise<AutoContainmentRunResult> => {
+    await deps.decisions.finish(decision.id, finished);
+    return { status: 'decided', decision: { ...decision, ...finished } };
+  };
+
+  if (!(await deps.takeHourlySlot(mode, config.maxPerHour))) {
     // Capped decisions need an admin: warn so the alarm on this log line sees them.
-    if (capped) deps.logger.warn('[AUTO_CONTAINMENT] decision capped by the hourly limit', logMeta);
-    else deps.logger.info('[AUTO_CONTAINMENT] decision recorded', logMeta);
-    return { status: 'decided', decision: recorded };
+    deps.logger.warn('[AUTO_CONTAINMENT] decision capped by the hourly limit', { ...logMeta, outcome: 'capped' });
+    return settle({ outcome: 'capped', batchId: null, error: null });
+  }
+  if (mode === 'shadow') {
+    deps.logger.info('[AUTO_CONTAINMENT] decision recorded', { ...logMeta, outcome: 'would_contain' });
+    return settle({ outcome: 'would_contain', batchId: null, error: null });
   }
 
-  let finished: Pick<AutoContainmentDecisionItem, 'outcome' | 'batchId' | 'error'>;
-  try {
-    const result = await deps.contain({
-      userIds: decision.userIds,
-      reason: decision.reason,
-      idempotencyKey: `auto-containment:${detection.id}`,
-      blockEmailDomains: config.blockEmailDomains,
-    });
-    const error = result ? failureText(result) : null;
-    finished = { outcome: error ? 'failed' : 'contained', batchId: result?.batchId ?? null, error };
-  } catch (error) {
-    finished = {
-      outcome: 'failed',
-      batchId: null,
-      error: (error instanceof Error ? error.message : String(error)).slice(0, 300),
-    };
+  // An admin may have ruled while this run was assessing and claiming: their verdict wins.
+  const latest = await deps.findDetection(detection.id);
+  if (!latest || latest.verdict !== null) {
+    deps.logger.info('[AUTO_CONTAINMENT] decision withdrawn by an admin verdict', { ...logMeta, outcome: 'withdrawn' });
+    return settle({ outcome: 'withdrawn', batchId: null, error: null });
   }
-  await deps.decisions.finish(detection.id, finished);
-  const meta = { ...logMeta, outcome: finished.outcome, batchId: finished.batchId };
-  if (finished.outcome === 'failed')
-    deps.logger.error('[AUTO_CONTAINMENT] containment failed', { ...meta, error: finished.error });
+
+  let finished: Finished;
+  try {
+    finished = finishedFrom(
+      await deps.contain({
+        userIds: decision.userIds,
+        reason: decision.reason,
+        idempotencyKey: `auto-containment:${detection.id}:${detection.revision}`,
+        blockEmailDomains: config.blockEmailDomains,
+      })
+    );
+  } catch (error) {
+    finished = { outcome: 'failed', batchId: null, error: errorText(error) };
+  }
+  const meta = { ...logMeta, outcome: finished.outcome, batchId: finished.batchId, error: finished.error };
+  if (finished.outcome === 'failed') deps.logger.error('[AUTO_CONTAINMENT] containment failed', meta);
+  else if (finished.outcome === 'pending') deps.logger.warn('[AUTO_CONTAINMENT] containment ran out of time', meta);
   else deps.logger.info('[AUTO_CONTAINMENT] accounts contained', meta);
-  return { status: 'decided', decision: { ...recorded, ...finished } };
+  return settle(finished);
 }

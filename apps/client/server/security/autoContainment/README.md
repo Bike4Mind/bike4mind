@@ -1,8 +1,8 @@
 # Automated containment
 
 Turns an abuse assessment's verdict into the same Contain an admin would run from the
-users list (suspend, remove a positive balance, revoke API keys, end sessions, optionally
-block owned email domains). It runs as the `auto-containment` system actor, and its audit
+users list (suspend, cancel Stripe subscriptions, remove a positive balance, revoke API keys,
+end sessions, optionally block owned email domains). It runs as the `auto-containment` system actor, and its audit
 reason cites the assessment and the evidence.
 
 ## Pieces
@@ -27,14 +27,23 @@ verdict, so the assessment stays advisory everywhere else.
 |-------|---------|-----|
 | `mode` | `shadow` | `off` / `shadow` (record only) / `enforce`. |
 | `minConfidence` | 0.9 | Only near-certain `abuse` verdicts act. |
-| `maxPerHour` | 5 | Fixed one-hour window, counted in shadow too so shadow measures the real cap; over it the decision is recorded as `capped` for an admin. |
+| `maxPerHour` | 5 | Fixed one-hour window per mode, so shadow measures the real cap without spending enforce's first hour after a flip; over it the decision is recorded `capped` and re-evaluated once the window resets. |
 | `maxAccountsPerDetection` | 5 | A larger cohort always goes to an admin. |
-| `blockEmailDomains` | false | Owned domains only; public mailbox providers are never blocked. |
+| `blockEmailDomains` | false | Owned domains only; public mailbox providers are never blocked. It refuses every new signup on the domain, so one false positive on a shared corporate or campus network blocks the whole domain: leave it off until shadow precision is known. |
 | `strongLinkWindowHours` | 72 | 0 turns the signup rule off. |
 
 Only detections whose `wouldAction` is contain or suspend, with no admin verdict yet, are
-eligible. Each detection is decided once (unique `detectionId` in `AutoContainmentDecision`),
-and the bulk call carries `auto-containment:<detectionId>` as its idempotency key.
+eligible, and the verdict is re-read right before the Contain runs (a late ruling records
+`withdrawn`).
+
+Each (detection, revision) is decided once (unique pair in `AutoContainmentDecision`). A campaign
+detection that gains members after a decision is decided again for the new members only. The run
+claims the decision (`pending`) before it takes an hourly slot, so losing the claim spends nothing.
+The bulk call carries `auto-containment:<detectionId>:<revision>` as its idempotency key.
+
+A claim left `pending` for 15 minutes (the run died, or the Contain ran out of time budget) is
+reclaimed by the next run on the detection and retried with the same key; the bulk path skips users
+it already contained. A Contain with no eligible account (admins, deleted users) records `failed`.
 
 ## Shadow grading
 
