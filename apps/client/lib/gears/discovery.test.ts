@@ -3,14 +3,15 @@ import {
   DISCOVERY_COOLDOWN_MS,
   DISCOVERY_PRIORITY,
   EMPTY_DISCOVERY_STATE,
-  captureDiscoveryLanding,
   discoveryCandidates,
-  isCampaignLanding,
+  DISCOVERY_CAMPAIGN_HOLD_MS,
+  holdDiscoveryForCampaign,
+  isDiscoveryHeldForCampaign,
   isDiscoverySkippedPath,
   pickDiscoveryGears,
   readDiscoveryState,
   shouldShowDiscovery,
-  wasCampaignLanding,
+  resetCampaignHoldForTests,
   writeDiscoveryState,
 } from './discovery';
 
@@ -110,7 +111,7 @@ describe('discovery storage', () => {
 });
 
 describe('isDiscoverySkippedPath', () => {
-  it.each(['/admin', '/admin/users', '/gears', '/bob', '/bob/runs/r1'])('skips %s', path => {
+  it.each(['/admin', '/admin/users', '/gears', '/bob', '/bob/runs/r1', '/Bob', '/BOB/runs/r1'])('skips %s', path => {
     expect(isDiscoverySkippedPath(path)).toBe(true);
   });
 
@@ -119,25 +120,35 @@ describe('isDiscoverySkippedPath', () => {
   });
 });
 
-describe('isCampaignLanding', () => {
-  it('is true when any utm_ param is present, whatever its case', () => {
-    expect(isCampaignLanding('?utm_source=x')).toBe(true);
-    expect(isCampaignLanding('?ref=a&UTM_Medium=b')).toBe(true);
+describe('campaign hold', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    resetCampaignHoldForTests();
   });
 
-  it('is false without one', () => {
-    expect(isCampaignLanding('')).toBe(false);
-    expect(isCampaignLanding('?ref=utm_source')).toBe(false);
+  it('is off until a campaign landing is recorded', () => {
+    expect(isDiscoveryHeldForCampaign(NOW)).toBe(false);
   });
-});
 
-describe('captureDiscoveryLanding', () => {
-  it('records the landing URL and re-reads it on each call', () => {
-    window.history.replaceState(null, '', '/bob?utm_campaign=launch');
-    captureDiscoveryLanding();
-    expect(wasCampaignLanding()).toBe(true);
-    window.history.replaceState(null, '', '/');
-    captureDiscoveryLanding();
-    expect(wasCampaignLanding()).toBe(false);
+  it('holds for the window, then lets go', () => {
+    holdDiscoveryForCampaign(NOW);
+    expect(isDiscoveryHeldForCampaign(NOW + DISCOVERY_CAMPAIGN_HOLD_MS - 1)).toBe(true);
+    expect(isDiscoveryHeldForCampaign(NOW + DISCOVERY_CAMPAIGN_HOLD_MS)).toBe(false);
+  });
+
+  it('survives a full reload in the same tab through sessionStorage', () => {
+    holdDiscoveryForCampaign(NOW);
+    vi.resetModules();
+    return import('./discovery').then(fresh => {
+      expect(fresh.isDiscoveryHeldForCampaign(NOW + 1000)).toBe(true);
+    });
+  });
+
+  it('still holds this page load when sessionStorage throws', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    holdDiscoveryForCampaign(NOW);
+    expect(isDiscoveryHeldForCampaign(NOW + 1000)).toBe(true);
   });
 });

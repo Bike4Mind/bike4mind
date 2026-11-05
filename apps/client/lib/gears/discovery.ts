@@ -1,6 +1,6 @@
 /**
  * Gears discovery modal - which unused gears to suggest and when. Pure apart from
- * the localStorage helpers and the landing capture; the hook is app/hooks/useGearsDiscovery.ts.
+ * the storage helpers; the hook is app/hooks/useGearsDiscovery.ts.
  */
 
 import type { GearKey } from '@client/lib/gears/keys';
@@ -58,27 +58,49 @@ export const DISCOVERY_PRIORITY: readonly GearKey[] = [
 export const DISCOVERY_SKIPPED_PATHS: readonly string[] = ['/admin', '/gears', '/bob'];
 
 export function isDiscoverySkippedPath(pathname: string): boolean {
-  return DISCOVERY_SKIPPED_PATHS.some(p => pathname === p || pathname.startsWith(`${p}/`));
+  // The router matches paths case-insensitively, so /Bob renders the Bob screen too.
+  const path = pathname.toLowerCase();
+  return DISCOVERY_SKIPPED_PATHS.some(p => path === p || path.startsWith(`${p}/`));
 }
 
-/** A load whose URL carries utm_* params is a visitor arriving from a landing page or campaign. */
-export function isCampaignLanding(search: string): boolean {
-  return [...new URLSearchParams(search).keys()].some(k => k.toLowerCase().startsWith('utm_'));
-}
+/** Same window as the b4m_utm session cookie (utmCapture.ts): long enough to cover sign-up. */
+export const DISCOVERY_CAMPAIGN_HOLD_MS = 30 * 60 * 1000;
 
-let campaignLanding = false;
+const CAMPAIGN_HOLD_KEY = 'gears_discovery_campaign_landing';
+let campaignLandedAt: number | undefined;
 
 /**
- * Remembers whether this page load arrived from a campaign. Must run at app bootstrap, next to
- * captureUtmParams() in app/router.tsx: the router's first resolve strips the query string.
+ * Holds the modal after a campaign landing. Called at bootstrap in app/router.tsx when
+ * captureUtmParams() saw one. Kept in sessionStorage, not the consent-gated UTM cookie, so it
+ * survives the full reload of an OAuth sign-up in the same tab whatever the visitor's consent.
  */
-export function captureDiscoveryLanding(): void {
-  if (typeof window === 'undefined') return;
-  campaignLanding = isCampaignLanding(window.location.search);
+export function holdDiscoveryForCampaign(now: number): void {
+  campaignLandedAt = now;
+  try {
+    sessionStorage.setItem(CAMPAIGN_HOLD_KEY, String(now));
+  } catch {
+    // Private mode or quota: the hold still covers this page load.
+  }
 }
 
-export function wasCampaignLanding(): boolean {
-  return campaignLanding;
+export function isDiscoveryHeldForCampaign(now: number): boolean {
+  let landedAt = campaignLandedAt;
+  try {
+    const stored = Number(sessionStorage.getItem(CAMPAIGN_HOLD_KEY));
+    if (stored > 0) landedAt = Math.max(landedAt ?? 0, stored);
+  } catch {
+    // Fall back to this page load's hold.
+  }
+  return landedAt !== undefined && landedAt <= now && now - landedAt < DISCOVERY_CAMPAIGN_HOLD_MS;
+}
+
+export function resetCampaignHoldForTests(): void {
+  campaignLandedAt = undefined;
+  try {
+    sessionStorage.removeItem(CAMPAIGN_HOLD_KEY);
+  } catch {
+    // Nothing to clear.
+  }
 }
 
 export interface DiscoveryState {

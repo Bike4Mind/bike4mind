@@ -5,8 +5,9 @@ import { FirstRunEvents } from '@bike4mind/common';
 import {
   DISCOVERY_RECHECK_MS,
   DISCOVERY_SETTLE_MS,
-  captureDiscoveryLanding,
+  holdDiscoveryForCampaign,
   readDiscoveryState,
+  resetCampaignHoldForTests,
   writeDiscoveryState,
 } from '@client/lib/gears/discovery';
 import {
@@ -79,8 +80,7 @@ beforeEach(() => {
   vi.setSystemTime(Date.UTC(2026, 9, 26));
   localStorage.clear();
   resetWhatsNewShownForTests();
-  window.history.replaceState(null, '', '/');
-  captureDiscoveryLanding();
+  resetCampaignHoldForTests();
   h.gears = ['image', 'agents', 'websearch', 'video', 'models', 'slack', 'mcp'].map(k => gear(k));
   h.isPending = false;
   h.isError = false;
@@ -151,12 +151,12 @@ describe('useGearsDiscovery', () => {
     expect(result.current.open).toBe(true);
   });
 
-  it('holds for the whole page load when it arrived from a campaign link', () => {
-    window.history.replaceState(null, '', '/bob?utm_source=landing&utm_campaign=bob');
-    captureDiscoveryLanding();
-    window.history.replaceState(null, '', '/');
+  it('holds after a campaign landing on /bob, even once the user moves on', () => {
+    holdDiscoveryForCampaign(Date.now());
+    h.pathname = '/bob';
     const { result, rerender } = renderHook(() => useGearsDiscovery());
     settle();
+    expect(result.current.open).toBe(false);
     h.pathname = '/new';
     rerender();
     act(() => vi.advanceTimersByTime(DISCOVERY_RECHECK_MS * 3));

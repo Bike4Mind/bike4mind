@@ -14,11 +14,11 @@ import {
   DISCOVERY_RECHECK_MS,
   DISCOVERY_SETTLE_MS,
   discoveryCandidates,
+  isDiscoveryHeldForCampaign,
   isDiscoverySkippedPath,
   pickDiscoveryGears,
   readDiscoveryState,
   shouldShowDiscovery,
-  wasCampaignLanding,
   writeDiscoveryState,
 } from '@client/lib/gears/discovery';
 
@@ -56,7 +56,7 @@ export function useGearsDiscovery(): GearsDiscovery {
   useEffect(() => {
     if (decidedRef.current || !settled || !userId || isError) return;
     if (isDiscoverySkippedPath(pathname)) return;
-    if (wasWhatsNewShown() || wasCampaignLanding()) {
+    if (wasWhatsNewShown() || isDiscoveryHeldForCampaign(Date.now())) {
       decidedRef.current = true;
       return;
     }
