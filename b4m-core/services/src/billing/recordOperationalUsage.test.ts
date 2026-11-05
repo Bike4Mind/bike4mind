@@ -32,13 +32,38 @@ function setToggles({ bill, enforce }: { bill: boolean; enforce: boolean }) {
   });
 }
 
-function fullBillingDb(record = vi.fn().mockResolvedValue(null)) {
+/**
+ * A credit-holder repo over an in-memory balance, with decrementCreditsFloored's contract (see
+ * UserModel.decrementCreditsFloored.test.ts): debit up to what is left above zero, leave a
+ * negative balance as is, resolve what was debited.
+ */
+function holderRepo(initialBalance: number) {
+  const state = { balance: initialBalance };
+  return {
+    state,
+    incrementCredits: vi.fn(async (_id: string, credits: number) => {
+      state.balance += credits;
+      return { currentCredits: state.balance };
+    }),
+    decrementCreditsFloored: vi.fn(async (_id: string, credits: number) => {
+      const debited = Math.min(credits, Math.max(state.balance, 0));
+      state.balance -= debited;
+      return debited;
+    }),
+    findById: vi.fn(async () => ({ currentCredits: state.balance })),
+  };
+}
+
+function fullBillingDb(
+  record = vi.fn().mockResolvedValue(null),
+  balances: { user?: number; organization?: number } = {}
+) {
   return {
     usageEvents: { record },
     adminSettings: {} as never,
     creditTransactions: {} as never,
-    users: {} as never,
-    organizations: {} as never,
+    users: holderRepo(balances.user ?? 1_000_000),
+    organizations: holderRepo(balances.organization ?? 1_000_000) as never,
   };
 }
 
@@ -128,7 +153,11 @@ describe('recordOperationalUsage', () => {
       { db: fullBillingDb(vi.fn().mockResolvedValue(null)), logger }
     );
 
-    expect(deductMock).toHaveBeenCalledWith(expect.objectContaining({ apiKeyId: 'key-1' }), expect.anything());
+    expect(deductMock).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyId: 'key-1' }),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('stays recorded-only when the toggle is on but billing repos are absent (a host that does not bill)', async () => {
@@ -350,5 +379,72 @@ describe('recordOperationalUsage', () => {
     await recordOperationalUsage(baseParams, { db: fullBillingDb(record), logger });
 
     expect(record.mock.calls[0][0].dataLakeId).toBeUndefined();
+  });
+  // A chat turn's own settlement is capped at the payer's balance; the background work that follows
+  // it (auto-naming, summaries, tags, mementos) is metered here after the call, with no hold.
+  describe('zero-balance floor', () => {
+    // The free-tier carve-out bills these holders even with billOperationalUsage off.
+    const freeTier = { hasActivePlan: vi.fn().mockResolvedValue(false) };
+
+    it.each([0, -17])('leaves a free-tier balance of %i untouched and writes the charge off', async balance => {
+      setToggles({ bill: false, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+      const db = { ...fullBillingDb(record, { user: balance }), activePlans: freeTier };
+
+      await recordOperationalUsage(baseParams, { db, logger });
+
+      expect(db.users.state.balance).toBe(balance);
+      expect(db.users.incrementCredits).not.toHaveBeenCalled();
+      expect(deductMock).not.toHaveBeenCalled();
+      expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100, writtenOffCredits: 100 });
+    });
+
+    it('debits only what the balance covers and records the rest as written off', async () => {
+      setToggles({ bill: false, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+      const db = { ...fullBillingDb(record, { user: 30 }), activePlans: freeTier };
+
+      await recordOperationalUsage(baseParams, { db, logger });
+
+      expect(db.users.state.balance).toBe(0);
+      // The ledger row carries what was debited; the balance already moved, so it must not move again.
+      expect(deductMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'text_generation_usage', credits: 30 }),
+        expect.anything(),
+        { skipBalanceUpdate: true, currentCreditHolder: { currentCredits: 0 } }
+      );
+      expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100, writtenOffCredits: 70 });
+    });
+
+    it('debits the full charge when the balance covers it, with nothing written off', async () => {
+      setToggles({ bill: true, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+      const db = fullBillingDb(record, { user: 500 });
+
+      await recordOperationalUsage(baseParams, { db, logger });
+
+      expect(db.users.state.balance).toBe(400);
+      expect(deductMock).toHaveBeenCalledWith(expect.objectContaining({ credits: 100 }), expect.anything(), {
+        skipBalanceUpdate: true,
+        currentCreditHolder: { currentCredits: 400 },
+      });
+      expect(record.mock.calls[0][0]).toMatchObject({ creditsCharged: 100 });
+      expect(record.mock.calls[0][0]).not.toHaveProperty('writtenOffCredits');
+    });
+
+    it('floors an organization pool at zero too', async () => {
+      setToggles({ bill: true, enforce: true });
+      const record = vi.fn().mockResolvedValue(null);
+      const db = fullBillingDb(record, { organization: 0 });
+
+      await recordOperationalUsage({ ...baseParams, organization: { id: 'org1' } as never }, { db, logger });
+
+      const organizations = db.organizations as unknown as ReturnType<typeof holderRepo>;
+      expect(organizations.decrementCreditsFloored).toHaveBeenCalledWith('org1', 100);
+      expect(organizations.state.balance).toBe(0);
+      expect(db.users.decrementCreditsFloored).not.toHaveBeenCalled();
+      expect(deductMock).not.toHaveBeenCalled();
+      expect(record.mock.calls[0][0]).toMatchObject({ writtenOffCredits: 100 });
+    });
   });
 });
