@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { ChatProject } from '@shared/chat';
 import type {
@@ -21,6 +21,7 @@ import {
   gitPath,
   listWorktrees,
   resolveBaseRef,
+  WORKTREE_ADD_TIMEOUT_MS,
 } from './git';
 import { gitArgumentPath } from '../../git/hostGitArgs';
 import { hostRealpath } from '../tools/paths';
@@ -864,7 +865,12 @@ export async function resolveWorkspace(
 
   if (await branchExists(projectDirectory, branch)) {
     timer?.lap('checks');
-    await git(projectDirectory, ['worktree', 'add', gitArgumentPath(projectDirectory, path), branch]);
+    await addWorktree(
+      projectDirectory,
+      path,
+      ['worktree', 'add', gitArgumentPath(projectDirectory, path), branch],
+      null
+    );
     timer?.lap('worktreeAdd');
     return { workingDirectory: path, branch, outcome: 'created' };
   }
@@ -877,17 +883,131 @@ export async function resolveWorkspace(
   // --no-track for the reason the shell helper gives: a feature branch should not track the
   // base it forked from, or a later `git push` would aim at the wrong ref.
   if (!fromSpare) {
-    await git(projectDirectory, [
-      'worktree',
-      'add',
-      '--no-track',
-      '-b',
-      branch,
-      gitArgumentPath(projectDirectory, path),
-      from,
-    ]);
+    await addWorktree(
+      projectDirectory,
+      path,
+      ['worktree', 'add', '--no-track', '-b', branch, gitArgumentPath(projectDirectory, path), from],
+      branch
+    );
   }
   timer?.lap(fromSpare ? 'spareSwitch' : 'worktreeAdd');
   spares?.refill(projectDirectory, container, from);
   return { workingDirectory: path, branch, outcome: 'created' };
 }
+
+/**
+ * Check out a new worktree at `path` (the host path), which did not exist before, or leave
+ * nothing behind. `args` carry the path as git sees it, via gitArgumentPath.
+ *
+ * A failed or timed-out add leaves a half-populated folder, a registration git has locked while
+ * it was initializing, and with `-b` the branch, and each of those makes the next attempt at the
+ * same branch fail. `createdBranch` is the branch this call creates.
+ *
+ * Nothing is cleaned when git refused because the path or branch already existed: then another
+ * writer made it between our checks and this add, and it is theirs. The caller has checked that
+ * `path` did not exist, so any other failure left only what this call made.
+ */
+async function addWorktree(
+  projectDirectory: string,
+  path: string,
+  args: readonly string[],
+  createdBranch: string | null
+): Promise<void> {
+  try {
+    await git(projectDirectory, args, { timeoutMs: WORKTREE_ADD_TIMEOUT_MS });
+  } catch (err) {
+    if (!(err instanceof Error && ALREADY_THERE.test(err.message))) {
+      await discardFailedWorktree(projectDirectory, path, createdBranch);
+    }
+    throw err;
+  }
+}
+
+/** git's refusals for a path or branch that something else holds. */
+const ALREADY_THERE = /already exists|already checked out|already used by worktree|is a missing but/i;
+
+async function discardFailedWorktree(
+  projectDirectory: string,
+  path: string,
+  createdBranch: string | null
+): Promise<void> {
+  // git takes the path as git itself sees it (a Linux path for a WSL project); the filesystem
+  // removal below takes the host path, as every other fs call here does.
+  const gitTarget = gitArgumentPath(projectDirectory, path);
+  // A killed add leaves its registration locked ("initializing"): one --force does not remove a
+  // locked worktree and prune skips it, which would leave the branch held.
+  await git(projectDirectory, ['worktree', 'unlock', gitTarget]).catch(() => undefined);
+  await git(projectDirectory, ['worktree', 'remove', '--force', '--force', gitTarget]).catch(() => undefined);
+  await rm(path, { recursive: true, force: true }).catch(() => undefined);
+  // Drops a registration whose folder is now gone, which would otherwise hold the branch.
+  await git(projectDirectory, ['worktree', 'prune']).catch(() => undefined);
+  if (createdBranch && (await branchExists(projectDirectory, createdBranch))) {
+    await git(projectDirectory, ['branch', '-D', createdBranch]).catch(() => undefined);
+  }
+}
+
+/**
+ * A branch name a spawn holds while its worktree is not cut yet. Only the holder of the token can
+ * give it back, so one spawn failing never frees a name another spawn is still cutting.
+ */
+export type BranchReservation = { readonly projectDirectory: string; readonly branch: string; readonly token: symbol };
+
+/**
+ * Reserved branch names per project directory, each with its holder's token. Without it two
+ * spawns started together with the same title both find the same name free, and the second would
+ * share the first one's tree through resolveWorkspace's existing-worktree return.
+ */
+const reservedBranches = new Map<string, Map<string, symbol>>();
+
+/** Hold `branch` for the caller, or null when another spawn holds it. */
+export function reserveBranchName(projectDirectory: string, branch: string): BranchReservation | null {
+  const reserved = reservedBranches.get(projectDirectory) ?? new Map<string, symbol>();
+  if (reserved.has(branch)) return null;
+  const token = Symbol(branch);
+  reserved.set(branch, token);
+  reservedBranches.set(projectDirectory, reserved);
+  return { projectDirectory, branch, token };
+}
+
+/** Give a name back. A no-op unless `reservation` is the one holding it. */
+export function releaseBranchName(reservation: BranchReservation): void {
+  const reserved = reservedBranches.get(reservation.projectDirectory);
+  if (!reserved || reserved.get(reservation.branch) !== reservation.token) return;
+  reserved.delete(reservation.branch);
+  if (reserved.size === 0) reservedBranches.delete(reservation.projectDirectory);
+}
+
+/**
+ * `wanted`, or the first of `wanted-2`, `wanted-3`... that no branch, no worktree and no other
+ * spawn holds, reserved for the caller, who releases it once the worktree is cut or abandoned.
+ *
+ * For a branch name the app picked itself (an Orchestrate spawn), where a leftover branch from an
+ * earlier attempt must not block the next one. Never for a name the user typed: that collision is
+ * theirs to see. Answers `wanted` unreserved when nothing free is found or git cannot be read,
+ * and the caller's own checks then refuse it with a reason.
+ */
+export async function unusedBranchName(
+  projectDirectory: string,
+  wanted: string
+): Promise<{ branch: string; reservation: BranchReservation | null }> {
+  try {
+    const worktrees = await listWorktrees(projectDirectory);
+    for (let attempt = 1; attempt <= MAX_BRANCH_NAME_ATTEMPTS; attempt++) {
+      const candidate = attempt === 1 ? wanted : `${wanted}-${attempt}`;
+      if (worktrees.some(entry => entry.branch === candidate)) continue;
+      // Taken before the await, so a parallel call cannot pick it in the gap.
+      const reservation = reserveBranchName(projectDirectory, candidate);
+      if (!reservation) continue;
+      if (await branchExists(projectDirectory, candidate)) {
+        releaseBranchName(reservation);
+        continue;
+      }
+      return { branch: candidate, reservation };
+    }
+  } catch {
+    // Unreadable: the caller's check reports it.
+  }
+  return { branch: wanted, reservation: null };
+}
+
+const MAX_BRANCH_NAME_ATTEMPTS = 20;

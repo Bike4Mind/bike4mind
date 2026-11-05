@@ -53,14 +53,18 @@ import type {
 import {
   awaitsWorktree,
   branchHolder,
+  defaultSpawnPlacement,
   findModelOption,
   isLocalBackend,
   isLocalModel,
   isResumableStop,
   isTurnBudgetStop,
   localBackend,
+  MAX_SPAWN_DEPTH,
   messagesSinceBoundary,
+  modelSupportsTools,
   NO_LOCAL_MODEL,
+  orchestratesAgents,
   parseLocalModelId,
   pickLocalModel,
   SERVER_CREDENTIALS_STOP,
@@ -117,6 +121,7 @@ import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
 import {
+  appWorktreeRoot,
   hasAppWorkspaceBranch,
   inspectWorktreeRemoval,
   listAppWorktrees,
@@ -125,10 +130,22 @@ import {
   sweepSafeOrphans,
   prefetchBase,
   resolveWorkspace,
+  releaseBranchName,
+  reserveBranchName,
+  type BranchReservation,
   type SpareWorktrees,
+  unusedBranchName,
   type WorkspaceOutcome,
 } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
+import {
+  AGENT_WAKES_PAUSED_NOTICE,
+  AgentWakeLedger,
+  agentsSettledNotice,
+  agentsSettledSummary,
+  lastReplySnippet,
+  type SettledAgent,
+} from './agentWake';
 import type { PdfPromptText } from './pdfText';
 import type { AttachmentStore } from './AttachmentStore';
 import type { SidebarSectionStore } from './SidebarSectionStore';
@@ -204,6 +221,8 @@ import {
 } from './tools/ApprovalGate';
 import { inspectDirectory, inspectDirectoryRequest } from './tools/requestDirectoryTool';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
+import { QUEST_COMPLETE_TOOL_NAME, SESSION_SPAWN_TOOL_NAME } from './tools/hostTools';
+import { isWithin } from './tools/paths';
 import { BackgroundWake } from './backgroundWake';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { projectName, relayHoldReason, resolveSessionRef } from './sessionRef';
@@ -231,6 +250,7 @@ import {
   type HostSessionView,
   type MediaContext,
   type RelayOutcome,
+  type QuestReadiness,
   type SpawnOutcome,
   type SpawnPlacement,
   type SpawnRejected,
@@ -321,6 +341,9 @@ const TURN_LIMITS: TurnLimits = {
   wallClockMs: 30 * 60 * 1000,
 };
 
+/** A spawn's hold on its worktree branch name; see spawnSession. */
+type BranchLease = { reservation: BranchReservation | null; launched: boolean };
+
 type SettledModel = { session: ChatSession; summary?: ChatSessionSummary; notice?: string } | { error: string };
 
 /** How a turn ended. Only 'completed' lets a queued message go out; see settleQueue. */
@@ -370,14 +393,10 @@ type SendOptions = {
 export const MAX_CONCURRENT_SPAWNED = 10;
 
 /**
- * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
- * and a grandchild and refuses the next one.
- *
- * Read off the child's stored `origin.depth` rather than walked back up the parent chain,
- * because a parent can be deleted mid-run and a cap that stops being enforceable when a row
- * disappears is not a cap.
+ * How long a spawned agent's first turn waits for its new worktree's dependency install (ms).
+ * It cannot wait out an install itself: ending its turn reads as the agent having finished.
  */
-const MAX_SPAWN_DEPTH = 2;
+export const SPAWN_INSTALL_WAIT_MS = 10 * 60_000;
 
 /**
  * How long a title request may take before it is dropped.
@@ -664,6 +683,11 @@ export class ChatService {
 
   private readonly launching = new Set<string>();
 
+  /** Ends a spawned agent's wait for its install early, when it is stopped or deleted meanwhile. */
+  /** Parents an agent worktree was cut for during this run; see mayHaveAgentWorktrees. */
+  private readonly agentParents = new Set<string>();
+  private readonly installWaits = new Map<string, (reason: 'stopped' | 'deleted') => void>();
+
   /** Startup has failed; no new input may race its preservation or deletion. */
   private readonly abandoning = new Set<string>();
 
@@ -702,10 +726,12 @@ export class ChatService {
   private readonly suggesting = new Map<string, AbortController>();
 
   /**
-   * Spawned sessions whose seeded run has not finished, and who to tell when it does.
+   * Spawned sessions with an autonomous turn running, and who to tell when it ends.
    *
-   * Only the AUTONOMOUS turn is tracked. A later turn the user types into the same session is
-   * an ordinary conversation and neither counts against the concurrency cap nor reports back.
+   * Armed for the seeded run and again for every later turn nobody typed (a session_send from the
+   * parent, an automatic turn), so each one reports back. A turn the user types into the same
+   * session is an ordinary conversation and neither counts against the concurrency cap nor
+   * reports back.
    */
   private readonly spawnWatch = new Map<string, { parentSessionId: string }>();
 
@@ -723,6 +749,15 @@ export class ChatService {
 
   /** Finished children waiting for their parent to be idle, so a report never splits a turn. */
   private readonly childReports = new Map<string, ChildReport[]>();
+
+  /** Agent turns that ended since each Orchestrate parent was last woken; see wakeParentForAgents. */
+  private readonly agentWakes = new AgentWakeLedger();
+
+  /**
+   * Agents whose turn has ended but whose report is not recorded yet. A sibling settling in that
+   * gap must still see them as running, or the parent would be woken without them.
+   */
+  private readonly agentsSettling = new Map<string, { parentId: string; settling: symbol }>();
 
   /**
    * Per session, the hop depth of the turn running there and how many messages it has sent.
@@ -1428,7 +1463,60 @@ export class ChatService {
 
     const granted = await this.deps.access.list();
     const owned = union([project.workingDirectory, ...project.contextDirectories], own);
-    return { roots: union(owned, granted), workingDirectory: project.workingDirectory };
+    const agents = this.mayHaveAgentWorktrees(session) ? await this.agentWorktrees(session.id, project.directory) : [];
+    return { roots: union(union(owned, agents), granted), workingDirectory: project.workingDirectory };
+  }
+
+  /**
+   * Whether agentWorktrees can find anything, without listing every conversation on every turn:
+   * the session called session_spawn at some point, or an agent was launched for it this run
+   * (a started suggestion leaves no call in the parent).
+   */
+  private mayHaveAgentWorktrees(session: ChatSession): boolean {
+    return (
+      this.agentParents.has(session.id) ||
+      session.messages.some(message => message.toolCalls?.some(call => call.name === SESSION_SPAWN_TOOL_NAME))
+    );
+  }
+
+  /**
+   * The worktrees of the agents this session started and that still exist, which the parent can
+   * read and write without asking: reviewing and combining their work is its job, and they sit
+   * under the repository's shared `.b4m/worktrees` (appWorktreeRoot), outside the parent's own
+   * folder whenever the parent is itself a linked worktree. Only a worktree the app cut for the
+   * child counts; a child that shares the parent's folder adds nothing. launchSpawned and
+   * cleanupDeletedSession bump the parent's scope so a running turn picks a change up.
+   *
+   * The child's stored fields are not trusted on their own, since a child can be re-pointed
+   * (updateProject): it must still be in the parent's repository, and its folder must exist
+   * under that repository's app worktree root once symlinks are resolved.
+   */
+  private async agentWorktrees(parentId: string, parentDirectory: string): Promise<string[]> {
+    const sessions = await this.deps.store.list();
+    const candidates = sessions.flatMap(entry => {
+      const project = entry.project;
+      if (entry.origin?.parentSessionId !== parentId || !project?.workspace || !project.workspaceBranch) return [];
+      if (project.directory !== parentDirectory || project.workingDirectory === project.directory) return [];
+      return [project.workingDirectory];
+    });
+    if (candidates.length === 0) return [];
+    let root: string;
+    try {
+      root = await realpath(appWorktreeRoot(await containerDirectory(parentDirectory)));
+    } catch {
+      return [];
+    }
+    const granted = await Promise.all(
+      candidates.map(async candidate => {
+        try {
+          const real = await realpath(candidate);
+          return real !== root && isWithin(root, real) ? [candidate] : [];
+        } catch {
+          return []; // Gone from disk.
+        }
+      })
+    );
+    return granted.flat();
   }
 
   /**
@@ -1507,6 +1595,11 @@ export class ChatService {
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
     return this.deps.store.setPinned(sessionId, pinned);
+  }
+
+  /** Read at the start of each turn, so a change applies from the next one. */
+  setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setOrchestrate(sessionId, orchestrate);
   }
 
   /**
@@ -1850,6 +1943,8 @@ export class ChatService {
     this.deps.approvals?.forgetSession(sessionId);
     this.loopRuns.delete(sessionId);
     this.deps.history?.removeSession(sessionId, historyScope);
+    // Ahead of stop(), so a spawn waiting on its install reads this as the delete it is.
+    this.installWaits.get(sessionId)?.('deleted');
     this.stop(sessionId);
     await this.deps.capabilities
       ?.revokeMatching(
@@ -1873,7 +1968,10 @@ export class ChatService {
     // Video polling stops first, so a download landing afterwards cannot recreate the folder.
     this.deps.videoJobs?.forgetSession(sessionId);
     await this.deps.media?.forgetSession(sessionId);
+    // Read before the delete: its parent's running turn drops this worktree from its roots (agentWorktrees).
+    const parentId = (await this.deps.store.get(sessionId))?.origin?.parentSessionId;
     if (deleteStoredSession) await this.deps.store.delete(sessionId);
+    if (parentId) this.bumpScope(parentId);
     // The stopped reply can settle and reindex while process/browser cleanup is awaiting I/O.
     // Once the serialized delete has finished, no later append can resurrect the session.
     this.deps.history?.removeSession(sessionId, historyScope);
@@ -1891,6 +1989,8 @@ export class ChatService {
     // running spawned session does not leak one for the rest of the run.
     this.spawnWatch.delete(sessionId);
     this.childReports.delete(sessionId);
+    this.agentWakes.forget(sessionId);
+    this.agentsSettling.delete(sessionId);
     this.turnRelay.delete(sessionId);
     this.turnNotify.delete(sessionId);
     // The stored session is already gone here, so resolving takes the "could not be delivered" path.
@@ -1909,6 +2009,7 @@ export class ChatService {
    * server it started. `bash_kill` and the panel's Stop button are how those end.
    */
   stop(sessionId: string): void {
+    this.installWaits.get(sessionId)?.('stopped');
     this.active.get(sessionId)?.abort();
   }
 
@@ -2228,7 +2329,14 @@ export class ChatService {
     if (!released?.relay && !released?.automatic && seedHops === undefined) {
       this.attendedTurns.add(sessionId);
       this.wake?.attended(sessionId);
-    } else this.attendedTurns.delete(sessionId);
+      // The user typing here lifts a hold their stop put on agent wakes, restarts the wake cap,
+      // and answers any batch waiting: its reports are already in the transcript this turn reads.
+      this.agentWakes.release(sessionId);
+    } else {
+      this.attendedTurns.delete(sessionId);
+      const parentSessionId = session.origin?.parentSessionId;
+      if (parentSessionId) this.spawnWatch.set(sessionId, { parentSessionId });
+    }
     const replyId = this.startReply(session, api, historyScope, undefined, released?.relay?.hops ?? seedHops ?? 0);
     this.noteNotify(sessionId, released?.relay);
 
@@ -2778,6 +2886,8 @@ export class ChatService {
       // Narrower than `ask`: a relay or automatic turn in a main session can still show a card,
       // but nobody typed it.
       const attended = this.attendedTurns.has(sessionId);
+      // One reading for the tool list, the prompt and the host (buildHostContext), so none disagree.
+      const orchestrating = orchestratesAgents(session);
       let { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = api && !localTurn ? this.buildMediaContext(session, api, serverConfig.cdnUrl) : undefined;
       // A wrapper over the client and nothing more: a turn that never searches makes no request.
@@ -2926,7 +3036,8 @@ export class ChatService {
               web: !!web,
               // See ToolDefinition.interactive.
               ask,
-              suggestions: !session.origin,
+              suggestions: !session.origin && !orchestrating,
+              delegates: orchestrating,
               mcp: mcpTools.map(binding => binding.definition.schema),
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
@@ -2958,7 +3069,7 @@ export class ChatService {
       const readAttachment = this.attachmentReader(session.id);
       const projectContext = await contextBlock;
       const skillsSection = await skillsBlock;
-      let toolsSupported = modelOption?.supportsTools !== false && (!localTurn || !!modelOption);
+      let toolsSupported = modelSupportsTools(session.model, modelOption);
       // See chat/deferredTools.ts. Decided once per turn, so a turn never mixes the two shapes.
       const deferredSetting = this.deps.deferredTools;
       const deferred =
@@ -2977,7 +3088,7 @@ export class ChatService {
           host: !!host,
           explore: !!explore,
           mcpServers: this.deps.mcp ? mcpServers : null,
-          dependencyLines: this.deps.dependencies?.promptLines(session.id) ?? [],
+          dependencyLines: this.deps.dependencies?.promptLines(session.id, { spawned: !!session.origin }) ?? [],
           projectContext: !!projectContext,
           browser: !!browser,
           patchEdits,
@@ -3049,7 +3160,7 @@ export class ChatService {
           toolsSupported && !!explore,
           toolsSupported && this.deps.mcp ? mcpServers : null,
           session.project,
-          this.deps.dependencies?.promptLines(session.id) ?? [],
+          this.deps.dependencies?.promptLines(session.id, { spawned: !!session.origin }) ?? [],
           projectContext,
           toolsSupported && !!browser,
           patchEdits,
@@ -3059,7 +3170,8 @@ export class ChatService {
           session.model,
           toolsSupported && !!web,
           toolsSupported && !!screen,
-          toolsSupported && !!simulator
+          toolsSupported && !!simulator,
+          orchestrating
         );
       wire.unshift(
         deferred ? buildDeferredSystemMessage(session.project, projectContext, skillsSection) : systemMessage()
@@ -3136,6 +3248,8 @@ export class ChatService {
           ...(promptCache ? { promptCache } : {}),
           ...(contextSnapshot ? { contextSnapshot } : {}),
           ...(deferred ? { deferred } : {}),
+          // A stopped reply is cut off mid-summary, so it cannot stand as the final one.
+          ...(stopReason !== 'aborted' && marksQuestComplete(toolCalls) ? { questComplete: true as const } : {}),
         };
         await this.settleReply(sessionId, !!resume, historyScope, message);
         this.emit({
@@ -3150,6 +3264,7 @@ export class ChatService {
           ...(keepRounds ? { rounds: withoutSent(rounds) } : {}),
           ...(artifacts.length > 0 ? { artifacts } : {}),
           ...(promptCache ? { promptCache } : {}),
+          ...(message.questComplete ? { questComplete: true as const } : {}),
         });
       };
 
@@ -3724,6 +3839,7 @@ export class ChatService {
       usage: message.usage,
       promptCache: message.promptCache,
       contextSnapshot: message.contextSnapshot,
+      questComplete: message.questComplete,
       // Never cleared: rounds a deferred run already sent keep replaying as they were sent.
       ...(message.deferred ? { deferred: true } : {}),
     });
@@ -3765,10 +3881,13 @@ export class ChatService {
       this.flushQueue(sessionId);
       // Behind anything the user queued: their turn is started first and takes the notice itself.
       this.wakeIfIdle(sessionId);
+      // A parent that was busy when its agents settled is woken now, once.
+      void this.wakeParentForAgents(sessionId);
       return;
     }
     // A stopped or failed turn is not followed by an automatic one. Exits after this still wake.
     this.wake?.discard(sessionId);
+    this.agentWakes.hold(sessionId);
     const reason = outcome === 'aborted' ? 'stopped' : outcome === 'expired' ? 'session-expired' : 'failed';
     const stranded = this.deps.queue?.releaseAll(sessionId, reason) ?? [];
     void this.strandRelay(sessionId, stranded).catch(() => undefined);
@@ -4389,8 +4508,16 @@ export class ChatService {
         return this.relayMessage(session, target, found.session.id, message, notify);
       },
 
-      // A spawned session has no suggestion tray, so it keeps the approval-gated start.
-      ...(session.origin ? {} : { suggestions: this.suggestionHost(session.id, project) }),
+      // A spawned session has no suggestion tray, so it keeps the approval-gated start. With
+      // Orchestrate on, the user's switch is the approval and a spawn starts at once.
+      ...(orchestratesAgents(session)
+        ? {
+            delegates: { placement: (title, prompt) => this.delegatedPlacement(project, title, prompt) },
+            quest: { readiness: () => this.questReadiness(session.id) },
+          }
+        : session.origin
+          ? {}
+          : { suggestions: this.suggestionHost(session.id, project) }),
     };
   }
 
@@ -4992,6 +5119,57 @@ export class ChatService {
     }
   }
 
+  /** Whether an orchestrating parent's job can be declared complete; see quest_complete. */
+  private async questReadiness(parentId: string): Promise<QuestReadiness> {
+    const sessions = await this.deps.store.list();
+    const agents: ChatSessionSummary[] = [];
+    const parents = new Set([parentId]);
+    // Descendants, so an agent's own agents count too; origin chains are acyclic by construction.
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const entry of sessions) {
+        const parent = entry.origin?.parentSessionId;
+        if (!parent || !parents.has(parent) || parents.has(entry.id)) continue;
+        parents.add(entry.id);
+        agents.push(entry);
+        grew = true;
+      }
+    }
+    if (agents.length === 0) {
+      return { ready: false, reason: 'No agents were started from this conversation, so there is no job to complete.' };
+    }
+
+    const reasons: string[] = [];
+    const working = agents.filter(
+      agent =>
+        this.hasTurnInFlight(agent.id) ||
+        this.launching.has(agent.id) ||
+        (this.deps.activity?.statusOf(agent.id) ?? 'done') !== 'done'
+    );
+    if (working.length > 0) {
+      reasons.push(`Still working or waiting on approval: ${working.map(agent => `"${agent.title}"`).join(', ')}.`);
+    }
+    const running = (sessionId: string) =>
+      (this.deps.background?.list(sessionId) ?? []).filter(process => process.status === 'running');
+    // Only the parent's own: bash_kill cannot reach an agent's processes, so they never block.
+    const own = running(parentId);
+    if (own.length > 0) {
+      reasons.push(`Background processes still running: ${own.map(process => process.command).join(', ')}.`);
+    }
+    if (reasons.length > 0) {
+      return { ready: false, reason: `${reasons.join(' ')} Call quest_complete again once they have finished.` };
+    }
+    const leftover = agents.flatMap(agent => running(agent.id));
+    if (leftover.length === 0) return { ready: true };
+    const count = leftover.length === 1 ? '1 background process is' : `${leftover.length} background processes are`;
+    return {
+      ready: true,
+      note:
+        `${count} still running in agent sessions (${leftover.map(process => process.command).join(', ')}); ` +
+        'mention it in the summary, since the user can stop them.',
+    };
+  }
+
   private toHostView(entry: ChatSessionSummary): HostSessionView {
     return {
       id: entry.id,
@@ -5051,9 +5229,19 @@ export class ChatService {
     placement: SpawnPlacement,
     onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
-    return this.withWorkspaceBindings(() =>
-      this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, onFailed)
-    );
+    // The worktree branch name this spawn holds (see reserveBranchName). It passes to
+    // launchSpawned with the session; until then, any way out of here gives it back.
+    const lease: BranchLease = {
+      reservation: placement.kind === 'worktree' ? (placement.reservation ?? null) : null,
+      launched: false,
+    };
+    try {
+      return await this.withWorkspaceBindings(() =>
+        this.spawnSessionWithWorkspaceLease(parent, prompt, title, placement, lease, onFailed)
+      );
+    } finally {
+      if (!lease.launched && lease.reservation) releaseBranchName(lease.reservation);
+    }
   }
 
   private async spawnSessionWithWorkspaceLease(
@@ -5061,6 +5249,7 @@ export class ChatService {
     prompt: string,
     title: string | undefined,
     placement: SpawnPlacement,
+    lease: BranchLease,
     onFailed?: (message: string) => Promise<void>
   ): Promise<SpawnOutcome> {
     const project = parent.project;
@@ -5106,7 +5295,7 @@ export class ChatService {
       // refused while they can still answer with another, rather than after a row appeared.
       let worktree: { branch: string; base: string } | null = null;
       if (placement.kind === 'worktree') {
-        const checked = await this.checkSpawnBranch(project, placement.branch);
+        const checked = await this.checkSpawnBranch(project, placement.branch, lease);
         if (!checked.ok) return checked;
         worktree = { branch: checked.branch, base: placement.base };
       }
@@ -5155,7 +5344,13 @@ export class ChatService {
       const loopRun = this.loopRuns.get(parent.id);
       if (loopRun) this.markLoopRun(child.id, loopRun);
       const seedHops = this.turnRelay.get(parent.id)?.hops ?? 0;
-      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, { seedHops, timer, onFailed });
+      lease.launched = true;
+      void this.launchSpawned(parent.id, project.directory, child, seed, worktree, {
+        seedHops,
+        timer,
+        onFailed,
+        reservation: lease.reservation,
+      });
       return { ok: true, session: child };
     } finally {
       this.spawnReservations--;
@@ -5180,19 +5375,38 @@ export class ChatService {
       seedHops,
       timer,
       onFailed,
-    }: { seedHops: number; timer: PhaseTimer; onFailed?: (message: string) => Promise<void> }
+      reservation,
+    }: {
+      seedHops: number;
+      timer: PhaseTimer;
+      onFailed?: (message: string) => Promise<void>;
+      /** Released once the worktree is cut or abandoned: from then on git itself holds the name. */
+      reservation: BranchReservation | null;
+    }
   ): Promise<void> {
     this.launching.add(child.id);
     this.deps.activity?.preparingStarted(child.id);
     let failure: string | null = null;
+    let deleted = false;
+    let stopped = false;
     try {
       let text = seed;
       if (worktree) {
         const unprepared = await this.ensureWorkspace(child, seed, timer);
         if (unprepared) failure = `The worktree could not be created: ${unprepared.error}`;
-        else if (child.project) {
+        else {
+          this.agentParents.add(parentId);
+          this.bumpScope(parentId);
+        }
+        if (!unprepared && child.project) {
           const workingDirectory = child.project.workingDirectory;
           text = `${worktreePreamble(projectDirectory, { ...worktree, workingDirectory })}\n\n${seed}`;
+        }
+        if (!unprepared) {
+          const waited = await this.awaitSpawnInstall(child.id);
+          if (waited !== 'ready') failure = 'It was stopped before its first turn.';
+          deleted = waited === 'deleted';
+          stopped = waited === 'stopped';
         }
       }
       if (!failure) {
@@ -5210,14 +5424,125 @@ export class ChatService {
         this.deps.logger.debug(`CHAT: spawned ${child.id} from ${parentId}`);
         return;
       }
-      await this.abandonSpawn(parentId, child, failure, onFailed).catch((err: unknown) => {
+      const settled = stopped
+        ? this.keepStoppedSpawn(parentId, child)
+        : this.abandonSpawn(parentId, child, failure, onFailed, deleted);
+      await settled.catch((err: unknown) => {
         this.deps.logger.warn(`CHAT: could not clean up ${child.id}: ${err instanceof Error ? err.message : err}`);
       });
     } finally {
+      if (reservation) releaseBranchName(reservation);
       this.launching.delete(child.id);
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
     }
+    // After `launching` is cleared: a kept session still counts as running until then.
+    if (failure) {
+      await this.wakeParentForAgents(parentId).catch((err: unknown) => {
+        this.deps.logger.warn(`CHAT: could not wake ${parentId}: ${err instanceof Error ? err.message : err}`);
+      });
+    }
+  }
+
+  /**
+   * Hold a spawned agent's first turn until its worktree's install settles, or the cap passes.
+   * A timeout or failure still starts the turn, whose prompt then says the install is running or
+   * failed; only a stop or a delete meanwhile does not.
+   */
+  private async awaitSpawnInstall(sessionId: string): Promise<'ready' | 'stopped' | 'deleted'> {
+    const installer = this.deps.dependencies;
+    if (!installer) return 'ready';
+    let interrupted: 'stopped' | 'deleted' | null = null;
+    const stopped = new Promise<null>(resolve =>
+      this.installWaits.set(sessionId, reason => {
+        interrupted ??= reason;
+        resolve(null);
+      })
+    );
+    try {
+      const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
+      if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
+    } finally {
+      this.installWaits.delete(sessionId);
+    }
+    if (interrupted) return interrupted;
+    if (this.abandoning.has(sessionId) || !(await this.deps.store.get(sessionId))) return 'deleted';
+    return 'ready';
+  }
+
+  /**
+   * A spawned agent the user stopped while its install ran: keep the session and its worktree,
+   * and hand the seed back unsent, since stopping is their call rather than a startup failure.
+   */
+  private async keepStoppedSpawn(parentId: string, child: ChatSessionSummary): Promise<void> {
+    this.spawnWatch.delete(child.id);
+    const stored = await this.deps.store.get(child.id);
+    if (!stored) return;
+    const seed: ChatQueuedMessage[] = stored.messages.some(message => message.role === 'user' && !message.system)
+      ? []
+      : [
+          {
+            id: randomUUID(),
+            sessionId: child.id,
+            text: stored.origin?.seedPrompt ?? '',
+            queuedAt: new Date().toISOString(),
+          },
+        ];
+    const pending = this.deps.queue?.list(child.id) ?? [];
+    const saved = await this.saveUnsentInput(
+      child.id,
+      [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)],
+      {
+        content: 'Stopped before its first turn. Unsent input saved:',
+        display: 'Unsent input saved after it was stopped:',
+      }
+    );
+    if (!saved) return;
+    await this.strandRelay(
+      child.id,
+      pending.filter(message => message.relay)
+    );
+    this.deps.queue?.giveBack(child.id, seed, 'stopped');
+    this.deps.logger.debug(`CHAT: ${child.id} was stopped before its first turn and kept`);
+    await this.deliverChildReport(parentId, {
+      localOnly: isLocalModel(child.model),
+      content:
+        `The session you started, "${child.title}" (${child.id}), was stopped by the user before it began. ` +
+        'Its task was saved there unsent and nothing is running for it. Do not restart it unless the user asks.',
+      display: `The session "${child.title}" was stopped before it began.`,
+    });
+    await this.recordAgentSettled(parentId, {
+      sessionId: child.id,
+      title: child.title,
+      outcome: 'aborted',
+      lastReply: null,
+    });
+  }
+
+  /**
+   * Queue return events only reach an open composer, so input handed back is also saved to the
+   * transcript; switching away first cannot lose the task or its files. False once the session
+   * is deleted meanwhile, which wins.
+   */
+  private async saveUnsentInput(
+    sessionId: string,
+    messages: readonly ChatQueuedMessage[],
+    heading: { content: string; display: string }
+  ): Promise<boolean> {
+    for (const message of messages) {
+      const recovery: ChatMessage = {
+        id: randomUUID(),
+        role: 'user',
+        system: true,
+        content: `${heading.content}\n\n${message.text}`,
+        display: `${heading.display}\n\n${message.text}`,
+        createdAt: new Date().toISOString(),
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+      };
+      if (!(await this.deps.store.appendMessage(sessionId, recovery))) return false;
+      this.emit({ type: 'message', sessionId, message: recovery });
+    }
+    return true;
   }
 
   /**
@@ -5228,13 +5553,15 @@ export class ChatService {
     parentId: string,
     child: ChatSessionSummary,
     reason: string,
-    onFailed?: (message: string) => Promise<void>
+    onFailed?: (message: string) => Promise<void>,
+    /** Already being deleted, though the store may not have caught up yet. */
+    deleted = false
   ): Promise<void> {
     this.abandoning.add(child.id);
     try {
       this.spawnWatch.delete(child.id);
       // Deleted by the user while it was preparing: that was their call, not a failure to report.
-      const stored = await this.deps.store.get(child.id);
+      const stored = deleted ? null : await this.deps.store.get(child.id);
       if (!stored) return;
       const pending = this.deps.queue?.list(child.id) ?? [];
       const retained = pending.some(message => !message.automatic);
@@ -5251,22 +5578,15 @@ export class ChatService {
                 queuedAt: new Date().toISOString(),
               },
             ];
-        // Queue return events only reach an open composer. Save an explicit unsent copy as
-        // well, so switching away before startup fails cannot lose the task or its files.
-        for (const message of [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)]) {
-          const recovery: ChatMessage = {
-            id: randomUUID(),
-            role: 'user',
-            system: true,
-            content: `Startup failed before this queued task could run. Unsent input saved for retry:\n\n${message.text}`,
-            display: `Unsent input saved after startup failed:\n\n${message.text}`,
-            createdAt: new Date().toISOString(),
-            ...(message.attachments?.length ? { attachments: message.attachments } : {}),
-          };
-          const recovered = await this.deps.store.appendMessage(child.id, recovery);
-          if (!recovered) return; // A deliberate deletion during recovery wins.
-          this.emit({ type: 'message', sessionId: child.id, message: recovery });
-        }
+        const saved = await this.saveUnsentInput(
+          child.id,
+          [...seed, ...pending.filter(entry => !entry.relay && !entry.automatic)],
+          {
+            content: 'Startup failed before this queued task could run. Unsent input saved for retry:',
+            display: 'Unsent input saved after startup failed:',
+          }
+        );
+        if (!saved) return;
         await this.strandRelay(
           child.id,
           pending.filter(message => message.relay)
@@ -5293,6 +5613,13 @@ export class ChatService {
             : 'Nothing is running for it. Start it again, or do the work in this conversation.'),
         display: `The session "${child.title}" could not start and ${outcome}. ${reason}`,
       });
+      // The parent was told this agent started, so its failure counts as one of the batch.
+      await this.recordAgentSettled(parentId, {
+        sessionId: child.id,
+        title: child.title,
+        outcome: 'failed',
+        lastReply: null,
+      });
     } finally {
       this.abandoning.delete(child.id);
     }
@@ -5311,9 +5638,24 @@ export class ChatService {
    * Only reads: the cut itself happens in launchSpawned, from the base the card showed (see
    * spawnBaseFor), so the child starts on the parent's commits rather than on main.
    */
+  /** The suggestion card's default placement, decided the way its card would be drawn. */
+  private async delegatedPlacement(
+    project: ChatProject,
+    title: string | undefined,
+    prompt: string
+  ): Promise<SpawnPlacement> {
+    const repository = await isGitRepository(project.workingDirectory);
+    if (defaultSpawnPlacement(repository) === 'local') return { kind: 'local' };
+    const base = await spawnBaseFor(project);
+    prefetchBase(project.directory, base);
+    const { branch, reservation } = await unusedBranchName(project.directory, suggestBranchName(title, prompt));
+    return { kind: 'worktree', branch, base, reservation };
+  }
+
   private async checkSpawnBranch(
     project: ChatProject,
-    branch: string
+    branch: string,
+    lease: BranchLease
   ): Promise<{ ok: true; branch: string } | SpawnRejected> {
     const wanted = branch.trim();
     if (!isValidBranchName(wanted)) {
@@ -5337,6 +5679,22 @@ export class ChatService {
       };
     }
 
+    if (lease.reservation && lease.reservation.branch !== wanted) {
+      releaseBranchName(lease.reservation);
+      lease.reservation = null;
+    }
+    // A name the user typed on a card is held here; one the app picked arrives already held.
+    // Either way it is held before the existence check, so no other spawn can take it meanwhile.
+    lease.reservation ??= reserveBranchName(project.directory, wanted);
+    if (!lease.reservation) {
+      return {
+        ok: false,
+        reason: 'branch',
+        message:
+          `Another session being started is already setting up the branch ${wanted}, so no worktree ` +
+          'was made and no session started. Pick a different branch name.',
+      };
+    }
     try {
       const [exists, worktrees] = await Promise.all([
         branchExists(project.directory, wanted),
@@ -5362,25 +5720,123 @@ export class ChatService {
   }
 
   /**
-   * A spawned session finished its seeded run: give the slot back and tell the parent.
+   * A spawned session's autonomous turn ended: give the slot back, tell the parent, and wake the
+   * parent if that was the last of its agents still running.
    *
-   * The parent is told through its transcript rather than by resuming it. Resuming would mean
-   * the app starting a turn - and spending credits - with nobody having typed anything, which
-   * is the unattended behaviour this task deliberately does not build. What lands instead is a
-   * message the user reads and the model sees on the next turn either of them takes.
+   * The report lands in the parent's transcript. Only an Orchestrate parent is then woken, by one
+   * automatic turn once every agent it started has settled (see wakeParentForAgents): there the
+   * user's switch is the standing instruction to carry the plan on. Any other parent reads the
+   * report on the next turn someone takes, since resuming it would spend credits nobody asked for.
    */
   private async settleSpawnedTurn(sessionId: string, localOnly: boolean): Promise<void> {
     const watch = this.spawnWatch.get(sessionId);
     if (!watch) return;
+    const parentId = watch.parentSessionId;
     this.spawnWatch.delete(sessionId);
+    const settling = Symbol();
+    this.agentsSettling.set(sessionId, { parentId, settling });
+    try {
+      const child = await this.deps.store.get(sessionId);
+      if (!child) return;
+      await this.deliverChildReport(parentId, {
+        localOnly,
+        content: describeChildOutcome(child),
+        display: childOutcomeDisplay(child),
+      });
+      const last = [...child.messages].reverse().find(message => message.role === 'assistant');
+      await this.recordAgentSettled(parentId, {
+        sessionId,
+        title: child.title,
+        outcome: classifyChildOutcome(child),
+        // A device-local child's words never reach a hosted parent; see flushChildReports.
+        lastReply: localOnly || !last ? null : lastReplySnippet(last.content),
+      });
+    } finally {
+      if (this.agentsSettling.get(sessionId)?.settling === settling) this.agentsSettling.delete(sessionId);
+    }
+    await this.wakeParentForAgents(parentId);
+  }
 
-    const child = await this.deps.store.get(sessionId);
-    if (!child) return;
-    await this.deliverChildReport(watch.parentSessionId, {
-      localOnly,
-      content: describeChildOutcome(child),
-      display: childOutcomeDisplay(child),
-    });
+  /**
+   * Start one turn in an idle Orchestrate parent whose agents have all settled, telling it how
+   * each one ended so it can carry its plan on or write the summary.
+   *
+   * Called after each agent settles and after each of the parent's own turns completes; it does
+   * nothing unless every condition holds at once. The ledger takes the whole batch per wake and
+   * caps wakes per parent, and a parent the user stopped is held until they type there again.
+   */
+  private async wakeParentForAgents(parentId: string): Promise<void> {
+    if (!this.agentWakes.hasPending(parentId) || this.parentBusy(parentId) || this.agentRunningNow(parentId)) return;
+    if (await this.agentStillRunning(parentId)) return;
+    const parent = await this.deps.store.get(parentId);
+    if (!parent || parent.archived || !orchestratesAgents(parent)) return;
+    // Re-read after the awaits: a turn or an agent that started in the gap calls this again.
+    if (this.parentBusy(parentId) || this.agentRunningNow(parentId)) return;
+
+    const claim = this.agentWakes.claim(parentId);
+    if (!claim.ok) {
+      if (claim.reason === 'cap' && claim.announce) await this.announceAgentWakesPaused(parentId);
+      return;
+    }
+    let started = false;
+    try {
+      const result = await this.startAutomaticTurn(parentId, agentsSettledNotice(claim.agents), {
+        kind: 'agents-settled',
+        sessionIds: claim.agents.map(agent => agent.sessionId),
+        summary: agentsSettledSummary(claim.agents),
+      });
+      started = result.ok;
+      if (!result.ok && !result.busy) this.deps.logger.warn(`CHAT: could not wake ${parentId}: ${result.error}`);
+    } finally {
+      this.agentWakes.finish(parentId, started, claim.agents);
+    }
+  }
+
+  /** Into the ledger only for an Orchestrate parent: no other parent is ever woken, so none collects a batch. */
+  private async recordAgentSettled(parentId: string, agent: SettledAgent): Promise<void> {
+    const parent = await this.deps.store.get(parentId);
+    if (parent && orchestratesAgents(parent)) this.agentWakes.record(parentId, agent);
+  }
+
+  /** Tell the user, once, that the wake cap has paused automatic turns until they reply. */
+  private async announceAgentWakesPaused(parentId: string): Promise<void> {
+    this.deps.logger.warn(`CHAT: not waking ${parentId} for its agents: too many automatic wakes`);
+    const message: ChatMessage = {
+      id: randomUUID(),
+      role: 'user',
+      content: AGENT_WAKES_PAUSED_NOTICE,
+      display: AGENT_WAKES_PAUSED_NOTICE,
+      createdAt: new Date().toISOString(),
+      system: true,
+    };
+    if (await this.deps.store.appendMessage(parentId, message))
+      this.emit({ type: 'message', sessionId: parentId, message });
+  }
+
+  private parentBusy(parentId: string): boolean {
+    return this.hasTurnInFlight(parentId) || (this.deps.queue?.list(parentId).length ?? 0) > 0;
+  }
+
+  /** The synchronous half of agentStillRunning: agents with a watched turn, or a report not yet recorded. */
+  private agentRunningNow(parentId: string): boolean {
+    for (const watch of this.spawnWatch.values()) {
+      if (watch.parentSessionId === parentId) return true;
+    }
+    for (const entry of this.agentsSettling.values()) {
+      if (entry.parentId === parentId) return true;
+    }
+    return false;
+  }
+
+  /** Whether any agent this parent started is still working, waiting on approval or has input waiting. */
+  private async agentStillRunning(parentId: string): Promise<boolean> {
+    if (this.agentRunningNow(parentId)) return true;
+    const sessions = await this.deps.store.list();
+    return sessions.some(
+      entry =>
+        entry.origin?.parentSessionId === parentId &&
+        (this.hasTurnInFlight(entry.id) || (this.deps.queue?.list(entry.id).length ?? 0) > 0)
+    );
   }
 
   /**
@@ -6533,8 +6989,11 @@ export function buildSystemMessage(
   modelId = '',
   web = false,
   screen = false,
-  simulator = false
+  simulator = false,
+  /** The session's Orchestrate switch; only meaningful with the host tools it steers toward. */
+  orchestrate = false
 ): CompletionMessage {
+  const orchestrating = host && orchestrate;
   if (roots.length === 0) {
     return {
       role: 'system',
@@ -6548,6 +7007,7 @@ export function buildSystemMessage(
         ...(web ? WEB_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
+        ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
         ...(memory ? MEMORY_GUIDANCE : []),
         ...(ask ? ASK_GUIDANCE : []),
         ...desktopAppGuidance(mcpServers ? (ask ? 'manage' : 'read') : null),
@@ -6577,6 +7037,7 @@ export function buildSystemMessage(
       ...HONESTY_LINES,
       ...(media ? MEDIA_GUIDANCE : []),
       ...(host ? HOST_GUIDANCE : []),
+      ...(orchestrating ? ORCHESTRATOR_GUIDANCE : []),
       ...(memory ? MEMORY_GUIDANCE : []),
       ...(ask ? ASK_GUIDANCE : []),
       ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
@@ -7024,6 +7485,46 @@ const HOST_GUIDANCE: readonly string[] = [
 ];
 
 /**
+ * For a session with Orchestrate on. Placed after HOST_GUIDANCE because it overrides that
+ * block's suggest-only rule: in such a session session_spawn starts the child at once (see
+ * buildHostContext), in a worktree of its own in a repository (delegatedPlacement), and the
+ * parent is woken when its agents settle (wakeParentForAgents). Outside a repository children
+ * share the parent's working directory, hence the split by file.
+ */
+const ORCHESTRATOR_GUIDANCE: readonly string[] = [
+  'The user turned on Orchestrate for this conversation: you are coordinating agents, not doing',
+  'the work yourself. Here session_spawn STARTS the session at once, with no card and nothing to',
+  'approve, whatever is said above about suggesting.',
+  'For each request, split the work into independent pieces that can run in parallel and start',
+  'one agent per piece with session_spawn. Each prompt must be self-contained: what to do, which',
+  'files, and what done means. Do not do the delegated work yourself.',
+  'Spawn early. Before spawning, do only a brief survey - a handful of reads or searches, enough',
+  'to name the files and contracts each piece touches - then start the agents. Keep each brief',
+  'concise and leave the detailed reading to the agents: they read the code themselves, and a',
+  "long survey here only delays them and can run out this turn's time before anything starts.",
+  'In a git repository session_spawn gives each agent its own isolated worktree and branch',
+  'automatically; its result names them. So never create worktrees or branches for agents',
+  'yourself, never point an agent at another path, and never remove an agent worktree or delete',
+  'its branch. Merging agent branches into your own branch to combine their work is fine.',
+  'Never use git stash, and tell agents not to: the stash is shared by every worktree of the',
+  "repository, so one agent's pop can take another's changes. Set work aside with a commit.",
+  'Outside a repository the agents share this working directory, so give each one different',
+  'files to change.',
+  `At most ${MAX_CONCURRENT_SPAWNED} agents run at once; plan within that, and if a start is refused for`,
+  'the limit, wait for one to finish before starting another.',
+  'Track them with session_list and session_read if you need to. Once every agent you started',
+  'has stopped running, the app wakes this conversation with how each one ended, so end your',
+  'turn after starting them rather than polling or sleeping. When woken, review their results',
+  'and either carry the plan on or combine them into one final answer for the user.',
+  'When the whole job is done - every agent settled and their work combined - write the final',
+  'summary for the user and call quest_complete in that same reply. Never call it for an interim',
+  'update such as "waiting on the install"; it is refused while anything is still running.',
+  'If the request is too small or does not split - a question, a single-step change - handle it',
+  'directly and say so in one short sentence, for example:',
+  '"This is small enough to handle directly, so I didn\'t start any agents."',
+];
+
+/**
  * One round's request, returning what went wrong instead of throwing it.
  *
  * The loop has to decide whether a failure ends the TURN or ends the REPLY, and that decision
@@ -7259,7 +7760,7 @@ function replaceToolResults(wire: CompletionMessage[], content: ReadonlyMap<stri
  * guessing at which mentions of a path meant "this repository" and which meant that exact
  * directory; saying where the child is lets it decide.
  */
-function worktreePreamble(
+export function worktreePreamble(
   projectDirectory: string,
   workspace: { branch: string; base: string; workingDirectory: string }
 ): string {
@@ -7271,7 +7772,10 @@ function worktreePreamble(
     `Any path in the task below that points into ${projectDirectory} names a file of THAT`,
     'checkout. Use the one at the matching path inside your own worktree instead. Do not read or',
     'write under it: it is another session working tree, you have no access to it, and changing it',
-    'is the one thing your own worktree exists to prevent.]',
+    'is the one thing your own worktree exists to prevent.',
+    '',
+    'Never use git stash: the stash is shared by every worktree of this repository, so other',
+    "sessions' entries are on it and a pop can take their changes. Set work aside with a commit.]",
   ].join('\n');
 }
 
@@ -7663,6 +8167,17 @@ export function sessionForRenderer(session: ChatSession | null): ChatSession | n
 }
 
 /** App-written notes ride after the turn's own words, so what the user said stays first. */
+/** An agent started after quest_complete in the same reply means the job was not finished after all. */
+function marksQuestComplete(toolCalls: readonly ChatToolCall[]): boolean {
+  let marked = false;
+  for (const call of toolCalls) {
+    if (call.status !== 'done') continue;
+    if (call.name === QUEST_COMPLETE_TOOL_NAME) marked = true;
+    else if (call.name === SESSION_SPAWN_TOOL_NAME) marked = false;
+  }
+  return marked;
+}
+
 function withNotes(message: ChatMessage, text: string): string {
   if (!message.notes?.length) return text;
   const block = ['<system-reminder>', ...message.notes, '</system-reminder>'].join('\n');
@@ -7753,9 +8268,16 @@ function frameRelay(message: ChatMessage, text: string): string {
 
 /** The thread's line for a turn the app started; see ChatMessage.display. */
 function automaticDisplay(automatic: ChatAutomaticOrigin): string {
-  if (automatic.kind === 'background-exit') return `Background command finished: ${automatic.summary}`;
-  if (automatic.kind === 'loop-runner') return `Loop ticket: ${automatic.summary}`;
-  return `Auto-fix: ${automatic.summary}`;
+  switch (automatic.kind) {
+    case 'background-exit':
+      return `Background command finished: ${automatic.summary}`;
+    case 'agents-settled':
+      return `Agents finished: ${automatic.summary}`;
+    case 'loop-runner':
+      return `Loop ticket: ${automatic.summary}`;
+    case 'auto-fix':
+      return `Auto-fix: ${automatic.summary}`;
+  }
 }
 
 /** Reads one attachment's stored content; null when the file is gone or, for a PDF, unreadable. */

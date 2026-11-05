@@ -10,7 +10,8 @@ import { ChatService } from './ChatService';
 import { MessageQueue } from './MessageQueue';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
-import type { WorkspaceResolution } from './project/workspace';
+import { appWorktreeRoot, type WorkspaceResolution } from './project/workspace';
+import { git } from './project/git';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
 
@@ -387,6 +388,125 @@ describe('ChatService.shareDirectory', () => {
     expect(existsSync(join(second, 'ran.txt'))).toBe(false);
     await h.awaitRound(2);
     expect(h.lastToolResult(1)).toContain(`no longer shared: ${outside}`);
+  });
+  describe("an agent's worktree", () => {
+    /** The app's worktree root for `directory`, whose git dir lives in a container beside it as the app lays one out. */
+    async function containerRoot(directory: string, name: string): Promise<string> {
+      await mkdir(directory, { recursive: true });
+      await mkdir(join(base, name), { recursive: true });
+      await git(directory, ['init', '--quiet', `--separate-git-dir=${join(base, name, '.bare')}`]);
+      await git(directory, [
+        '-c',
+        'user.email=t@example.com',
+        '-c',
+        'user.name=T',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'first',
+      ]);
+      return appWorktreeRoot(join(base, name));
+    }
+
+    let worktrees: string;
+    beforeEach(async () => {
+      worktrees = await containerRoot(project, 'container');
+    });
+
+    async function agentSession(parentSessionId: string, folder: string, directory = project) {
+      await mkdir(folder, { recursive: true });
+      // The parent's record of starting it, which is what tells its scope to look for agents.
+      await store.appendMessage(parentSessionId, {
+        id: `spawn-${folder.split('/').pop()}`,
+        role: 'assistant',
+        content: '',
+        createdAt: new Date().toISOString(),
+        toolCalls: [{ id: 'spawn', name: 'session_spawn', input: { prompt: 'do a piece' }, status: 'done' }],
+      });
+      return store.create(undefined, {
+        mode: 'code',
+        project: {
+          directory,
+          name: 'project',
+          branch: '',
+          workspace: true,
+          workspaceBranch: `b4m/${folder.split('/').pop()}`,
+          workingDirectory: folder,
+          contextDirectories: [],
+        },
+        origin: { parentSessionId, depth: 1, seedPrompt: 'do a piece' },
+      });
+    }
+
+    it('is open to the parent that started it, without asking, until the agent is deleted', async () => {
+      const parent = await codeSession();
+      const worktree = join(worktrees, 'agent');
+      const agent = await agentSession(parent, worktree);
+      await writeFile(join(worktree, 'AGENT.md'), 'agent work', 'utf8');
+
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'already' });
+      await h.service.send(parent, 'review the agent');
+      await h.awaitRound(1);
+      streams[0].write(toolTurn('agent-read', 'file_read', { path: join(worktree, 'AGENT.md') }));
+      streams[0].write(frame('[DONE]'));
+      expect((await awaitSettled('agent-read')).preview).toContain('agent work');
+      await h.awaitRound(2);
+      streams[1].write(frame({ type: 'content', text: 'Done.' }));
+      streams[1].write(frame('[DONE]'));
+      await vi.waitUntil(() => events.some(event => event.type === 'done'), { timeout: 5000, interval: 10 });
+
+      await h.service.deleteSession(agent.id);
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open to a session that did not start it', async () => {
+      const parent = await codeSession();
+      const other = await codeSession();
+      const worktree = join(worktrees, 'someone-else');
+      await agentSession(other, worktree);
+
+      expect(await h.service.shareDirectory(parent, worktree)).toMatchObject({ status: 'added' });
+      const roots = (await store.get(parent))?.project?.contextDirectories;
+      expect(roots).toEqual([worktree]);
+    });
+
+    it('is not open once the agent is re-pointed to another project', async () => {
+      const parent = await codeSession();
+      const agent = await agentSession(parent, join(worktrees, 'moved'));
+      expect(await h.service.shareDirectory(parent, join(worktrees, 'moved'))).toMatchObject({ status: 'already' });
+
+      const elsewhere = join(base, 'elsewhere');
+      const elsewhereWorktree = join(await containerRoot(elsewhere, 'elsewhere-container'), 'agent');
+      await mkdir(elsewhereWorktree, { recursive: true });
+      expect(await h.service.updateProject({ sessionId: agent.id, directory: elsewhere })).toMatchObject({ ok: true });
+      // What the agent's next turn records once it cuts its worktree in the new repository.
+      await store.updateProjectWorkspace(agent.id, {
+        workspaceBranch: 'b4m/agent',
+        workingDirectory: elsewhereWorktree,
+      });
+      const moved = (await store.get(agent.id))?.project;
+      expect(moved).toMatchObject({ directory: elsewhere, workingDirectory: elsewhereWorktree });
+
+      expect(await h.service.shareDirectory(parent, elsewhereWorktree)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open when its folder is not under the app worktree root', async () => {
+      const parent = await codeSession();
+      await agentSession(parent, outside);
+
+      expect(await h.service.shareDirectory(parent, outside)).toMatchObject({ status: 'added' });
+    });
+
+    it('is not open through a symlink under the root that leads outside it', async () => {
+      const parent = await codeSession();
+      const link = join(worktrees, 'link');
+      await mkdir(worktrees, { recursive: true });
+      await symlink(outside, link);
+      await agentSession(parent, link);
+
+      expect(await h.service.shareDirectory(parent, outside)).toMatchObject({ status: 'added' });
+    });
   });
 });
 

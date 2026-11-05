@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@shared/chat';
+import type { ChatAutomaticOrigin, ChatMessage } from '@shared/chat';
 
 /** Where the summary stops, so a long message cannot push the chevron off the line. */
 const MAX_SUMMARY_CHARS = 64;
@@ -13,16 +13,26 @@ export function displayText(message: Pick<ChatMessage, 'content' | 'display'>): 
   return message.display?.trim() || message.content;
 }
 
+const AUTOMATIC_HEADS: Record<ChatAutomaticOrigin['kind'], string> = {
+  'auto-fix': 'Started by auto-fix',
+  'background-exit': 'Background command finished',
+  'agents-settled': 'Agents finished',
+  'loop-runner': 'Started by the loop runner',
+};
+
+/** Short labels for the queue, keyed like AUTOMATIC_HEADS. */
+export const AUTOMATIC_TAGS: Record<ChatAutomaticOrigin['kind'], string> = {
+  'auto-fix': 'Auto-fix',
+  'background-exit': 'Background',
+  'agents-settled': 'Agents',
+  'loop-runner': 'Loop',
+};
+
 /** The collapsed row for a turn the app started: who started it, then what it is about. */
 export function automaticSummary(message: Pick<ChatMessage, 'automatic'>): string {
-  const summary = message.automatic?.summary;
-  const kind = message.automatic?.kind;
-  const head =
-    kind === 'background-exit'
-      ? 'Background command finished'
-      : kind === 'loop-runner'
-        ? 'Started by the loop runner'
-        : 'Started by auto-fix';
+  if (!message.automatic) return AUTOMATIC_HEADS['auto-fix'];
+  const head = AUTOMATIC_HEADS[message.automatic.kind];
+  const summary = message.automatic.summary;
   return summary ? `${head}: ${summary}` : head;
 }
 
