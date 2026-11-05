@@ -6,7 +6,8 @@ import type { ApprovalPrompt, ToolContext } from './types';
  * The ways Windows can spell `path`: lower case, `.` segments dropped, `..` removing its parent
  * segment, and one spelling per colon-separated part of the final segment (a drive prefix, a
  * `rev:` or `host:` prefix, a `:stream` or `:stream:$DATA` suffix), each without trailing dots and
- * spaces. Applied on every platform, since a path can name a file on a Windows volume (or WSL share) from anywhere.
+ * spaces. Applied on every platform, since a path can name a file on a Windows volume (or WSL
+ * share) from anywhere.
  */
 function windowsSpellings(path: string): string[] {
   const segments: string[] = [];

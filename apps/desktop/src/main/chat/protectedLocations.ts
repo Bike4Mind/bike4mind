@@ -6,7 +6,7 @@ export function permissionProtectedRoots(userData: string, home: string, managed
   return [userData, join(home, '.claude'), managedSettingsDir].flatMap(withRealPath);
 }
 
-/** Paths no tool may read or write; userData holds the auth vault. */
+/** Paths no tool may write, share or upload, and a sandboxed shell may not read; userData holds the auth vault. */
 export function toolProtectedPaths(userData: string): string[] {
   return withRealPath(userData);
 }
