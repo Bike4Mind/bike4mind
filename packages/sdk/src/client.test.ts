@@ -148,6 +148,30 @@ describe('B4mApiError', () => {
     });
   });
 
+  it('maps an OAuth envelope: errorCode from error, message from error_description', () => {
+    const error = new B4mApiError(
+      401,
+      { error: 'invalid_grant', error_description: 'Invalid ID token' },
+      new Headers()
+    );
+    expect(error).toMatchObject({ status: 401, errorCode: 'invalid_grant', message: 'Invalid ID token' });
+  });
+
+  it('leaves errorCode unset for an error body without error_description', () => {
+    const error = new B4mApiError(429, { error: 'Too many requests' }, new Headers());
+    expect(error.errorCode).toBeUndefined();
+    expect(error.message).toBe('Too many requests');
+  });
+
+  it('keeps errorCode when a body has both errorCode and error_description', () => {
+    const error = new B4mApiError(
+      429,
+      { error: 'Prose', errorCode: 'rate_limited', error_description: 'x' },
+      new Headers()
+    );
+    expect(error).toMatchObject({ errorCode: 'rate_limited', message: 'Prose' });
+  });
+
   it('falls back to X-Request-ID and keeps a non-JSON body as text', async () => {
     const { client } = setup(
       new Response('<html>bad gateway</html>', { status: 502, headers: { 'x-request-id': 'r2' } })
