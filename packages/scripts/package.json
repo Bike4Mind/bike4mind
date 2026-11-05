@@ -94,6 +94,7 @@
     "curated:sign": "tsx src/curatedCatalog/signCurated.ts",
     "curated:publish": "tsx src/curatedCatalog/publishCurated.ts",
     "curated:schema": "tsx src/curatedCatalog/curatedSchema.ts",
+    "curated:v2": "tsx src/curatedCatalog/curatedV2.ts",
     "curated:check-build": "tsx src/curatedCatalog/checkDesktopBuild.ts"
   },
   "dependencies": {
@@ -138,6 +139,7 @@
     "aws-sdk-client-mock": "^4.1.0",
     "mailparser": "^3.12.4",
     "ora": "^9.4.1",
+    "prettier": "^3.9.6",
     "tsx": "^4.23.0",
     "vitest": "^4.1.12"
   }

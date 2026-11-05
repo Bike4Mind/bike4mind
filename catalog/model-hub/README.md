@@ -7,6 +7,8 @@ the catalog is reviewed and updated pins arrive in a desktop release or an accep
 Explore remains available for reviewing the live repo.
 Do not refresh digests automatically just to make a check green.
 
+`curated-v3.json` is the source list: each entry has a `modality`, each build a license label and the runtime profile it was measured with, and tiers pick per modality. Its `v2Channel` names what v2 clients get, and `curated-v2.json` is generated from it: edit v3, then run `pnpm --filter @bike4mind/scripts curated:v2` (`--check` verifies the committed file).
+
 `keys.json` is the one keyring Desktop, the CLI and the publishing scripts trust (`{ keyId, spki, role }` entries; empty until production keys exist).
 A key only reaches users in a Desktop or CLI release built after it lands here.
 Each signature in `<list>.sig` is pure Ed25519 over the 64-byte statement `utf8("b4m-model-hub-curated-v2-digest\n") || sha256(list bytes)`, so a KMS key can sign it as a raw message.
