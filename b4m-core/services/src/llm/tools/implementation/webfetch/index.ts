@@ -220,6 +220,29 @@ export class UnsupportedContentTypeError extends UnprocessableEntityError {
   }
 }
 
+// Firecrawl's wording when every engine it tried (browser and retry) failed to load the page: the
+// site is down, blocks bots or the URL is wrong. Like the file-type case it comes as a 500 with no code.
+const FIRECRAWL_ALL_ENGINES_FAILED = 'all scraping engines failed';
+
+function isAllEnginesFailedError(error: unknown): error is FirecrawlError {
+  return error instanceof FirecrawlError && error.message.toLowerCase().includes(FIRECRAWL_ALL_ENGINES_FAILED);
+}
+
+/**
+ * No scraping engine could load the page. A property of the URL the model picked rather than a
+ * fault of ours: a 422 that /api/tools/web-fetch logs at warn, and a hint from the web_fetch tool.
+ */
+export class UnreachableScrapeTargetError extends UnprocessableEntityError {
+  // `cause` is the FirecrawlError, typed as Error for the same reason as UnsupportedScrapeTargetError.
+  constructor(cause: Error) {
+    super(
+      "This page can't be fetched: the web scraper could not load it. The site may be down or block automated access."
+    );
+    this.name = 'UnreachableScrapeTargetError';
+    this.cause = cause;
+  }
+}
+
 /** Scrape after a 1s wait for client-side rendering, retrying without the action where Firecrawl rejects actions. */
 async function scrapeAfterRenderWait(app: FirecrawlClient, url: string, params: FirecrawlScrapeParams) {
   try {
@@ -302,6 +325,7 @@ export async function firecrawlFetch(
       throw new UnsupportedScrapeTargetError(url, scrapeError);
     }
     if (isUnsupportedFileTypeError(scrapeError)) throw new UnsupportedContentTypeError(scrapeError);
+    if (isAllEnginesFailedError(scrapeError)) throw new UnreachableScrapeTargetError(scrapeError);
     throw scrapeError;
   }
   const durationMs = Date.now() - startedAt;
@@ -525,6 +549,15 @@ export const webFetchTool: ToolDefinition = {
           });
           await context.statusUpdate({}, 'WebFetch: unsupported file type');
           return WEB_FETCH_UNSUPPORTED_FILE_TYPE_MSG;
+        }
+
+        if (error instanceof UnreachableScrapeTargetError) {
+          context.logger.warn('WebFetch page unreachable', {
+            url: params.url,
+            cause: error.cause instanceof Error ? error.cause.message : undefined,
+          });
+          await context.statusUpdate({}, 'WebFetch: page unreachable');
+          return WEB_FETCH_UNREACHABLE_MSG;
         }
 
         // Firecrawl 500 with PDF page-count timeout hint - the PDF is too large to process
