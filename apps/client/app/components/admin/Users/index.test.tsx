@@ -326,6 +326,19 @@ describe('UsersTab', () => {
     await waitFor(() => expect(fakeAdminRouter.search).not.toHaveProperty('aiVerdict'));
   });
 
+  it('keeps the rows and shows no badge when the AI advisory fetch fails', async () => {
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/shadow-detections/ai-advisory') throw new Error('forbidden');
+      return { data: respond(url) };
+    });
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/admin/shadow-detections/ai-advisory'));
+    expect(screen.getByTestId('admin-users-row-u2')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-users-ai-advisory-u1')).toBeNull();
+  });
+
   it('reads a single active day as one UTC day', async () => {
     act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, activeFrom: '2026-10-03', activeTo: '2026-10-03' }));
     renderTab();
