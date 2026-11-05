@@ -731,6 +731,7 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
+  'pendingUploadLimit',
   'imageModerationLimitFreePerDay',
   'imageModerationLimitPaidPerDay',
   'apiKeyAccess',
@@ -1174,6 +1175,12 @@ export const DEFAULT_WRITE_RATE_LIMIT_PER_MIN = 120;
  */
 export const FILE_UPLOAD_LIMIT_FREE_PER_HOUR = 300;
 export const FILE_UPLOAD_LIMIT_PAID_PER_HOUR = 3000;
+
+/**
+ * Default cap on a user's presigned client uploads whose bytes have not landed yet. Also the value
+ * apps/client/server/files/pendingUploads.ts applies when the setting cannot be read.
+ */
+export const PENDING_UPLOAD_LIMIT = 250;
 
 /**
  * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
@@ -2514,9 +2521,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitDefaultWriteMode', order: 6 },
       { key: 'fileUploadLimitFreePerHour', order: 7 },
       { key: 'fileUploadLimitPaidPerHour', order: 8 },
-      { key: 'imageModerationLimitFreePerDay', order: 9 },
-      { key: 'imageModerationLimitPaidPerDay', order: 10 },
-      { key: 'apiKeyAccess', order: 11 },
+      { key: 'pendingUploadLimit', order: 9 },
+      { key: 'imageModerationLimitFreePerDay', order: 10 },
+      { key: 'imageModerationLimitPaidPerDay', order: 11 },
+      { key: 'apiKeyAccess', order: 12 },
     ],
   },
   API_KEY_TRUST: {
@@ -3612,6 +3620,20 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 8,
   }),
+  // Read by apps/client/server/files/pendingUploads.ts.
+  pendingUploadLimit: makeNumberSetting({
+    key: 'pendingUploadLimit',
+    name: 'Pending Upload Limit (files)',
+    defaultValue: PENDING_UPLOAD_LIMIT,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      'Max presigned file uploads a user may have waiting for their bytes at once, on every tier. An upload stops counting when its bytes land or 30 minutes after it was requested. Admins and developer-tagged users are not limited. Set to 0 to block presigned uploads.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 9,
+  }),
   // Both read by apps/client/server/s3/imageModerationBudget.ts.
   imageModerationLimitFreePerDay: makeNumberSetting({
     key: 'imageModerationLimitFreePerDay',
@@ -3624,7 +3646,7 @@ export const settingsMap = {
       "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 9,
+    order: 10,
   }),
   imageModerationLimitPaidPerDay: makeNumberSetting({
     key: 'imageModerationLimitPaidPerDay',
@@ -3637,7 +3659,7 @@ export const settingsMap = {
       "Max content-moderation scans a Basic or Pro subscriber's uploaded images may use per 24 hours, counted like the Free limit. Admins and developer-tagged users are not limited. Set to 0 to hold every uploaded image for these users.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 10,
+    order: 11,
   }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
@@ -3652,7 +3674,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 11,
+    order: 12,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({

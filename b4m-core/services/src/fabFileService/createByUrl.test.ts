@@ -70,6 +70,9 @@ describe('createFabFileByUrl', () => {
     // Uploaded to the path createFabFile allocated, so S3 ObjectCreated picks it up as usual.
     expect(storageUpload).toHaveBeenCalledWith(created.filePath, 'body text', { ContentType: 'text/plain' });
     expect(result.id).toBe('fab-1');
+    // The server writes these bytes, so the row stays out of the pending client-upload count.
+    expect(created).not.toHaveProperty('clientUpload');
+    expect(created).not.toHaveProperty('presignedUrl');
   });
 
   it('accepts a dotted page title and keeps it as the fileName', async () => {
