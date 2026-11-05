@@ -612,6 +612,15 @@ describe('ModelServersSettings launch settings', () => {
     expect(update.mock.invocationCallOrder[0]).toBeLessThan(launchAction.mock.invocationCallOrder[0]);
   });
 
+  it('stays idle when saving the prefilled values fails', async () => {
+    const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
+    await show({ ...LOCAL, launch: launch({ prefill }) });
+    update.mockResolvedValueOnce({ ok: false, error: 'could not save' } as never);
+    await clickId('model-servers-launch-start-btn');
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(launchAction).not.toHaveBeenCalled();
+  });
+
   it('starts without saving when launch settings are already saved', async () => {
     const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
     await show({ ...LOCAL, launch: launch({ prefill, settings: { flashAttention: 'on' } }) });
