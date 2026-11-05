@@ -1820,6 +1820,7 @@ describe('runLoopSchedulerTick - liveness', () => {
         executionId: 'exec-gone',
         runCount: 1,
       });
+      await age(ticket.id, minutesAgo(60));
 
       await runLoopSchedulerTick(NOW, logger);
 
@@ -1854,6 +1855,9 @@ describe('runLoopSchedulerTick - liveness', () => {
       const resumed = await ticket('exec-resumed');
       const desktop = await ticket('exec-desktop');
       const live = await ticket('exec-live');
+      // A desktop claim links its ticket before the run doc exists, so a fresh claim with no run is left alone.
+      const claiming = await ticket('exec-claiming');
+      for (const t of [missing, done, active, resumed, desktop, live]) await age(t.id, minutesAgo(60));
       await loopEventRepository.resolveUnsure(
         {
           loopId: loop.id,
@@ -1876,7 +1880,7 @@ describe('runLoopSchedulerTick - liveness', () => {
         expect(after).toMatchObject({ status: 'open', runCount: 0 });
         expect(after.executionId).toBeUndefined();
       }
-      for (const t of [active, resumed, desktop, live]) {
+      for (const t of [active, resumed, desktop, live, claiming]) {
         expect(await ticketOf(t.id)).toMatchObject({ status: 'in_progress', runCount: 1 });
       }
     });

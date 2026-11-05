@@ -146,9 +146,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   }
 
   async listAlarmed(kinds?: LoopAlarmKind[]): Promise<ILoop[]> {
+    // Both predicates are needed for the partial `alarm.kind` index; `alarm` alone scans the collection.
     const results = await this.loopModel.find({
       alarm: { $exists: true },
-      ...(kinds && { 'alarm.kind': { $in: kinds } }),
+      'alarm.kind': { $in: kinds ?? LOOP_ALARM_KINDS },
     });
     return results.map(doc => doc.toJSON());
   }
@@ -160,7 +161,11 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         { $eq: [{ $ifNull: ['$alarm.executionId', null] }, alarm.executionId ?? null] },
       ],
     };
-    await this.loopModel.updateOne({ _id: id }, [
+    // Only while the alarm still applies: a long run while it is the active run, an idle alarm while live and idle.
+    const stillApplies = alarm.executionId
+      ? { activeExecutionId: alarm.executionId }
+      : { status: 'live', activeExecutionId: { $exists: false } };
+    await this.loopModel.updateOne({ _id: id, ...stillApplies }, [
       {
         $set: {
           alarm: {
@@ -168,7 +173,8 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
             // $literal: a pipeline update would read a reason starting with '$' as a field path.
             reason: { $literal: alarm.reason },
             since: { $cond: [same, '$alarm.since', alarm.since] },
-            ...(alarm.executionId && { executionId: alarm.executionId }),
+            // An object in a pipeline $set merges into the old alarm, so drop a stale executionId explicitly.
+            executionId: alarm.executionId ?? '$$REMOVE',
           },
         },
       },

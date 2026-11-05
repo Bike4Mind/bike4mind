@@ -300,21 +300,38 @@ describe('LoopRepository', () => {
     });
 
     it('setAlarm keeps since for the same alarm and resets it for another kind or run', async () => {
-      const loop = await create({ status: 'live' });
+      const loop = await create({
+        status: 'live',
+        alarm: { kind: 'long_run', reason: 'long', since: earlier, executionId: 'a' },
+      });
       await loopRepository.setAlarm(loop.id, { kind: 'idle_with_work', reason: 'first', since: earlier });
       await loopRepository.setAlarm(loop.id, { kind: 'idle_with_work', reason: '$second', since: now });
+      // toEqual: the old long run's executionId must not survive into the idle alarm.
       expect((await loopRepository.findById(loop.id))?.alarm).toEqual({
         kind: 'idle_with_work',
         reason: '$second',
         since: earlier,
       });
 
-      await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'a' });
-      expect((await loopRepository.findById(loop.id))?.alarm?.since).toEqual(now);
-      await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: later(now), executionId: 'a' });
-      expect((await loopRepository.findById(loop.id))?.alarm?.since).toEqual(now);
-      await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: later(now), executionId: 'b' });
-      expect((await loopRepository.findById(loop.id))?.alarm).toMatchObject({ since: later(now), executionId: 'b' });
+      const running = await create({ status: 'live', activeExecutionId: 'b' });
+      await loopRepository.setAlarm(running.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'b' });
+      await loopRepository.setAlarm(running.id, {
+        kind: 'long_run',
+        reason: 'long',
+        since: later(now),
+        executionId: 'b',
+      });
+      expect((await loopRepository.findById(running.id))?.alarm?.since).toEqual(now);
+    });
+
+    it('setAlarm writes nothing once the alarm no longer applies', async () => {
+      const running = await create({ status: 'live', activeExecutionId: 'b' });
+      const paused = await create({ status: 'paused' });
+      await loopRepository.setAlarm(running.id, { kind: 'idle_with_work', reason: 'idle', since: now });
+      await loopRepository.setAlarm(running.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'a' });
+      await loopRepository.setAlarm(paused.id, { kind: 'idle_with_work', reason: 'idle', since: now });
+      expect((await loopRepository.findById(running.id))?.alarm).toBeUndefined();
+      expect((await loopRepository.findById(paused.id))?.alarm).toBeUndefined();
     });
 
     it('clearAlarm is conditional on kind; listAlarmed filters by kind', async () => {

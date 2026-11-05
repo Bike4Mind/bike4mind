@@ -318,7 +318,10 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
   listPastDueLive(before: Date, limit: number): Promise<ILoop[]>;
   /** Loops carrying an alarm, of `kinds` when given. */
   listAlarmed(kinds?: LoopAlarmKind[]): Promise<ILoop[]>;
-  /** Sets the alarm, keeping `since` when the same alarm (kind, and run for long_run) is already set. */
+  /**
+   * Sets the alarm while it still applies (a long run while it is the active run; an idle alarm while the loop is
+   * live with no run), keeping `since` when the same alarm (kind, and run for long_run) is already set.
+   */
   setAlarm(id: string, alarm: ILoopAlarm): Promise<void>;
   clearAlarm(id: string, kind: LoopAlarmKind): Promise<void>;
 }

@@ -275,11 +275,12 @@ async function recoverStrandedTickets(now: Date, logger: Logger): Promise<void> 
 }
 
 async function isStranded(ticket: IWorkItem, loop: ILoop, now: Date): Promise<boolean> {
-  if (!ticket.executionId) {
-    return !loop.activeExecutionId && new Date(ticket.updatedAt).getTime() < now.getTime() - LOOP_LEASE_MS;
-  }
+  const claimExpired = new Date(ticket.updatedAt).getTime() < now.getTime() - LOOP_LEASE_MS;
+  if (!ticket.executionId) return !loop.activeExecutionId && claimExpired;
   if (ticket.executionId === loop.activeExecutionId) return false;
   const execution = await agentExecutionRepository.findById(ticket.executionId);
+  // A desktop claim links its ticket before the run doc exists, so a missing run only counts once the claim is old.
+  if (!execution && !claimExpired) return false;
   if (execution && (execution.runner === 'desktop' || ACTIVE_AGENT_EXECUTION_STATUSES.includes(execution.status))) {
     return false;
   }
