@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type IMessage } from '@bike4mind/common';
 import type { ChatRequest } from 'ollama';
-import { OllamaBackend, type OllamaRequestSettingsReader } from './ollamaBackend';
+import { OllamaBackend, type OllamaRequestSettings, type OllamaRequestSettingsReader } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
 
@@ -831,6 +831,64 @@ describe('OllamaBackend per-model request settings', () => {
     ]);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain('context change applies after restart');
+  });
+
+  function listingBackend(read: OllamaRequestSettingsReader, listed: () => string[]) {
+    const warn = vi.fn();
+    const settingsWarning = vi.fn();
+    const logger = { ...silentLogger, warn };
+    const backend = new OllamaBackend('http://localhost:11434', logger, { requestSettings: read, settingsWarning });
+    const chat = vi.fn(async (_request: ChatRequest) => reply);
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => show),
+      list: vi.fn(async () => ({ models: listed().map(name => ({ name })) })),
+    };
+    return { backend, chat, warn, settingsWarning };
+  }
+
+  it('sends the warning through settingsWarning when one is given, not the logger', async () => {
+    let numCtx = 16384;
+    const { backend, warn, settingsWarning } = listingBackend(
+      async () => ({ numCtx }),
+      () => ['qwen2.5-coder:3b']
+    );
+    await backend.getModelInfo();
+    numCtx = 8192;
+    await run(backend, {});
+    expect(settingsWarning).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('pins nothing for a model whose settings a listing could not read', async () => {
+    let read: () => Promise<OllamaRequestSettings> = async () => {
+      throw new Error('broken');
+    };
+    const { backend, chat, settingsWarning } = listingBackend(
+      () => read(),
+      () => ['qwen2.5-coder:3b']
+    );
+    expect((await backend.getModelInfo())[0].contextWindow).toBe(32768);
+    read = async () => ({ numCtx: 16384 });
+    await run(backend, {});
+    expect(chat.mock.calls[0][0].options?.num_ctx).toBe(16384);
+    expect(settingsWarning).not.toHaveBeenCalled();
+  });
+
+  it('forgets a model the next listing no longer has', async () => {
+    let numCtx = 16384;
+    let names = ['qwen2.5-coder:3b'];
+    const { backend, chat, settingsWarning } = listingBackend(
+      async () => ({ numCtx }),
+      () => names
+    );
+    await backend.getModelInfo();
+    names = [];
+    await backend.getModelInfo();
+    numCtx = 65536;
+    await run(backend, {});
+    expect(chat.mock.calls[0][0].options?.num_ctx).toBe(65536);
+    expect(settingsWarning).not.toHaveBeenCalled();
   });
 });
 

@@ -129,20 +129,27 @@ export class OllamaBackend implements ICompletionBackend {
   private _agent: Agent;
   private _fetch?: typeof globalThis.fetch;
   private _requestSettings?: OllamaRequestSettingsReader;
+  private _settingsWarning: (message: string) => void;
   public currentModel: string = '';
 
   /**
    * `options.fetch` replaces the default transport, for servers that need credentials the host URL cannot carry.
    * `options.requestSettings` supplies per-model fields, such as the CLI's reading of Desktop's model settings.
+   * `options.settingsWarning` takes a mid-turn warning about those settings in place of `logger.warn`.
    */
   constructor(
     host?: string,
     logger?: ILogger,
-    options: { fetch?: typeof globalThis.fetch; requestSettings?: OllamaRequestSettingsReader } = {}
+    options: {
+      fetch?: typeof globalThis.fetch;
+      requestSettings?: OllamaRequestSettingsReader;
+      settingsWarning?: (message: string) => void;
+    } = {}
   ) {
     this._fetch = options.fetch;
     this._requestSettings = options.requestSettings;
     this._logger = logger ?? new Logger();
+    this._settingsWarning = options.settingsWarning ?? (message => this._logger.warn(message));
     this._host = host ?? 'http://localhost:11434';
     const url = new URL(this._host);
     const headers: Record<string, string> = {};
@@ -185,6 +192,8 @@ export class OllamaBackend implements ICompletionBackend {
   /** Rejects when Ollama is unreachable; getAvailableModels needs a down host to differ from an empty one. */
   async getModelInfo(): Promise<ModelInfo[]> {
     const models = await this._api.list();
+    this._listedNumCtx.clear();
+    this._numCtxChangeWarned.clear();
 
     // In self-host, Ollama runs on the operator's own hardware, so describe
     // it as local; otherwise it is served remotely by the hosted platform.
@@ -339,9 +348,11 @@ export class OllamaBackend implements ICompletionBackend {
       this._logger.debug(`[OllamaBackend] Settings for ${model} not read while listing:`, error);
       return undefined;
     });
-    const numCtx = settings?.numCtx ?? ollamaNumCtx(details.contextWindow);
+    const fallback = ollamaNumCtx(details.contextWindow);
+    // Unread settings pin nothing, so turns send what they read until a listing reads them.
+    if (!settings) return fallback;
+    const numCtx = settings.numCtx ?? fallback;
     this._listedNumCtx.set(model, numCtx);
-    this._numCtxChangeWarned.delete(model);
     return numCtx;
   }
 
@@ -350,7 +361,7 @@ export class OllamaBackend implements ICompletionBackend {
     if (listed === undefined) return wanted;
     if (wanted !== listed && !this._numCtxChangeWarned.has(model)) {
       this._numCtxChangeWarned.add(model);
-      this._logger.warn(
+      this._settingsWarning(
         `[OllamaBackend] ${model}: context size changed from ${listed} to ${wanted}; the context change applies after restart.`
       );
     }
