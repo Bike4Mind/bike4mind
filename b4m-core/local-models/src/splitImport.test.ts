@@ -515,11 +515,11 @@ describe('runSplitImport', () => {
     await expect(stat(corrupt)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('keeps the staged parts when Ollama refuses the create', async () => {
+  it('rejects when Ollama refuses the create', async () => {
     const { hub, runtime } = fakes({ failCreate: true });
     const dir = join(root, 'run');
     await expect(runSplitImport(plan(), { hub, runtime, dir })).rejects.toThrow('invalid split GGUF');
-    await expect(stat(dir)).resolves.toBeDefined();
+    expect(await readdir(dir)).toEqual([]);
   });
 
   it('stages each part under its digest, whatever its name or url', () => {
@@ -664,6 +664,21 @@ describe('sweepSplitImports', () => {
         await utimes(join(root, name), aged, aged);
       await sweepSplitImports(root, week);
       expect(await readdir(root)).toEqual([`${hex('b')}.gguf.partial`]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a part whose record is old but whose partial was written recently', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'split-sweep-'));
+    try {
+      const week = 7 * 24 * 60 * 60 * 1000;
+      const aged = new Date(Date.now() - 2 * week);
+      const names = [`${hex('a')}.gguf.partial`, `${hex('a')}.gguf.partial.json`];
+      for (const name of names) await writeFile(join(root, name), 'x');
+      await utimes(join(root, names[1]), aged, aged);
+      await sweepSplitImports(root, week);
+      expect((await readdir(root)).sort()).toEqual(names);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
