@@ -11,6 +11,7 @@ import type {
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
+  ContextNoticeKind,
   CreateCodeSessionRequest,
   ModelPhase,
   ReasoningEffortSetting,
@@ -71,24 +72,25 @@ export interface SessionPlacement {
 }
 
 /** Newest context notice of each kind per conversation that was not open when it arrived; shown when it opens. */
-const backgroundNotices = new Map<string, string>();
+const backgroundNotices = new Map<string, ContextNotice[]>();
 
-// Kinds mirror the notices OllamaLocal and OpenAICompatibleChat emit: a newer one replaces its kind.
-function noticeKind(message: string): string {
-  if (message.includes('-token context')) return 'context-size';
-  if (message.includes('no tool support')) return 'no-tools';
-  return message;
+interface ContextNotice {
+  message: string;
+  kind?: ContextNoticeKind;
 }
 
-function joinNotices(current: string | undefined, next: string): string {
-  if (!current) return next;
-  const kind = noticeKind(next);
-  const lines = current.split('\n');
-  const at = lines.findIndex(line => noticeKind(line) === kind);
-  if (at === -1) return `${current}\n${next}`;
-  lines[at] = next;
-  return lines.join('\n');
+/** A notice replaces the earlier one of its kind; one without a kind replaces only an identical message. */
+function addNotice(current: ContextNotice[] | undefined, next: ContextNotice): ContextNotice[] {
+  const list = current ?? [];
+  const at = list.findIndex(item =>
+    next.kind ? item.kind === next.kind : !item.kind && item.message === next.message
+  );
+  if (at === -1) return [...list, next];
+  return list.map((item, index) => (index === at ? next : item));
 }
+
+const noticeText = (notices: ContextNotice[]): string | null =>
+  notices.length > 0 ? notices.map(item => item.message).join('\n') : null;
 
 export function useSessions(): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
@@ -571,7 +573,9 @@ export function useConversation(
   const [phase, setPhase] = useState<ModelPhase | null>(null);
   const [preparing, setPreparing] = useState<WorkspaceProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notices, setNotices] = useState<ContextNotice[]>([]);
+  const notice = useMemo(() => noticeText(notices), [notices]);
+  const setNotice = useCallback((text: string | null) => setNotices(text ? [{ message: text }] : []), []);
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
@@ -614,7 +618,7 @@ export function useConversation(
 
   useEffect(() => {
     setSendError(null);
-    setNotice(backgroundNotices.get(sessionId ?? '') ?? null);
+    setNotices(backgroundNotices.get(sessionId ?? '') ?? []);
     if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
     setReturned(null);
@@ -825,7 +829,10 @@ export function useConversation(
         setSettledTurns(count => count + 1);
       }
       if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
-        backgroundNotices.set(event.sessionId, joinNotices(backgroundNotices.get(event.sessionId), event.message));
+        backgroundNotices.set(
+          event.sessionId,
+          addNotice(backgroundNotices.get(event.sessionId), { message: event.message, kind: event.kind })
+        );
         return;
       }
       if (event.sessionId !== activeSessionId.current) return;
@@ -902,7 +909,7 @@ export function useConversation(
       }
 
       if (event.type === 'context-notice') {
-        setNotice(current => joinNotices(current ?? undefined, event.message));
+        setNotices(current => addNotice(current, { message: event.message, kind: event.kind }));
         return;
       }
 

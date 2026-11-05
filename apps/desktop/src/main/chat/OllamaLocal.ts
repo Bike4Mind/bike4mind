@@ -1,7 +1,13 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import type { FetchLike } from '@bike4mind/local-models';
-import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
+import {
+  localBackend,
+  localModelId,
+  parseLocalModelId,
+  type ChatModelOption,
+  type ContextNoticeKind,
+} from '@shared/chat';
 import {
   AUTO_LOCAL_CONTEXT,
   LOCAL_CONTEXT_SIZES,
@@ -318,7 +324,7 @@ export class OllamaLocal {
     /** Called with how many of the oldest messages were left out because the prompt overflowed. */
     onTrimmed?: (dropped: number) => void,
     /** Called when Auto changed this model's context in a way the user should hear about. */
-    onNotice?: (message: string) => void
+    onNotice?: (message: string, kind?: ContextNoticeKind) => void
   ): Promise<void> {
     const model = ollamaModelName(request.model, this.runtimeId);
     const inspection = showSchema.parse(await this.json('/api/show', { name: model }, signal, TURN_INSPECT_TIMEOUT_MS));
@@ -352,7 +358,7 @@ export class OllamaLocal {
       this.toldNoTools.delete(request.sessionId);
     } else if (offeredTools && onNotice && request.sessionId && this.toldNoTools.get(request.sessionId) !== model) {
       this.toldNoTools.set(request.sessionId, model);
-      onNotice(noToolsNotice(model));
+      onNotice(noToolsNotice(model), 'no-tools');
     }
     const post = (fitted: OllamaMessage[]) => {
       // Another conversation may have grown the model, or a load failure lowered it, since this turn began.
@@ -391,7 +397,8 @@ export class OllamaLocal {
       const floor = await this.fallBack(request.model, inspection, tried);
       if (floor === undefined) return reply;
       onNotice?.(
-        `This model could not load with a ${shortSize(tried)}-token context, so Desktop runs it at ${shortSize(floor)} for now.`
+        `This model could not load with a ${shortSize(tried)}-token context, so Desktop runs it at ${shortSize(floor)} for now.`,
+        'context-size'
       );
       return post(fitted);
     };
@@ -407,7 +414,10 @@ export class OllamaLocal {
       if (growth.tokens !== undefined) {
         numCtx = growth.tokens;
         if (growth.slower)
-          onNotice?.(`This conversation now runs with a ${shortSize(numCtx)}-token context.${SLOWER_HINT}`);
+          onNotice?.(
+            `This conversation now runs with a ${shortSize(numCtx)}-token context.${SLOWER_HINT}`,
+            'context-size'
+          );
         response = await send(sent);
         measured = await refusedSize(response);
       }

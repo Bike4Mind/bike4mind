@@ -1,3 +1,4 @@
+import type { ContextNoticeKind } from '@shared/chat';
 import type { CompletionRequest } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
@@ -8,7 +9,7 @@ export interface LocalChat {
     onEvent: (event: CompletionStreamEvent) => void,
     signal?: AbortSignal,
     onTrimmed?: (dropped: number) => void,
-    onNotice?: (message: string) => void
+    onNotice?: (message: string, kind?: ContextNoticeKind) => void
   ): Promise<void>;
   /** The context the model's requests are sent with. */
   contextTokens(modelId: string, signal?: AbortSignal): Promise<number>;

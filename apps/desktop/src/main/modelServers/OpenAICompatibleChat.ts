@@ -14,7 +14,14 @@ import {
   toolsOffHint as sharedToolsOffHint,
   type HintApp,
 } from '@bike4mind/local-models/servers';
-import { localBackend, localModelId, parseLocalModelId, type ChatModelOption, type ChatTokenRate } from '@shared/chat';
+import {
+  localBackend,
+  localModelId,
+  parseLocalModelId,
+  type ChatModelOption,
+  type ChatTokenRate,
+  type ContextNoticeKind,
+} from '@shared/chat';
 import { isChatCapable } from '@shared/models';
 import type { CompletionMessage, CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
@@ -355,7 +362,7 @@ export class OpenAICompatibleChat implements LocalChat {
     onEvent: (event: CompletionStreamEvent) => void,
     signal?: AbortSignal,
     _onTrimmed?: (dropped: number) => void,
-    onNotice?: (message: string) => void
+    onNotice?: (message: string, kind?: ContextNoticeKind) => void
   ): Promise<void> {
     const model = this.modelName(request.model);
     const tools = this.toolsOffFor(model)
@@ -406,11 +413,12 @@ export class OpenAICompatibleChat implements LocalChat {
         : longMessage
           ? longMessageNotice(model, context)
           : contextTooSmallHint(this.server.label, this.server.product, [{ name: model, context }], measured);
+    const noticeKind: ContextNoticeKind = this.toolsOffFor(model) ? 'no-tools' : 'context-size';
     if (why && onNotice && longMessage) {
-      onNotice(why);
+      onNotice(why, noticeKind);
     } else if (why && onNotice && request.sessionId && !this.told.has(request.sessionId)) {
       this.told.add(request.sessionId);
-      onNotice(why);
+      onNotice(why, noticeKind);
     }
     if (!response.ok || !response.body) throw await this.httpError(response);
     await this.readStream(

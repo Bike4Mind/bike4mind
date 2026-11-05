@@ -49,6 +49,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
   WorkspacePreparation,
+  ContextNoticeKind,
 } from '@shared/chat';
 import {
   awaitsWorktree,
@@ -3217,7 +3218,7 @@ export class ChatService {
               onCompletionEvent,
               controller.signal,
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
-              message => this.emit({ type: 'context-notice', sessionId, message })
+              (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
           : await streamRound(
               api!.getAxiosInstance(),
@@ -6993,7 +6994,7 @@ async function streamLocalRound(
   onEvent: (event: CompletionStreamEvent) => void,
   signal?: AbortSignal,
   onTrimmed?: (dropped: number) => void,
-  onNotice?: (message: string) => void
+  onNotice?: (message: string, kind?: ContextNoticeKind) => void
 ): Promise<Error | null> {
   try {
     await local.stream(request, onEvent, signal, onTrimmed, onNotice);

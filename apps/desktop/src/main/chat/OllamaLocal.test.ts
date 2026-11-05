@@ -734,7 +734,7 @@ describe('OllamaLocal', () => {
       await local.stream(turn('a', 'tools'), () => undefined, undefined, undefined, onNotice);
       await local.stream(turn('b', 'tools'), () => undefined, undefined, undefined, onNotice);
       await local.stream(turn('c', 'withheld'), () => undefined, undefined, undefined, onNotice);
-      expect(onNotice.mock.calls).toEqual(Array(3).fill([noToolsNotice('gemma3:270m')]));
+      expect(onNotice.mock.calls).toEqual(Array(3).fill([noToolsNotice('gemma3:270m'), 'no-tools']));
       expect(noToolsNotice('gemma3:270m')).toBe(
         'gemma3:270m has no tool support, so this conversation runs without tools. Pick a model with tool support to use tools.'
       );
@@ -1408,7 +1408,7 @@ describe('OllamaLocal context sizing', () => {
     const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, discrete(7, 32)));
     await local.stream(longTurn, () => undefined, undefined, undefined, onNotice);
     expect(sent()).toEqual([16384, 32768]);
-    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('replies will be slower'));
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('replies will be slower'), 'context-size');
   });
 
   it('drops Auto to 16K and retries once when the model fails to load at a larger context', async () => {
@@ -1418,7 +1418,10 @@ describe('OllamaLocal context sizing', () => {
     const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
     await local.stream(longTurn, () => undefined, undefined, undefined, onNotice);
     expect(sent()).toEqual([65536, 16384]);
-    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('could not load with a 64K-token context'));
+    expect(onNotice).toHaveBeenCalledWith(
+      expect.stringContaining('could not load with a 64K-token context'),
+      'context-size'
+    );
     expect((await local.models())[0].contextWindow).toBe(16384);
     // It does not grow back into the size that failed.
     await expect(local.stream(longTurn, () => undefined)).rejects.toThrow("would not fit this computer's memory");

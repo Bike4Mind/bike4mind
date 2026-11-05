@@ -1,5 +1,5 @@
 import type { LocalContextFit } from '@shared/localContextSetting';
-import { parseLocalModelId, type ChatModelOption } from '@shared/chat';
+import { parseLocalModelId, type ChatModelOption, type ContextNoticeKind } from '@shared/chat';
 import type { CatalogSampling } from '@shared/generation';
 import type { CompletionRequest } from '../chat/completions';
 import type { LocalChat } from '../chat/localChat';
@@ -36,7 +36,7 @@ export class LocalModels implements LocalChat {
     onEvent: (event: CompletionStreamEvent) => void,
     signal?: AbortSignal,
     onTrimmed?: (dropped: number) => void,
-    onNotice?: (message: string) => void
+    onNotice?: (message: string, kind?: ContextNoticeKind) => void
   ): Promise<void> {
     return this.route(request.model).stream(request, onEvent, signal, onTrimmed, onNotice);
   }

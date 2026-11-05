@@ -91,16 +91,33 @@ describe('a context notice for a conversation that is not open', () => {
   });
 
   it('keeps only the newest notice of each kind', async () => {
-    const say = (message: string) => emit({ type: 'context-notice', sessionId: 'away', message });
+    const say = (message: string, kind?: 'context-size' | 'no-tools') =>
+      emit({ type: 'context-notice', sessionId: 'away', message, kind });
     await act(async () => root.render(<Harness id="open" />));
-    await act(async () => say('This conversation now runs with a 16K-token context.'));
-    await act(async () => say('m has no tool support, so this conversation runs without tools.'));
-    await act(async () => say('This conversation now runs with a 32K-token context.'));
+    await act(async () => say('size one', 'context-size'));
+    await act(async () => say('tools', 'no-tools'));
+    await act(async () => say('size two', 'context-size'));
 
     await act(async () => root.render(<Harness id="away" />));
-    expect(conversation.notice).toBe(
-      'This conversation now runs with a 32K-token context.\nm has no tool support, so this conversation runs without tools.'
-    );
+    expect(conversation.notice).toBe('size two\ntools');
+  });
+
+  it('replaces a notice without a kind only when the text is identical', async () => {
+    const say = (message: string) => emit({ type: 'context-notice', sessionId: 'away', message });
+    await act(async () => root.render(<Harness id="open" />));
+    await act(async () => say('a'));
+    await act(async () => say('b'));
+    await act(async () => say('a'));
+
+    await act(async () => root.render(<Harness id="away" />));
+    expect(conversation.notice).toBe('a\nb');
+  });
+
+  it('shows notices that arrive together on separate lines while the conversation is open', async () => {
+    await act(async () => root.render(<Harness id="open" />));
+    await act(async () => emit({ type: 'context-notice', sessionId: 'open', message: 'first', kind: 'no-tools' }));
+    await act(async () => emit({ type: 'context-notice', sessionId: 'open', message: 'second', kind: 'context-size' }));
+    expect(conversation.notice).toBe('first\nsecond');
   });
 
   it('is dropped when the conversation is deleted', async () => {
