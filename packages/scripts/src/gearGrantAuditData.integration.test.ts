@@ -156,7 +156,7 @@ describe('runGearGrantAudit', () => {
 
     const { report, markdown } = await runGearGrantAudit({
       days: 30,
-      withinMinutes: 60,
+      withinDays: 8,
       top: 5,
       testPattern,
       staffDomainsEnv: 'staff.example.com',
@@ -173,8 +173,7 @@ describe('runGearGrantAudit', () => {
     expect(report.fastClaims).toEqual({
       activeGears: 2,
       externalSignups: 1,
-      claimedEveryGear: 1,
-      claimedEveryGearWithin: 1,
+      tiers: [{ gears: 2, signups: 1, within: 1 }],
     });
     expect(report.spend).toMatchObject({
       gearCredits: 13000,
@@ -205,12 +204,12 @@ describe('runGearGrantAudit', () => {
     await spend(late, 300, daysBefore(15), { model: 'big' });
     await spend(late, 200, daysBefore(5), { model: 'big' });
 
-    const { report } = await runGearGrantAudit({ days: 30, withinMinutes: 60, top: 5, testPattern, now: NOW });
+    const { report } = await runGearGrantAudit({ days: 30, withinDays: 8, top: 5, testPattern, now: NOW });
     expect(report.spend).toMatchObject({ spentAfterFirstPayout: 200, gearAttributed: 200 });
   });
 
   it('runs on an empty database with the default clock, batch size and staff domains', async () => {
-    const { report } = await runGearGrantAudit({ days: 30, withinMinutes: 60, top: 10, testPattern });
+    const { report } = await runGearGrantAudit({ days: 30, withinDays: 8, top: 10, testPattern });
     expect(report.payouts.count).toBe(0);
     expect(report.fastClaims.activeGears).toBe(GEAR_KEYS.length);
     expect(report.checks.minAccountAgeDays).toBe(GEAR_TRUST_MIN_AGE_DAYS);

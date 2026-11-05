@@ -13,7 +13,10 @@ import { buildExclusionRules, exclusionReason } from './externalActiveUsers';
 import {
   GEAR_TX_PREFIX,
   activeGearKeys,
+  addSpend,
+  attributeSpend,
   buildGearGrantReport,
+  emptySpend,
   formatGearGrantReport,
   gearKeyOf,
   type AuditUser,
@@ -33,7 +36,7 @@ const HELD_FIELDS = { transactionId: 1, userId: 1, status: 1, heldAt: 1 };
 
 export interface GearGrantAuditOptions {
   days: number;
-  withinMinutes: number;
+  withinDays: number;
   top: number;
   testPattern: RegExp;
   staffDomainsEnv?: string;
@@ -70,7 +73,7 @@ export async function runGearGrantAudit(
 ): Promise<{ report: GearGrantReport; markdown: string }> {
   const {
     days,
-    withinMinutes,
+    withinDays,
     top,
     testPattern,
     staffDomainsEnv = process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS,
@@ -80,6 +83,7 @@ export async function runGearGrantAudit(
   const windowStart = new Date(now.getTime() - days * MS_PER_DAY);
   const rules = buildExclusionRules(staffDomainsEnv, testPattern);
 
+  // The transactionId index has no createdAt, so this walks every gear payout ever; fine for an ad hoc report.
   const payoutDocs = await CreditTransaction.find(
     {
       transactionId: { $regex: `^${GEAR_TX_PREFIX}` },
@@ -98,7 +102,8 @@ export async function runGearGrantAudit(
   }));
 
   const held = await HeldCreditRewardModel.find(
-    { source: 'gear', heldAt: { $gte: windowStart, $lte: now } },
+    // The status clause matches every row; it is there so the {status, heldAt} index serves the range.
+    { source: 'gear', status: { $in: ['held', 'paid', 'void', 'paused'] }, heldAt: { $gte: windowStart, $lte: now } },
     HELD_FIELDS
   )
     .read('secondaryPreferred')
@@ -125,15 +130,23 @@ export async function runGearGrantAudit(
   );
 
   const firstPaidAt = new Map<string, number>();
+  const payoutsByUser = new Map<string, GearPayoutRow[]>();
   for (const p of payouts) {
     const at = p.paidAt.getTime();
     if (at < (firstPaidAt.get(p.userId) ?? Infinity)) firstPaidAt.set(p.userId, at);
+    const list = payoutsByUser.get(p.userId) ?? [];
+    list.push(p);
+    payoutsByUser.set(p.userId, list);
   }
 
-  // Only usage from each recipient's first payout on is attributed, so earlier rows are neither read nor kept.
-  const usage: UsageRow[] = [];
+  const freeTierModels = new Set(await adminSettingsRepository.getSettingsValue('freeTierAllowedModels'));
+
+  // Only usage from each recipient's first payout on is attributed, so earlier rows are neither read nor
+  // kept. Each batch is attributed and dropped, so memory is bounded by one batch's usage.
+  const spend = emptySpend();
   for (let i = 0; i < recipients.length; i += batchSize) {
     const batch = recipients.slice(i, i + batchSize);
+    const usage: UsageRow[] = [];
     const from = Math.min(...batch.map(id => firstPaidAt.get(id) as number));
     const rows = CreditTransaction.find(
       {
@@ -151,6 +164,14 @@ export async function runGearGrantAudit(
       if (row.createdAt.getTime() < (firstPaidAt.get(row.ownerId) as number)) continue;
       usage.push({ userId: row.ownerId, model: row.model ?? null, credits: Math.abs(row.credits), at: row.createdAt });
     }
+    addSpend(
+      spend,
+      attributeSpend(
+        batch.flatMap(id => payoutsByUser.get(id) ?? []),
+        usage,
+        freeTierModels
+      )
+    );
   }
 
   const publishedOwners = new Set(payouts.filter(p => gearKeyOf(p.transactionId) === 'published').map(p => p.userId));
@@ -166,7 +187,6 @@ export async function runGearGrantAudit(
   }
 
   const overrides = await GearOverride.find({}, { key: 1, enabled: 1, credits: 1 }).lean<GearOverrideRow[]>();
-  const freeTierModels = await adminSettingsRepository.getSettingsValue('freeTierAllowedModels');
   const minAccountAgeDays = resolveMinAccountAgeDays(
     await adminSettingsRepository.getSettingsValue('gearRewardMinAccountAgeDays')
   );
@@ -174,15 +194,15 @@ export async function runGearGrantAudit(
   const report = buildGearGrantReport({
     now,
     days,
-    withinMinutes,
+    withinDays,
     top,
     payouts,
     held,
-    usage,
+    spend,
     users,
     rules,
     activeGearKeys: activeGearKeys(GEAR_KEYS, overrides),
-    freeTierModels: new Set(freeTierModels),
+    freeTierModels,
     minAccountAgeDays,
     externallyViewedPublishers: viewed,
   });

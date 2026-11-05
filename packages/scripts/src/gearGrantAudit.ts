@@ -13,11 +13,13 @@ import { DEFAULT_TEST_PATTERN, exclusionReason, type ExclusionRules, type UserRe
  */
 
 export const DEFAULT_WINDOW_DAYS = 30;
-export const DEFAULT_WITHIN_MINUTES = 60;
+// One day past the default gearRewardMinAccountAgeDays (7), so it catches claims made as soon as the gate opens.
+export const DEFAULT_WITHIN_DAYS = 8;
+/** Claim counts the new-account section reports, besides every active gear. */
+export const CLAIM_TIERS = [5, 10, 20];
 export const DEFAULT_TOP = 10;
 export const GEAR_TX_PREFIX = 'gear-unlock:';
 
-const MS_PER_MINUTE = 60_000;
 const MS_PER_DAY = 86_400_000;
 
 // --- Args ---
@@ -25,7 +27,7 @@ const MS_PER_DAY = 86_400_000;
 export interface GearAuditArgs {
   help: boolean;
   days: number;
-  withinMinutes: number;
+  withinDays: number;
   top: number;
   testPattern: RegExp;
   out?: string;
@@ -33,10 +35,10 @@ export interface GearAuditArgs {
 
 export const HELP_TEXT = `Gear grant audit (read-only). Prints a markdown report.
 
-Usage: report:gear-grant-audit [--days <n>] [--within-minutes <n>] [--top <n>] [--test-pattern <regex>] [--out <path>]
+Usage: report:gear-grant-audit [--days <n>] [--within-days <n>] [--top <n>] [--test-pattern <regex>] [--out <path>]
 
   --days <n>             Window in days ending now (default ${DEFAULT_WINDOW_DAYS}).
-  --within-minutes <n>   Signup-to-claim span for the "every gear soon after signup" count (default ${DEFAULT_WITHIN_MINUTES}).
+  --within-days <n>      Signup-to-claim span for the new-account claim counts (default ${DEFAULT_WITHIN_DAYS}).
   --top <n>              Rows in the per-account and per-model tables (default ${DEFAULT_TOP}).
   --test-pattern <regex> Exclude accounts whose email matches (case-insensitive). Default: ${DEFAULT_TEST_PATTERN}
   --out <path>           Write the report to a file instead of stdout.
@@ -58,7 +60,7 @@ export function parseGearAuditArgs(args: string[]): GearAuditArgs {
     options: {
       help: { type: 'boolean', short: 'h', default: false },
       days: { type: 'string', default: String(DEFAULT_WINDOW_DAYS) },
-      'within-minutes': { type: 'string', default: String(DEFAULT_WITHIN_MINUTES) },
+      'within-days': { type: 'string', default: String(DEFAULT_WITHIN_DAYS) },
       top: { type: 'string', default: String(DEFAULT_TOP) },
       'test-pattern': { type: 'string', default: DEFAULT_TEST_PATTERN },
       out: { type: 'string' },
@@ -74,7 +76,7 @@ export function parseGearAuditArgs(args: string[]): GearAuditArgs {
   return {
     help: values.help,
     days: positiveInt('days', values.days),
-    withinMinutes: positiveInt('within-minutes', values['within-minutes']),
+    withinDays: positiveInt('within-days', values['within-days']),
     top: positiveInt('top', values.top),
     testPattern,
     out: values.out,
@@ -122,14 +124,14 @@ export interface GearOverrideRow {
 export interface GearGrantAuditInput {
   now: Date;
   days: number;
-  withinMinutes: number;
+  withinDays: number;
   top: number;
   /** Gear payouts paid inside the window. */
   payouts: GearPayoutRow[];
   /** Gear HeldCreditReward rows held inside the window, or behind a payout in `payouts`. */
   held: HeldGearRow[];
-  /** AI usage of the payout owners inside the window. */
-  usage: UsageRow[];
+  /** attributeSpend over the external recipients' payouts and usage, summed with addSpend. */
+  spend: SpendAttribution;
   /** Payout owners plus every account created inside the window. */
   users: Map<string, AuditUser>;
   rules: ExclusionRules;
@@ -173,6 +175,14 @@ export interface AccountRow {
   credits: number;
 }
 
+export interface ClaimTierRow {
+  gears: number;
+  /** New external accounts that claimed at least `gears` active gears. */
+  signups: number;
+  /** Of those, the ones whose `gears`-th claim came within withinDays of signup. */
+  within: number;
+}
+
 export interface ModelSpendRow {
   model: string;
   tier: ModelTier;
@@ -183,7 +193,7 @@ export interface GearGrantReport {
   windowStart: string;
   now: string;
   days: number;
-  withinMinutes: number;
+  withinDays: number;
   staffExclusionConfigured: boolean;
   excludedPayouts: number;
   payouts: { count: number; credits: number; accounts: number };
@@ -193,8 +203,8 @@ export interface GearGrantReport {
   fastClaims: {
     activeGears: number;
     externalSignups: number;
-    claimedEveryGear: number;
-    claimedEveryGearWithin: number;
+    /** Ascending claim counts, the last being every active gear. */
+    tiers: ClaimTierRow[];
   };
   spend: {
     gearCredits: number;
@@ -225,6 +235,12 @@ export function percentile(sorted: number[], p: number): number | null {
   return sorted[Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)];
 }
 
+/** Signup time, falling back to the ObjectId timestamp the way the gears catalog does for account age. */
+function signupMs(userId: string, user: AuditUser): number {
+  if (user.createdAt) return user.createdAt.getTime();
+  return /^[0-9a-f]{24}$/i.test(userId) ? parseInt(userId.slice(0, 8), 16) * 1000 : NaN;
+}
+
 function wasVerifiedBy(user: AuditUser, at: Date): boolean {
   if (!user.emailVerified) return false;
   return !user.emailVerifiedAt || user.emailVerifiedAt <= at;
@@ -235,16 +251,36 @@ function wasVerifiedBy(user: AuditUser, at: Date): boolean {
  * account's gear balance and each usage row draws from it first. Credits are fungible in the real
  * balance, so this is an attribution, not a record of which credits paid for what.
  */
-function attributeSpend(
-  payouts: GearPayoutRow[],
-  usage: UsageRow[],
-  freeTierModels: ReadonlySet<string>
-): Pick<
+export type SpendAttribution = Pick<
   GearGrantReport['spend'],
   'spentAfterFirstPayout' | 'gearAttributed' | 'gearAttributedFrontier' | 'gearAttributedUnknown'
 > & {
   byModel: Map<string, number>;
-} {
+};
+
+export const emptySpend = (): SpendAttribution => ({
+  spentAfterFirstPayout: 0,
+  gearAttributed: 0,
+  gearAttributedFrontier: 0,
+  gearAttributedUnknown: 0,
+  byModel: new Map(),
+});
+
+/** Adds `from` into `into`. Attribution is per account, so batches of whole accounts sum exactly. */
+export function addSpend(into: SpendAttribution, from: SpendAttribution): SpendAttribution {
+  into.spentAfterFirstPayout += from.spentAfterFirstPayout;
+  into.gearAttributed += from.gearAttributed;
+  into.gearAttributedFrontier += from.gearAttributedFrontier;
+  into.gearAttributedUnknown += from.gearAttributedUnknown;
+  for (const [model, credits] of from.byModel) into.byModel.set(model, (into.byModel.get(model) ?? 0) + credits);
+  return into;
+}
+
+export function attributeSpend(
+  payouts: GearPayoutRow[],
+  usage: UsageRow[],
+  freeTierModels: ReadonlySet<string>
+): SpendAttribution {
   type Event = { at: number; order: number; payout?: GearPayoutRow; use?: UsageRow };
   const events = new Map<string, Event[]>();
   const push = (userId: string, event: Event) => {
@@ -285,7 +321,7 @@ function attributeSpend(
 }
 
 export function buildGearGrantReport(input: GearGrantAuditInput): GearGrantReport {
-  const { now, days, withinMinutes, users, rules, activeGearKeys: activeKeys, freeTierModels } = input;
+  const { now, days, withinDays, users, rules, activeGearKeys: activeKeys, freeTierModels } = input;
   const windowStart = new Date(now.getTime() - days * MS_PER_DAY);
   const isExternal = (userId: string) => exclusionReason(users.get(userId), rules) === null;
 
@@ -322,27 +358,31 @@ export function buildGearGrantReport(input: GearGrantAuditInput): GearGrantRepor
   const accountCredits = [...perAccount.values()].map(a => a.credits).sort((a, b) => a - b);
   const totalCredits = accountCredits.reduce((sum, c) => sum + c, 0);
 
-  // Every active gear claimed, by accounts created inside the window.
-  const claimsByUser = new Map<string, Map<string, number>>();
+  // Active gears claimed by accounts created inside the window.
+  const activeSet = new Set(activeKeys);
+  const claimTimesByUser = new Map<string, number[]>();
   for (const claim of claims.values()) {
-    const byKey = claimsByUser.get(claim.userId) ?? new Map<string, number>();
-    byKey.set(claim.key, claim.at.getTime());
-    claimsByUser.set(claim.userId, byKey);
+    if (!activeSet.has(claim.key)) continue;
+    const times = claimTimesByUser.get(claim.userId) ?? [];
+    times.push(claim.at.getTime());
+    claimTimesByUser.set(claim.userId, times);
   }
+  const tierCounts = [...new Set([...CLAIM_TIERS.filter(n => n < activeKeys.length), activeKeys.length])]
+    .filter(n => n > 0)
+    .map(gears => ({ gears, signups: 0, within: 0 }));
   let externalSignups = 0;
-  let claimedEveryGear = 0;
-  let claimedEveryGearWithin = 0;
   for (const [userId, user] of users) {
     if (!user.createdAt || user.createdAt < windowStart || !isExternal(userId)) continue;
     externalSignups += 1;
-    const byKey = claimsByUser.get(userId) ?? new Map<string, number>();
-    const times = activeKeys.map(key => byKey.get(key) ?? NaN);
-    if (times.length === 0 || times.some(Number.isNaN)) continue;
-    claimedEveryGear += 1;
-    if (Math.max(...times) - user.createdAt.getTime() <= withinMinutes * MS_PER_MINUTE) claimedEveryGearWithin += 1;
+    const times = (claimTimesByUser.get(userId) ?? []).sort((a, b) => a - b);
+    for (const tier of tierCounts) {
+      if (times.length < tier.gears) continue;
+      tier.signups += 1;
+      if (times[tier.gears - 1] - user.createdAt.getTime() <= withinDays * MS_PER_DAY) tier.within += 1;
+    }
   }
 
-  const spend = attributeSpend(payouts, input.usage, freeTierModels);
+  const { spend } = input;
 
   const minAgeMs = input.minAccountAgeDays * MS_PER_DAY;
   let claimedBelowMinAge = 0;
@@ -353,8 +393,9 @@ export function buildGearGrantReport(input: GearGrantAuditInput): GearGrantRepor
   for (const p of payouts) {
     const user = users.get(p.userId) as AuditUser;
     const at = (claims.get(p.transactionId) as { at: Date }).at;
-    if (!user.createdAt) signupUnknown += 1;
-    else if (at.getTime() - user.createdAt.getTime() < minAgeMs) claimedBelowMinAge += 1;
+    const createdMs = signupMs(p.userId, user);
+    if (Number.isNaN(createdMs)) signupUnknown += 1;
+    else if (at.getTime() - createdMs < minAgeMs) claimedBelowMinAge += 1;
     if (!wasVerifiedBy(user, at)) claimedBeforeEmailVerified += 1;
     if (gearKeyOf(p.transactionId) === 'published') {
       publishedPayouts += 1;
@@ -368,7 +409,7 @@ export function buildGearGrantReport(input: GearGrantAuditInput): GearGrantRepor
     windowStart: windowStart.toISOString(),
     now: now.toISOString(),
     days,
-    withinMinutes,
+    withinDays,
     staffExclusionConfigured: rules.staffEmail !== null,
     excludedPayouts: input.payouts.length - payouts.length,
     payouts: { count: payouts.length, credits: totalCredits, accounts: perAccount.size },
@@ -384,7 +425,7 @@ export function buildGearGrantReport(input: GearGrantAuditInput): GearGrantRepor
     topAccounts: [...perAccount.values()]
       .sort((a, b) => b.credits - a.credits || a.userId.localeCompare(b.userId))
       .slice(0, input.top),
-    fastClaims: { activeGears: activeKeys.length, externalSignups, claimedEveryGear, claimedEveryGearWithin },
+    fastClaims: { activeGears: activeKeys.length, externalSignups, tiers: tierCounts },
     spend: {
       gearCredits: totalCredits,
       spentAfterFirstPayout: spend.spentAfterFirstPayout,
@@ -457,12 +498,21 @@ export function formatGearGrantReport(report: GearGrantReport): string {
       report.topAccounts.map(a => [a.userId, num(a.gears), num(a.credits)])
     ),
     '',
-    `### 2. Every gear claimed within ${report.withinMinutes} minutes of signup`,
+    '### 2. Gears claimed by new accounts',
     '',
-    `Of ${num(fastClaims.externalSignups)} external account(s) created in the window, ` +
-      `${num(fastClaims.claimedEveryGear)} claimed all ${fastClaims.activeGears} active gears, ` +
-      `${num(fastClaims.claimedEveryGearWithin)} of them within ${report.withinMinutes} minutes of signup. ` +
-      'A claim is timed by its queue entry when the reward was queued, else by its payout.',
+    `Of ${num(fastClaims.externalSignups)} external account(s) created in the window ` +
+      `(${fastClaims.activeGears} active gears), how many claimed at least N active gears, and how many ` +
+      `reached N within ${report.withinDays} day(s) of signup. A claim is timed by its queue entry when the ` +
+      'reward was queued, else by its payout.',
+    '',
+    ...table(
+      ['Gears claimed', 'Accounts', `Within ${report.withinDays} day(s)`],
+      fastClaims.tiers.map(t => [
+        t.gears === fastClaims.activeGears ? `all ${t.gears}` : `>= ${t.gears}`,
+        num(t.signups),
+        num(t.within),
+      ])
+    ),
     '',
     '### 3. Gear credits spent on frontier models',
     '',

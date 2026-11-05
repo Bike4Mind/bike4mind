@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_TEST_PATTERN, buildExclusionRules } from './externalActiveUsers';
+import { DEFAULT_TEST_PATTERN, buildExclusionRules, exclusionReason } from './externalActiveUsers';
 import {
   activeGearKeys,
+  addSpend,
+  attributeSpend,
   buildGearGrantReport,
+  emptySpend,
   formatGearGrantReport,
   gearKeyOf,
   modelTier,
@@ -10,11 +13,17 @@ import {
   percentile,
   type AuditUser,
   type GearGrantAuditInput,
+  type UsageRow,
 } from './gearGrantAudit';
 
 const NOW = new Date('2026-11-01T00:00:00Z');
 const minutesAfter = (date: Date, minutes: number) => new Date(date.getTime() + minutes * 60_000);
+const daysAfter = (date: Date, days: number) => new Date(date.getTime() + days * 86_400_000);
 const daysBefore = (days: number) => new Date(NOW.getTime() - days * 86_400_000);
+const objectIdAt = (date: Date) =>
+  Math.floor(date.getTime() / 1000)
+    .toString(16)
+    .padStart(8, '0') + '0'.repeat(16);
 const tx = (userId: string, key: string) => `gear-unlock:${userId}:${key}`;
 const rules = buildExclusionRules('staff.example.com', new RegExp(DEFAULT_TEST_PATTERN, 'i'));
 
@@ -26,34 +35,42 @@ const user = (overrides: Partial<AuditUser> = {}): AuditUser => ({
   ...overrides,
 });
 
-const input = (overrides: Partial<GearGrantAuditInput> = {}): GearGrantAuditInput => ({
-  now: NOW,
-  days: 30,
-  withinMinutes: 60,
-  top: 10,
-  payouts: [],
-  held: [],
-  usage: [],
-  users: new Map(),
-  rules,
-  activeGearKeys: ['projects', 'published'],
-  freeTierModels: new Set(['small-model']),
-  minAccountAgeDays: 7,
-  externallyViewedPublishers: new Set(),
-  ...overrides,
-});
+const input = ({
+  usage = [],
+  ...overrides
+}: Partial<GearGrantAuditInput> & { usage?: UsageRow[] } = {}): GearGrantAuditInput => {
+  const base: GearGrantAuditInput = {
+    now: NOW,
+    days: 30,
+    withinDays: 8,
+    top: 10,
+    payouts: [],
+    held: [],
+    spend: emptySpend(),
+    users: new Map(),
+    rules,
+    activeGearKeys: ['projects', 'published'],
+    freeTierModels: new Set(['small-model']),
+    minAccountAgeDays: 7,
+    externallyViewedPublishers: new Set(),
+    ...overrides,
+  };
+  // Like runGearGrantAudit, attribute usage of external payout recipients only.
+  const external = base.payouts.filter(p => exclusionReason(base.users.get(p.userId), base.rules) === null);
+  return { ...base, spend: overrides.spend ?? attributeSpend(external, usage, base.freeTierModels) };
+};
 
 describe('parseGearAuditArgs', () => {
   it('applies the defaults', () => {
     const args = parseGearAuditArgs([]);
-    expect(args).toMatchObject({ help: false, days: 30, withinMinutes: 60, top: 10, out: undefined });
+    expect(args).toMatchObject({ help: false, days: 30, withinDays: 8, top: 10, out: undefined });
     expect(args.testPattern.test('a+e2e@example.org')).toBe(true);
   });
 
   it('reads every flag', () => {
     const args = parseGearAuditArgs([
       '--days=7',
-      '--within-minutes',
+      '--within-days',
       '15',
       '--top',
       '3',
@@ -63,7 +80,7 @@ describe('parseGearAuditArgs', () => {
       'r.md',
       '-h',
     ]);
-    expect(args).toMatchObject({ help: true, days: 7, withinMinutes: 15, top: 3, out: 'r.md' });
+    expect(args).toMatchObject({ help: true, days: 7, withinDays: 15, top: 3, out: 'r.md' });
     expect(args.testPattern.test('QA@x')).toBe(true);
   });
 
@@ -118,8 +135,7 @@ describe('buildGearGrantReport', () => {
     expect(report.fastClaims).toEqual({
       activeGears: 2,
       externalSignups: 0,
-      claimedEveryGear: 0,
-      claimedEveryGearWithin: 0,
+      tiers: [{ gears: 2, signups: 0, within: 0 }],
     });
     expect(report.staffExclusionConfigured).toBe(true);
     const markdown = formatGearGrantReport(report);
@@ -193,14 +209,14 @@ describe('buildGearGrantReport', () => {
     expect(report.spend.topModels.map(m => m.model)).toEqual(['alpha', 'zeta']);
   });
 
-  describe('every gear soon after signup', () => {
-    const signup = daysBefore(5);
-    const claimAll = (userId: string, minutes: number[]) =>
-      ['projects', 'published'].map((key, i) => ({
-        transactionId: tx(userId, key),
+  describe('gears claimed by new accounts', () => {
+    const signup = daysBefore(20);
+    const claimAll = (userId: string, days: number[], keys = ['projects', 'published']) =>
+      days.map((day, i) => ({
+        transactionId: tx(userId, keys[i]),
         userId,
         credits: 100,
-        paidAt: minutesAfter(signup, minutes[i]),
+        paidAt: daysAfter(signup, day),
       }));
 
     it('counts an account that claimed every gear in time, apart from a late or partial one', () => {
@@ -214,19 +230,40 @@ describe('buildGearGrantReport', () => {
         ['staff', user({ createdAt: signup, email: 'x@staff.example.com' })],
       ]);
       const payouts = [
-        ...claimAll('fast', [5, 60]),
-        ...claimAll('late', [5, 61]),
-        ...claimAll('partial', [5, 6]).slice(0, 1),
-        ...claimAll('old', [5, 6]),
-        ...claimAll('staff', [5, 6]),
+        ...claimAll('fast', [1, 8]),
+        ...claimAll('late', [1, 8.5]),
+        ...claimAll('partial', [1, 2]).slice(0, 1),
+        ...claimAll('old', [1, 2]),
+        ...claimAll('staff', [1, 2]),
       ];
       const report = buildGearGrantReport(input({ users, payouts }));
       expect(report.fastClaims).toEqual({
         activeGears: 2,
         externalSignups: 4,
-        claimedEveryGear: 2,
-        claimedEveryGearWithin: 1,
+        tiers: [{ gears: 2, signups: 2, within: 1 }],
       });
+    });
+
+    it('reports the claim tiers below the active gear count, timing each by its n-th claim', () => {
+      const keys = ['a', 'b', 'c', 'd', 'e', 'f'];
+      const users = new Map<string, AuditUser>([
+        ['six', user({ createdAt: signup })],
+        ['fiveLate', user({ createdAt: signup })],
+        ['four', user({ createdAt: signup })],
+      ]);
+      const payouts = [
+        ...claimAll('six', [1, 1, 1, 1, 2, 3], keys),
+        ...claimAll('fiveLate', [1, 1, 1, 1, 9], keys),
+        ...claimAll('four', [1, 1, 1, 1], keys),
+        // An inactive gear does not count toward a tier.
+        ...claimAll('four', [1], ['retired']),
+      ];
+      const report = buildGearGrantReport(input({ users, payouts, activeGearKeys: keys }));
+      expect(report.fastClaims.tiers).toEqual([
+        { gears: 5, signups: 2, within: 1 },
+        { gears: 6, signups: 1, within: 1 },
+      ]);
+      expect(formatGearGrantReport(report)).toContain('| >= 5 | 2 | 1 |');
     });
 
     it('times a queued claim by its queue entry and ignores refused queue entries', () => {
@@ -262,8 +299,7 @@ describe('buildGearGrantReport', () => {
         },
       ];
       const report = buildGearGrantReport(input({ users, payouts, held }));
-      expect(report.fastClaims.claimedEveryGearWithin).toBe(1);
-      expect(report.fastClaims.claimedEveryGear).toBe(1);
+      expect(report.fastClaims.tiers).toEqual([{ gears: 2, signups: 1, within: 1 }]);
     });
 
     it('counts a claim still waiting in the queue', () => {
@@ -280,19 +316,14 @@ describe('buildGearGrantReport', () => {
         },
       ];
       const report = buildGearGrantReport(input({ users, payouts, held }));
-      expect(report.fastClaims.claimedEveryGearWithin).toBe(1);
+      expect(report.fastClaims.tiers).toEqual([{ gears: 2, signups: 1, within: 1 }]);
       expect(report.checks.heldByStatus.held).toBe(1);
     });
 
     it('counts nobody when no gear is active', () => {
       const users = new Map<string, AuditUser>([['fast', user({ createdAt: signup })]]);
       const report = buildGearGrantReport(input({ users, payouts: claimAll('fast', [1, 2]), activeGearKeys: [] }));
-      expect(report.fastClaims).toEqual({
-        activeGears: 0,
-        externalSignups: 1,
-        claimedEveryGear: 0,
-        claimedEveryGearWithin: 0,
-      });
+      expect(report.fastClaims).toEqual({ activeGears: 0, externalSignups: 1, tiers: [] });
     });
   });
 
@@ -337,6 +368,26 @@ describe('buildGearGrantReport', () => {
       expect(report.spend.gearAttributed).toBe(0);
       expect(report.spend.frontierShare).toBeNull();
     });
+
+    it('sums per-batch attributions to the same totals as one pass', () => {
+      const allow = new Set(['small-model']);
+      const payouts = ['a', 'b'].map(id => ({
+        transactionId: tx(id, 'projects'),
+        userId: id,
+        credits: 100,
+        paidAt: daysBefore(3),
+      }));
+      const usage = [
+        { userId: 'a', model: 'big', credits: 60, at: daysBefore(2) },
+        { userId: 'b', model: 'big', credits: 150, at: daysBefore(2) },
+      ];
+      const batched = addSpend(
+        attributeSpend([payouts[0]], [usage[0]], allow),
+        attributeSpend([payouts[1]], [usage[1]], allow)
+      );
+      expect(batched).toEqual(attributeSpend(payouts, usage, allow));
+      expect(batched.byModel.get('big')).toBe(160);
+    });
   });
 
   describe('claim checks', () => {
@@ -345,6 +396,8 @@ describe('buildGearGrantReport', () => {
         ['ok', user({ createdAt: daysBefore(20), emailVerifiedAt: daysBefore(19) })],
         ['young', user({ createdAt: daysBefore(3) })],
         ['nodate', user({ createdAt: null })],
+        // No createdAt, but an ObjectId id: aged by its timestamp, 3 days old.
+        [objectIdAt(daysBefore(3)), user({ createdAt: null })],
         ['unverified', user({ emailVerified: false })],
         ['verifiedLater', user({ emailVerifiedAt: daysBefore(0.5) })],
       ]);
@@ -365,8 +418,8 @@ describe('buildGearGrantReport', () => {
       const report = buildGearGrantReport(input({ users, payouts, held, externallyViewedPublishers: new Set(['ok']) }));
       expect(report.checks).toEqual({
         minAccountAgeDays: 7,
-        payoutsChecked: 7,
-        claimedBelowMinAge: 2,
+        payoutsChecked: 8,
+        claimedBelowMinAge: 3,
         signupUnknown: 1,
         claimedBeforeEmailVerified: 2,
         publishedPayouts: 2,
@@ -392,7 +445,8 @@ describe('formatGearGrantReport', () => {
     expect(markdown).toContain('| u | 1 | 1,234 |');
     expect(markdown).toContain('Frontier share: 100.0% of 100 spent gear credits');
     expect(markdown).toContain('| big | frontier | 100 |');
-    expect(markdown).toContain('### 2. Every gear claimed within 60 minutes of signup');
+    expect(markdown).toContain('### 2. Gears claimed by new accounts');
+    expect(markdown).toContain('| all 2 | 0 | 0 |');
     expect(markdown).toContain('A declined claim writes no row');
   });
 });
