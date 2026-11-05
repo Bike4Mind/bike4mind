@@ -76,7 +76,7 @@ const researchEngineQueuePayload = z.union([
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = researchEngineQueuePayload.parse(JSON.parse(event.Records[0].body));
 
-  logger.info('Dispatching action', body);
+  logger.info('Dispatching action', { action: body.action, payload: { ...body.payload, topic: undefined } });
 
   switch (body.action) {
     case 'process':
