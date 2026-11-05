@@ -684,12 +684,12 @@ describe('ModelsScreen curated', () => {
     };
     await mount(undefined, 'curated');
     const chip = inside('models-curated-all', 'models-curated-license-chip')[0];
-    expect(chip?.textContent).toBe('Restricted license: Gemma Terms of Use');
-    expect(chip?.title).toBe('Restricted license: Gemma Terms of Use');
+    expect(chip?.textContent).toBe('Gemma Terms of Use (restricted)');
+    expect(chip?.title).toBe('Gemma Terms of Use (restricted)');
     expect(chip?.dataset.kind).toBe('restricted');
     const pick = inside('models-curated-picks', 'models-curated-pick').find(row => row.dataset.entry === 'gemma-4-e4b');
     expect(pick?.querySelector('[data-testid="models-curated-license-chip"]')?.textContent).toBe(
-      'Restricted license: Gemma Terms of Use'
+      'Gemma Terms of Use (restricted)'
     );
   });
 
