@@ -1,4 +1,9 @@
-import { findOllamaBinary, LlamaServerRuntime, startOllamaServe } from '@bike4mind/local-models';
+import {
+  DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
+  findOllamaBinary,
+  LlamaServerRuntime,
+  startOllamaServe,
+} from '@bike4mind/local-models';
 import type { LaunchRuntime, ModelServerLaunchSettings } from '@shared/modelServers';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { findOnPath, resolveUserPath } from '../chat/tools/userPath';
@@ -221,7 +226,7 @@ export class LocalServerSupervisor {
       if (!controller.signal.aborted) this.problems.set(id, message);
       throw new Error(message, { cause: error });
     } finally {
-      slot.busy = null;
+      if (slot.busy === 'starting') slot.busy = null;
       slot.starting = null;
       this.deps.changed(id);
     }
@@ -375,6 +380,7 @@ export function hostLaunchers({ env = process.env, unifiedMemory }: HostLauncher
         binaryPath: program,
         modelsDir: request.settings.modelsDir ?? '',
         env: childEnv,
+        startTimeoutMs: DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
       });
       return runtime.startRouter({ port: request.port, flashAttention, signal });
     },
