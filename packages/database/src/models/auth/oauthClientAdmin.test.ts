@@ -404,6 +404,17 @@ describe('updateOAuthClient scopes', () => {
     expect(stored?.allowedScopes).toEqual(['openid']);
   });
 
+  it('answers ConflictError when the client type changes concurrently under an opt-in grant', async () => {
+    const { client } = await createOAuthClient(federated);
+    conflictOnRead(client.id, { $set: { clientType: 'first-party' } });
+    await expect(
+      updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] })
+    ).rejects.toMatchObject({ statusCode: 409 });
+    vi.restoreAllMocks();
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.allowedScopes).not.toContain(FEDERATED_ADMIN_STATUS_SCOPE);
+  });
+
   it('answers ConflictError when federation is removed concurrently under an opt-in grant', async () => {
     const { client } = await createOAuthClient(federated);
     await updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] });

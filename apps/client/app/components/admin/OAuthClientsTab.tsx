@@ -50,6 +50,7 @@ import {
   updateOAuthClient,
   rotateOAuthClientSecret,
 } from '@client/app/utils/oauthClientAPICalls';
+import { isAxiosError } from 'axios';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 
@@ -294,7 +295,11 @@ export default function OAuthClientsTab() {
   const [formError, setFormError] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<OAuthClientView | null>(null);
   const [editForm, setEditForm] = useState<EditForm | null>(null);
-  const [narrowing, setNarrowing] = useState<{ removed: string[]; payload: UpdateOAuthClientInput } | null>(null);
+  const [narrowing, setNarrowing] = useState<{
+    removed: string[];
+    dropsTrust: boolean;
+    payload: UpdateOAuthClientInput;
+  } | null>(null);
   const [rotateTarget, setRotateTarget] = useState<OAuthClientView | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<OAuthClientView | null>(null);
   // The secret is held in state and in the create/rotate mutation result; both are cleared when the modal closes (gcTime 0).
@@ -331,7 +336,12 @@ export default function OAuthClientsTab() {
     onError: (error: unknown) => {
       invalidate();
       setNarrowing(null);
-      setFormError(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setFormError(
+        isAxiosError(error) && error.response?.status === 409
+          ? `${message} Close and reopen this client to load the latest changes.`
+          : message
+      );
     },
   });
 
@@ -394,7 +404,8 @@ export default function OAuthClientsTab() {
     const payload = buildEditPayload(editTarget, editForm);
     if (Object.keys(payload).length === 0) return setEditTarget(null);
     const removed = removedScopes(editTarget, payload);
-    if (removed.length) return setNarrowing({ removed, payload });
+    const dropsTrust = payload.federatedIdp === null && !!editTarget.federatedIdp;
+    if (removed.length || dropsTrust) return setNarrowing({ removed, dropsTrust, payload });
     editMutation.mutate({ client: editTarget, payload });
   };
 
@@ -744,7 +755,7 @@ export default function OAuthClientsTab() {
       <Modal open={!!narrowing} onClose={() => setNarrowing(null)}>
         <ModalDialog role="alertdialog" variant="outlined" data-testid="oauth-client-edit-narrow-modal">
           <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'warning.500' }} />}>
-            Remove scopes
+            {narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
           </Typography>
           <Divider sx={{ my: 1 }} />
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
@@ -754,11 +765,18 @@ export default function OAuthClientsTab() {
               </Chip>
             ))}
           </Stack>
-          <Typography level="body-sm" sx={{ mt: 1 }}>
-            Apps that still request a removed scope get invalid_scope at /authorize, for every user. Grants users
-            already approved are kept, but ai-token and federated-admin calls that need a removed scope fail with
-            invalid_scope, because the client no longer has it.
-          </Typography>
+          {!!narrowing?.removed.length && (
+            <Typography level="body-sm" sx={{ mt: 1 }}>
+              Apps that still request a removed scope get invalid_scope at /authorize, for every user. Grants users
+              already approved are kept, but ai-token and federated-admin calls that need a removed scope fail with
+              invalid_scope, because the client no longer has it.
+            </Typography>
+          )}
+          {narrowing?.dropsTrust && (
+            <Typography level="body-sm" sx={{ mt: 1 }}>
+              Removing the trust config stops the AI-token exchange for every user of this client (403).
+            </Typography>
+          )}
           <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
             <Button variant="plain" color="neutral" onClick={() => setNarrowing(null)}>
               Cancel
@@ -771,7 +789,7 @@ export default function OAuthClientsTab() {
               }
               data-testid="oauth-client-edit-narrow-confirm-btn"
             >
-              Remove scopes
+              {narrowing?.removed.length ? 'Remove scopes' : 'Turn off federation'}
             </Button>
           </Stack>
         </ModalDialog>

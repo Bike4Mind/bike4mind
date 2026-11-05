@@ -201,7 +201,7 @@ With the script, register the trust config in the same run. To add it to an exis
 
 An admin can also register, edit, deactivate and rotate clients from the admin console (Trust and safety > OAuth clients), which applies the same rules as the script. Editing a client changes its redirect URIs, active state, allowed scopes and federated trust config. The opt-in `federated:admin-status` scope can be ticked only on a federated relying-party client. Turning federation on in the form ticks `ai:generate` and `me:read`. The script remains the fallback for installs that have no admin user yet.
 
-Removing a scope takes effect at once for every user of the client. An app that still requests a removed scope gets 400 `invalid_scope` at `/authorize`. Grants users already approved are kept, but `ai-token` and `federated-admin` calls that need a removed scope return 403 `invalid_scope`, because the client no longer has it. The admin console asks you to confirm before it removes a scope.
+Removing a scope takes effect at once for every user of the client. An app that still requests a removed scope gets 400 `invalid_scope` at `/authorize`. Grants users already approved are kept, but `ai-token` and `federated-admin` calls that need a removed scope return 403 `invalid_scope`, because the client no longer has it. The admin console asks you to confirm before it removes a scope or turns federation off.
 
 Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when you edit a client, URIs it already stores are kept even if they predate these rules, and only newly-added ones are checked.
 

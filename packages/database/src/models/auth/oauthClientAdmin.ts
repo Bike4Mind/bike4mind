@@ -206,6 +206,7 @@ export async function updateOAuthClient(
   } else if (scopesOrTrustChanged && grantsOptIn) {
     // Federation must still exist when this write leaves an opt-in scope in place.
     filter.federatedIdp = { $exists: true };
+    filter.clientType = 'relying-party';
   }
   if (data.expectedUpdatedAt !== undefined) {
     filter.updatedAt = data.expectedUpdatedAt === null ? null : new Date(data.expectedUpdatedAt);

@@ -253,6 +253,30 @@ describe('OAuthClientsTab', () => {
     await waitFor(() => expect(api.fetchOAuthClients).toHaveBeenCalledTimes(2));
   });
 
+  it('hints to reopen the client when the save conflicts (409), and not for other errors', async () => {
+    const conflict = Object.assign(new Error('conflict'), {
+      isAxiosError: true,
+      response: { status: 409, data: { message: 'Client was changed by someone else' } },
+    });
+    api.updateOAuthClient.mockRejectedValueOnce(conflict);
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+    fireEvent.change(screen.getByTestId('oauth-client-edit-uris-input'), {
+      target: { value: 'https://x.example.test/cb' },
+    });
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    expect(await screen.findByTestId('oauth-client-edit-error')).toHaveTextContent(
+      /Client was changed by someone else Close and reopen this client/
+    );
+
+    api.updateOAuthClient.mockRejectedValueOnce(new Error('Redirect URI must not contain whitespace'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() =>
+      expect(screen.getByTestId('oauth-client-edit-error')).toHaveTextContent(/must not contain whitespace/)
+    );
+    expect(screen.getByTestId('oauth-client-edit-error')).not.toHaveTextContent(/Close and reopen/);
+  });
+
   it('toasts the error and shows no secret modal when rotation fails', async () => {
     api.rotateOAuthClientSecret.mockRejectedValue(new Error('rotate failed'));
     renderTab();
@@ -468,12 +492,26 @@ describe('edit modal scopes and federated trust', () => {
     await openEdit();
     fireEvent.click(screen.getByTestId('oauth-client-edit-federated-switch'));
     fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    fireEvent.click(await screen.findByTestId('oauth-client-edit-narrow-confirm-btn'));
     await waitFor(() =>
       expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
         federatedIdp: null,
         expectedUpdatedAt: client.updatedAt,
       })
     );
+  });
+
+  it('confirms before turning federation off, and cancel sends no request', async () => {
+    api.fetchOAuthClients.mockResolvedValue([federatedClient]);
+    api.updateOAuthClient.mockResolvedValue(client);
+    await openEdit();
+    fireEvent.click(screen.getByTestId('oauth-client-edit-federated-switch'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    const modal = await screen.findByTestId('oauth-client-edit-narrow-modal');
+    expect(modal).toHaveTextContent('stops the AI-token exchange');
+    expect(modal).not.toHaveTextContent('invalid_scope');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel', hidden: false }));
+    expect(api.updateOAuthClient).not.toHaveBeenCalled();
   });
 
   it('closes without a request when nothing changed', async () => {
