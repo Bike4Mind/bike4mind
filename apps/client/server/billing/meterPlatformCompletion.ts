@@ -33,7 +33,6 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import {
   createModelAdmission as createSharedModelAdmission,
-  isModelRequiresSubscriptionError,
   loadFreeTierAllowedModels,
   loadModelConfigurations,
   type ModelAdmission,
@@ -46,7 +45,7 @@ import {
 import { getSettingsMap, getSettingsValue, usdToCredits, usdToCreditsStochastic } from '@bike4mind/utils';
 import { assertApiKeyOrgMembership } from '@bike4mind/server-utils/billing/assertApiKeyOrgMembership';
 import { persistedIsAdmin } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
-import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
+import { recordPaidPlanRefusal } from '@server/billing/userLimitEvents';
 import { getUserEntitlements } from '@server/entitlements';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 import {
@@ -99,8 +98,7 @@ export async function createModelAdmission(
       try {
         await admission.assert(modelId);
       } catch (error) {
-        if (isModelRequiresSubscriptionError(error))
-          await recordUserLimitEvent({ userId: user.id, kind: 'model_requires_paid_plan', model: modelId });
+        await recordPaidPlanRefusal(user.id, modelId, error);
         throw error;
       }
     },

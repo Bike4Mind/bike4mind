@@ -1,5 +1,6 @@
 import { userLimitEventRepository, type RecordUserLimitEventInput } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
+import { isModelRequiresSubscriptionError } from '@bike4mind/services/llm/modelAdmission';
 
 /**
  * Records a limit hit for the admin user timeline (see UserLimitEventModel). Called on refusal paths,
@@ -35,3 +36,20 @@ export const recordInsufficientCredits = async (event: {
       ...(event.availableCredits === undefined ? {} : { availableCredits: Math.floor(event.availableCredits) }),
     },
   });
+
+/**
+ * Records a model admission refusal when it is the paid-plan one. Classifying the error sits inside
+ * the best-effort guard too, so nothing here can replace the refusal the caller rethrows.
+ */
+export const recordPaidPlanRefusal = async (userId: string, modelId: string, error: unknown): Promise<void> => {
+  try {
+    if (!isModelRequiresSubscriptionError(error)) return;
+  } catch (classifyError) {
+    Logger.warn('[USER_LIMIT_EVENT] could not classify model refusal', {
+      userId,
+      error: classifyError instanceof Error ? classifyError.message : String(classifyError),
+    });
+    return;
+  }
+  await recordUserLimitEvent({ userId, kind: 'model_requires_paid_plan', model: modelId });
+};
