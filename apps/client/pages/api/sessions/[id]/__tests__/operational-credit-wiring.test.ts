@@ -100,6 +100,12 @@ describe('session operational credit pre-flight wiring', () => {
       expect(mockPublishTag).not.toHaveBeenCalled();
     });
 
+    it('reports a failed publish as a queueing failure, not an access denial', async () => {
+      mockPublishTag.mockRejectedValue(new Error('queue down'));
+
+      await expect(run(tagHandler)).rejects.toThrow('Could not queue tagging');
+    });
+
     it('names the requester on the queued job so the write re-checks their access', async () => {
       await run(tagHandler);
 
