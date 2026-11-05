@@ -656,7 +656,7 @@ Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQU
 
 **You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Profile menu -> More -> API Keys**) as well as at build time.
 
-This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+This is also the one place OpenAI specifically is required: Help panel vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
 ### Help in any chat (the `system-help` data lake)
 
@@ -664,6 +664,7 @@ Separately from the Help panel, the public help articles are mirrored into a dat
 
 - **First run.** On an install where the lake has never existed, the worker creates it, owned by the oldest admin account. Until an admin exists, each run logs that it is waiting and does nothing. The lake owner's keys (or your instance-wide keys) pay for the embeddings.
 - **Steady state.** Re-runs are differential: an unchanged corpus writes nothing and embeds nothing. Rebuilding the image after a docs change re-embeds only the articles that changed.
+- **Missing embedding key.** If the Default Embedding Model's provider has no API key, the run fails and the worker logs `scheduled task "helpDatalakeIngest" failed` on startup and every 6 hours. Add the key or pick a local embedder under **Settings -> AI -> Default Embedding Model**.
 - **Turning it off.** Delete the `system-help` lake. The worker never recreates a lake that was deleted.
 
 ## Background worker
