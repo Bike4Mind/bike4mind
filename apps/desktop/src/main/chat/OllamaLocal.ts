@@ -236,6 +236,8 @@ export interface RemoteOllama {
 export class OllamaLocal {
   private listed: ChatModelOption[] = [];
   private readonly runtimeId: string;
+  /** Conversations already told that their model has no tool support. */
+  private readonly toldNoTools = new Set<string>();
 
   /**
    * Main passes Electron's net.fetch: Node's fetch gives up after five minutes without response
@@ -340,9 +342,15 @@ export class OllamaLocal {
         ? withNoThinkSwitch(toMessages(request.messages))
         : toMessages(request.messages);
     // Ollama refuses tools for a model without the capability; the list may not have known it yet.
-    const tools = inspection.capabilities.includes('tools')
+    const canUseTools = inspection.capabilities.includes('tools');
+    const tools = canUseTools
       ? (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }))
       : [];
+    const offeredTools = request.toolsUnsupported === true || (request.tools?.length ?? 0) > 0;
+    if (!canUseTools && offeredTools && onNotice && request.sessionId && !this.toldNoTools.has(request.sessionId)) {
+      this.toldNoTools.add(request.sessionId);
+      onNotice(noToolsNotice(model));
+    }
     const post = (fitted: OllamaMessage[]) => {
       // Another conversation may have grown the model, or a load failure lowered it, since this turn began.
       numCtx = contextByModel.get(request.model) ?? numCtx;
@@ -865,6 +873,11 @@ function ollamaModelName(modelId: string, runtimeId: string): string {
   const parsed = parseLocalModelId(modelId);
   if (parsed?.runtimeId !== runtimeId) throw new Error('Invalid local model id.');
   return parsed.model;
+}
+
+/** Worded like the CLI's notice for a server model without tool support. */
+export function noToolsNotice(model: string): string {
+  return `${model} has no tool support, so this conversation runs without tools. Pick a model with tool support to use tools.`;
 }
 
 // Module-wide so every OllamaLocal instance (catalog, chat, tests) reads the same figure.

@@ -2863,8 +2863,8 @@ export class ChatService {
       const videoModels = await videoModelsRead;
       // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
       let roomForTools = true;
-      const toolsFor = (granted: readonly string[]) =>
-        modelOption?.supportsTools === false || (localTurn && !modelOption) || !roomForTools
+      const offeredTools = (granted: readonly string[]) =>
+        (localTurn && !modelOption) || !roomForTools
           ? []
           : toolsForRequest({
               modelId: session.model,
@@ -2886,6 +2886,8 @@ export class ChatService {
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
             });
+      const toolsFor = (granted: readonly string[]) =>
+        modelOption?.supportsTools === false ? [] : offeredTools(granted);
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
@@ -3210,6 +3212,9 @@ export class ChatService {
                 ...generationField,
                 ...(maxTokens ? { maxTokens } : {}),
                 ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
+                ...(modelOption?.supportsTools === false && offeredTools(roots).length > 0
+                  ? { toolsUnsupported: true as const }
+                  : {}),
               },
               onCompletionEvent,
               controller.signal,
