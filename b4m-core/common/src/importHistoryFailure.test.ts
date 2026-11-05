@@ -23,7 +23,7 @@ describe('describeImportHistoryFailure', () => {
     expect(describeImportHistoryFailure('Unexpected end of JSON input').retryable).toBe(false);
   });
 
-  it.each([undefined, null, '', 'User not found: 64f0c0ffee', 'connect ECONNRESET 10.0.0.1:27017'])(
+  it.each([undefined, null, '', 'User not found: 64f0c0ffee', 'connect ECONNRESET 10.0.0.1:27017', 'Failed to import notebook "JSON notes"'])(
     'falls back to a generic, retryable reason for %j',
     raw => {
       const reason = describeImportHistoryFailure(raw);

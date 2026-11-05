@@ -41,7 +41,7 @@ const MATCHERS: Array<[RegExp, ImportHistoryFailureKind]> = [
     'not_a_zip',
   ],
   [
-    /\bJSON\b|unable to read .* from archive|invalid (stored block|distance|block type|code)|incorrect header check|unexpected end of file|too many length or distance symbols/i,
+    /in JSON at position|is not valid JSON|unexpected end of JSON input|unable to read .* from archive|invalid (stored block|distance|block type|code)|incorrect header check|unexpected end of file|too many length or distance symbols/i,
     'damaged_export',
   ],
 ];
