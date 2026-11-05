@@ -81,6 +81,7 @@
     "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
     "repair:stale-organization-pointers": "tsx src/repair-stale-organization-pointers.ts",
     "report:signup-grant-sizing": "tsx src/report-signup-grant-sizing.ts",
+    "report:gear-grant-audit": "tsx src/gear-grant-audit.ts",
     "migrate:signup-grant-schedule": "tsx src/migrate-signup-grant-schedule.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
@@ -130,6 +131,7 @@
   "devDependencies": {
     "@types/mailparser": "^3.9.0",
     "@types/yargs": "^17.0.35",
+    "@vitest/coverage-v8": "^4.1.12",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "aws-sdk-client-mock": "^4.1.0",
