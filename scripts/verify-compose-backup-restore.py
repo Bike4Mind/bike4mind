@@ -3,28 +3,51 @@
 
 Seeds a sentinel user and a sentinel file in the real mongo + minio services, runs
 scripts/selfhost_backup.py backup and restore, and checks the same user and the same
-file sha256 come back. Needs built minio/createbuckets images (see SELF_HOST.md) and
-.env.selfhost. Python stdlib only. Removes only the projects it creates.
+file sha256 come back, while a writer keeps the oplog non-empty during the dump.
+--auth runs the same drill against a Mongo started with a root user and keyFile.
+Needs built minio/createbuckets images (see SELF_HOST.md) and .env.selfhost.
+Python stdlib only. Removes only the projects it creates.
 """
 
 import argparse
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import secrets
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 BACKUP = ROOT / 'scripts' / 'selfhost_backup.py'
 MC_ALIAS = 'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null; '
 
 
+MONGO_AUTH = '''    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: {password}
+      KEYFILE_CONTENT: {key}
+    entrypoint:
+      - sh
+      - -c
+      - printf %s "$$KEYFILE_CONTENT" > /tmp/keyfile && chown mongodb /tmp/keyfile && chmod 400 /tmp/keyfile && exec docker-entrypoint.sh "$$@"
+      - sh
+    command: [mongod, --replSet, rs0, --bind_ip_all, --keyFile, /tmp/keyfile]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet -u root -p "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin
+          --eval "try {{ rs.status().ok }} catch (e) {{ rs.initiate({{_id:'rs0',members:[{{_id:0,host:'mongo:27017'}}]}}).ok }}"
+'''
+
+
 def sh(cmd, **kwargs):
-    print('+', ' '.join(shlex.quote(str(c)) for c in cmd[:12]), flush=True)
+    print('+', ' '.join(shlex.quote(str(c)) for c in cmd), flush=True)
     return subprocess.run(cmd, cwd=ROOT, check=True, **kwargs)
 
 
@@ -35,11 +58,11 @@ def require(condition, message):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--env-file', default='.env.selfhost')
+    parser.add_argument('--auth', action='store_true', help='Run Mongo with a root user and keyFile')
     args = parser.parse_args(argv)
-    env_file = (ROOT / args.env_file).resolve()
+    env_file = ROOT / '.env.selfhost'
     if not env_file.is_file():
-        raise SystemExit(f'Configure {args.env_file} before running the drill')
+        raise SystemExit('Configure .env.selfhost before running the drill')
 
     base = ['docker', 'compose', '-f', str(ROOT / 'compose.selfhost.yaml'), '--env-file', str(env_file)]
     config = json.loads(sh([*base, 'config', '--format', 'json'], stdout=subprocess.PIPE, text=True).stdout)
@@ -52,6 +75,9 @@ def main(argv=None):
     payload = secrets.token_bytes(64 * 1024)
     expected = hashlib.sha256(payload).hexdigest()
     key = f'drill/{tag}.bin'
+    password = secrets.token_hex(16)
+    mongo_uri = ('mongodb://root:' + password + '@mongo:27017/bike4mind?replicaSet=rs0&authSource=admin'
+                 if args.auth else 'mongodb://mongo:27017/bike4mind?replicaSet=rs0')
 
     print('UTC:', datetime.datetime.now(datetime.timezone.utc).isoformat())
     print('Revision:', sh(['git', 'rev-parse', 'HEAD'], stdout=subprocess.PIPE, text=True).stdout.strip())
@@ -65,7 +91,9 @@ def main(argv=None):
                 for s in ('createbuckets',))
             + f'  minio:\n    image: {json.dumps(images["minio"])}\n    pull_policy: never\n'
               '    build: !reset null\n    ports: !reset []\n'
-            '  mongo:\n    ports: !reset []\n')
+            '  mongo:\n    ports: !reset []\n'
+            + (MONGO_AUTH.format(password=password, key=secrets.token_hex(24)) if args.auth else '')
+            + f'  app:\n    environment:\n      MONGODB_URI: {json.dumps(mongo_uri)}\n')
         backup_dir = Path(directory) / 'backup'
 
         def compose(project):
@@ -77,7 +105,7 @@ def main(argv=None):
                        '--entrypoint', '/bin/sh', 'createbuckets', '-ec', MC_ALIAS + script], **kwargs)
 
         def mongosh(project, js):
-            return sh([*compose(project), 'exec', '-T', 'mongo', 'mongosh', '--quiet', '--eval', js],
+            return sh([*compose(project), 'exec', '-T', 'mongo', 'mongosh', mongo_uri, '--quiet', '--eval', js],
                       stdout=subprocess.PIPE, text=True).stdout.strip()
 
         def file_sha(project):
@@ -95,7 +123,17 @@ def main(argv=None):
 
             cli = [sys.executable, '-I', str(BACKUP), '--env-file', str(env_file),
                    '-f', str(ROOT / 'compose.selfhost.yaml'), '-f', str(override)]
-            sh([*cli, '-p', projects['src'], 'backup', '--dest', str(backup_dir)])
+            noise = subprocess.Popen([*compose(projects['src']), 'exec', '-T', 'mongo', 'mongosh', mongo_uri, '--quiet', '--eval',
+                                      'for (let i = 0; i < 200; i++) { db.getSiblingDB("bike4mind").noise.insertOne({i}); sleep(100) }'],
+                                     cwd=ROOT, stdout=subprocess.DEVNULL)
+            time.sleep(2)  # writes land in the oplog slice captured by --oplog
+            try:
+                sh([*cli, '-p', projects['src'], 'backup', '--dest', str(backup_dir)])
+            finally:
+                noise.terminate()
+                noise.wait()
+            owner = (backup_dir / 'objects').stat().st_uid
+            require(owner == os.getuid(), f'objects/ is owned by uid {owner}, not the invoking user')
             manifest = json.loads((backup_dir / 'manifest.json').read_text())
             print('Manifest:', json.dumps(manifest))
             require(manifest['buckets'][bucket]['objects'] >= 1, 'Manifest records no objects for the seeded bucket')

@@ -782,7 +782,13 @@ The drill derives its broker image, configuration mount, and storage mounts from
 
 `scripts/selfhost_backup.py` backs up the durable user state of the Compose stack while it is running, and restores it into a fresh project. Python 3 and Docker Compose are required; run it from the repository root with the same `-f`, `--env-file`, and `--profile` flags you use to run the stack.
 
-**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless) but never the reverse. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup that does not match it.
+**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless); the reverse is rare and needs an object deleted or expired during the backup window. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup that does not match it.
+
+**Requirements:**
+
+- Mongo and object storage must be the bundled `mongo` and `minio` services. The tool refuses an external `MONGODB_URI` or `AWS_ENDPOINT_URL_S3`; back those up with your provider's tooling.
+- The user in `MONGODB_URI` must hold the `root` role (or `backup` and `restore`, with `applyOps`), because it takes a whole-instance `--oplog` dump and replays the oplog on restore. If the URI has credentials and no `authSource`, the database in its path is used as the auth database.
+- The `mongodump` and `mongorestore` run inside the `mongo` container. The URI is read from a 0600 temp file there, so the password is not in any process argv.
 
 **What is not backed up:**
 
@@ -799,7 +805,7 @@ python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.self
   backup --dest /srv/backups/b4m-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-`--dest` must be empty or absent. The archive is not encrypted: protect it like the database, and encrypt any off-host copy.
+`--dest` must be empty or absent and is created `0700`, owned by you. The archive is not encrypted: protect it like the database, and encrypt any off-host copy. If a backup fails, the tool names the failed step and the directory is incomplete: remove it before retrying.
 
 ### Restore into a fresh project
 
@@ -808,7 +814,18 @@ python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.self
   -p b4m-restored restore --from /srv/backups/b4m-20260101T000000Z
 ```
 
-Put the original `.env.selfhost` in place first. Restore starts `mongo` and `minio`, runs `mongorestore --drop --oplogReplay`, runs the `createbuckets` job (buckets, upload webhooks, lifecycle rules), then mirrors the objects back. It refuses a target Mongo that already holds data unless you pass `--yes`. Then bring up the rest of the stack with the same `-p`. To restore over the original project, stop the app services first and pass `--yes`.
+Before you restore:
+
+- Put the original `.env.selfhost` in place.
+- `-p b4m-restored` builds the `minio` and `createbuckets` images from source (they are named per project), which needs network access on a DR host. Build or tag them first if it is offline.
+- If the original stack is still running on this host, set `MONGO_HOST_PORT`, `MINIO_HOST_PORT` and `MINIO_CONSOLE_HOST_PORT` in `.env.selfhost` to free ports.
+- With MongoDB authentication, the fresh project's `mongo` needs the same root user and replica-set bootstrap as the original (and a healthcheck that authenticates) before you run restore. `scripts/verify-compose-backup-restore.py --auth` shows a working override.
+
+Restore starts `mongo` and `minio`, runs `mongorestore --oplogReplay`, runs the `createbuckets` job (buckets, upload webhooks, lifecycle rules), then mirrors the objects back. It refuses a target Mongo that already holds data unless you pass `--yes`.
+
+Then bring up the rest of the stack with the same `-p`.
+
+To restore over the original project, stop every service except `mongo` and `minio` first (the workers and app also write, and the upload webhook re-queues every restored object), for example `docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps --services | grep -vx -e mongo -e minio | xargs docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop`, then pass `--yes`. This drops the collections in the backup and removes objects newer than the backup, so everything written since is lost. It needs the same Mongo credentials the backup was taken with.
 
 ### Recovery point and retention
 
@@ -819,10 +836,10 @@ Put the original `.env.selfhost` in place first. Restore starts `mongo` and `min
 ### Prove it restores
 
 ```bash
-python3 scripts/verify-compose-backup-restore.py
+python3 scripts/verify-compose-backup-restore.py          # add --auth for a Mongo with a root user and keyFile
 ```
 
-With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user and one 64 KiB file, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
+With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user and one 64 KiB file, keeps writing to Mongo so the dump has an oplog slice, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
 
 ## Troubleshooting
 

@@ -53,3 +53,7 @@ jobs:
         run: docker compose -f compose.selfhost.yaml --env-file .env.selfhost build --no-cache minio createbuckets
       - name: Verify storage and notifications
         run: python3 scripts/smoke_selfhost_objectstore.py
+      - name: Verify backup and restore
+        run: python3 scripts/verify-compose-backup-restore.py
+      - name: Verify backup and restore with MongoDB authentication
+        run: python3 scripts/verify-compose-backup-restore.py --auth

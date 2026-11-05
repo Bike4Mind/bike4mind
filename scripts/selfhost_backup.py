@@ -3,7 +3,8 @@
 
 Online and logical: `mongodump --oplog` (point-in-time consistent) then `mc mirror`
 per bucket. Mongo is dumped first, so an object may exist without a database row
-(harmless) but never the reverse. Python stdlib only; see SELF_HOST.md#backup-and-restore.
+(harmless); the reverse is rare and needs an object deleted or expired during the
+backup window. Python stdlib only; see SELF_HOST.md#backup-and-restore.
 """
 
 import argparse
@@ -15,7 +16,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 BUCKET_KEYS = [
     'APP_FILES_BUCKET', 'EMAIL_INGESTION_BUCKET', 'FAB_FILE_BUCKET',
@@ -23,8 +24,10 @@ BUCKET_KEYS = [
     'PUBLISHED_ARTIFACTS_BUCKET', 'SLACK_EXPORT_BUCKET',
 ]
 MONGO_ARCHIVE = 'mongo.archive.gz'
-URI_ENV = 'B4M_BACKUP_MONGODB_URI'  # passed by name, so the value never lands in argv
+URI_ENV = 'B4M_BACKUP_MONGODB_URI'  # passed to docker by name; inside the container it is only read by shell builtins and a 0600 config file, never an argv
 SYSTEM_DBS = {'admin', 'local', 'config'}
+MONGO_HOST = 'mongo'
+S3_HOST = 'minio'
 MC_ALIAS = 'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null'
 
 
@@ -36,47 +39,79 @@ def resolve_targets(config):
     missing = [key for key, name in buckets.items() if not name]
     if missing:
         raise ValueError('Bucket names not configured: ' + ', '.join(missing))
-    uri = (services.get('app', {}).get('environment') or {}).get('MONGODB_URI') or env.get('MONGODB_URI')
+    app_env = services.get('app', {}).get('environment') or {}
+    uri = app_env.get('MONGODB_URI') or env.get('MONGODB_URI')
     if not uri:
         raise ValueError('MONGODB_URI is not configured')
+    hosts = urlsplit(uri).netloc.rpartition('@')[2].split(',')
+    if any(host.rsplit(':', 1)[0] != MONGO_HOST for host in hosts):
+        raise ValueError(f'MONGODB_URI does not point at the Compose {MONGO_HOST} service; '
+                         'back up external MongoDB with your provider tooling')
+    endpoint = app_env.get('AWS_ENDPOINT_URL_S3') or env.get('AWS_ENDPOINT_URL_S3')
+    if urlsplit(endpoint or '').hostname != S3_HOST:
+        raise ValueError(f'AWS_ENDPOINT_URL_S3 is not the Compose {S3_HOST} service; '
+                         'back up external object storage with your provider tooling')
     return uri, buckets
 
 
 def instance_uri(uri):
-    """Drop the database path: --oplog only works on a whole-instance dump."""
+    """Drop the database path: --oplog only works on a whole-instance dump.
+
+    With credentials and no authSource, the path database is the auth database, so keep it.
+    """
     parts = urlsplit(uri)
-    return urlunsplit((parts.scheme, parts.netloc, '/', parts.query, ''))
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    database = parts.path.lstrip('/')
+    if '@' in parts.netloc and database and 'authSource' not in dict(query):
+        query.append(('authSource', database))
+    return urlunsplit((parts.scheme, parts.netloc, '/', urlencode(query), ''))
 
 
 def exec_cmd(compose, *inner):
     return [*compose, 'exec', '-T', '-e', URI_ENV, 'mongo', 'sh', '-c', *inner]
 
 
+def with_config(tool):
+    """Run `tool` with the URI read from a 0600 temp config file.
+
+    printf is a shell builtin and sed gets the URI on stdin, so the password is never
+    in the argv of a process in the container (visible to `ps` on the host).
+    """
+    return ("umask 077; f=$(mktemp); trap 'rm -f \"$f\"' EXIT; "
+            f"printf \"uri: '%s'\\n\" \"$(printf %s \"${URI_ENV}\" | sed \"s/'/''/g\")\" > \"$f\"; "
+            f'{tool} --config "$f"')
+
+
 def mongodump_cmd(compose):
-    return exec_cmd(compose, f'mongodump --uri "${URI_ENV}" --oplog --archive --gzip --quiet')
+    return exec_cmd(compose, with_config('mongodump --oplog --archive --gzip'))
 
 
-def mongorestore_cmd(compose):
-    return exec_cmd(compose, f'mongorestore --uri "${URI_ENV}" --drop --oplogReplay --archive --gzip --quiet')
+def mongorestore_cmd(compose, drop):
+    """--drop only when overwriting existing data: on a fresh auth-enabled target it replaces
+    the admin users mid-restore and the following oplog replay is then unauthenticated."""
+    return exec_cmd(compose, with_config('mongorestore ' + ('--drop ' if drop else '') + '--oplogReplay --archive --gzip'))
 
 
 def mongo_user_dbs_cmd(compose):
-    js = 'db.getMongo().getDBNames().filter(n => !' + json.dumps(sorted(SYSTEM_DBS)) + '.includes(n)).join(",")'
-    return exec_cmd(compose, f'mongosh "${URI_ENV}" --quiet --eval {shlex.quote(js)}')
+    js = (f'new Mongo(process.env.{URI_ENV}).getDBNames().filter(n => !'
+          + json.dumps(sorted(SYSTEM_DBS)) + '.includes(n)).join(",")')
+    return exec_cmd(compose, f'mongosh --nodb --quiet --eval {shlex.quote("print(" + js + ")")}')
 
 
 def mc_cmd(compose, objects_dir, script, read_only):
+    """Backup runs as the invoking user so the operator owns (and can rotate) the output."""
     mount = f'{objects_dir}:/backup' + (':ro' if read_only else '')
-    return [*compose, 'run', '--rm', '--no-deps', '-v', mount,
+    user = [] if read_only else ['--user', f'{os.getuid()}:{os.getgid()}', '-e', 'MC_CONFIG_DIR=/tmp/.mc']
+    return [*compose, 'run', '--rm', '--no-deps', *user, '-v', mount,
             '--entrypoint', '/bin/sh', 'createbuckets', '-ec', script]
 
 
-def mirror_script(buckets, restore):
+def mirror_script(buckets, restore, remove=False):
     lines = [MC_ALIAS]
     for name in buckets:
         q = shlex.quote(name)
         if restore:
-            lines.append(f'mc mirror --quiet --overwrite /backup/{q} local/{q}')
+            lines.append(f'mc mirror --quiet --overwrite{" --remove" if remove else ""} /backup/{q} local/{q}')
         else:
             lines.append(f'mkdir -p /backup/{q} && mc mirror --quiet local/{q} /backup/{q}')
     return '; '.join(lines)
@@ -127,6 +162,13 @@ def run(cmd, env=None, **kwargs):
     return subprocess.run(cmd, check=True, text=True, env=env, **kwargs)
 
 
+def step(name, cmd, **kwargs):
+    try:
+        return run(cmd, **kwargs)
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(f'{name} failed (exit {error.returncode})') from None
+
+
 def load(args):
     compose = ['docker', 'compose']
     for file in args.file or ['compose.selfhost.yaml']:
@@ -137,7 +179,7 @@ def load(args):
         compose += ['-p', args.project_name]
     for profile in args.profile:
         compose += ['--profile', profile]
-    config = json.loads(run([*compose, 'config', '--format', 'json'], stdout=subprocess.PIPE).stdout)
+    config = json.loads(step('compose config', [*compose, 'config', '--format', 'json'], stdout=subprocess.PIPE).stdout)
     uri, buckets = resolve_targets(config)
     return compose, buckets, {**os.environ, URI_ENV: instance_uri(uri)}
 
@@ -147,11 +189,16 @@ def backup(args):
     dest = Path(args.dest).resolve()
     if dest.exists() and any(dest.iterdir()):
         raise SystemExit(f'Refusing to write into non-empty {dest}')
-    (dest / 'objects').mkdir(parents=True, exist_ok=True)
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    dest.chmod(0o700)  # the archive holds the whole database, including credential hashes
+    (dest / 'objects').mkdir(mode=0o700)
     started = utcnow()
-    with open(dest / MONGO_ARCHIVE, 'wb') as out:
-        run(mongodump_cmd(compose), env=env, stdout=out)
-    run(mc_cmd(compose, dest / 'objects', mirror_script(buckets.values(), restore=False), False), env=env)
+    try:
+        with open(dest / MONGO_ARCHIVE, 'wb') as out:
+            step('mongodump', mongodump_cmd(compose), env=env, stdout=out)
+        step('object mirror', mc_cmd(compose, dest / 'objects', mirror_script(buckets.values(), restore=False), False), env=env)
+    except SystemExit as error:
+        raise SystemExit(f'{error}; {dest} is incomplete, remove it before retrying') from None
     revision = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
     manifest = build_manifest(dest, buckets, started, utcnow(), revision)
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -163,13 +210,14 @@ def restore(args):
     compose, buckets, env = load(args)
     dest = Path(args.source).resolve()
     check_manifest(dest, buckets)
-    run([*compose, 'up', '-d', '--no-deps', '--wait', 'mongo', 'minio'])
-    existing = run(mongo_user_dbs_cmd(compose), env=env, stdout=subprocess.PIPE).stdout.strip()
+    step('start mongo and minio', [*compose, 'up', '-d', '--no-deps', '--wait', 'mongo', 'minio'])
+    existing = step('target check', mongo_user_dbs_cmd(compose), env=env, stdout=subprocess.PIPE).stdout.strip()
     if existing and not args.yes:
         raise SystemExit(f'Target Mongo already has data ({existing}); restore into a fresh project or pass --yes to overwrite')
-    run(mongorestore_cmd(compose), env=env, stdin=open(dest / MONGO_ARCHIVE, 'rb'))
-    run([*compose, 'run', '--rm', '--no-deps', 'createbuckets'], env=env)  # buckets, webhooks, lifecycle
-    run(mc_cmd(compose, dest / 'objects', mirror_script(buckets.values(), restore=True), True), env=env)
+    step('mongorestore', mongorestore_cmd(compose, drop=bool(existing)), env=env, stdin=open(dest / MONGO_ARCHIVE, 'rb'))
+    step('createbuckets', [*compose, 'run', '--rm', '--no-deps', 'createbuckets'], env=env)  # buckets, webhooks, lifecycle
+    script = mirror_script(buckets.values(), restore=True, remove=bool(existing))
+    step('object mirror', mc_cmd(compose, dest / 'objects', script, True), env=env)
     print(f'Restore complete from {dest}')
 
 
@@ -184,13 +232,16 @@ def parser():
     b.add_argument('--dest', required=True)
     r = sub.add_parser('restore', help='Restore a backup directory into the selected project')
     r.add_argument('--from', dest='source', required=True)
-    r.add_argument('--yes', action='store_true', help='Overwrite a target database that already has data')
+    r.add_argument('--yes', action='store_true', help='Overwrite a target that already has data; also removes objects newer than the backup')
     return p
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    {'backup': backup, 'restore': restore}[args.command](args)
+    try:
+        {'backup': backup, 'restore': restore}[args.command](args)
+    except (ValueError, OSError) as error:
+        raise SystemExit(f'Error: {error}') from None
     return 0
 
 
