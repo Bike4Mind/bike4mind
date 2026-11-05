@@ -298,27 +298,35 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
     const size = part.file.sizeBytes;
     let held = await runtime.hasBlob(part.digest, { signal });
     const path = splitPartPath(dir, part);
-    for (let wait = BUSY_POLL_MIN_MS; !held; wait = Math.min(wait * 2, BUSY_POLL_MAX_MS)) {
-      try {
-        await hub.download(part.file, path, {
-          signal,
-          onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
-        });
-        break;
-      } catch (error) {
-        if (!(error instanceof ModelFileBusyError)) throw error;
-        // Another import is downloading this part; it may hand the part to Ollama, so look again once it lets go.
-        await abortableDelay(wait, signal);
-        held = await runtime.hasBlob(part.digest, { signal });
+    let uploaded = false;
+    try {
+      for (let wait = BUSY_POLL_MIN_MS; !held; wait = Math.min(wait * 2, BUSY_POLL_MAX_MS)) {
+        try {
+          await hub.download(part.file, path, {
+            signal,
+            onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
+          });
+          break;
+        } catch (error) {
+          if (!(error instanceof ModelFileBusyError)) throw error;
+          // Another import is downloading this part; it may hand the part to Ollama, so look again once it lets go.
+          await abortableDelay(wait, signal);
+          held = await runtime.hasBlob(part.digest, { signal });
+        }
       }
+      // An import sharing this part may have uploaded and deleted it while this one waited or hashed it.
+      held = held || (await runtime.hasBlob(part.digest, { signal }));
+      if (!held) {
+        await runtime.uploadBlob(part.digest, path, {
+          signal,
+          onProgress: sent => report(done + (size + Math.min(sent, size)) / 2),
+        });
+        uploaded = true;
+      }
+    } catch (error) {
+      if (signal?.aborted || !(await runtime.hasBlob(part.digest).catch(() => false))) throw error;
     }
-    if (!held) {
-      await runtime.uploadBlob(part.digest, path, {
-        signal,
-        onProgress: sent => report(done + (size + Math.min(sent, size)) / 2),
-      });
-      await rm(path, { force: true });
-    }
+    if (uploaded) await removeStaged(path);
     done += size;
     report(done);
   }

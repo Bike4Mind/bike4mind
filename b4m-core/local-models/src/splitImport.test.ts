@@ -389,6 +389,39 @@ describe('runSplitImport', () => {
     expect(runtime.uploadBlob).toHaveBeenCalledWith(`sha256:${hex('f')}`, expect.anything(), expect.anything());
   });
 
+  it('still creates the model when another import hands the downloaded part to Ollama and deletes it', async () => {
+    const { hub, runtime } = fakes();
+    const shared = `sha256:${hex('f')}`;
+    let sharedDone = false;
+    runtime.hasBlob.mockImplementation(async (digest: string) => digest === shared && sharedDone);
+    const download = hub.download.getMockImplementation();
+    hub.download.mockImplementation(async (file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+      const result = await download!(file, destination, opts);
+      if (file.sha256 === hex('f')) {
+        sharedDone = true;
+        await rm(destination, { force: true });
+      }
+      return result;
+    });
+    await runSplitImport(plan(), { hub, runtime, dir: join(root, 'run') });
+    expect(runtime.uploadBlob).not.toHaveBeenCalledWith(shared, expect.anything(), expect.anything());
+    expect(runtime.create).toHaveBeenCalled();
+  });
+
+  it('treats a part as held when its upload fails because another import removed the file first', async () => {
+    const { hub, runtime } = fakes();
+    const shared = `sha256:${hex('f')}`;
+    let sharedDone = false;
+    runtime.hasBlob.mockImplementation(async (digest: string) => digest === shared && sharedDone);
+    runtime.uploadBlob.mockImplementation(async (digest: string, path: string) => {
+      if (digest !== shared) return;
+      sharedDone = true;
+      await stat(`${path}.gone`);
+    });
+    await runSplitImport(plan(), { hub, runtime, dir: join(root, 'run') });
+    expect(runtime.create).toHaveBeenCalled();
+  });
+
   it('stops waiting for a busy part when the run is aborted', async () => {
     const { hub, runtime } = fakes();
     const controller = new AbortController();

@@ -113,6 +113,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe('registerModels', () => {
@@ -154,7 +155,6 @@ describe('registerModels', () => {
       expect(deps.defaultStoreDir?.()).not.toBe(SERVICE_STORE);
       vi.stubEnv('OLLAMA_MODELS', '/data/models');
       expect(deps.defaultStoreDir?.()).toBe('/data/models');
-      vi.unstubAllEnvs();
     }
   );
 
@@ -178,7 +178,6 @@ describe('registerModels', () => {
       expect(fallback && isAbsolute(fallback)).toBe(true);
       expect(stagedUnder('relative/cache')).toBe(fallback);
       expect(stagedUnder(absolute)).toBe(join(absolute, 'bike4mind-desktop', 'model-imports'));
-      vi.unstubAllEnvs();
     }
   );
 
