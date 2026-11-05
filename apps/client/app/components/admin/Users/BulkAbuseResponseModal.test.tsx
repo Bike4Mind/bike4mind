@@ -176,6 +176,44 @@ describe('BulkAbuseResponseModal', () => {
     mutationState.executePending = false;
   });
 
+  it('discloses the subscription cancel on Ban and reports canceled and refused subscriptions', () => {
+    const entry = (userId: string, overrides: Record<string, unknown>) => ({
+      userId,
+      email: `${userId}@example.com`,
+      status: 'succeeded' as const,
+      steps: {},
+      revokedApiKeys: 0,
+      clawedBackCredits: 0,
+      canceledSubscriptions: [],
+      ...overrides,
+    });
+    resolvePreviewWith(preview());
+    resolveExecuteWith(
+      executeResult({
+        results: [
+          entry('u1', { canceledSubscriptions: ['sub_a', 'sub_b'] }),
+          entry('u2', { subscriptionCancelError: 'stripe down' }),
+        ] as unknown as BulkAbuseExecuteResult['results'],
+      })
+    );
+    renderModal();
+
+    expect(screen.getByTestId('bulk-abuse-ban-subscriptions-note')).toHaveTextContent('stay canceled');
+    previewDomain('kashre.com');
+    applyWithReason();
+
+    expect(screen.getByTestId('bulk-abuse-result-summary')).toHaveTextContent('2 Stripe subscription(s) canceled');
+    expect(screen.getByTestId('bulk-abuse-subscription-cancel-failures')).toHaveTextContent(
+      'u2@example.com: stripe down'
+    );
+  });
+
+  it('shows no subscription note when Ban is off', () => {
+    renderModal();
+    fireEvent.click(screen.getByTestId('bulk-abuse-action-ban-checkbox'));
+    expect(screen.queryByTestId('bulk-abuse-ban-subscriptions-note')).not.toBeInTheDocument();
+  });
+
   it('previews a domain, then executes with the token and reason', () => {
     resolvePreviewWith(preview());
     executeMutate.mockImplementation((_req: unknown, options?: MutateOptions<BulkAbuseExecuteResult>) =>
@@ -348,6 +386,7 @@ describe('BulkAbuseResponseModal', () => {
             },
             revokedApiKeys: 0,
             clawedBackCredits: 0,
+            canceledSubscriptions: [],
             error: 'audit store unavailable',
           },
         ],

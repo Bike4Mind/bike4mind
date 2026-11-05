@@ -3,9 +3,7 @@ import { Alert, Box, Button, CircularProgress, Sheet, Stack, Typography } from '
 import { toast } from 'sonner';
 import type { ArenaChoice, ArenaPairView } from '@bike4mind/common';
 import { ArenaMarkdown } from '@client/app/components/PreferenceArena/ArenaMarkdown';
-import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
 import { useArenaNextPair, useArenaVote } from '@client/app/hooks/data/preferenceArena';
-import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -87,12 +85,6 @@ export default function ArenaPage() {
   useDocumentTitle('Rate answers');
   const { data, isPending, isError, error, isFetching, refetch } = useArenaNextPair();
   const vote = useArenaVote();
-  const { openView: openBillingView } = useBillingView();
-  // The billing modal that hosts the verification flow only mounts when credits are enforced, and
-  // its unlock card renders nothing unless the no-card unlock is on.
-  const enforceCredits = !!useGetSettingsValue('enforceCredits');
-  const noCardUnlockEnabled = !!useGetSettingsValue('noCardUnlockEnabled');
-  const canOpenVerification = enforceCredits && noCardUnlockEnabled;
 
   const voteInFlight = useRef(false);
 
@@ -153,14 +145,9 @@ export default function ArenaPage() {
     if (data.reason === 'unverified') {
       return (
         <Notice title="Only verified accounts can take part" testId="arena-unverified">
-          <Typography level="body-sm" sx={{ mt: 0.5, mb: 1.5 }}>
-            Verify your account to share your feedback on answers and earn credits.
+          <Typography level="body-sm" sx={{ mt: 0.5 }}>
+            Sharing feedback on answers and earning credits is limited to accounts that are already verified.
           </Typography>
-          {canOpenVerification && (
-            <Button size="sm" onClick={() => openBillingView('credits')} data-testid="arena-unverified-verify-btn">
-              Verify your account
-            </Button>
-          )}
         </Notice>
       );
     }

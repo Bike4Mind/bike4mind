@@ -53,6 +53,7 @@ describe('analytics overview route', () => {
       { range: '1y' },
       { compare: 'yes' },
       { signups: 'bots' },
+      { accounts: 'staff' },
       { range: 'custom', from: '2026-01-01' },
     ]) {
       expect((await run(query))._getStatusCode(), JSON.stringify(query)).toBe(400);
@@ -64,19 +65,32 @@ describe('analytics overview route', () => {
 
   it('applies the defaults and never caches', async () => {
     const res = await run();
-    expect(mocks.overview).toHaveBeenCalledWith({ range: '28d', compare: 'prev', signups: 'legit' });
+    expect(mocks.overview).toHaveBeenCalledWith({
+      range: '28d',
+      compare: 'prev',
+      signups: 'legit',
+      accounts: 'external',
+    });
     expect(res._getJSONData()).toEqual({ window: { range: '28d' } });
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
   it('passes a custom range through', async () => {
-    await run({ range: 'custom', from: '2026-01-01', to: '2026-01-31', compare: 'off', signups: 'all' });
+    await run({
+      range: 'custom',
+      from: '2026-01-01',
+      to: '2026-01-31',
+      compare: 'off',
+      signups: 'all',
+      accounts: 'internal',
+    });
     expect(mocks.overview).toHaveBeenCalledWith({
       range: 'custom',
       from: '2026-01-01',
       to: '2026-01-31',
       compare: 'off',
       signups: 'all',
+      accounts: 'internal',
     });
   });
 

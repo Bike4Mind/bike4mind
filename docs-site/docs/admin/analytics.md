@@ -9,7 +9,7 @@ tags: [admin, analytics]
 
 The Analytics page (**Overview > Analytics**) shows who uses Bike4Mind, how often, and whether they come back. It is a trend page: the Dashboard answers "is anything wrong right now?", Analytics answers "are we growing?".
 
-All days are UTC days, and every chart says so. Counts exclude admin accounts, system accounts, accounts flagged as automated test accounts, and accounts on your internal staff email domains. Every other account is counted, including a test account that carries none of those flags.
+All days are UTC days, and every chart says so. By default, counts exclude internal accounts: admin accounts, system accounts, accounts flagged as automated test accounts, and accounts on your internal staff email domains. Every other account is counted, including a test account that carries none of those flags.
 
 ## Toolbar
 
@@ -18,10 +18,13 @@ All days are UTC days, and every chart says so. Counts exclude admin accounts, s
 | **Range** | 7d, 28d, 90d, 12m, Custom | 28d |
 | **Compare** | Previous period, Off | Previous period |
 | **Signups** | Legit only, All | Legit only |
+| **Accounts** | External only, Internal only, All | External only |
 
 **Custom** shows two date inputs. Both days are included, and the range can cover at most 366 days.
 
-The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signups`), so a copied link opens the same view.
+The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signups`, `accounts`), so a copied link opens the same view.
+
+**Accounts** chooses whose activity the active-user tiles and the Active users section count. **Internal only** counts just the internal accounts the default view leaves out, and **All** counts everyone. A user whose account changed between internal and external during a week or month is counted once in **All**'s weekly and monthly numbers. Signups, the Usage cards and the Top organizations and users tables always exclude internal accounts, whichever option is selected.
 
 **Last updated** shows when the nightly rollup last ran. A **Stale** chip appears when it is more than 30 hours old.
 
@@ -43,6 +46,8 @@ The tiles cover complete days only. When the range ends today, today is still co
 
 A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished.
 
+Hover over any day to see its external and internal daily, weekly and monthly active users, whichever **Accounts** option is selected.
+
 Switch to **By surface** to see AI requests per day stacked by surface as bars. Internal system traffic is not shown.
 
 ## Signups: real vs suspected
@@ -50,6 +55,15 @@ Switch to **By surface** to see AI requests per day stacked by surface as bars. 
 Stacked bars of likely legit, suspected and not-yet-classified signups. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
 
 Click a bar to open the Users list filtered to the accounts created in that bar's window. Below the chart, the signals that marked accounts in the range are listed with their counts.
+
+## Retention cohorts
+
+A table of how many people come back. Each row is a signup week (weeks start on Monday, UTC) and shows the cohort size, then the share of that cohort who were active in week 0 (the signup week itself) through week 8. The percent is printed in every cell, and a darker shade means a higher share. Hover a cell to see the head count.
+
+- **Last 12 weeks.** Only signup weeks that are over appear, so a cohort never grows after you see it. The table is read through the last complete day and ignores the **Range** and **Compare** controls.
+- **Blank cells are gaps, not zero.** A cell is blank when its week is not over yet, when the nightly rollup is missing for a day it depends on, or when the cohort is empty. A real zero is printed as 0.0%.
+- **Signups toggle.** With **Legit only**, the cohort leaves out suspected signups and keeps accounts too new to classify. With **All**, it counts every signup. The size and the active counts follow the same rule.
+- **Active** uses the same definition as the rest of the page: at least one successful AI request that UTC day.
 
 ## Usage
 
@@ -77,7 +91,7 @@ Each chart has a **View as table** button that shows the same numbers as a table
 
 ## Gaps, empty ranges and errors
 
-- **Missing days**: if the nightly rollup did not run for some days, a banner says how many. Those days are drawn as gaps, never as zero. Select **Show missing days** to list them.
+- **Missing days**: if the nightly rollup did not run for some days, a banner says how many. Those days are drawn as gaps, never as zero. Select **Show missing days** to list them. With **Accounts** set to Internal only or All, a second line lists days whose internal counts are missing or incomplete: days rolled up before internal counts were recorded, and days whose 28-day window includes one. They show as gaps, today included, until the rollup is run again for them.
 - **No activity**: a section with nothing to show offers **Show last 90 days**.
 - **Errors**: a section that fails to load shows **Try again**.
 

@@ -39,6 +39,15 @@ describe('LocalModels', () => {
     registry.models.mockRejectedValueOnce(new Error('boom'));
     expect((await local.models()).map(model => model.id)).toEqual(['local:ollama:qwen']);
   });
+
+  it('attaches the catalog sampling it is given for a listed model, and nothing when there is none', async () => {
+    const seeded = new LocalModels(computer as unknown as OllamaLocal, registry, option =>
+      option.server ? undefined : { thinking: { temperature: 1 } }
+    );
+    const [own, remote] = await seeded.models();
+    expect(own?.catalogSampling).toEqual({ thinking: { temperature: 1 } });
+    expect(remote).not.toHaveProperty('catalogSampling');
+  });
 });
 
 describe('credentialInput', () => {

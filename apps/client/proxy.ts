@@ -215,6 +215,9 @@ export function proxy(request: NextRequest) {
   // too, for the service worker's re-fetch (see mapTileHost).
   const whatsNewUpstreamOrigin = resolveWhatsNewUpstreamOrigin(process.env.WHATS_NEW_FEED_URL);
   const whatsNewUpstreamHost = whatsNewUpstreamOrigin ? ` ${whatsNewUpstreamOrigin}` : '';
+  // ElevenLabs voice preview clips (Studio's voice list) come from regional hosts such as
+  // api.us.elevenlabs.io. connect-src too, for the service worker's re-fetch (see mapTileHost).
+  const elevenLabsHost = ' https://*.elevenlabs.io';
   // The desktop download page reads its latest release from the GitHub API (app/utils/desktopReleases.ts).
   const desktopReleasesApiHost = ' https://api.github.com';
   // Social post thumbnails. video.bsky.app redirects every poster frame to video.cdn.bsky.app and CSP
@@ -229,10 +232,10 @@ export function proxy(request: NextRequest) {
     style-src ${styleSrcPolicy};
     img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost}${socialImageHosts}${objectStoreHost}${whatsNewUpstreamHost};
     font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com data:;
-    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://challenges.cloudflare.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${desktopReleasesApiHost}${mapTileHost}${socialImageHosts}${objectStoreHost}${whatsNewUpstreamHost};
+    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://challenges.cloudflare.com${elevenLabsHost} wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${desktopReleasesApiHost}${mapTileHost}${socialImageHosts}${objectStoreHost}${whatsNewUpstreamHost};
     frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
-    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${objectStoreHost}${whatsNewUpstreamHost};
+    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com${elevenLabsHost}${objectStoreHost}${whatsNewUpstreamHost};
     base-uri 'self';
     frame-ancestors 'self';
     form-action 'self';

@@ -51,6 +51,7 @@ import {
   TEAM_PLAN_SEATS_HARD_LIMIT,
 } from '../constants/organization';
 import { CHAT_MODELS, ChatModels } from '../models';
+import { DECISION_MODEL_IDS } from '../decisions/catalog';
 import {
   BedrockEmbeddingModel,
   defaultEmbeddingModelForEnv,
@@ -461,6 +462,8 @@ export const SettingKeySchema = z.enum([
   'gearRewardMinAccountAgeDays',
   'usagePatternSignalsEnabled',
   'usagePatternSignalsConfig',
+  'abuseAssessmentEnabled',
+  'abuseAssessmentConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -510,6 +513,7 @@ export const SettingKeySchema = z.enum([
   'newAccountSpendCapDays',
   'newAccountHourlySpendCapCredits',
   'newAccountDailySpendCapCredits',
+  'paidCompletionOverdraftCredits',
   'spendMonitorEnabled',
   'spendMonitorSlackEnabled',
   'spendMonitorPlatformSpikeRatio',
@@ -519,6 +523,10 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAccountSpikeRatio',
   'spendMonitorAccountSpikeFloorCredits',
   'spendMonitorAccountCeilingCredits',
+  'spendMonitorTrustedEmailDomains',
+  'spendMonitorTrustedAccountIds',
+  'spendMonitorTrustedAccountSpikeFloorCredits',
+  'spendMonitorTrustedAccountCeilingCredits',
   'freeTierDailySystemCostCapUsd',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
@@ -528,7 +536,6 @@ export const SettingKeySchema = z.enum([
   'signupGrantTricklePoolDaily',
   'signupGrantRiskPolicy',
   'signupGrantActivityEnabled',
-  'signupGrantOrgInviteEnabled',
   'signupGrantActivityMinMessages',
   'signupGrantActivityMinActiveSeconds',
   'signupGrantActivityMinDays',
@@ -551,14 +558,6 @@ export const SettingKeySchema = z.enum([
   'turnstileFailClosed',
   'turnstileSiteKey',
   'signupRiskScoring',
-  'noCardUnlockEnabled',
-  'noCardUnlockGithubCredits',
-  'noCardUnlockWorkEmailCredits',
-  'noCardUnlockMaxCredits',
-  'noCardUnlockGithubMinAgeDays',
-  'noCardUnlockGithubMinRepos',
-  'noCardUnlockWorkEmailDomainDailyCap',
-  'noCardUnlockProbeInconclusiveAllows',
   'preferenceArenaEnabled',
   'preferenceArenaCreditsPerVote',
   'preferenceArenaDailyVoteCap',
@@ -729,6 +728,8 @@ export const SettingKeySchema = z.enum([
   'apiRateLimitDefaultWriteMode',
   'fileUploadLimitFreePerHour',
   'fileUploadLimitPaidPerHour',
+  'imageModerationLimitFreePerDay',
+  'imageModerationLimitPaidPerDay',
   'apiKeyAccess',
   'shadowTierModelAllowlist',
   'shadowTierRequestsPerMin',
@@ -1172,6 +1173,13 @@ export const FILE_UPLOAD_LIMIT_FREE_PER_HOUR = 300;
 export const FILE_UPLOAD_LIMIT_PAID_PER_HOUR = 3000;
 
 /**
+ * Default daily uploaded-image moderation allowances, in detector calls. The free one is also the
+ * floor that apps/client/server/s3/imageModerationBudget.ts applies when the setting cannot be read.
+ */
+export const IMAGE_MODERATION_LIMIT_FREE_PER_DAY = 200;
+export const IMAGE_MODERATION_LIMIT_PAID_PER_DAY = 2000;
+
+/**
  * Data-lake semantic-search scan budgets. Declared here so the admin-settings default and the
  * retrieval code that applies it cannot drift - `semanticDataLakeSearch` imports these same
  * constants for the case where no setting row exists.
@@ -1417,6 +1425,32 @@ export const UsagePatternSignalsConfigSchema = z.object({
 });
 
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
+
+/**
+ * Operator limits for advisory abuse assessments (apps/client/server/security/abuseAssessment/abuseAssessment.ts).
+ * Every default spends nothing: no model, a zero budget and the sweep off. `abuseAssessmentEnabled`
+ * gates all provider egress on top of this.
+ */
+export const AbuseAssessmentConfigSchema = z.object({
+  /** Decisions model to ask; must be served here and have a platform key. Null means no calls. */
+  model: z.enum(DECISION_MODEL_IDS).nullable().prefault(null),
+  /** Platform spend per 24h window (opened by the first call), in USD, at each call's worst-case cost. */
+  dailyBudgetUsd: z.number().min(0).max(1000).prefault(0),
+  /** Provider calls per 24h window (opened by the first call), across admin, sweep and replay runs. */
+  maxCallsPerDay: z.number().int().min(0).max(10_000).prefault(100),
+  /** Provider calls in flight at once, across all instances. */
+  maxConcurrency: z.number().int().min(1).max(10).prefault(2),
+  /** Lets the hourly sweep assess unreviewed shadow detections; the admin button works without it. */
+  sweepEnabled: z.boolean().prefault(false),
+  /** Share (0-100) of unreviewed detections the sweep assesses, chosen by a stable hash of the detection. */
+  sweepRolloutPercent: z.number().int().min(0).max(100).prefault(0),
+  /** Detections assessed per sweep run. */
+  maxAssessmentsPerSweep: z.number().int().min(1).max(500).prefault(20),
+  /** How far back the sweep looks for unreviewed detections. */
+  sweepLookbackHours: z.number().int().min(1).max(720).prefault(24),
+});
+
+export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2297,7 +2331,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'signupGrantTricklePoolDaily', order: 7.2 },
       { key: 'signupGrantRiskPolicy', order: 8 },
       { key: 'signupGrantActivityEnabled', order: 9 },
-      { key: 'signupGrantOrgInviteEnabled', order: 10 },
       { key: 'signupGrantActivityMinMessages', order: 11 },
       { key: 'signupGrantActivityMinActiveSeconds', order: 11.5 },
       { key: 'signupGrantActivityMinDays', order: 12 },
@@ -2317,6 +2350,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'newAccountSpendCapDays', order: 19.1 },
       { key: 'newAccountHourlySpendCapCredits', order: 19.2 },
       { key: 'newAccountDailySpendCapCredits', order: 19.3 },
+      { key: 'paidCompletionOverdraftCredits', order: 19.35 },
       { key: 'spendMonitorEnabled', order: 19.41 },
       { key: 'spendMonitorSlackEnabled', order: 19.42 },
       { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
@@ -2326,6 +2360,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
       { key: 'spendMonitorAccountSpikeFloorCredits', order: 19.48 },
       { key: 'spendMonitorAccountCeilingCredits', order: 19.49 },
+      { key: 'spendMonitorTrustedEmailDomains', order: 19.491 },
+      { key: 'spendMonitorTrustedAccountIds', order: 19.492 },
+      { key: 'spendMonitorTrustedAccountSpikeFloorCredits', order: 19.493 },
+      { key: 'spendMonitorTrustedAccountCeilingCredits', order: 19.494 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
@@ -2473,7 +2511,9 @@ export const API_SERVICE_GROUPS = {
       { key: 'apiRateLimitDefaultWriteMode', order: 6 },
       { key: 'fileUploadLimitFreePerHour', order: 7 },
       { key: 'fileUploadLimitPaidPerHour', order: 8 },
-      { key: 'apiKeyAccess', order: 9 },
+      { key: 'imageModerationLimitFreePerDay', order: 9 },
+      { key: 'imageModerationLimitPaidPerDay', order: 10 },
+      { key: 'apiKeyAccess', order: 11 },
     ],
   },
   API_KEY_TRUST: {
@@ -2593,6 +2633,16 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'usagePatternSignalsEnabled', order: 1 },
       { key: 'usagePatternSignalsConfig', order: 2 },
+    ],
+  },
+  ABUSE_ASSESSMENT: {
+    id: 'abuseAssessmentService',
+    name: 'Advisory Abuse Assessment',
+    description: 'Bounded model calls that add an advisory judgment to shadow detections for admin review',
+    icon: 'Security',
+    settings: [
+      { key: 'abuseAssessmentEnabled', order: 1 },
+      { key: 'abuseAssessmentConfig', order: 2 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -3559,6 +3609,33 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
     order: 8,
   }),
+  // Both read by apps/client/server/s3/imageModerationBudget.ts.
+  imageModerationLimitFreePerDay: makeNumberSetting({
+    key: 'imageModerationLimitFreePerDay',
+    name: 'Uploaded Image Moderation Limit - Free (scans/day)',
+    defaultValue: IMAGE_MODERATION_LIMIT_FREE_PER_DAY,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Max content-moderation scans a Free-tier user's uploaded images may use per 24 hours. A still image is one scan; an animated image is one scan per sampled frame (at most 10). Images over the limit stay pending (not shown) until the window resets and they are scanned. Admin-restricted users get this limit too. Set to 0 to hold every uploaded image for these users.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 9,
+  }),
+  imageModerationLimitPaidPerDay: makeNumberSetting({
+    key: 'imageModerationLimitPaidPerDay',
+    name: 'Uploaded Image Moderation Limit - Basic and Pro (scans/day)',
+    defaultValue: IMAGE_MODERATION_LIMIT_PAID_PER_DAY,
+    min: 0,
+    max: 1000000,
+    int: true,
+    description:
+      "Max content-moderation scans a Basic or Pro subscriber's uploaded images may use per 24 hours, counted like the Free limit. Admins and developer-tagged users are not limited. Set to 0 to hold every uploaded image for these users.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.RATE_LIMITING.id,
+    order: 10,
+  }),
   // Enforced at mint AND on every key-authenticated request (apiKeyAccessGate.ts), so
   // tightening it also cuts off keys that already exist.
   apiKeyAccess: makeStringSetting({
@@ -3572,7 +3649,7 @@ export const settingsMap = {
     options: ['all', 'paid', 'disabled'],
     category: 'SecOps',
     group: API_SERVICE_GROUPS.RATE_LIMITING.id,
-    order: 9,
+    order: 11,
   }),
   // Auto-block of IPs with repeated failed OAuth sign-ins, plus per-IP limits on the OAuth routes.
   oauthAbuseAutoBlockEnabled: makeBooleanSetting({
@@ -4388,6 +4465,28 @@ export const settingsMap = {
     dependsOn: 'usagePatternSignalsEnabled',
     schema: UsagePatternSignalsConfigSchema,
   }),
+  abuseAssessmentEnabled: makeBooleanSetting({
+    key: 'abuseAssessmentEnabled',
+    name: 'Advisory Abuse Assessment',
+    defaultValue: false,
+    description:
+      'Lets a Decisions model add an advisory judgment (abuse, legitimate automation or insufficient evidence) to shadow detections, from a pseudonymous summary of counts and flags. Paid from the platform key and budget, never from the assessed account. Advisory only: it never changes an account, its access, its credits or its review state. Off means no provider calls.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 1,
+  }),
+  abuseAssessmentConfig: makeObjectSetting({
+    key: 'abuseAssessmentConfig',
+    name: 'Advisory Abuse Assessment: Model and Limits',
+    defaultValue: AbuseAssessmentConfigSchema.parse({}),
+    description:
+      'The Decisions model to ask (it must have a platform key), the daily USD budget and call cap, concurrent calls, and the hourly sweep (on/off, rollout percent of unreviewed detections, detections per run, lookback hours). The defaults make no calls. Prefer a pinned model id (jev-1.13.0 over jev-latest): judgments are cached per model id, so an alias that moves keeps serving older judgments until the evidence changes.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 2,
+    dependsOn: 'abuseAssessmentEnabled',
+    schema: AbuseAssessmentConfigSchema,
+  }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
   freeTierModelGateEnabled: makeBooleanSetting({
@@ -4716,7 +4815,7 @@ export const settingsMap = {
     min: 0,
     int: true,
     description:
-      'Absolute free credits paid per UTC day for initial signup grants, invite bonuses and no-card unlocks. Grants past it are held until a later day. 0 pauses these grants; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
+      'Absolute free credits paid per UTC day for initial signup grants and invite bonuses. Grants past it are held until a later day. 0 pauses these grants; there is no unlimited mode, and a missing or invalid value also pauses them and alerts.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4748,16 +4847,6 @@ export const settingsMap = {
     userReadable: true,
     description:
       'Legacy fallback: only read while Signup Grant Daily Credits is unset, where ON applies Signup Activity Daily Credits as the daily drip and OFF pays no drip. Set Signup Grant Daily Credits instead.',
-    group: API_SERVICE_GROUPS.CREDITS.id,
-    category: 'Users',
-  }),
-  signupGrantOrgInviteEnabled: makeBooleanSetting({
-    key: 'signupGrantOrgInviteEnabled',
-    name: 'Signup Grant Organization Invite Unlock',
-    defaultValue: false,
-    userReadable: true,
-    description:
-      'Allow staged grant unlocks after organization invitation acceptance. Off by default; enable only by operator decision until a replenishing organization grant budget is implemented.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4845,7 +4934,7 @@ export const settingsMap = {
     max: 720,
     int: true,
     description:
-      'Hours a subscription or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
+      'Hours a subscription, credit pack or card payment must settle before it releases the locked signup credits. A dispute, refund or early fraud warning in that window cancels the release. Zero releases them on payment.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4929,82 +5018,6 @@ export const settingsMap = {
     description:
       'Legacy fallback: the credits a signup WITHOUT an invite code receives after email verification while Signup Grant Initial Credits is unset and either Staged Signup Grants is OFF or Signup Grant Credits is unset. Once Signup Grant Initial Credits is set, editing this no longer changes open-signup grants. Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. 0 grants nothing. An unverified account receives no credits.',
     category: 'Users',
-  }),
-  noCardUnlockEnabled: makeBooleanSetting({
-    key: 'noCardUnlockEnabled',
-    // Read by the billing UI to decide whether to render the unlock options.
-    userReadable: true,
-    name: 'No-Card Credit Unlock',
-    defaultValue: false,
-    description:
-      'Lets a verified user unlock starter credits without a card by linking a qualifying GitHub account or by verifying a work email. When OFF (default), no unlock is offered and every attempt is refused.',
-    category: 'Users',
-  }),
-  noCardUnlockGithubCredits: makeNumberSetting({
-    key: 'noCardUnlockGithubCredits',
-    name: 'No-Card Unlock: GitHub Credits',
-    defaultValue: 0,
-    int: true,
-    min: 0,
-    description:
-      'Credits granted when a user links a qualifying GitHub account. 0 grants nothing. Each GitHub account can unlock once across all users.',
-    category: 'Users',
-  }),
-  noCardUnlockWorkEmailCredits: makeNumberSetting({
-    key: 'noCardUnlockWorkEmailCredits',
-    name: 'No-Card Unlock: Work Email Credits',
-    defaultValue: 0,
-    int: true,
-    min: 0,
-    description: 'Credits granted when a user verifies a qualifying work email. 0 grants nothing.',
-    category: 'Users',
-  }),
-  noCardUnlockMaxCredits: makeNumberSetting({
-    key: 'noCardUnlockMaxCredits',
-    name: 'No-Card Unlock: Combined Maximum',
-    defaultValue: 0,
-    int: true,
-    min: 0,
-    description: 'Most credits one user can receive from all no-card unlocks combined. 0 grants nothing.',
-    category: 'Users',
-  }),
-  noCardUnlockGithubMinAgeDays: makeNumberSetting({
-    key: 'noCardUnlockGithubMinAgeDays',
-    name: 'No-Card Unlock: GitHub Minimum Account Age (days)',
-    defaultValue: 0,
-    int: true,
-    min: 0,
-    description:
-      'A linked GitHub account must be at least this many days old to qualify. 0 disables the GitHub unlock.',
-    category: 'Users',
-  }),
-  noCardUnlockGithubMinRepos: makeNumberSetting({
-    key: 'noCardUnlockGithubMinRepos',
-    name: 'No-Card Unlock: GitHub Minimum Public Repos',
-    defaultValue: 0,
-    int: true,
-    min: 0,
-    description:
-      'A linked GitHub account must have at least this many public repositories to qualify. 0 disables the GitHub unlock.',
-    category: 'Users',
-  }),
-  noCardUnlockWorkEmailDomainDailyCap: makeNumberSetting({
-    key: 'noCardUnlockWorkEmailDomainDailyCap',
-    name: 'No-Card Unlock: Work Email Domain Daily Cap',
-    defaultValue: 0,
-    int: true,
-    min: 0,
-    description: 'Most work-email unlocks granted per email domain per day. 0 grants nothing.',
-    category: 'Users',
-  }),
-  noCardUnlockProbeInconclusiveAllows: makeBooleanSetting({
-    key: 'noCardUnlockProbeInconclusiveAllows',
-    name: 'No-Card Unlock: Allow When Catch-All Check Is Inconclusive',
-    defaultValue: false,
-    description:
-      'Grant the work-email unlock when the catch-all mail-domain check cannot reach a verdict. This deployment cannot run that check, so ON grants work-email unlocks after only the MX and disposable-domain checks. OFF (default) refuses them.',
-    category: 'Users',
-    userReadable: true,
   }),
   preferenceArenaEnabled: makeBooleanSetting({
     key: 'preferenceArenaEnabled',
@@ -5153,6 +5166,19 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  // Read by ChatCompletionProcess when it caps a chat turn's output at what the payer can afford
+  // (b4m-core/services/src/llm/chatCreditCap.ts).
+  paidCompletionOverdraftCredits: makeNumberSetting({
+    key: 'paidCompletionOverdraftCredits',
+    name: 'Paid Completion Overdraft Allowance (credits)',
+    defaultValue: 500,
+    int: true,
+    min: 0,
+    description:
+      'How far past its balance one chat answer may run for a personal account on a paid plan. Each answer is capped so its worst-case cost fits the balance plus this allowance, and it stops once it reaches that limit. Accounts without a paid plan get no allowance, and organizations always stop at their balance. Applies to chat turns only; agent runs ignore it. Set to 0 to give paid accounts no allowance either.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
   spendMonitorEnabled: makeBooleanSetting({
     key: 'spendMonitorEnabled',
     name: 'Spend Monitor: Enabled',
@@ -5245,6 +5271,46 @@ export const settingsMap = {
     min: 1,
     description:
       'Credits per 15-minute window. Any single account spending this much in the window raises an alert regardless of its baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedEmailDomains: makeStringSetting({
+    key: 'spendMonitorTrustedEmailDomains',
+    name: 'Spend Monitor: Trusted Email Domains',
+    defaultValue: '',
+    description:
+      "Comma-separated email domains. A user whose email is verified and whose domain (the part after the last @) exactly equals one of these is held to the trusted-account thresholds below instead of the standard ones. Subdomains are not covered: list each one. Organizations are never trusted by their members' domains; list them under Trusted Account IDs. Empty (default) trusts no domain.",
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedAccountIds: makeStringSetting({
+    key: 'spendMonitorTrustedAccountIds',
+    name: 'Spend Monitor: Trusted Account IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated user or organization IDs held to the trusted-account thresholds below, for partner and client accounts with known heavy usage. API keys and agents follow the account that pays for them. Empty (default) trusts no account by ID.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedAccountSpikeFloorCredits: makeNumberSetting({
+    key: 'spendMonitorTrustedAccountSpikeFloorCredits',
+    name: 'Spend Monitor: Trusted Account Spike Floor',
+    defaultValue: 20_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. Replaces the account spike floor for trusted accounts: a trusted account spike alert needs at least this much spend in the window. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedAccountCeilingCredits: makeNumberSetting({
+    key: 'spendMonitorTrustedAccountCeilingCredits',
+    name: 'Spend Monitor: Trusted Account Ceiling',
+    defaultValue: 40_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. Replaces the account ceiling for trusted accounts: a trusted account spending this much in the window still raises a critical alert. Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -5457,7 +5523,7 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Post a LiveOps alert when a card payment matches a risk signal below (young account, shared card, several cards, hosting network). Controls the alert only; the automatic actions below have their own settings.',
+      'Post a LiveOps alert when a card payment matches a risk signal below (young account, shared card, several cards, hosting network). Also controls recording these payments on the Detections page; the automatic actions below have their own settings.',
   }),
   paymentRiskYoungAccountMinutes: makeNumberSetting({
     key: 'paymentRiskYoungAccountMinutes',
@@ -5603,7 +5669,7 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Record what the abuse detectors (such as the signup network burst alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
+      'Record what the abuse detectors (such as the signup network burst and payment risk alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',

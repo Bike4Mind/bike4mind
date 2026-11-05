@@ -36,13 +36,13 @@ describe('aiVoiceService factory', () => {
 describe('OpenAIVoiceService', () => {
   beforeEach(() => speechCreate.mockReset());
 
-  it('synthesizes with defaults (tts-1, alloy, mp3) and returns audio/mpeg bytes', async () => {
+  it('synthesizes with defaults (gpt-4o-mini-tts, alloy, mp3) and returns audio/mpeg bytes', async () => {
     speechCreate.mockResolvedValue({ arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer });
 
     const result = await aiVoiceService('openai', 'key', logger).synthesize('hello');
 
     expect(speechCreate).toHaveBeenCalledWith({
-      model: 'tts-1',
+      model: 'gpt-4o-mini-tts',
       voice: 'alloy',
       input: 'hello',
       response_format: 'mp3',
@@ -51,7 +51,7 @@ describe('OpenAIVoiceService', () => {
     expect(result.format).toBe('mp3');
     expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
     // Billing fields: resolved model + input char count.
-    expect(result.model).toBe('tts-1');
+    expect(result.model).toBe('gpt-4o-mini-tts');
     expect(result.characters).toBe('hello'.length);
   });
 

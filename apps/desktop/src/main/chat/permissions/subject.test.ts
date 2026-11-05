@@ -190,6 +190,12 @@ describe('everySessionRules', () => {
     expect(rulesFor('browser_evaluate', {}, { detail: '', key: 'k', askInFull: true })).toEqual([]);
   });
 
+  it('derives nothing for a card that allows one run only', () => {
+    expect(
+      rulesFor('session_send', { session_id: 's', message: 'hi' }, { detail: '', key: 'k', allowOnce: true })
+    ).toEqual([]);
+  });
+
   it('derives the bare tool name for a desktop tool, which parses as a native rule', () => {
     const rules = rulesFor('session_send', { session_id: 's', message: 'hi' }, { detail: '', key: 'k' });
     expect(rules).toEqual(['session_send']);

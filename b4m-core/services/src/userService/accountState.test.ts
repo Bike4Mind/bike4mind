@@ -6,9 +6,12 @@ import {
   accountBlockReasons,
   accountBlockedMessage,
   aiAccessDeniedMessage,
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
   AI_ACCESS_PENDING_REVIEW_MESSAGE,
   AI_ACCESS_REVOKED_MESSAGE,
   entersBlockedState,
+  entersSuspension,
+  suspensionReasons,
   isAiAccessRevoked,
   type AccountStateFields,
 } from './accountState';
@@ -81,6 +84,34 @@ describe('entersBlockedState', () => {
   });
 });
 
+describe('suspensionReasons', () => {
+  it('omits the dispute hold', () => {
+    expect(suspensionReasons({ isBanned: true, disputePending: true })).toEqual(['banned']);
+    expect(suspensionReasons({ disputePending: true })).toEqual([]);
+  });
+});
+
+describe('entersSuspension', () => {
+  it.each([
+    ['ban', { isBanned: true }],
+    ['suspension', { moderation: { status: 'suspended' as const } }],
+  ])('is true when the account becomes %s', (_label, next) => {
+    expect(entersSuspension(clean, next)).toBe(true);
+  });
+
+  it('is true when a suspension lands on a disputed account', () => {
+    expect(entersSuspension({ disputePending: true }, { disputePending: true, isBanned: true })).toBe(true);
+  });
+
+  it.each([
+    ['a dispute flag alone', clean, { disputePending: true }],
+    ['re-banning a banned account', { isBanned: true }, { isBanned: true }],
+    ['unbanning', { isBanned: true }, { isBanned: false }],
+  ])('is false on %s', (_label, previous, next) => {
+    expect(entersSuspension(previous, next)).toBe(false);
+  });
+});
+
 describe('isAiAccessRevoked', () => {
   it('revokes AI access for a moderated user', () => {
     expect(isAiAccessRevoked({ isModerated: true })).toBe(true);
@@ -144,5 +175,12 @@ describe('aiAccessDeniedMessage', () => {
 
   it('allows a clean account', () => {
     expect(aiAccessDeniedMessage({ isBanned: false, disputePending: false, isModerated: false })).toBeNull();
+  });
+
+  it('denies AI access while the account is scheduled for deletion, behind a block reason', () => {
+    const deletion = { scheduledFor: new Date('2026-11-17T00:00:00.000Z') };
+    expect(aiAccessDeniedMessage({ deletion })).toBe(AI_ACCESS_DELETION_PENDING_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion, isBanned: true })).toBe(ACCOUNT_BANNED_MESSAGE);
+    expect(aiAccessDeniedMessage({ deletion: null })).toBeNull();
   });
 });

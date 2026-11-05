@@ -126,6 +126,11 @@ describe('serveNextPair', () => {
     ).toBe('ready');
   });
 
+  it('blocks a user whose signup grant is admin-blocked', async () => {
+    const user = { ...verifiedUser, signupGrant: { blocked: { at: new Date('2025-12-01T00:00:00Z') } } };
+    expect(await build({ user }).service.serveNextPair('u1')).toEqual({ status: 'ineligible', reason: 'blocked' });
+  });
+
   it('returns the outstanding pair without serving another', async () => {
     const { service, votes, pairs } = build();
     votes.findOutstanding.mockResolvedValue(servedRow({ swapped: true }));
@@ -380,6 +385,14 @@ describe('submitVote', () => {
       await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(ForbiddenError);
       expect(addCredits).not.toHaveBeenCalled();
     }
+  });
+
+  it('pays no vote reward to a rater whose signup grant is admin-blocked after the pair was served', async () => {
+    const user = { ...verifiedUser, signupGrant: { blocked: { at: new Date('2025-12-01T00:00:00Z') } } };
+    const { service, addCredits, votes } = build({ user });
+    await expect(service.submitVote('u1', vote)).rejects.toBeInstanceOf(ForbiddenError);
+    expect(addCredits).not.toHaveBeenCalled();
+    expect(votes.recordVote).not.toHaveBeenCalled();
   });
 
   it('honors credits the ledger already paid when taking over a stale claim', async () => {

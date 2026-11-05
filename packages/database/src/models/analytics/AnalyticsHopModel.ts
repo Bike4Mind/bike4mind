@@ -11,7 +11,8 @@ const ModelName = 'AnalyticsHop';
  * can name another product as the source. `redeemedAt` is null until the destination redeems the
  * hop's token; the redeem is a conditional update on that null, which is what makes it single use.
  *
- * `expiresAt` is the record's retention, swept by a TTL index. A record without it is kept.
+ * `expiresAt` is the record's retention, swept by a TTL index. A record without it is kept, which
+ * is how a hop a signup was bound to stays: a payment may later cite it.
  */
 export interface IAnalyticsHopDoc {
   _id: string;
@@ -33,10 +34,12 @@ export interface IAnalyticsHopDoc {
   redeemedAt: Date | null;
   /** The destination visit the hop was redeemed in. Set only when the visitor consented. */
   redeemedSessionId?: string;
+  /** When a signup in that visit was bound to the hop (user.acquisition.verifiedTouch). Once. */
+  boundAt?: Date;
   expiresAt?: Date;
 }
 
-export type AnalyticsHopInput = Omit<IAnalyticsHopDoc, '_id' | 'redeemedAt' | 'redeemedSessionId'>;
+export type AnalyticsHopInput = Omit<IAnalyticsHopDoc, '_id' | 'redeemedAt' | 'redeemedSessionId' | 'boundAt'>;
 
 type IAnalyticsHopModel = Model<IAnalyticsHopDoc>;
 
@@ -52,6 +55,7 @@ const AnalyticsHopSchema = new Schema<IAnalyticsHopDoc>(
     createdAt: { type: Date, required: true },
     redeemedAt: { type: Date, default: null },
     redeemedSessionId: { type: String, required: false },
+    boundAt: { type: Date, required: false },
     expiresAt: { type: Date, required: false },
   },
   { collection: 'analytics_hops' }
@@ -91,6 +95,34 @@ export const analyticsHopRepository = {
     return AnalyticsHop.findOneAndUpdate(
       { hopId: opts.hopId, dest: opts.dest, redeemedAt: null, createdAt: { $gte: opts.mintedSince } },
       { $set: { redeemedAt: opts.now, ...(opts.sessionId !== undefined && { redeemedSessionId: opts.sessionId }) } },
+      { new: true }
+    )
+      .lean<IAnalyticsHopDoc>()
+      .exec();
+  },
+
+  /**
+   * Bind a redeemed hop to the signup that followed it, once, and keep it: a bound hop is the
+   * evidence a payment may later cite, so its retention (`expiresAt`) is removed. Only a hop for this
+   * destination, redeemed in visit `sessionId` no earlier than `redeemedSince`, and never bound
+   * matches, in one conditional update, so two signups cannot both take one hop. Null otherwise.
+   */
+  async bindToSignup(opts: {
+    hopId: string;
+    dest: string;
+    sessionId: string;
+    now: Date;
+    redeemedSince: Date;
+  }): Promise<IAnalyticsHopDoc | null> {
+    return AnalyticsHop.findOneAndUpdate(
+      {
+        hopId: opts.hopId,
+        dest: opts.dest,
+        redeemedSessionId: opts.sessionId,
+        redeemedAt: { $gte: opts.redeemedSince },
+        boundAt: null,
+      },
+      { $set: { boundAt: opts.now }, $unset: { expiresAt: 1 } },
       { new: true }
     )
       .lean<IAnalyticsHopDoc>()

@@ -15,9 +15,6 @@ const state = vi.hoisted(() => ({
     refetch: ReturnType<typeof vi.fn>;
   },
   mutate: vi.fn(),
-  openBillingView: vi.fn(),
-  enforceCredits: true,
-  noCardUnlockEnabled: true,
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -25,16 +22,6 @@ const state = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/preferenceArena', () => ({
   useArenaNextPair: () => state.next,
   useArenaVote: () => ({ mutate: state.mutate, isPending: false }),
-}));
-vi.mock('@client/app/components/subscription/BillingDeepLinkModals', () => ({
-  useBillingView: () => ({ openView: state.openBillingView }),
-}));
-vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => {
-    if (key === 'enforceCredits') return state.enforceCredits;
-    if (key === 'noCardUnlockEnabled') return state.noCardUnlockEnabled;
-    return undefined;
-  },
 }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
 vi.mock('@client/app/components/PreferenceArena/ArenaMarkdown', () => ({
@@ -59,10 +46,7 @@ const ready: ArenaNextResponse = {
 describe('ArenaPage', () => {
   beforeEach(() => {
     state.next = { isPending: false, isError: false, error: null, isFetching: false, data: ready, refetch: vi.fn() };
-    state.enforceCredits = true;
-    state.noCardUnlockEnabled = true;
     state.mutate.mockReset();
-    state.openBillingView.mockReset();
     state.toastSuccess.mockReset();
     state.toastError.mockReset();
   });
@@ -144,28 +128,11 @@ describe('ArenaPage', () => {
     expect(screen.queryByTestId('arena-vote-a-btn')).not.toBeInTheDocument();
   });
 
-  it('explains verification and opens the billing view for unverified accounts', () => {
+  it('explains that only verified accounts can take part, with no verification action', () => {
     state.next.data = { status: 'ineligible', reason: 'unverified' };
     renderPage();
     expect(screen.getByTestId('arena-unverified')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('arena-unverified-verify-btn'));
-    expect(state.openBillingView).toHaveBeenCalledWith('credits');
-  });
-
-  it('hides the verify button when credits are not enforced, since the billing modal cannot open', () => {
-    state.enforceCredits = false;
-    state.next.data = { status: 'ineligible', reason: 'unverified' };
-    renderPage();
-    expect(screen.getByTestId('arena-unverified')).toBeInTheDocument();
-    expect(screen.queryByTestId('arena-unverified-verify-btn')).not.toBeInTheDocument();
-  });
-
-  it('hides the verify button when the no-card unlock is off, since its card renders nothing', () => {
-    state.noCardUnlockEnabled = false;
-    state.next.data = { status: 'ineligible', reason: 'unverified' };
-    renderPage();
-    expect(screen.getByTestId('arena-unverified')).toBeInTheDocument();
-    expect(screen.queryByTestId('arena-unverified-verify-btn')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('shows a generic notice when blocked or disabled', () => {

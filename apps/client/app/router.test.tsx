@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useUser } from '@client/app/contexts/UserContext';
 import {
   createMemoryHistory,
   createRootRoute,
@@ -60,18 +62,18 @@ describe('adminRoute validateSearch', () => {
       validate({
         emergency_access: 'true',
         tab: 'audit-log',
-        feedbackId: 'f1',
+        feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
         category: 'credits',
-        entryId: 'e1',
+        entryId: 'cccccccccccccccccccccccc',
         section: 'security',
         q: 'slack',
       })
     ).toEqual({
       emergency_access: 'true',
       tab: 'audit-log',
-      feedbackId: 'f1',
+      feedbackId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
       category: 'credits',
-      entryId: 'e1',
+      entryId: 'cccccccccccccccccccccccc',
       section: 'security',
       q: 'slack',
     });
@@ -330,5 +332,40 @@ describe('admin subscription detail routes', () => {
     const match = (pathname: string) => router.getMatchedRoutes(pathname)[2]?.id;
     expect(match('/admin/subscriptions/by-stripe/sub_123')).toBe(adminSubscriptionByStripeIdRoute.id);
     expect(match('/admin/subscriptions/0123456789abcdef01234567')).toBe(adminSubscriptionDetailRoute.id);
+  });
+});
+
+describe('root route deletion-pending gate', () => {
+  // The app root's own component over a stub child, so the child stands in for any route outside ProviderBundle.
+  const mountAt = (path: string) => {
+    const root = createRootRoute({ component: router.routeTree.options.component });
+    const route = createRoute({ getParentRoute: () => root, path, component: () => <div data-testid="probe-page" /> });
+    const probe = createRouter({
+      routeTree: root.addChildren([route]),
+      history: createMemoryHistory({ initialEntries: [path] }),
+    });
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={probe} />
+      </QueryClientProvider>
+    );
+  };
+
+  afterEach(() => useUser.setState({ currentUser: null }));
+
+  it('shows only the cancel screen on a root-level route for a deletion-pending user', async () => {
+    useUser.setState({ currentUser: { id: 'u1', deletion: { scheduledFor: '2030-01-01T00:00:00.000Z' } } as never });
+    mountAt('/accept-policies');
+
+    expect(await screen.findByTestId('account-deletion-pending-screen')).toBeInTheDocument();
+    expect(screen.queryByTestId('probe-page')).not.toBeInTheDocument();
+  });
+
+  it('renders the route for a user with no pending deletion', async () => {
+    useUser.setState({ currentUser: { id: 'u1' } as never });
+    mountAt('/accept-policies');
+
+    expect(await screen.findByTestId('probe-page')).toBeInTheDocument();
+    expect(screen.queryByTestId('account-deletion-pending-screen')).not.toBeInTheDocument();
   });
 });

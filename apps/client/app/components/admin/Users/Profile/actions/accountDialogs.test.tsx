@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  toastWarning: vi.fn(),
   currentUser: null as CurrentUser,
 }));
 
@@ -44,7 +45,7 @@ vi.mock('@client/app/hooks/data/user', () => ({
 }));
 vi.mock('@client/app/hooks/data/mfa', () => ({ useForceResetMFA: () => ({ mutateAsync: mocks.resetMfa }) }));
 vi.mock('@client/app/hooks/data/inbox', () => ({ useSendSystemMessage: () => ({ mutateAsync: mocks.sendMessage }) }));
-vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
+vi.mock('sonner', () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess, warning: mocks.toastWarning } }));
 
 const renderDialog = (
   ui: (user: AdminUserProfile, onClose: () => void) => React.ReactElement,
@@ -450,6 +451,37 @@ describe('account dialogs', () => {
       );
       expect(onClose).toHaveBeenCalled();
       expect(onDeleted).toHaveBeenCalled();
+    });
+
+    it('warns when the delete could not cancel every subscription', async () => {
+      mocks.deleteUser.mockResolvedValue({
+        subscriptionCancellation: {
+          canceled: [],
+          failed: [{ customerId: 'cus_1', subscriptionId: null, reason: 'stripe down' }],
+        },
+      });
+      const { onDeleted } = renderDelete();
+      pickReason('delete-user-dialog');
+      fireEvent.change(screen.getByTestId('delete-user-dialog-typed-input'), { target: { value: 'ada@example.com' } });
+
+      fireEvent.click(confirmButton('delete-user-dialog'));
+
+      await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+      expect(mocks.toastWarning).toHaveBeenCalledWith(
+        'Could not cancel 1 Stripe subscription(s) of this account. Cancel them in Stripe.'
+      );
+    });
+
+    it('shows no subscription warning for a plain delete', async () => {
+      mocks.deleteUser.mockResolvedValue({ id: USER_ID });
+      const { onDeleted } = renderDelete();
+      pickReason('delete-user-dialog');
+      fireEvent.change(screen.getByTestId('delete-user-dialog-typed-input'), { target: { value: 'ada@example.com' } });
+
+      fireEvent.click(confirmButton('delete-user-dialog'));
+
+      await waitFor(() => expect(onDeleted).toHaveBeenCalled());
+      expect(mocks.toastWarning).not.toHaveBeenCalled();
     });
 
     it('asks for the user id when the account has no email', () => {

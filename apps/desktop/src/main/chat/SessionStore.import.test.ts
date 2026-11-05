@@ -119,6 +119,14 @@ describe('SessionStore imports', () => {
     await store.putImported({ ...imported('cl-f', 'Second'), messages: [] });
     expect((await store.get('cl-f'))!).toMatchObject({ title: 'Second', grantedDirectories: ['/work/granted'] });
   });
+
+  it('keeps the per-chat generation overrides over what a re-sync carries', async () => {
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'store-import-')), 'default');
+    await store.putImported(imported('cl-g', 'First'));
+    await store.setGeneration('cl-g', { temperature: 0.3 });
+    await store.putImported({ ...imported('cl-g', 'Second'), generation: { temperature: 1.5 } });
+    expect((await store.get('cl-g'))!.generation).toEqual({ temperature: 0.3 });
+  });
   it('does not recreate a copy deleted after the importer read it', async () => {
     const store = new SessionStore(await mkdtemp(join(tmpdir(), 'store-import-')), 'default');
     await store.putImported(imported('cl-race', 'Original'));
@@ -156,5 +164,4 @@ describe('SessionStore imports', () => {
     current = alice;
     expect((await store.get('cl-shared'))?.title).toBe('Alice');
   });
-
 });

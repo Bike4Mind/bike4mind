@@ -50,7 +50,12 @@ describe('analytics top accounts route', () => {
 
   it('applies the defaults and never caches', async () => {
     const res = await run();
-    expect(mocks.topAccounts).toHaveBeenCalledWith({ range: '28d', compare: 'prev', signups: 'legit' });
+    expect(mocks.topAccounts).toHaveBeenCalledWith({
+      range: '28d',
+      compare: 'prev',
+      signups: 'legit',
+      accounts: 'external',
+    });
     expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 

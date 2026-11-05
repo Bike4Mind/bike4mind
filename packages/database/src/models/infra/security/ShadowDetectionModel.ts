@@ -5,12 +5,15 @@ import {
   accountCampaignSummary,
   withoutCampaignMember,
   SHADOW_DETECTION_ACTIONS,
+  SHADOW_DETECTION_PAYMENT_KINDS,
+  SHADOW_DETECTION_PAYMENT_OUTCOMES,
   type AccountCampaignGroup,
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
   type ShadowDetectionAction,
   type ShadowDetectionItem,
   type ShadowDetectionNetwork,
+  type ShadowDetectionPayment,
   type ShadowDetectionSignal,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
@@ -34,6 +37,7 @@ export interface IShadowDetectionDocument extends Document {
   signals: ShadowDetectionSignal[];
   windowMinutes: number | null;
   group: AccountCampaignGroup | null;
+  payment: ShadowDetectionPayment | null;
   detectedAt: Date;
   verdict: ShadowDetectionVerdict | null;
   verdicts: ShadowDetectionVerdictEntry[];
@@ -65,6 +69,20 @@ const SignalSchema = new Schema<ShadowDetectionSignal>(
   { _id: false }
 );
 
+const PaymentSchema = new Schema<ShadowDetectionPayment>(
+  {
+    paymentIntentId: { type: String, required: true },
+    chargeId: { type: String, default: null },
+    kind: { type: String, enum: SHADOW_DETECTION_PAYMENT_KINDS, required: true },
+    outcome: { type: String, enum: SHADOW_DETECTION_PAYMENT_OUTCOMES, required: true },
+    amount: { type: Number, default: null },
+    currency: { type: String, default: null },
+    riskLevel: { type: String, default: null },
+    livemode: { type: Boolean, required: true },
+  },
+  { _id: false }
+);
+
 const VerdictEntrySchema = new Schema<ShadowDetectionVerdictEntry>(
   {
     verdict: { type: String, enum: SHADOW_DETECTION_VERDICTS, required: true },
@@ -88,6 +106,7 @@ export const ShadowDetectionSchema = new Schema<IShadowDetectionDocument>(
     // Validated against accountCampaignGroupSchema on write (recordCampaignGroup); Mixed because the
     // nested evidence lists are read whole and never queried field by field.
     group: { type: Schema.Types.Mixed, default: null },
+    payment: { type: PaymentSchema, default: null },
     detectedAt: { type: Date, required: true },
     verdict: { type: String, enum: [...SHADOW_DETECTION_VERDICTS, null], default: null },
     verdicts: { type: [VerdictEntrySchema], default: [] },
@@ -205,6 +224,19 @@ const toItem = (doc: LeanShadowDetection): ShadowDetectionItem => ({
   })),
   windowMinutes: doc.windowMinutes ?? null,
   group: doc.group ?? null,
+  // Records written before payment evidence existed carry no field at all.
+  payment: doc.payment
+    ? {
+        paymentIntentId: doc.payment.paymentIntentId,
+        chargeId: doc.payment.chargeId ?? null,
+        kind: doc.payment.kind,
+        outcome: doc.payment.outcome,
+        amount: doc.payment.amount ?? null,
+        currency: doc.payment.currency ?? null,
+        riskLevel: doc.payment.riskLevel ?? null,
+        livemode: doc.payment.livemode,
+      }
+    : null,
   detectedAt: doc.detectedAt,
   verdict: doc.verdict ?? null,
   verdicts: (doc.verdicts ?? []).map(entry => ({
@@ -366,6 +398,21 @@ class ShadowDetectionRepository {
       .limit(query.limit + 1)
       .lean<LeanShadowDetection[]>();
     return { data: docs.slice(0, query.limit).map(toItem), truncated: docs.length > query.limit };
+  }
+
+  async findById(id: string): Promise<ShadowDetectionItem | null> {
+    if (!Types.ObjectId.isValid(id)) return null;
+    const doc = await ShadowDetectionModel.findById(id).lean<LeanShadowDetection>();
+    return doc ? toItem(doc) : null;
+  }
+
+  /** Ungraded detections recorded at or after `since`, newest first. */
+  async listUnreviewedSince(since: Date, limit: number): Promise<ShadowDetectionItem[]> {
+    const docs = await ShadowDetectionModel.find({ verdict: null, detectedAt: { $gte: since } })
+      .sort({ detectedAt: -1, _id: -1 })
+      .limit(limit)
+      .lean<LeanShadowDetection[]>();
+    return docs.map(toItem);
   }
 
   /**

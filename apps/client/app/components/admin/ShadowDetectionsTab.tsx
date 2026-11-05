@@ -10,6 +10,7 @@ import {
   type AccountCampaignRelationship,
   type ShadowDetectionAction,
   type ShadowDetectionNetwork,
+  type ShadowDetectionPayment,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
   type ShadowDetector,
@@ -43,12 +44,14 @@ import {
   type CampaignGroupRow,
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
+import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
 import { getErrorMessage } from '@client/app/utils/error';
 
 export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
   signupNetworkBurst: 'Signup network burst',
   accountCampaign: 'Account campaign',
   youngAccountSpend: 'Young-account spend',
+  paymentRisk: 'Payment risk',
 };
 
 const RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {
@@ -115,6 +118,57 @@ export const formatNetwork = (network: ShadowDetectionNetwork): string =>
     .filter((part): part is string => !!part)
     .join(' / ');
 
+/** The payment in the Stripe Dashboard it was taken in; test-mode payments live under /test. */
+export const stripePaymentUrl = (payment: Pick<ShadowDetectionPayment, 'paymentIntentId' | 'livemode'>): string =>
+  `https://dashboard.stripe.com${payment.livemode ? '' : '/test'}/payments/${encodeURIComponent(payment.paymentIntentId)}`;
+
+const currencyDecimals = (currency: string): number => {
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+};
+
+export const formatPaymentAmount = (payment: Pick<ShadowDetectionPayment, 'amount' | 'currency'>): string => {
+  if (payment.amount === null || !payment.currency) return 'Unknown amount';
+  const decimals = currencyDecimals(payment.currency);
+  return `${(payment.amount / 10 ** decimals).toFixed(decimals)} ${payment.currency.toUpperCase()}`;
+};
+
+const StripePaymentLink: React.FC<{ payment: ShadowDetectionPayment; testId: string }> = ({ payment, testId }) => (
+  <Typography
+    component="a"
+    href={stripePaymentUrl(payment)}
+    target="_blank"
+    rel="noopener noreferrer"
+    level="body-xs"
+    fontFamily="code"
+    data-testid={testId}
+    sx={{ color: 'admin.link', textDecoration: 'none', overflowWrap: 'anywhere' }}
+  >
+    {payment.paymentIntentId}
+  </Typography>
+);
+
+const PaymentEvidence: React.FC<{ payment: ShadowDetectionPayment }> = ({ payment }) => (
+  <Stack gap={0.25} data-testid="shadow-detection-dialog-payment" sx={{ minWidth: 0 }}>
+    <Typography level="body-xs" sx={muted}>
+      Payment
+    </Typography>
+    <Typography level="body-sm">
+      {`${payment.kind} payment ${payment.outcome}, ${formatPaymentAmount(payment)}`}
+      {payment.riskLevel ? `, Radar risk ${payment.riskLevel}` : ''}
+    </Typography>
+    <StripePaymentLink payment={payment} testId="shadow-detection-dialog-stripe-link" />
+    {!payment.livemode && (
+      <Typography level="body-xs" sx={muted}>
+        Stripe test mode
+      </Typography>
+    )}
+  </Stack>
+);
+
 const UserLink: React.FC<{ userId: string; testId: string }> = ({ userId, testId }) => (
   <Link to="/admin/users/$userId" params={{ userId }} data-testid={testId} style={{ textDecoration: 'none' }}>
     <Typography level="body-xs" fontFamily="code" noWrap sx={{ color: 'admin.link' }}>
@@ -142,7 +196,8 @@ const Actor: React.FC<{ row: ShadowDetectionRow }> = ({ row }) => {
           {formatNetwork(row.network)}
         </Typography>
       )}
-      {row.userIds.length === 0 && !row.network && <Dash />}
+      {row.payment && <StripePaymentLink payment={row.payment} testId={`shadow-detection-stripe-link-${row.id}`} />}
+      {row.userIds.length === 0 && !row.network && !row.payment && <Dash />}
     </Stack>
   );
 };
@@ -370,6 +425,7 @@ const DialogActors: React.FC<{ row: ShadowDetectionRow; now: number }> = ({ row,
           {formatNetwork(row.network)}
         </Typography>
       )}
+      {row.payment && <PaymentEvidence payment={row.payment} />}
     </Stack>
   );
 
@@ -454,6 +510,7 @@ const VerdictDialog: React.FC<VerdictDialogProps> = ({ row, now, onClose, onRowC
         </RadioGroup>
       </FormControl>
       <SignalList row={row} />
+      <ShadowDetectionAssessmentPanel detectionId={row.id} enabled />
       <VerdictHistory row={row} now={now} />
     </ActionDialog>
   );

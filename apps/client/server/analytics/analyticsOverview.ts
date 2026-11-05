@@ -1,8 +1,15 @@
-import { AnalyticsDaily, AnalyticsUserDay, type IAnalyticsDailySignups } from '@bike4mind/database';
+import {
+  AnalyticsDaily,
+  AnalyticsUserDay,
+  type IAnalyticsDailyInternal,
+  type IAnalyticsDailySignups,
+} from '@bike4mind/database';
 import {
   ANALYTICS_MAX_CUSTOM_DAYS,
   ANALYTICS_STALE_AFTER_MS,
+  type ActiveUserCounts,
   type ActiveUsersDay,
+  type AnalyticsAccounts,
   type AnalyticsBucket,
   type AnalyticsOverview,
   type AnalyticsOverviewQuery,
@@ -20,8 +27,10 @@ import {
   classifyCohort,
   collectDayUsage,
   formatDay,
+  internalWindowIds,
   MAU_WINDOW_DAYS,
   shiftDay,
+  unionSize,
   WAU_WINDOW_DAYS,
 } from './analyticsRollup';
 
@@ -110,14 +119,18 @@ export type OverviewDailyRow = {
   requestsByFeature: Record<string, number>;
   requestsByModel: Record<string, number>;
   creditsConsumed: number;
+  internal?: Omit<IAnalyticsDailyInternal, 'userIds'>;
   computedAt: Date;
 };
+
+type ActiveValues = ActiveUserCounts & { requestsBySource: Record<string, number> };
 
 /** Today's numbers, computed live with the rollup's own definitions. */
 export type LiveDay = Omit<OverviewDailyRow, 'day' | 'computedAt'>;
 
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
 const mean = (values: readonly number[]) => (values.length ? sum(values) / values.length : null);
+/** Differs from `cohortSignupCount` (analyticsCohorts.ts), which also counts unclassified signups as legit; keep the two in step. */
 const signupTotal = (signups: IAnalyticsDailySignups, mode: AnalyticsSignupsMode) =>
   mode === 'legit' ? signups.legit : signups.legit + signups.suspected + signups.unclassified;
 
@@ -184,9 +197,38 @@ function buildUsage(
   };
 }
 
-const mondayOf = (day: string) => shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
+export const mondayOf = (day: string) => shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
 const bucketStart = (day: string, bucket: AnalyticsBucket) =>
   bucket === 'day' ? day : bucket === 'week' ? mondayOf(day) : `${day.slice(0, 7)}-01`;
+const counts = ({ dau, wau, mau }: ActiveUserCounts): ActiveUserCounts => ({ dau, wau, mau });
+const mergeCounts = (a: Record<string, number>, b: Record<string, number>) => {
+  const merged = { ...a };
+  for (const [key, value] of Object.entries(b)) merged[key] = (merged[key] ?? 0) + value;
+  return merged;
+};
+
+/** Internal counts that can be trusted: recorded, over a window that has no row from before they were. */
+const usableInternal = (values: LiveDay | undefined) =>
+  values?.internal?.windowComplete ? values.internal : undefined;
+
+/**
+ * The active-user values of a day for the selected accounts. A day's two sides are disjoint, so "all"
+ * DAU is their sum; WAU/MAU use the stored union. Undefined when the side it needs is not usable.
+ */
+function activeValuesFor(values: LiveDay | undefined, accounts: AnalyticsAccounts): ActiveValues | undefined {
+  if (!values) return undefined;
+  if (accounts === 'external') return { ...counts(values), requestsBySource: values.requestsBySource };
+  const internal = usableInternal(values);
+  if (!internal) return undefined;
+  if (accounts === 'internal') return { ...counts(internal), requestsBySource: internal.requestsBySource };
+  return {
+    dau: values.dau + internal.dau,
+    wau: internal.allWau,
+    mau: internal.allMau,
+    requestsBySource: mergeCounts(values.requestsBySource, internal.requestsBySource),
+  };
+}
+
 const nextBucketStart = (start: string, bucket: AnalyticsBucket) => {
   if (bucket === 'day') return shiftDay(start, 1);
   if (bucket === 'week') return shiftDay(start, 7);
@@ -198,12 +240,14 @@ const nextBucketStart = (start: string, bucket: AnalyticsBucket) => {
 export function buildOverview({
   window,
   signupsMode,
+  accounts,
   rows,
   live,
   now,
 }: {
   window: OverviewWindow;
   signupsMode: AnalyticsSignupsMode;
+  accounts: AnalyticsAccounts;
   rows: readonly OverviewDailyRow[];
   live: LiveDay | null;
   now: Date;
@@ -212,6 +256,8 @@ export function buildOverview({
   const byDay = new Map(rows.filter(row => row.day < window.today).map(row => [row.day, row]));
   const valuesFor = (day: string): LiveDay | undefined =>
     day === window.partialDay ? (live ?? undefined) : byDay.get(day);
+  const activeAt = (day: string) => activeValuesFor(valuesFor(day), accounts);
+  const rolledUpActive = (day: string) => activeValuesFor(byDay.get(day), accounts);
 
   const rangeDays = daysBetween(window.from, window.to);
   const completeDays =
@@ -221,39 +267,43 @@ export function buildOverview({
 
   const days: ActiveUsersDay[] = rangeDays.map(day => {
     const values = valuesFor(day);
+    const active = activeAt(day);
+    const internal = usableInternal(values);
     return {
       day,
-      dau: values?.dau ?? null,
-      wau: values?.wau ?? null,
-      mau: values?.mau ?? null,
+      dau: active?.dau ?? null,
+      wau: active?.wau ?? null,
+      mau: active?.mau ?? null,
       partial: day === window.partialDay,
       // shiftBack(partialDay) lands on window.from, inside the current range, so today has no comparison point.
       ...(window.previous
-        ? { previousMau: day === window.partialDay ? null : (byDay.get(shiftBack(day))?.mau ?? null) }
+        ? { previousMau: day === window.partialDay ? null : (rolledUpActive(shiftBack(day))?.mau ?? null) }
         : {}),
+      external: values ? counts(values) : null,
+      internal: internal ? counts(internal) : null,
     };
   });
 
   const sourceTotals = new Map<string, number>();
   const bySource: RequestsBySourceDay[] = rangeDays.map(day => {
-    const values = valuesFor(day);
-    if (!values) return { day, partial: day === window.partialDay, counts: null };
-    const counts = Object.fromEntries(
-      Object.entries(values.requestsBySource).filter(([source]) => !EXCLUDED_SOURCES.has(source))
+    const active = activeAt(day);
+    if (!active) return { day, partial: day === window.partialDay, counts: null };
+    const bySurface = Object.fromEntries(
+      Object.entries(active.requestsBySource).filter(([source]) => !EXCLUDED_SOURCES.has(source))
     );
-    for (const [source, count] of Object.entries(counts)) {
+    for (const [source, count] of Object.entries(bySurface)) {
       sourceTotals.set(source, (sourceTotals.get(source) ?? 0) + count);
     }
-    return { day, partial: day === window.partialDay, counts };
+    return { day, partial: day === window.partialDay, counts: bySurface };
   });
   const sources = [...sourceTotals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([s]) => s);
 
   // MAU at the range end: the last complete day with a row, so a gap at the end does not blank the tile.
-  const mauDay = [...completeDays].reverse().find(day => byDay.has(day));
-  const presentDau = (list: readonly string[]) => list.flatMap(day => byDay.get(day)?.dau ?? []);
+  const mauDay = [...completeDays].reverse().find(day => rolledUpActive(day));
+  const presentDau = (list: readonly string[]) => list.flatMap(day => rolledUpActive(day)?.dau ?? []);
   const mau: AnalyticsStat = {
-    value: mauDay ? (byDay.get(mauDay)?.mau ?? null) : null,
-    previous: window.previous && mauDay ? (byDay.get(shiftBack(mauDay))?.mau ?? null) : null,
+    value: mauDay ? (rolledUpActive(mauDay)?.mau ?? null) : null,
+    previous: window.previous && mauDay ? (rolledUpActive(shiftBack(mauDay))?.mau ?? null) : null,
   };
   const avgDau: AnalyticsStat = {
     value: mean(presentDau(completeDays)),
@@ -304,12 +354,15 @@ export function buildOverview({
   return {
     window,
     signupsMode,
+    accounts,
     lastUpdated: lastUpdated?.toISOString() ?? null,
     // A fully past range is complete history; only a window reaching the latest rollup can be stale.
     stale:
       window.to >= shiftDay(window.today, -1) &&
       (!lastUpdated || now.getTime() - lastUpdated.getTime() > ANALYTICS_STALE_AFTER_MS),
     missingDays: completeDays.filter(day => !byDay.has(day)),
+    internalMissingDays:
+      accounts === 'external' ? [] : rangeDays.filter(day => valuesFor(day) && !usableInternal(valuesFor(day))),
     stats: {
       mau,
       avgDau,
@@ -347,11 +400,13 @@ async function distinctUsersBefore(today: string, windowDays: number): Promise<s
  * Yesterday's active users when its rollup has not run yet (the nightly rollup lands at 04:00 UTC),
  * so today's windows do not drop users seen only yesterday. Empty once the daily row exists.
  */
-async function unrolledYesterdayUsers(today: string): Promise<string[]> {
+async function unrolledYesterdayUsers(today: string): Promise<{ external: string[]; internal: string[] }> {
   const yesterday = shiftDay(today, -1);
-  if (await AnalyticsDaily.exists({ day: yesterday }).maxTimeMS(LIVE_QUERY_DEADLINE_MS)) return [];
+  if (await AnalyticsDaily.exists({ day: yesterday }).maxTimeMS(LIVE_QUERY_DEADLINE_MS)) {
+    return { external: [], internal: [] };
+  }
   const usage = await collectDayUsage(yesterday, { maxTimeMS: LIVE_QUERY_DEADLINE_MS });
-  return [...usage.perUser.keys()];
+  return { external: [...usage.perUser.keys()], internal: usage.internal.userIds };
 }
 
 /** Today so far, with collectDayUsage and classifyCohort so it counts exactly what the nightly rollup will. */
@@ -364,15 +419,34 @@ export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
     unrolledYesterdayUsers(today),
   ]);
   const todayIds = [...usage.perUser.keys()];
+  const internal = await internalWindowIds(
+    today,
+    { day: today, userIds: usage.internal.userIds },
+    { maxTimeMS: LIVE_QUERY_DEADLINE_MS }
+  );
+  // A missing yesterday row adds nothing to internalWindowIds, so its live internal ids are added here.
+  for (const id of yesterdayIds.internal) {
+    internal.week.add(id);
+    internal.month.add(id);
+  }
   return {
     dau: todayIds.length,
-    wau: new Set([...weekIds, ...yesterdayIds, ...todayIds]).size,
-    mau: new Set([...monthIds, ...yesterdayIds, ...todayIds]).size,
+    wau: unionSize(weekIds, yesterdayIds.external, todayIds),
+    mau: unionSize(monthIds, yesterdayIds.external, todayIds),
     signups: cohort.signups,
     requestsBySource: Object.fromEntries(usage.bySource),
     requestsByFeature: Object.fromEntries(usage.byFeature),
     requestsByModel: Object.fromEntries(usage.byModel),
     creditsConsumed: usage.creditsConsumed,
+    internal: {
+      dau: usage.internal.userIds.length,
+      wau: internal.week.size,
+      mau: internal.month.size,
+      allWau: unionSize(weekIds, yesterdayIds.external, todayIds, internal.week),
+      allMau: unionSize(monthIds, yesterdayIds.external, todayIds, internal.month),
+      windowComplete: internal.complete,
+      requestsBySource: Object.fromEntries(usage.internal.bySource),
+    },
   };
 }
 
@@ -384,7 +458,9 @@ export async function getAnalyticsOverview(
   const earliest = window.previous?.from ?? window.from;
   const [rows, live] = await Promise.all([
     AnalyticsDaily.find({ day: { $gte: earliest, $lte: window.to } })
-      .select('day dau wau mau signups requestsBySource requestsByFeature requestsByModel creditsConsumed computedAt')
+      .select(
+        'day dau wau mau signups requestsBySource requestsByFeature requestsByModel creditsConsumed internal.dau internal.wau internal.mau internal.allWau internal.allMau internal.windowComplete internal.requestsBySource computedAt'
+      )
       .maxTimeMS(QUERY_DEADLINE_MS)
       .lean<OverviewDailyRow[]>(),
     // A failed live slice leaves today as a gap, like a missing rollup day, instead of failing the page.
@@ -395,5 +471,5 @@ export async function getAnalyticsOverview(
         })
       : Promise.resolve(null),
   ]);
-  return buildOverview({ window, signupsMode: query.signups, rows, live, now });
+  return buildOverview({ window, signupsMode: query.signups, accounts: query.accounts, rows, live, now });
 }

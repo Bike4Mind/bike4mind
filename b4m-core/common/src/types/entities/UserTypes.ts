@@ -323,6 +323,67 @@ export interface IUserRiskSignal {
   at: Date;
 }
 
+export const ACCOUNT_DELETION_SOURCES = ['self'] as const;
+export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
+
+/** Days between a deletion request and the purge; the user can cancel until then. */
+export const ACCOUNT_DELETION_GRACE_DAYS = 14;
+
+export interface AccountDeletionRetainedRecord {
+  category: string;
+  reason: string;
+  retention: string;
+}
+
+// The full list is owned by the personal-data inventory and must stay in sync with the privacy policy.
+/** What survives a completed deletion, as listed in the deletion-complete email. */
+export const ACCOUNT_DELETION_RETAINED_RECORDS: readonly AccountDeletionRetainedRecord[] = [
+  { category: 'Account security audit log', reason: 'Account security', retention: '12 months' },
+  { category: 'API key security audit log', reason: 'Account security', retention: 'Up to 90 days' },
+  {
+    category: "Hidden annotations on other owners' published pages",
+    reason: 'Existing annotation audit retention; annotations are hidden immediately',
+    retention: '90 days after deletion',
+  },
+  { category: 'Pseudonymized performance telemetry', reason: 'Service reliability', retention: 'Up to 90 days' },
+  {
+    category: 'Organization-owned content and independently owned copies',
+    reason: "Deleting your account does not delete another owner's data",
+    retention: "Their owners' existing retention periods",
+  },
+  {
+    category: 'Files held by moderation, including their contents and related records',
+    reason: 'Existing moderation restrictions preserve these files and their evidence',
+    retention: 'While the moderation restriction remains in place',
+  },
+  {
+    category: 'Minimal deletion markers',
+    reason: 'Preventing removed data from reappearing; the markers contain no deleted memory content',
+    retention: 'Indefinitely',
+  },
+];
+
+/** Error `code` (status 403) for every request a deletion-pending account may not make. */
+export const ACCOUNT_DELETION_PENDING_CODE = 'ACCOUNT_DELETION_PENDING';
+
+/** Error `code` (status 409) when a deletion request is refused because the user owns an organization. */
+export const ACCOUNT_DELETION_ORG_OWNER_CODE = 'ACCOUNT_DELETION_ORG_OWNER';
+
+/**
+ * A pending account deletion. While set the account is locked down to the cancel screen, and the
+ * purge job deletes it once `scheduledFor` passes. Cleared on cancel. Distinct from `deletedAt`,
+ * which existing queries read as "already deleted".
+ */
+export interface IUserDeletion {
+  requestedAt: Date;
+  scheduledFor: Date;
+  source: AccountDeletionSource;
+  /** Set once irreversible cleanup starts; cancellation is no longer allowed. */
+  purgeStartedAt?: Date;
+  purgeLeaseId?: string;
+  purgeLeaseExpiresAt?: Date;
+}
+
 export interface IUser extends ICreditHolder {
   id: string;
   username: string;
@@ -358,6 +419,8 @@ export interface IUser extends ICreditHolder {
    * `defaultFreeCredits` instead.
    */
   pendingCreditGrant?: number | null;
+  /** GrantPackage this account redeemed at signup; its grant claims the inbox like the default grant. */
+  grantPackageId?: string | null;
   /**
    * Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under. Unset
    * until a grant is claimed; unique across users, so aliases of one inbox share a single grant.
@@ -392,6 +455,10 @@ export interface IUser extends ICreditHolder {
    * Blocks chat completions and API key access until resolved by an admin.
    */
   disputePending?: boolean;
+  /** Set while a requested deletion is in its grace period (see IUserDeletion). */
+  deletion?: IUserDeletion | null;
+  /** Server-side lease preventing a data export from racing permanent account cleanup. */
+  accountDataExportLease?: { id: string; expiresAt: Date };
   /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.
@@ -796,9 +863,23 @@ export interface IUserAcquisitionTouch {
   content?: string;
 }
 
+/**
+ * The verified hop a signup followed (apps/client server/analytics/hops.ts): the product whose own
+ * server sent the visitor here, as that server proved with its ingest key, not as the browser
+ * claimed. Written only when the hop was redeemed in the same visit as the signup, with consent.
+ */
+export interface IUserVerifiedTouch {
+  /** The Overwatch product whose ingest key minted the hop. */
+  srcProductId: string;
+  hopId: string;
+  redeemedAt: Date;
+}
+
 export interface IUserAcquisition {
   firstTouch?: IUserAcquisitionTouch;
   lastTouch?: IUserAcquisitionTouch;
+  /** Absent for a signup that followed no verified hop. */
+  verifiedTouch?: IUserVerifiedTouch;
   /** How the account was created (`otc`, `google`, `github`, ...). */
   signupMethod: string;
   capturedAt: Date;

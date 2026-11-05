@@ -3,8 +3,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ReinstateDialog, SuspendDialog } from './SuspendDialog';
 import { LiveProfile, ProfileTestWrapper, buildProfile } from '../profileTestUtils';
 
-const mocks = vi.hoisted(() => ({ update: vi.fn() }));
+const mocks = vi.hoisted(() => ({ update: vi.fn(), toastWarning: vi.fn() }));
 
+vi.mock('sonner', () => ({ toast: { warning: mocks.toastWarning, error: vi.fn(), success: vi.fn() } }));
 vi.mock('./useAdminUserUpdate', () => ({ useAdminUserUpdate: () => mocks.update }));
 
 const setup = (credits = 500) => {
@@ -24,6 +25,31 @@ describe('SuspendDialog', () => {
     mocks.update.mockResolvedValue(undefined);
   });
 
+  it('warns when the suspend could not cancel every subscription, and stays quiet otherwise', async () => {
+    mocks.update.mockResolvedValue({
+      subscriptionCancellation: {
+        canceled: ['sub_a'],
+        failed: [{ customerId: 'cus_1', subscriptionId: 'sub_b', reason: 'stripe down' }],
+      },
+    });
+    const { onClose } = setup();
+    pickReason();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.toastWarning).toHaveBeenCalledWith(
+      'Could not cancel 1 Stripe subscription(s) of this account. Cancel them in Stripe.'
+    );
+  });
+
+  it('shows no warning when every subscription was canceled', async () => {
+    mocks.update.mockResolvedValue({ subscriptionCancellation: { canceled: ['sub_a'], failed: [] } });
+    const { onClose } = setup();
+    pickReason();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.toastWarning).not.toHaveBeenCalled();
+  });
+
   it('names the user and blocks until a reason is given', () => {
     setup();
 
@@ -36,6 +62,7 @@ describe('SuspendDialog', () => {
 
   it('sends only isBanned: true when credits are left alone', async () => {
     const { onClose } = setup();
+    expect(screen.getByTestId('suspend-dialog')).toHaveTextContent('stay canceled if you undo or reinstate');
     pickReason();
 
     fireEvent.click(confirmButton());
@@ -47,7 +74,9 @@ describe('SuspendDialog', () => {
       })
     );
     expect(onClose).toHaveBeenCalled();
-    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent('Account suspended');
+    expect(await screen.findByTestId('undo-toast-message')).toHaveTextContent(
+      'Account suspended. Undo does not restore canceled subscriptions.'
+    );
   });
 
   it('also zeroes credits with the reason when the checkbox is ticked', async () => {

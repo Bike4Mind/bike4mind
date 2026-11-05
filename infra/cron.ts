@@ -4,6 +4,7 @@ import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT, runsScheduledJobs } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
+import { eventBus } from './bus';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
@@ -20,14 +21,21 @@ import {
   riskEvidenceQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
-import { appUrlForLambdaEnv } from './router';
-import { fabFileBucket, generatedImagesBucket } from './buckets';
+import { appUrlForLambdaEnv, router, routerDistributionId } from './router';
+import {
+  fabFileBucket,
+  generatedImagesBucket,
+  appFilesBucket,
+  historyImportBucket,
+  publishedArtifactsBucket,
+} from './buckets';
 import { websocketApi } from './websocket';
 import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { alarmSlackMentionFunctionArgs } from './alarmSlackMention';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import './businessMetricAlerts';
 import './imageModerationReviewSweep';
 
@@ -236,6 +244,72 @@ if (signupGrantHeldRelease && signupGrantHeldReleaseDeadLetter) {
   signupGrantHeldReleaseDeadLetter.allowRules([$util.output(signupGrantHeldRelease)]);
 }
 
+// Account Deletion Sweep - hard-deletes accounts whose self-serve deletion grace period has passed.
+// Idempotent per account, so the next daily run is the retry; a run with failures throws into the DLQ.
+// Self-host twin: apps/workers/src/selfhost/accountDeletionSweep.ts.
+const accountDeletionSweep =
+  runsScheduledJobs && accountDeletionSweepDeadLetter
+    ? new sst.aws.Cron('accountDeletionSweep', {
+        schedule: 'cron(0 5 * * ? *)', // Daily at 5am UTC
+        function: {
+          vpc: lambdaVpc,
+          handler: 'apps/workers/src/cron/accountDeletionSweep.handler',
+          runtime: 'nodejs24.x',
+          timeout: '10 minutes',
+          retries: 0,
+          link: [
+            ...allSecrets,
+            eventBus,
+            fabFileBucket,
+            generatedImagesBucket,
+            appFilesBucket,
+            historyImportBucket,
+            publishedArtifactsBucket,
+            routerDistributionId,
+          ],
+          environment: {
+            ...DEFAULT_LAMBDA_ENVIRONMENT,
+          },
+          permissions: [
+            accountDeletionSweepDeadLetter.sendPermission,
+            {
+              actions: ['s3:ListBucketVersions', 's3:DeleteObjectVersion'],
+              resources: [
+                fabFileBucket.arn,
+                $interpolate`${fabFileBucket.arn}/*`,
+                generatedImagesBucket.arn,
+                $interpolate`${generatedImagesBucket.arn}/*`,
+                appFilesBucket.arn,
+                $interpolate`${appFilesBucket.arn}/*`,
+                historyImportBucket.arn,
+                $interpolate`${historyImportBucket.arn}/*`,
+                publishedArtifactsBucket.arn,
+                $interpolate`${publishedArtifactsBucket.arn}/*`,
+              ],
+            },
+            {
+              actions: ['cloudfront:CreateInvalidation'],
+              resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
+            },
+          ],
+          transform: accountDeletionSweepDeadLetter.functionTarget,
+          logging: {
+            retention: '1 month',
+          },
+        },
+        transform: {
+          target: {
+            ...accountDeletionSweepDeadLetter.ruleTarget.target,
+            input: undefined,
+          },
+        },
+      })
+    : undefined;
+
+if (accountDeletionSweep && accountDeletionSweepDeadLetter) {
+  accountDeletionSweepDeadLetter.allowRules([$util.output(accountDeletionSweep)]);
+}
+
 const secretRotationNotifierCron = runsScheduledJobs
   ? new sst.aws.Cron('secretRotationNotifier', {
       // Daily check at 9am UTC (4am EST)
@@ -320,6 +394,27 @@ const usagePatternSignals = runsScheduledJobs
       function: {
         vpc: lambdaVpc,
         handler: 'apps/workers/src/cron/usagePatternSignals.handler',
+        runtime: 'nodejs24.x',
+        timeout: '10 minutes',
+        link: [...allSecrets],
+        environment: {
+          ...DEFAULT_LAMBDA_ENVIRONMENT,
+        },
+        logging: {
+          retention: '1 week',
+        },
+      },
+    })
+  : undefined;
+
+// Advisory abuse assessments of unreviewed shadow detections; a no-op until an operator enables
+// abuseAssessmentEnabled and the sweep in abuseAssessmentConfig.
+const abuseAssessmentSweep = runsScheduledJobs
+  ? new sst.aws.Cron('abuseAssessmentSweep', {
+      schedule: 'rate(1 hour)',
+      function: {
+        vpc: lambdaVpc,
+        handler: 'apps/workers/src/cron/abuseAssessmentSweep.handler',
         runtime: 'nodejs24.x',
         timeout: '10 minutes',
         link: [...allSecrets],
@@ -1480,6 +1575,7 @@ const lakeInconsistencySweepCron = runsScheduledJobs
   : undefined;
 
 export {
+  accountDeletionSweep,
   adminAuditAlertsCron,
   oauthAbuseAutoBlockCron,
   signupGrantHeldRelease,
@@ -1496,6 +1592,7 @@ export {
   scheduleTaskCron,
   apiKeyBaselineCalculation,
   usagePatternSignals,
+  abuseAssessmentSweep,
   agentProactiveMessageCron,
   emailCampaignSchedulerCron,
   liveopsTriageDispatcherCron,

@@ -29,6 +29,7 @@ export const buildRow = (overrides: Partial<AdminSubscriptionRow> = {}): AdminSu
   subscriptionId: 'admin_grant_1',
   ownerType: 'User',
   ownerId: OWNER_ID,
+  ownerAlert: null,
   owner: {
     kind: 'User',
     id: OWNER_ID,
@@ -68,6 +69,7 @@ export const buildDetail = (
     otherSubscriptions: [],
     seats: null,
     actingUserId: OWNER_ID,
+    stripe: null,
     ...rest,
   };
 };

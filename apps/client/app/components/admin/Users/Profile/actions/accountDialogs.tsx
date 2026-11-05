@@ -11,6 +11,7 @@ import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useSendSystemMessage } from '@client/app/hooks/data/inbox';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, undoAdminReason, useUndoToast } from '../../../shared';
 import { useAdminUserUpdate, adminUpdateErrorMessage } from './useAdminUserUpdate';
+import { warnSubscriptionCancelFailures } from './warnSubscriptionCancelFailures';
 import type { ProfileDialogProps } from './profileActions';
 import { accountStatus, displayName } from '../userProfileModel';
 
@@ -350,8 +351,9 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
   const deleteUser = useDeleteUser();
 
   const handleConfirm = async (reason: string) => {
-    await deleteUser.mutateAsync({ id: user.id, reason });
+    const response = await deleteUser.mutateAsync({ id: user.id, reason });
     onClose();
+    warnSubscriptionCancelFailures(response);
     onDeleted();
   };
 
@@ -360,7 +362,7 @@ export const DeleteUserDialog: React.FC<ProfileDialogProps & { onDeleted: () => 
       open
       onClose={onClose}
       title={`Delete ${displayName(user)}`}
-      description="Permanently removes this user and all their data. There is no undo; suspend them instead if you might need to restore access."
+      description="Permanently deletes this user's account. Their live Stripe subscriptions, including those of organizations they own, are canceled with no refund. There is no undo; suspend them instead if you might need to restore access."
       reasonPresets={ADMIN_REASON_PRESETS.userDeletion}
       typedConfirm={
         user.email ? { expected: user.email, noun: 'email address' } : { expected: user.id, noun: 'user ID' }

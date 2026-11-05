@@ -1,7 +1,8 @@
 import mongoose, { Schema } from 'mongoose';
 
 export type CreditRewardSource = 'gear' | 'referral_first_answer';
-export type HeldCreditRewardStatus = 'held' | 'paid' | 'void';
+/** `paused` is a blocked account's reward: out of the queue, its heldAt kept so unblock restores its place. */
+export type HeldCreditRewardStatus = 'held' | 'paid' | 'void' | 'paused';
 
 export type HeldCreditReward = {
   id: string;
@@ -30,13 +31,15 @@ const heldCreditRewardSchema = new Schema<HeldCreditRewardDoc>(
     description: { type: String, required: true },
     metadata: { type: Schema.Types.Mixed },
     heldAt: { type: Date, required: true },
-    status: { type: String, enum: ['held', 'paid', 'void'], required: true, default: 'held' },
+    status: { type: String, enum: ['held', 'paid', 'void', 'paused'], required: true, default: 'held' },
     paidAt: { type: Date, default: null },
   },
   { versionKey: false, timestamps: true }
 );
 
 heldCreditRewardSchema.index({ status: 1, heldAt: 1, _id: 1 });
+// pauseForUser / resumeForUser filter on one user's rows by status.
+heldCreditRewardSchema.index({ userId: 1, status: 1 });
 
 export const HeldCreditRewardModel =
   (mongoose.models.HeldCreditReward as mongoose.Model<HeldCreditRewardDoc>) ??
@@ -81,6 +84,30 @@ export const heldCreditRewardRepository = {
       .limit(limit)
       .lean();
     return rows.map(toReward);
+  },
+  /** Takes a user's queued rewards out of the queue; every queue query reads `held` only, so none pays or blocks the head. */
+  async pauseForUser(userId: string): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateMany(
+      { userId, status: 'held' },
+      { $set: { status: 'paused' } }
+    );
+    return modifiedCount;
+  },
+  /** Takes one queued reward out of the queue, leaving the user's other rows as they are. */
+  async pauseOne(transactionId: string): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateOne(
+      { transactionId, status: 'held' },
+      { $set: { status: 'paused' } }
+    );
+    return modifiedCount;
+  },
+  /** Puts a user's paused rewards back in the queue at their original place. */
+  async resumeForUser(userId: string): Promise<number> {
+    const { modifiedCount } = await HeldCreditRewardModel.updateMany(
+      { userId, status: 'paused' },
+      { $set: { status: 'held' } }
+    );
+    return modifiedCount;
   },
   async settle(transactionId: string, status: 'paid' | 'void', at: Date = new Date()) {
     await HeldCreditRewardModel.updateOne(

@@ -1,5 +1,6 @@
 import {
   THROTTLE_SOURCES,
+  ACCOUNT_DELETION_SOURCES,
   THROTTLE_TIERS,
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
@@ -20,6 +21,7 @@ import {
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
+  riskEvidenceSummarySchema,
   type RiskEvidenceTrigger,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
@@ -285,6 +287,18 @@ const UserThrottleSchema = new Schema(
     source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
     changedAt: { type: Date, required: true },
     changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserDeletionSchema = new Schema(
+  {
+    requestedAt: { type: Date, required: true },
+    scheduledFor: { type: Date, required: true },
+    source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    purgeStartedAt: { type: Date, required: false },
+    purgeLeaseId: { type: String, required: false },
+    purgeLeaseExpiresAt: { type: Date, required: false },
   },
   { _id: false }
 );
@@ -654,7 +668,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     return this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email username lastActiveAt isOnline photoUrl');
+      .select('name email emailVerified username lastActiveAt isOnline photoUrl');
   }
 
   /**
@@ -701,6 +715,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .select('email')
       .lean({ virtuals: true });
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
+  }
+
+  /** Accounts whose self-serve deletion grace period ended at or before `now`, oldest first; served by user_deletion_scheduledFor. */
+  async findDeletionDueUserIds(now: Date, limit: number): Promise<string[]> {
+    const docs = await this.model
+      // $type repeats the partial index's filter, without which the planner cannot use it.
+      .find({ 'deletion.scheduledFor': { $type: 'date', $lte: now } })
+      .select('_id')
+      .sort({ 'deletion.scheduledFor': 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
   }
 
   /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
@@ -1078,6 +1104,24 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .exec();
   }
 
+  /**
+   * The stored evidence summary and creation time of each id, and nothing else from the account:
+   * advisory abuse assessments read only this. Unparseable or absent summaries come back null.
+   */
+  async findRiskEvidenceSummaries(
+    ids: string[]
+  ): Promise<{ id: string; createdAt: Date | null; summary: RiskEvidenceSummary | null }[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } }, { createdAt: 1, 'riskEvidence.summary': 1 })
+      .lean<{ _id: mongoose.Types.ObjectId; createdAt?: Date; riskEvidence?: { summary?: unknown } }[]>();
+    return docs.map(doc => {
+      const parsed = riskEvidenceSummarySchema.safeParse(doc.riskEvidence?.summary);
+      return { id: doc._id.toString(), createdAt: doc.createdAt ?? null, summary: parsed.success ? parsed.data : null };
+    });
+  }
+
   async riskEvidenceCoverage(since: Date): Promise<RiskEvidenceCoverage> {
     const isType = (path: string, type: string) => ({ $eq: [{ $type: path }, type] });
     const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
@@ -1136,10 +1180,21 @@ const AcquisitionTouchSchema = new Schema(
   { _id: false }
 );
 
+const VerifiedTouchSchema = new Schema(
+  {
+    srcProductId: { type: String, required: true },
+    hopId: { type: String, required: true },
+    redeemedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const UserAcquisitionSchema = new Schema(
   {
     firstTouch: { type: AcquisitionTouchSchema, required: false },
     lastTouch: { type: AcquisitionTouchSchema, required: false },
+    // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
+    verifiedTouch: { type: VerifiedTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },
@@ -1221,6 +1276,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    grantPackageId: { type: String, default: null },
     // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
@@ -1266,6 +1322,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
             ),
             default: undefined,
           },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1284,6 +1344,16 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     throttle: { type: UserThrottleSchema, required: false, default: undefined },
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
+    deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountDataExportLease: {
+      type: new Schema(
+        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
@@ -1636,8 +1706,8 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
-// Serves the per-organization org_invite unlock cap (apps/client/server/credits/orgInviteUnlock.ts).
-// Sparse: only accounts an org invite unlocked carry the field. Explicit name so the migration
+// Serves the per-organization lookup of accounts an org invite unlocked.
+// Sparse: only those accounts carry the field. Explicit name so the migration
 // 20260921235968 and autoIndex (mongo.ts) agree.
 UserSchema.index({ 'signupGrant.unlockedOrgId': 1 }, { sparse: true, name: 'signupGrant_unlockedOrgId' });
 UserSchema.index({ createdAt: 1 });
@@ -1684,6 +1754,11 @@ UserSchema.index(
 );
 // Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
 UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
+// Serves the account deletion purge job's scan for grace periods that have ended.
+UserSchema.index(
+  { 'deletion.scheduledFor': 1 },
+  { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

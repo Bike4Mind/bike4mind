@@ -12,6 +12,7 @@ import { evaluateSpend } from './spendMonitor/evaluate';
 import { defaultResolveScopeDeps } from './spendMonitor/resolveScope';
 import type { SpendThresholds } from './spendMonitor/rules';
 import { createSpendPost } from './spendMonitor/slackPost';
+import { parseSpendTrustConfig, type SpendTrustConfig } from './spendMonitor/trust';
 
 const scheduledEventSchema = z.object({ time: z.iso.datetime() });
 
@@ -23,7 +24,9 @@ type ThresholdKey =
   | 'spendMonitorPlatformCostFloorUsd'
   | 'spendMonitorAccountSpikeRatio'
   | 'spendMonitorAccountSpikeFloorCredits'
-  | 'spendMonitorAccountCeilingCredits';
+  | 'spendMonitorAccountCeilingCredits'
+  | 'spendMonitorTrustedAccountSpikeFloorCredits'
+  | 'spendMonitorTrustedAccountCeilingCredits';
 
 function readThresholds(settings: SettingsMap): SpendThresholds {
   const read = (key: ThresholdKey): number => {
@@ -39,7 +42,16 @@ function readThresholds(settings: SettingsMap): SpendThresholds {
     accountSpikeRatio: read('spendMonitorAccountSpikeRatio'),
     accountSpikeFloorCredits: read('spendMonitorAccountSpikeFloorCredits'),
     accountCeilingCredits: read('spendMonitorAccountCeilingCredits'),
+    trustedAccountSpikeFloorCredits: read('spendMonitorTrustedAccountSpikeFloorCredits'),
+    trustedAccountCeilingCredits: read('spendMonitorTrustedAccountCeilingCredits'),
   };
+}
+
+function readTrust(settings: SettingsMap): SpendTrustConfig {
+  return parseSpendTrustConfig(
+    getSettingsValue('spendMonitorTrustedEmailDomains', settings) ?? '',
+    getSettingsValue('spendMonitorTrustedAccountIds', settings) ?? ''
+  );
 }
 
 export async function handler(event: unknown): Promise<{ status: 'ok' | 'disabled'; rolled: number }> {
@@ -87,7 +99,8 @@ export async function handler(event: unknown): Promise<{ status: 'ok' | 'disable
       },
       logger,
     },
-    readThresholds(settings)
+    readThresholds(settings),
+    readTrust(settings)
   );
   logger.log('spend-monitor-evaluated', { breaches, posted });
   return { status: 'ok', rolled: buckets.length };

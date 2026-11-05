@@ -37,6 +37,7 @@ export interface CreateInviteFormData {
   tags?: string[];
   startingCredits?: number;
   startingStorage?: number;
+  grantPackageId?: string;
 }
 
 export interface FormErrors {

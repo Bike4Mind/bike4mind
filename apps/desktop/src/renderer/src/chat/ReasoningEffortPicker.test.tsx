@@ -54,7 +54,14 @@ describe('ReasoningEffortPicker', () => {
     expect(on).toContain('Thinking: On');
     // The button's state class, not the word: Joy's inlined CSS mentions disabled on every control.
     expect(on).not.toMatch(/<button[^>]*Mui-disabled/);
+    expect(markup('qwen3:8b', [LOCAL_THINKER], 'none')).toContain('Thinking: Off');
     expect(markup('qwen3:8b', [LOCAL_THINKER], 'minimal')).toContain('Thinking: Off');
+  });
+
+  it('shows an older Minimal as On where it was an effort the server ignored, as the request does', () => {
+    const learned: ChatModelOption = { ...LOCAL_THINKER, minimalThinks: true };
+    expect(markup('qwen3:8b', [learned], 'minimal')).toContain('Thinking: On');
+    expect(markup('qwen3:8b', [learned], 'none')).toContain('Thinking: Off');
   });
 
   it('reads any effort but Off as thinking On, as the request does', () => {
@@ -63,5 +70,70 @@ describe('ReasoningEffortPicker', () => {
 
   it('keeps a model the catalog never stated a flag for usable', () => {
     expect(markup('some-local-ollama', [{ id: 'some-local-ollama', name: 'Local' }])).toContain('Effort: High');
+  });
+
+  it('draws nothing for a local model that cannot think', () => {
+    const plain: ChatModelOption = {
+      id: 'local:ollama:llama3.2',
+      name: 'llama3.2',
+      supportsReasoningEffort: false,
+      controls: {},
+    };
+    expect(markup(plain.id, [plain])).toBe('');
+  });
+
+  it('draws nothing for an Ollama model not yet inspected, whose controls list no effort', () => {
+    const uninspected: ChatModelOption = {
+      id: 'local:ollama:qwen3:8b',
+      name: 'qwen3:8b',
+      backend: 'ollama',
+      controls: { temperature: { min: 0, max: 2, step: 0.05, scope: 'request' } },
+    };
+    expect(markup(uninspected.id, [uninspected])).toBe('');
+  });
+
+  it('disables itself on a hosted model whose controls list no effort, whatever its flag says', () => {
+    const budget: ChatModelOption = {
+      id: 'claude-opus-4-1',
+      name: 'Claude Opus 4.1',
+      supportsReasoningEffort: true,
+      controls: {},
+    };
+    expect(markup(budget.id, [budget])).toContain('Effort: n/a');
+  });
+
+  it('points a model that thinks with a budget to the budget under Params', () => {
+    const budget: ChatModelOption = {
+      id: 'claude-opus-4-1',
+      name: 'Claude Opus 4.1',
+      controls: { thinkingBudgetTokens: { min: 1024, max: 31_000, step: 1024, scope: 'request' } },
+    };
+    expect(markup(budget.id, [budget])).toContain(
+      'thinks with a token budget instead of an effort. Set it under Params.'
+    );
+  });
+
+  it('shows a stored level the model does not list as the nearest level it sends instead', () => {
+    const listed: ChatModelOption = {
+      id: 'gpt-5',
+      name: 'GPT-5',
+      supportsReasoningEffort: true,
+      controls: { effort: { levels: ['low', 'medium', 'high'], scope: 'request' } },
+    };
+    expect(markup('gpt-5', [listed], 'minimal')).toContain('Effort: Low');
+    expect(markup('gpt-5', [listed], 'xhigh')).toContain('Effort: High');
+    expect(markup('gpt-5', [listed], 'default')).toContain('Effort: Default');
+  });
+
+  it('shows a stored Off on a local model with think levels as the lowest level it runs at', () => {
+    const gptOss: ChatModelOption = {
+      id: 'local:ollama:gpt-oss:20b',
+      name: 'gpt-oss:20b',
+      supportsReasoningEffort: true,
+      thinkingToggle: true,
+      controls: { effort: { levels: ['low', 'medium', 'high'], scope: 'request' } },
+    };
+    expect(markup(gptOss.id, [gptOss], 'minimal')).toContain('Effort: Low');
+    expect(markup(gptOss.id, [gptOss], 'medium')).toContain('Effort: Medium');
   });
 });

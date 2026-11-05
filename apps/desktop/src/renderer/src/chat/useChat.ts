@@ -18,6 +18,7 @@ import type {
 } from '@shared/chat';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
+import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
 import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
@@ -409,7 +410,8 @@ export function useModelCatalog(local = false): ModelCatalogController {
 
   // A model pulled or removed on the Models screen changes the local half of the list.
   useEffect(() => window.b4m.models.onInstalledChanged(() => void load(true)), [load]);
-  // Main already dropped its device-side cache, so an unforced read lists servers again but keeps the hosted half.
+  // Main already dropped its device-side cache or rebuilt the hosted one with late effort levels, so an unforced
+  // read picks up the change and keeps the hosted half.
   useEffect(() => window.b4m.chat.onModelsChanged(() => void load(false, true)), [load]);
 
   const reload = useCallback(() => forcedLoad.current ?? load(true), [load]);
@@ -503,6 +505,11 @@ export interface ConversationController {
   /** How long the server keeps this conversation's prompt cache. Sent only on a model that takes the hour. */
   setPromptCacheTtl: (ttl: PromptCacheTtl) => Promise<void>;
   /**
+   * Replace this conversation's sampling and output overrides; `{}` returns every one to the model
+   * default. False, with a notice, when they were not saved.
+   */
+  setGeneration: (generation: GenerationSettings) => Promise<boolean>;
+  /**
    * Set how much this conversation may do without asking. Driven by the composer pill, from a
    * click, and from nothing else: this is the only path to the mode in the renderer.
    */
@@ -581,6 +588,8 @@ export function useConversation(
   const transcriptVersion = useRef(0);
   const workspaceVersion = useRef(0);
   const historyVersion = useRef(0);
+  // Each params save replaces the whole set, so only a chat's latest answer may land.
+  const generationVersions = useRef(new Map<string, number>());
 
   useEffect(() => {
     setSendError(null);
@@ -1131,32 +1140,63 @@ export function useConversation(
 
   const clearReturned = useCallback(() => setReturned(null), []);
 
-  const rename = useCallback(
-    async (title: string) => {
+  // A save resolves after the user may have moved to another chat: the list always takes the
+  // result, the open chat only when it is still the one that was saved.
+  const saveSetting = useCallback(
+    async (
+      what: string,
+      save: (id: string) => Promise<ChatSessionSummary | null>,
+      apply: (updated: ChatSessionSummary) => Partial<ChatSession>,
+      clearsNotice = false
+    ) => {
       if (!sessionId) return;
-      const updated = await window.b4m.chat.renameSession(sessionId, title);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, title: updated.title } : current));
-      onSummaryChanged(updated);
+      try {
+        const updated = await save(sessionId);
+        if (!updated) return;
+        if (clearsNotice && activeSessionId.current === sessionId) setNotice(null);
+        setSession(current => (current?.id === sessionId ? { ...current, ...apply(updated) } : current));
+        onSummaryChanged(updated);
+      } catch (error) {
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not save ${what}. ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     },
     [sessionId, onSummaryChanged]
   );
 
+  const rename = useCallback(
+    (title: string) =>
+      saveSetting(
+        'the title',
+        id => window.b4m.chat.renameSession(id, title),
+        updated => ({ title: updated.title })
+      ),
+    [sessionId, saveSetting]
+  );
+
   const setModel = useCallback(
-    async (model: string) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionModel(sessionId, model);
-      if (!updated) return;
-      setNotice(null);
-      setSession(current => (current ? { ...current, model: updated.model } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+    (model: string) =>
+      saveSetting(
+        'the model',
+        id => window.b4m.chat.setSessionModel(id, model),
+        updated => ({ model: updated.model }),
+        true
+      ),
+    [sessionId, saveSetting]
   );
 
   const settleLocalModel = useCallback(async () => {
     if (!sessionId) return;
-    const settled = await window.b4m.chat.settleLocalModel(sessionId);
+    let settled: Awaited<ReturnType<typeof window.b4m.chat.settleLocalModel>>;
+    try {
+      settled = await window.b4m.chat.settleLocalModel(sessionId);
+    } catch (error) {
+      if (activeSessionId.current === sessionId) {
+        setNotice(`Could not settle the local model. ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
     if (!settled || activeSessionId.current !== sessionId) return;
     if (settled.notice) setNotice(settled.notice);
     setSession(current => (current?.id === sessionId ? { ...current, model: settled.session.model } : current));
@@ -1175,43 +1215,72 @@ export function useConversation(
         );
         onSummaryChanged(updated);
       } catch (error) {
-        setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     },
     [sessionId, session?.id, onSummaryChanged]
   );
 
   const setReasoningEffort = useCallback(
-    async (effort: ReasoningEffortSetting) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionReasoningEffort(sessionId, effort);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, reasoningEffort: updated.reasoningEffort } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+    (effort: ReasoningEffortSetting) =>
+      saveSetting(
+        'the reasoning effort',
+        id => window.b4m.chat.setSessionReasoningEffort(id, effort),
+        updated => ({ reasoningEffort: updated.reasoningEffort })
+      ),
+    [sessionId, saveSetting]
   );
 
   const setPromptCacheTtl = useCallback(
-    async (ttl: PromptCacheTtl) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setSessionPromptCacheTtl(sessionId, ttl);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, promptCacheTtl: updated.promptCacheTtl } : current));
-      onSummaryChanged(updated);
+    (ttl: PromptCacheTtl) =>
+      saveSetting(
+        'the prompt cache setting',
+        id => window.b4m.chat.setSessionPromptCacheTtl(id, ttl),
+        updated => ({ promptCacheTtl: updated.promptCacheTtl })
+      ),
+    [sessionId, saveSetting]
+  );
+
+  const setGeneration = useCallback(
+    async (generation: GenerationSettings): Promise<boolean> => {
+      if (!sessionId || session?.id !== sessionId) return false;
+      const versions = generationVersions.current;
+      const version = (versions.get(sessionId) ?? 0) + 1;
+      versions.set(sessionId, version);
+      const latest = () => versions.get(sessionId) === version;
+      try {
+        const updated = await window.b4m.chat.setSessionGeneration(sessionId, generation);
+        if (!updated) throw new Error('The conversation could not be found.');
+        if (!latest()) return true;
+        setSession(current => (current?.id === sessionId ? { ...current, generation: updated.generation } : current));
+        onSummaryChanged(updated);
+        return true;
+      } catch (error) {
+        if (!latest()) return false;
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
+        }
+        // An older save skipped as stale may still have landed, so show what main holds now.
+        const stored = await window.b4m.chat.getSession(sessionId).catch(() => null);
+        if (stored && latest()) {
+          setSession(current => (current?.id === sessionId ? { ...current, generation: stored.generation } : current));
+        }
+        return false;
+      }
     },
-    [sessionId, onSummaryChanged]
+    [sessionId, session?.id, onSummaryChanged]
   );
 
   const setApprovalMode = useCallback(
-    async (mode: ChatApprovalMode) => {
-      if (!sessionId) return;
-      const updated = await window.b4m.chat.setApprovalMode(sessionId, mode);
-      if (!updated) return;
-      setSession(current => (current ? { ...current, approvalMode: updated.approvalMode } : current));
-      onSummaryChanged(updated);
-    },
-    [sessionId, onSummaryChanged]
+    (mode: ChatApprovalMode) =>
+      saveSetting(
+        'the approval mode',
+        id => window.b4m.chat.setApprovalMode(id, mode),
+        updated => ({ approvalMode: updated.approvalMode })
+      ),
+    [sessionId, saveSetting]
   );
 
   const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
@@ -1389,6 +1458,7 @@ export function useConversation(
     settleLocalModel,
     setReasoningEffort,
     setPromptCacheTtl,
+    setGeneration,
     setApprovalMode,
     project,
     addContextDirectoryTo,

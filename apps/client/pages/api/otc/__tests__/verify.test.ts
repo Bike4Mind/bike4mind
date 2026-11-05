@@ -1,3 +1,6 @@
+vi.mock('@server/auth/withAccountNotPurging', () => ({
+  withAccountNotPurging: async (_id: string, write: () => Promise<unknown>) => write(),
+}));
 import { signupProtection } from '@server/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
@@ -118,6 +121,8 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
+// Distinct identity so a test can prove the repository itself reaches the grant adapters.
+const grantPackageRepositoryStub = vi.hoisted(() => ({ marker: 'grant-package-repository' }));
 const mockFindByEmail = vi.fn();
 const mockFindSetting = vi.fn();
 const mockClaimOnce = vi.fn();
@@ -161,6 +166,7 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   creditLotRepository: {},
+  grantPackageRepository: grantPackageRepositoryStub,
   userRepository: {
     findByEmail: (...a: unknown[]) => mockFindByEmail(...a),
     findById: (...a: unknown[]) => mockFindUserById(...a),
@@ -172,6 +178,8 @@ vi.mock('@bike4mind/database', () => ({
     // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
     // are about the handler, so the inbox is always free here.
     claimFreeCreditGrant: (...a: unknown[]) => mockClaimFreeCreditGrant(...a),
+    // The domain grant also checks the account has not been blocked from grants; none is blocked here.
+    findById: async () => null,
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
@@ -593,6 +601,16 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expectSelfUserStripped(body.user, body, 'user-1');
   });
 
+  it('wires the grant package repository into the registration adapters', async () => {
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    const adapters = mockRegisterViaOTC.mock.calls[0][1] as { db: { grantPackages?: unknown } };
+    expect(adapters.db.grantPackages).toBe(grantPackageRepositoryStub);
+  });
+
   it('persists the signup touches and reports email_verified and credits_granted for the new user', async () => {
     const acquisition = { firstTouch: { source: 'widgets' }, signupMethod: 'otc', capturedAt: new Date() };
     mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
@@ -719,6 +737,22 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     await handler(req, res);
 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
+  it("carries a verified hop, read from the verify request's cookies, to signup_completed", async () => {
+    const hopId = 'c'.repeat(32);
+    const verifiedTouch = { srcProductId: 'source-product', hopId, redeemedAt: new Date() };
+    const acquisition = { verifiedTouch, signupMethod: 'otc', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    // Verify is a same-origin request, so the browser's hop and visit cookies arrive on it.
+    (req as any).headers.cookie = `b4m_vid=${'d'.repeat(32)}; b4m_hop=${hopId}`;
+
+    await handler(req, res);
+
+    expect(mockRecordSignupAcquisition.mock.calls[0][0].req.headers.cookie).toContain(`b4m_hop=${hopId}`);
+    const signup = mockEmitFunnelEvent.mock.calls.find(([c]) => c.event === 'signup_completed')?.[0];
+    expect(signup.user).toEqual(expect.objectContaining({ id: 'user-1', acquisition }));
   });
 
   it('ties every signup stage to the visit the code was entered in', async () => {
@@ -1220,6 +1254,18 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(mockClearPending).toHaveBeenCalledWith('u-existing');
     // The release is reflected onto the response, not just the doc the handler mutated.
     expect(res._getJSONData()).toMatchObject({ tags: ['Customer'], pendingCreditGrant: null });
+  });
+
+  it('wires the grant package repository into the held-grant release adapters', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ pendingCreditGrant: 250 }));
+    mockReleasePending.mockResolvedValue({ released: false, creditsGranted: 0, currentCredits: null, patch: {} });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+
+    await handler(req, res);
+
+    expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    const adapters = mockReleasePending.mock.calls[0][1] as { db: { grantPackages?: unknown } };
+    expect(adapters.db.grantPackages).toBe(grantPackageRepositoryStub);
   });
 
   it('reports email_verified and the summed credits on the first verifying login', async () => {

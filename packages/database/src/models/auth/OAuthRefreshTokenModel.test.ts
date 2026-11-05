@@ -60,4 +60,17 @@ describe('OAuthRefreshTokenModel repository', () => {
     expect(await revoked('other-client')).toBeNull();
     expect(await revoked('other-user')).toBeNull();
   });
+
+  it('revokeAllForUser revokes every client family of that user only', async () => {
+    await seed('u-a');
+    await seed('u-b', { clientId: 'c2' });
+    await seed('someone-else', { userId: 'u2' });
+
+    expect(await oauthRefreshTokenRepository.revokeAllForUser('u1')).toBe(2);
+
+    const revoked = async (id: string) => (await oauthRefreshTokenRepository.findByFamilyId(id))?.revokedAt;
+    expect(await revoked('u-a')).toBeInstanceOf(Date);
+    expect(await revoked('u-b')).toBeInstanceOf(Date);
+    expect(await revoked('someone-else')).toBeNull();
+  });
 });

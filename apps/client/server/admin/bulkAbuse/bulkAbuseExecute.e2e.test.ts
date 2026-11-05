@@ -101,6 +101,33 @@ describe('executeBulkAbuse on a real replica set', () => {
     expect(outcomes).toEqual(['applied', 'skipped']);
   });
 
+  it('settles a pending risk review as banned, so the risk sweep stops picking the account', async () => {
+    const user = await seedGrantedUser();
+    const computedAt = new Date();
+    await User.updateOne(
+      { _id: user.id },
+      { $set: { riskScore: { score: 60, signals: [], computedAt, reviewState: 'pending' } } }
+    );
+    const since = new Date(Date.now() - 60 * 60 * 1000);
+    expect(await userRepository.findRiskScoringCandidateIds(since, { limit: 10 })).toEqual([user.id]);
+
+    const reloaded = await userRepository.findById(user.id);
+    await abuseService.executeBulkAbuse(
+      [reloaded!],
+      { ban: true, revokeApiKeys: false, revokeSessions: false, clawbackFreeCredits: false },
+      ACTOR_ID,
+      adapters()
+    );
+
+    expect((await User.findById(user.id).lean())?.riskScore).toEqual({
+      score: 60,
+      signals: [],
+      computedAt,
+      reviewState: 'banned',
+    });
+    expect(await userRepository.findRiskScoringCandidateIds(since, { limit: 10 })).toEqual([]);
+  });
+
   it('rolls back every step for a user whose audit write fails', async () => {
     const user = await seedGrantedUser();
     const actions: BulkAbuseActions = {

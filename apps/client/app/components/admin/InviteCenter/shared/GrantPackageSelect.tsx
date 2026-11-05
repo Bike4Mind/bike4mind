@@ -1,0 +1,84 @@
+import { Chip, FormControl, FormHelperText, FormLabel, Option, Select } from '@mui/joy';
+import { useQuery } from '@tanstack/react-query';
+import {
+  fetchGrantPackages,
+  GRANT_PACKAGES_QUERY_KEY,
+  type GrantPackageRow,
+} from '@client/app/utils/grantPackageAPICalls';
+
+const capText = (cap: number | null) => (cap === null ? 'uncapped' : `cap ${cap.toLocaleString()}`);
+
+export const grantPackageUsage = (pkg: GrantPackageRow) => {
+  const redeemed = `${pkg.redeemedTotal.toLocaleString()}${pkg.totalCap === null ? '' : ` / ${pkg.totalCap.toLocaleString()}`} redeemed`;
+  const hits = pkg.capHits
+    ? `cap hit ${pkg.capHits.toLocaleString()} times${pkg.lastCapHitAt ? `, last ${new Date(pkg.lastCapHitAt).toUTCString()}` : ''}`
+    : 'cap never hit';
+  return `${redeemed}; ${hits}${pkg.active ? '' : ' (inactive)'}`;
+};
+
+export const useGrantPackageOptions = () =>
+  useQuery({
+    queryKey: [GRANT_PACKAGES_QUERY_KEY, { all: true }],
+    // Every page, so a package older than the newest 100 can still be picked or shown as selected.
+    queryFn: async () => {
+      const first = await fetchGrantPackages({ page: 1, limit: 100 });
+      const pages = Array.from({ length: Math.max(0, first.meta.totalPages - 1) }, (_, i) => i + 2);
+      const rest = await Promise.all(pages.map(page => fetchGrantPackages({ page, limit: 100 })));
+      return { ...first, data: [...first.data, ...rest.flatMap(r => r.data)] };
+    },
+  });
+
+/** The picked package's row, so a form can show the credits and storage it will grant. */
+export const useSelectedGrantPackage = (id: string | null) => {
+  const { data } = useGrantPackageOptions();
+  return id ? data?.data.find(pkg => pkg.id === id) : undefined;
+};
+
+type Props = {
+  value: string | null;
+  onChange: (id: string | null) => void;
+  testId: string;
+  helperText?: string;
+  disabled?: boolean;
+};
+
+/**
+ * Optional grant package picker. Inactive packages are listed only when already selected, so an
+ * existing link stays visible but cannot be newly chosen.
+ */
+const GrantPackageSelect = ({ value, onChange, testId, helperText, disabled }: Props) => {
+  const { data, isPending, isError } = useGrantPackageOptions();
+  const packages = (data?.data ?? []).filter(pkg => pkg.active || pkg.id === value);
+  const selected = packages.find(pkg => pkg.id === value);
+
+  return (
+    <FormControl>
+      <FormLabel>Grant package</FormLabel>
+      <Select
+        value={value ?? ''}
+        onChange={(_, next) => onChange(next ? String(next) : null)}
+        disabled={disabled || isPending}
+        placeholder={isPending ? 'Loading packages...' : 'None'}
+        slotProps={{ button: { 'data-testid': testId } }}
+      >
+        <Option value="">None</Option>
+        {packages.map(pkg => (
+          <Option key={pkg.id} value={pkg.id} data-testid={`${testId}-option-${pkg.id}`}>
+            {pkg.name}
+            {pkg.legacy && (
+              <Chip size="sm" variant="soft" sx={{ ml: 1 }} data-testid={`${testId}-legacy-${pkg.id}`}>
+                Legacy
+              </Chip>
+            )}{' '}
+            ({pkg.credits.toLocaleString()} credits, {capText(pkg.totalCap)}, daily {capText(pkg.dailyCap)})
+          </Option>
+        ))}
+      </Select>
+      <FormHelperText data-testid={`${testId}-usage`}>
+        {isError ? 'Could not load packages' : selected ? grantPackageUsage(selected) : helperText}
+      </FormHelperText>
+    </FormControl>
+  );
+};
+
+export default GrantPackageSelect;
