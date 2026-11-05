@@ -289,6 +289,7 @@ import AllowGpt4oMiniTtsWhereTts1IsFree from './20260921238800_allow-gpt-4o-mini
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
 import BackfillAnalyticsUserDayActive from './20260921239700_backfill-analytics-user-day-active';
+import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -504,6 +505,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureReferralInviterIndexes,
   EnsureHeldCreditRewardUserStatusIndex,
   BackfillAnalyticsUserDayActive,
+  EnsureOverwatchUserDayInternalIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

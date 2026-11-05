@@ -398,6 +398,44 @@ describe('executeBulkAbuse', () => {
     ]);
   });
 
+  it('settles a signup risk review as banned, keeping its score', async () => {
+    const riskScore = { score: 60, signals: [], computedAt: new Date('2026-10-20'), reviewState: 'pending' as const };
+    const user = makeUser(1, { riskScore });
+    const { adapters, store, audit } = executeAdapters([user], []);
+
+    await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore).toEqual({ ...riskScore, reviewState: 'banned' });
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'abuse.bulk.ban',
+        changes: [
+          { field: 'isBanned', before: false, after: true },
+          { field: 'riskScore.reviewState', before: 'pending', after: 'banned' },
+        ],
+      })
+    );
+  });
+
+  it('bans an unscored account without inventing a risk score', async () => {
+    const user = makeUser(1);
+    const { adapters, store } = executeAdapters([user], []);
+
+    await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore).toBeUndefined();
+  });
+
+  it('leaves the risk review alone when only revoking keys', async () => {
+    const riskScore = { score: 60, signals: [], computedAt: new Date('2026-10-20'), reviewState: 'pending' as const };
+    const user = makeUser(1, { riskScore });
+    const { adapters, store } = executeAdapters([user], [], { [id(1)]: 1 });
+
+    await executeBulkAbuse([user], ONLY('revokeApiKeys'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore?.reviewState).toBe('pending');
+  });
+
   it('still bumps tokenVersion but skips the audit row and sockets when nothing was left to revoke', async () => {
     const user = makeUser(1);
     const { adapters, audit } = executeAdapters([user], []);

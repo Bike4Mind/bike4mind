@@ -9,6 +9,8 @@ const thresholds: SpendThresholds = {
   accountSpikeRatio: 10,
   accountSpikeFloorCredits: 1000,
   accountCeilingCredits: 5000,
+  trustedAccountSpikeFloorCredits: 20000,
+  trustedAccountCeilingCredits: 40000,
 };
 
 const platformCredits = (value: number, baseline: number | null): ScopeObservation => ({
@@ -108,5 +110,43 @@ describe('evaluateScope', () => {
   it('returns nothing for platform and model scopes', () => {
     expect(evaluateScope(scope('platform', 99999, 1), thresholds)).toEqual([]);
     expect(evaluateScope(scope('model', 99999, 1), thresholds)).toEqual([]);
+  });
+});
+
+describe('evaluateScope trusted tier', () => {
+  it('stays quiet for a trusted account under its higher ceiling and spike floor', () => {
+    // No history (baseline 0): a spike would need floor x ratio, so only the ceiling can fire.
+    expect(evaluateScope(scope('User', 30000, 0), thresholds, 'trusted')).toEqual([]);
+    // A 10x jump that clears the standard floor but not the trusted one.
+    expect(evaluateScope(scope('User', 15000, 1000), thresholds, 'trusted')).toEqual([]);
+  });
+
+  it('still warns on a trusted spike above the trusted floor', () => {
+    const breaches = evaluateScope(scope('User', 30000, 2000), thresholds, 'trusted');
+    expect(breaches.map(b => [b.rule, b.severity])).toEqual([['account_spike', 'warning']]);
+  });
+
+  it('still pages a trusted account past its own ceiling, marking the breach trusted', () => {
+    const breaches = evaluateScope(scope('User', 40000, 2000), thresholds, 'trusted');
+    expect(breaches.map(b => [b.rule, b.severity, b.trusted])).toEqual([
+      ['account_spike', 'warning', true],
+      ['account_ceiling', 'critical', true],
+    ]);
+  });
+
+  it('keeps the standard limits for an untrusted account', () => {
+    const breaches = evaluateScope(scope('User', 15000, 1000), thresholds);
+    expect(breaches.map(b => [b.rule, b.severity])).toEqual([
+      ['account_spike', 'warning'],
+      ['account_ceiling', 'critical'],
+    ]);
+    expect(breaches.every(b => b.trusted === undefined)).toBe(true);
+  });
+
+  it('applies the trusted limits to API key scopes too', () => {
+    expect(evaluateScope(scope('apiKey', 30000, 0), thresholds, 'trusted')).toEqual([]);
+    expect(evaluateScope(scope('apiKey', 40000, 0), thresholds, 'trusted').map(b => b.rule)).toContain(
+      'apikey_ceiling'
+    );
   });
 });

@@ -1,5 +1,6 @@
 import {
   isCompSubscription,
+  isScheduledToCancel,
   isTerminalSubscriptionStatus,
   type AdminSubscriptionDetail,
   type AdminSubscriptionRow,
@@ -9,7 +10,7 @@ import {
 
 export const ADMIN_SUBSCRIPTIONS_TAB_SLUG = 'subscriptions';
 
-export type SubscriptionAction = 'extend' | 'end' | 'credits' | 'remove';
+export type SubscriptionAction = 'extend' | 'end' | 'credits' | 'remove' | 'cancel' | 'resume';
 
 export const ownerDisplayName = (row: Pick<AdminSubscriptionRow, 'owner'>): string => {
   const { owner } = row;
@@ -38,21 +39,35 @@ export const NO_ACTING_USER_REASON = 'No account can act for this owner: the use
 export type SubscriptionActionAvailability = {
   /** Extend comp and End comp, the header's two buttons. */
   compActions: boolean;
+  /** Cancel at period end: a live Stripe row with no cancellation scheduled. */
+  stripeCancel: boolean;
+  /** Resume: a Stripe row with a scheduled cancellation whose period has not ended. */
+  stripeResume: boolean;
   editCredits: { visible: boolean; disabledReason: string | null };
   remove: { disabledReason: string | null };
 };
 
 /** Which header actions a subscription offers (docs/admin-subscriptions-spec.md sections 5.2 and 7). */
 export const subscriptionActionAvailability = (
-  detail: Pick<AdminSubscriptionDetail, 'subscription' | 'actingUserId'>
+  detail: Pick<AdminSubscriptionDetail, 'subscription' | 'actingUserId'> & {
+    stripe?: { cancelAtPeriodEnd: boolean } | null;
+  }
 ): SubscriptionActionAvailability => {
   const { subscription, actingUserId } = detail;
   const terminal = isTerminalSubscriptionStatus(subscription.status);
   const noActor = actingUserId === null ? NO_ACTING_USER_REASON : null;
+  // A legacy comp row can read as source 'stripe'; it is never a Stripe write target.
+  const live = isLiveStripeSubscription(subscription) && !isCompSubscription(subscription);
+  // The row's cancelAt is null when periodEndsAt is, so the mirror flag covers a period-end schedule without a date.
+  const scheduled = isScheduledToCancel(subscription) || Boolean(detail.stripe?.cancelAtPeriodEnd);
+  const { periodEndsAt } = subscription;
+  const periodRunning = periodEndsAt !== null && new Date(periodEndsAt).getTime() > Date.now();
   return {
+    stripeCancel: live && !scheduled,
+    stripeResume: live && scheduled && periodRunning,
     compActions: isCompSubscription(subscription) && !terminal,
     editCredits: { visible: !terminal, disabledReason: noActor },
-    remove: { disabledReason: isLiveStripeSubscription(subscription) ? REMOVE_LIVE_STRIPE_REASON : noActor },
+    remove: { disabledReason: live ? REMOVE_LIVE_STRIPE_REASON : noActor },
   };
 };
 
@@ -123,6 +138,3 @@ export type SubscriptionDialogProps = {
   onClose: () => void;
   onAudit: () => void;
 };
-
-/** The audit reason of an undo, the same convention as the profile's Undo toasts. */
-export const undoReason = (reason: string): string => `Undo: ${reason}`.slice(0, 500);

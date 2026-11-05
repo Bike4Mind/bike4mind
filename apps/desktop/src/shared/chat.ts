@@ -990,7 +990,7 @@ export interface ChatModelOption {
    * see thinkingSwitchedOff.
    */
   thinkingToggle?: boolean;
-  /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
+  /** A model whose template always thinks, so Off is unavailable; set with or without `thinkingToggle`. */
   thinkingAlwaysOn?: boolean;
   /**
    * A `thinkingToggle` model a stored `minimal` leaves thinking: a saved OpenAI-compatible server's,
