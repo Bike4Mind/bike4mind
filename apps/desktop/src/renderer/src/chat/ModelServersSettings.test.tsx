@@ -457,6 +457,39 @@ describe('ModelServersSettings hardware', () => {
     expect(byTestId('model-servers-specs-form')).not.toBeNull();
     expect(byTestId('model-servers-specs-form')?.textContent).not.toContain('KV cache');
   });
+
+  const launchOf = (owner: 'remote' | 'none') => ({
+    runtime: 'ollama' as const,
+    owner,
+    busy: null,
+    settings: {},
+    pendingRestart: false,
+    canStart: false,
+    problem: null,
+    observed: null,
+    sizingKvCacheType: 'f16' as const,
+    sizingFlashAttention: 'auto' as const,
+    prefill: null,
+    noun: 'Ollama server',
+  });
+
+  it('asks a remote Ollama for the KV cache type it runs with, which Desktop cannot set', async () => {
+    await show({ ...saved('ollama', 'manage'), launch: launchOf('remote') });
+    await click('model-servers-specs-btn');
+    await type('model-servers-specs-ram-input', '64');
+    await click('model-servers-specs-kv-select');
+    await click('model-servers-specs-kv-option-q8_0');
+    await click('model-servers-specs-save-btn');
+    expect(update).toHaveBeenCalledWith('gpu', {
+      specs: { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q8_0' },
+    });
+  });
+
+  it('leaves the KV cache type of a server Desktop can start to its launch settings', async () => {
+    await show({ ...saved('ollama', 'manage'), address: 'http://127.0.0.1:11500', launch: launchOf('none') });
+    await click('model-servers-specs-btn');
+    expect(byTestId('model-servers-specs-kv-select')).toBeNull();
+  });
 });
 
 describe('ModelServersSettings launch settings', () => {
@@ -563,11 +596,49 @@ describe('ModelServersSettings launch settings', () => {
     await show({ ...LOCAL, launch: launch({ prefill }) });
     await clickId('model-servers-launch-settings-btn');
     expect(byTestId('model-servers-launch-prefilled')?.textContent).toBe(
-      'Filled in from the Ollama that ran here: OLLAMA_KV_CACHE_TYPE=q8_0. Save to start with these.'
+      'Filled in from the Ollama that ran here: OLLAMA_KV_CACHE_TYPE=q8_0. Start uses these.'
     );
     expect(byTestId('model-servers-launch-kv-select')?.textContent).toContain('q8_0');
     await clickId('model-servers-launch-save-btn');
     expect(update).toHaveBeenLastCalledWith('local', { launch: { kvCacheType: 'q8_0' } });
+  });
+
+  it('saves the prefilled values before Start, so the server starts with what the form shows', async () => {
+    const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
+    await show({ ...LOCAL, launch: launch({ prefill }) });
+    await clickId('model-servers-launch-start-btn');
+    expect(update).toHaveBeenCalledWith('local', { launch: { kvCacheType: 'q8_0' } });
+    expect(launchAction).toHaveBeenCalledWith('local', 'start');
+    expect(update.mock.invocationCallOrder[0]).toBeLessThan(launchAction.mock.invocationCallOrder[0]);
+  });
+
+  it('starts without saving when launch settings are already saved', async () => {
+    const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
+    await show({ ...LOCAL, launch: launch({ prefill, settings: { flashAttention: 'on' } }) });
+    await clickId('model-servers-launch-start-btn');
+    expect(update).not.toHaveBeenCalled();
+    expect(launchAction).toHaveBeenCalledWith('local', 'start');
+  });
+
+  it('says a prefill needs a restart while the server Desktop started runs', async () => {
+    const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
+    await show({ ...LOCAL, launch: launch({ owner: 'desktop', canStart: false, prefill }) });
+    await clickId('model-servers-launch-settings-btn');
+    expect(byTestId('model-servers-launch-prefilled')?.textContent).toBe(
+      'Filled in from the Ollama that ran here: OLLAMA_KV_CACHE_TYPE=q8_0. Save, then restart to use these.'
+    );
+  });
+
+  it('names a port held by a program that does not answer, with no Start', async () => {
+    const problem = 'Another program is using 127.0.0.1:11434 but does not answer there. Stop it, then check again.';
+    await show({
+      ...LOCAL,
+      health: { ...health, state: 'unreachable' },
+      launch: launch({ owner: 'other', canStart: false, problem }),
+    });
+    expect(byTestId('model-servers-launch-owner')?.textContent).toBe('In use by another program');
+    expect(byTestId('model-servers-launch-problem')?.textContent).toBe(problem);
+    expect(byTestId('model-servers-launch-start-btn')).toBeNull();
   });
 
   it('keeps saved launch settings over what it read from the server', async () => {
@@ -615,7 +686,7 @@ describe('ModelServersSettings launch settings', () => {
     await show({ ...saved('ollama', 'chat'), launch: launch({ owner: 'remote', canStart: false }) });
     expect(byTestId('model-servers-launch')).toBeNull();
     expect(byTestId('model-servers-launch-locked')?.textContent).toBe(
-      "This Ollama server runs on another machine, so Desktop can't start it or apply these settings. Fit badges assume an f16 KV cache."
+      "This Ollama server runs on another machine, so Desktop can't start it or apply these settings. Fit badges assume an f16 KV cache, set under Hardware."
     );
   });
 

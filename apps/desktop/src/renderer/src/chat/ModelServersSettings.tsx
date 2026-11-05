@@ -181,6 +181,7 @@ type SpecsDraft = {
   gpu: string;
   bandwidth: string;
   unified: boolean;
+  kv: QuantizedKvCacheType | null;
 };
 
 const figure = (value: number | null | undefined) => (value === null || value === undefined ? '' : String(value));
@@ -192,6 +193,7 @@ function specsDraft(specs: ModelServerSpecs | null): SpecsDraft {
     gpu: figure(specs?.gpuMemoryGiB),
     bandwidth: figure(specs?.bandwidthGBps),
     unified: specs?.unified ?? false,
+    kv: specs?.kvCacheType ?? null,
   };
 }
 
@@ -201,7 +203,13 @@ function draftSpecs(draft: SpecsDraft): ModelServerSpecs {
     gpuMemoryGiB: parsed(draft.gpu),
     bandwidthGBps: parsed(draft.bandwidth),
     unified: draft.unified,
+    ...(draft.kv ? { kvCacheType: draft.kv } : {}),
   };
+}
+
+/** A remote or SSH Ollama: Desktop cannot set its cache type, so Hardware says which one it runs with. */
+function hardwareKvCache(server: ModelServerView): boolean {
+  return server.kind === 'ollama' && server.launch?.owner === 'remote';
 }
 
 export function specsSummary(specs: ModelServerSpecs): string {
@@ -209,6 +217,7 @@ export function specsSummary(specs: ModelServerSpecs): string {
     specs.ramGiB !== null ? `${specs.ramGiB} GB RAM${specs.unified ? ' shared with the GPU' : ''}` : null,
     specs.gpuMemoryGiB !== null ? `${specs.gpuMemoryGiB} GB GPU memory` : null,
     specs.bandwidthGBps !== null ? `${specs.bandwidthGBps} GB/s memory bandwidth` : null,
+    specs.kvCacheType ? `${specs.kvCacheType} KV cache` : null,
   ]
     .filter(Boolean)
     .join(', ');
@@ -318,6 +327,32 @@ function SpecsFields({
         in Curated picks
         {gpuBandwidth ? ", so enter the GPU's own figure, not the system RAM's." : '.'}
       </Typography>
+      {hardwareKvCache(server) && (
+        <FormControl size="sm" sx={{ maxWidth: 260 }}>
+          <FormLabel>KV cache type</FormLabel>
+          <Select
+            size="sm"
+            value={draft.kv ?? 'f16'}
+            onChange={(_event, value) =>
+              setDraft({ ...draft, kv: QUANTIZED_KV_CACHE_TYPES.find(type => type === value) ?? null })
+            }
+            slotProps={{ button: { 'data-testid': 'model-servers-specs-kv-select' } }}
+          >
+            <Option value="f16" data-testid="model-servers-specs-kv-option-f16">
+              f16 (Ollama&apos;s default)
+            </Option>
+            {QUANTIZED_KV_CACHE_TYPES.map(type => (
+              <Option key={type} value={type} data-testid={`model-servers-specs-kv-option-${type}`}>
+                {type}
+              </Option>
+            ))}
+          </Select>
+          <FormHelperText>
+            What OLLAMA_KV_CACHE_TYPE is set to where this Ollama runs, which its API does not report. It applies to
+            every model on the server. With q8_0 or q4_0, Ollama fails to load models while flash attention is off.
+          </FormHelperText>
+        </FormControl>
+      )}
       {problem && (
         <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-specs-error">
           {problem}
@@ -431,18 +466,36 @@ function LaunchSection({
     if (server.kind !== 'ollama') return null;
     return (
       <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-locked">
-        {locked} Fit badges assume an f16 KV cache.
+        {locked} Fit badges assume a{launch.sizingKvCacheType === 'f16' ? 'n' : ''} {launch.sizingKvCacheType} KV cache,
+        set under Hardware.
       </Typography>
     );
   }
 
   const look = OWNER_LOOK[launch.owner];
-  const save = () => {
+  // A listener that holds the port without answering (see ModelServerRegistry.ownerOf).
+  const label =
+    launch.owner === 'other' && (server.health.state === 'unreachable' || server.health.state === 'unknown')
+      ? 'In use by another program'
+      : look.label;
+  const checked = (): ModelServerLaunchSettings | null => {
     const settings = draftLaunch(draft, launch.runtime);
     const issue = launchSettingsProblem(settings, launch.runtime);
     setProblem(issue);
-    if (issue) return;
-    void onSave(settings).then(ok => ok && setOpen(false));
+    return issue ? null : settings;
+  };
+  const save = () => {
+    const settings = checked();
+    if (settings) void onSave(settings).then(ok => ok && setOpen(false));
+  };
+  // With nothing saved, Start runs what the form shows, so the prefill is saved first.
+  const start = async () => {
+    if (prefilled(launch)) {
+      const settings = checked();
+      if (!settings || !(await onSave(settings))) return;
+      setOpen(false);
+    }
+    await onAction('start');
   };
   const path = (key: 'binaryPath' | 'modelsDir', label: string, testId: string, hint: string) => (
     <FormControl size="sm" sx={{ flex: 1, minWidth: 220 }}>
@@ -462,14 +515,14 @@ function LaunchSection({
     <Stack spacing={1} data-testid="model-servers-launch" data-owner={launch.owner}>
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
         <Chip size="sm" variant="soft" color={look.color} data-testid="model-servers-launch-owner">
-          {launch.busy === 'starting' ? 'Starting' : launch.busy === 'stopping' ? 'Stopping' : look.label}
+          {launch.busy === 'starting' ? 'Starting' : launch.busy === 'stopping' ? 'Stopping' : label}
         </Chip>
         {launch.canStart && (
           <Button
             size="sm"
             variant="outlined"
             disabled={busy || !!launch.busy}
-            onClick={() => void onAction('start')}
+            onClick={() => void start()}
             data-testid="model-servers-launch-start-btn"
           >
             Start
@@ -588,7 +641,9 @@ function LaunchSection({
             <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-prefilled">
               {launch.owner === 'other'
                 ? `Filled in from what this server runs with: ${launch.prefill.from}.`
-                : `Filled in from the Ollama that ran here: ${launch.prefill.from}. Save to start with these.`}
+                : `Filled in from the Ollama that ran here: ${launch.prefill.from}. ${
+                    launch.owner === 'desktop' ? 'Save, then restart to use these.' : 'Start uses these.'
+                  }`}
             </Typography>
           )}
           {problem && (
