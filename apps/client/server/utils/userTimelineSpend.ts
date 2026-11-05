@@ -11,8 +11,9 @@ import { CreditTransaction, creditTransactionRepository, Session } from '@bike4m
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 
 /**
- * Most ledger rows one spend page reads. Grouping happens here rather than in Mongo so the read is a
- * bounded index scan however long the account's history is.
+ * Most ledger rows one spend page reads. Grouping happens here rather than in Mongo so that read stays
+ * a bounded index scan. The balance-after walk is not bounded: each page also sums every ledger row
+ * newer than it (sumSignedCreditsNewerThan), so its cost grows with how deep the admin pages.
  */
 export const SPEND_READ_LIMIT = 2000;
 
@@ -148,6 +149,7 @@ export const listSpendGroups = async ({
   let older = groups.filter(group => isOlderThanCursor(group, cursor));
 
   // One hour busier than a whole read: what was shown of it is all there is, so continue below it.
+  // Groups of that hour the first read never reached are skipped here, without a lower-bound marker.
   if (cursor && older.length === 0 && read.truncated) {
     read = await readLedger(ownerId, range, new Date(hourStart(cursor.occurredAt)));
     groups = await groupsFrom(read.rows, read.truncated, ownerId, currentBalance);
@@ -250,7 +252,7 @@ export const spendGroupToEntry = (group: SpendGroup, lookups: SpendLookups): Use
     group.balanceAfter !== undefined ? `balance after ${formatCredits(group.balanceAfter)}` : undefined,
   ]
     .filter(Boolean)
-    .join(' · ');
+    .join(' \u00b7 ');
   const negative = group.balanceAfter !== undefined && group.balanceAfter < 0;
   return {
     type: 'spend',

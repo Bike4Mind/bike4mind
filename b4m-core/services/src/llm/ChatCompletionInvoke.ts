@@ -481,11 +481,10 @@ export class ChatCompletionInvoke {
           const message = `Model ${gatedModelId} is not admitted: ${(err as Error).message}`;
           if (isModelRequiresSubscriptionError(err)) {
             this.logger.warn(message);
-            await this.db.recordLimitEvent?.({
-              userId: this.user.id,
-              kind: 'model_requires_paid_plan',
-              model: gatedModelId,
-            });
+            // Best-effort: a failed record must never replace the refusal rethrown below.
+            await this.db
+              .recordLimitEvent({ userId: this.user.id, kind: 'model_requires_paid_plan', model: gatedModelId })
+              .catch(recordError => this.logger.warn('[USER_LIMIT_EVENT] failed to record', recordError));
           } else this.logger.error(message);
           throw err;
         });

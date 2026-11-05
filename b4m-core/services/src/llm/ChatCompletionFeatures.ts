@@ -252,9 +252,10 @@ interface DatabaseAdapters {
   newAccountSpendCap: NewAccountSpendCapAdapters;
   /**
    * Records a refusal or a settlement that left the balance negative, for the admin user timeline
-   * (apps/client/server/billing/userLimitEvents.ts). Optional, and must not throw.
+   * (apps/client/server/billing/userLimitEvents.ts). Required, so a completion path that forgets it fails
+   * typecheck instead of silently skipping it. Must not throw.
    */
-  recordLimitEvent?: (event: LimitEventRecord) => Promise<void>;
+  recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
   creditTransactions?: ICreditTransactionRepository;
   /** Optional usage-event sink: dual-write analytics, never billing. */
   usageEvents?: IUsageEventRepository;

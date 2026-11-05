@@ -66,12 +66,14 @@ export const userLimitEventRepository = {
   /** Counts one hit into its hour's row, creating the row on the first hit. */
   async record({ userId, kind, model: modelId = '', details = {}, at = new Date() }: RecordUserLimitEventInput) {
     const hour = new Date(Math.floor(at.getTime() / HOUR_MS) * HOUR_MS);
+    // Refusal paths record from inside the hold's transaction, which then aborts; session(null) opts
+    // out of the ambient one (transactionAsyncLocalStorage) so the row survives the rollback it records.
     const write = () =>
       UserLimitEventModel.updateOne(
         { userId, kind, hour, modelId },
         { $inc: { count: 1 }, $max: { lastAt: at }, $min: { firstAt: at }, $set: { details } },
-        { upsert: true }
-      );
+        { upsert: true, maxTimeMS: 5_000 }
+      ).session(null);
     try {
       await write();
     } catch (error) {

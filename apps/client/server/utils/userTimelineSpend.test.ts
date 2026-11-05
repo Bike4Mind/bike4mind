@@ -113,7 +113,7 @@ describe('spendGroupToEntry', () => {
       apiKeyPrefixes: new Map([['c'.repeat(24), 'b4m_ab12']]),
     });
     expect(entry.summary).toBe('Spent 2,400 credits: 14 chat messages on opus in "Notebook X"');
-    expect(entry.detail).toBe('CLI · key b4m_ab12 · over 30 min · balance after 1,200');
+    expect(entry.detail).toBe('CLI \u00b7 key b4m_ab12 \u00b7 over 30 min \u00b7 balance after 1,200');
     expect(entry.alert).toBeUndefined();
     expect(entry.flags).toBeUndefined();
   });

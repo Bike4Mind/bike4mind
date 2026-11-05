@@ -66,7 +66,7 @@ describe('fetchSignupEntries', () => {
         type: 'signup',
         id: USER_ID,
         at: createdAt,
-        detail: '203.0.113.9 · NL · AS64500 Hosting · @mailer.test',
+        detail: '203.0.113.9 \u00b7 NL \u00b7 AS64500 Hosting \u00b7 @mailer.test',
         flags: ['Disposable domain', 'Domain held', 'Datacenter IP', 'Signup credits held: risk review'],
         alert: true,
       }),

@@ -669,6 +669,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             usageEvents: usageEventRepository,
             organizations: organizationRepository,
             cache: cacheRepository,
+            recordLimitEvent: recordUserLimitEvent,
             // Per-key spend metering (spend-cap enforcement), org-paid turns only. NOT the
             // provider-LLM key repo above (apiKeys) - this one holds the embed UserApiKey docs.
             ...(ctx.endUserId ? {} : { userApiKeys: userApiKeyRepository }),

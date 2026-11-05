@@ -18,7 +18,7 @@ const row = (overrides: Partial<LimitEventRow>): LimitEventRow => ({
 describe('limitDetail', () => {
   it('spells out cap numbers', () => {
     expect(limitDetail(row({ details: { capCredits: 5000, spentCredits: 4980.6, requestedCredits: 120 } }))).toBe(
-      'cap 5,000 · spent 4,981 · requested 120'
+      'cap 5,000 \u00b7 spent 4,981 \u00b7 requested 120'
     );
   });
 
@@ -31,12 +31,12 @@ describe('limitDetail', () => {
           details: { reason: 'member_cap', requiredCredits: 40, availableCredits: 3 },
         })
       )
-    ).toBe('opus · org member cap · needed 40 · had 3');
+    ).toBe('opus \u00b7 org member cap \u00b7 needed 40 \u00b7 had 3');
   });
 
   it('reports free-tier USD caps in dollars', () => {
     expect(limitDetail(row({ kind: 'free_tier_daily_cap', details: { capUsd: 0.5, spentUsd: 0.512 } }))).toBe(
-      'cost cap $0.50 · cost $0.51'
+      'cost cap $0.50 \u00b7 cost $0.51'
     );
   });
 
@@ -54,8 +54,8 @@ describe('limitRowToEntry', () => {
       type: 'limit',
       id: '6700000000000000000000aa',
       at: new Date('2026-11-01T10:40:00Z'),
-      summary: 'Balance went negative ×3',
-      detail: 'shortfall 12 · balance after -12',
+      summary: 'Balance went negative \u00d73',
+      detail: 'shortfall 12 \u00b7 balance after -12',
       alert: true,
     });
   });

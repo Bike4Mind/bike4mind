@@ -79,7 +79,7 @@ export const fetchSignupEntries = async (
     domain ? `@${domain}` : undefined,
   ]
     .filter(Boolean)
-    .join(' · ');
+    .join(' \u00b7 ');
 
   return {
     entries: [
@@ -156,7 +156,7 @@ export const fetchPaymentEntries = async (userId: string, limit: number, window:
       detail:
         [row.kind === 'subscription' ? 'Subscription' : 'Credits', row.riskLevel ? `risk ${row.riskLevel}` : undefined]
           .filter(Boolean)
-          .join(' · ') || undefined,
+          .join(' \u00b7 ') || undefined,
       flags: row.hostingNetwork ? ['Hosting network'] : undefined,
       alert: true,
     })),
@@ -190,7 +190,8 @@ export const fetchModerationEntries = async (userId: string, limit: number, wind
         reviewStatus: row.reviewStatus,
         summary: `Image flagged by moderation${labels.length > 0 ? `: ${labels.join(', ')}` : ''}`,
         detail:
-          [row.model, row.surface, `review ${row.reviewStatus ?? 'pending'}`].filter(Boolean).join(' · ') || undefined,
+          [row.model, row.surface, `review ${row.reviewStatus ?? 'pending'}`].filter(Boolean).join(' \u00b7 ') ||
+          undefined,
         alert: row.reviewStatus !== 'false_positive' || undefined,
       };
     }),

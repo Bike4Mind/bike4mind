@@ -17,7 +17,8 @@ const migration: MigrationFile = {
   },
 
   down: async () => {
-    await UserLimitEventModel.collection.drop();
+    // One-way, like the sibling ensure-index migrations. Dropping the unique key would let racing
+    // first hits split an hour across rows; the events themselves are never this migration's to delete.
   },
 };
 

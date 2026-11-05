@@ -1187,10 +1187,26 @@ export class ChatCompletionProcess {
     details: LimitEventRecord['details']
   ): Promise<void> {
     try {
-      await this.db.recordLimitEvent?.({ userId: this.user.id, kind, model, details });
+      await this.db.recordLimitEvent({ userId: this.user.id, kind, model, details });
     } catch (error) {
       logger.warn('[USER_LIMIT_EVENT] failed to record', { kind, error });
     }
+  }
+
+  /**
+   * A settlement shortfall, on the user's own timeline only: an org or agent pool's balance is not
+   * the member's. Not awaited, so a slow timeline write never sits between the balance move and the
+   * ledger rows that record it.
+   */
+  private recordSettlementEvent(
+    logger: Logger,
+    ownerType: CreditHolderType,
+    kind: 'balance_debt' | 'debt_written_off',
+    model: string | undefined,
+    details: LimitEventRecord['details']
+  ): void {
+    if (ownerType !== CreditHolderType.User) return;
+    void this.recordLimitEvent(logger, kind, model, details);
   }
   private getThinkingVisibility: IChatCompletionServiceOptions['getThinkingVisibility'];
   private thinkingVisibilityPromise?: Promise<ThinkingVisibility>;
@@ -5060,6 +5076,11 @@ export class ChatCompletionProcess {
           });
           if (!firstRound.affordable) {
             await this.releaseReservedCredits(questId, logger);
+            await this.recordLimitEvent(logger, 'insufficient_credits', chargedModelInfo.id, {
+              reason: 'balance',
+              requiredCredits: firstRound.minimumCredits,
+              availableCredits: balanceBeforeHold,
+            });
             throw new InsufficientCreditsError(
               buildInsufficientCreditsMessage({
                 available: balanceBeforeHold,
@@ -7105,9 +7126,8 @@ export class ChatCompletionProcess {
               available: Math.max(0, (this.reservedCreditHolder?.currentCredits ?? 0) - floorCredits),
               writtenOff: writtenOffCredits,
             });
-            await this.recordLimitEvent(logger, 'debt_written_off', currentModel.id, {
+            this.recordSettlementEvent(logger, this.reservedCreditsOwnerType, 'debt_written_off', currentModel.id, {
               writtenOffCredits,
-              ownerType: this.reservedCreditsOwnerType,
             });
           }
 
@@ -7189,7 +7209,15 @@ export class ChatCompletionProcess {
                 reserved: reservedAtSettlement,
                 used: totalCreditsUsed,
               });
-              if (debt) await this.recordLimitEvent(logger, 'balance_debt', currentModel.id, debt);
+              if (debt) {
+                this.recordSettlementEvent(
+                  logger,
+                  this.reservedCreditsOwnerType,
+                  'balance_debt',
+                  currentModel.id,
+                  debt
+                );
+              }
             }
 
             // Record audit-trail transactions with skipBalanceUpdate (balance already settled)
@@ -8018,7 +8046,7 @@ export class ChatCompletionProcess {
       reserved,
       used: totalCredits,
     });
-    if (debt) await this.recordLimitEvent(logger, 'balance_debt', priced[0]?.ledgerModelInfo?.id, debt);
+    if (debt) this.recordSettlementEvent(logger, ownerType, 'balance_debt', priced[0]?.ledgerModelInfo?.id, debt);
     this.reservedCreditHolder = null;
     quest.creditsUsed = totalCredits;
 

@@ -76,7 +76,7 @@ const kindDetail = (row: LimitEventRow): Array<string | undefined> => {
 
 /** The kind-specific numbers worth a glance, in plain words. */
 export const limitDetail = (row: LimitEventRow): string | undefined =>
-  [row.modelId || undefined, ...kindDetail(row)].filter(Boolean).join(' · ') || undefined;
+  [row.modelId || undefined, ...kindDetail(row)].filter(Boolean).join(' \u00b7 ') || undefined;
 
 export const limitRowToEntry = (row: LimitEventRow): UserTimelineEntry => ({
   type: 'limit',
@@ -85,7 +85,7 @@ export const limitRowToEntry = (row: LimitEventRow): UserTimelineEntry => ({
   firstAt: row.firstAt,
   kind: row.kind,
   count: row.count,
-  summary: `${LIMIT_SUMMARIES[row.kind]}${row.count > 1 ? ` ×${row.count.toLocaleString('en-US')}` : ''}`,
+  summary: `${LIMIT_SUMMARIES[row.kind]}${row.count > 1 ? ` \u00d7${row.count.toLocaleString('en-US')}` : ''}`,
   detail: limitDetail(row),
   alert: true,
 });

@@ -18,7 +18,11 @@ export const recordUserLimitEvent = async (input: RecordUserLimitEventInput): Pr
   }
 };
 
-/** The CreditHoldAdapters.onInsufficientCredits every hold path in the apps passes. */
+/**
+ * The CreditHoldAdapters.onInsufficientCredits the hold paths pass (reserveRequestCredits, generation jobs).
+ * Chat and CLI completions record through their own `db.recordLimitEvent`; voice calls through
+ * recordVoiceRefusal.
+ */
 export const recordInsufficientCredits = async (event: {
   userId: string;
   reason: string;
@@ -53,3 +57,13 @@ export const recordPaidPlanRefusal = async (userId: string, modelId: string, err
   }
   await recordUserLimitEvent({ userId, kind: 'model_requires_paid_plan', model: modelId });
 };
+
+/** A voice call refused for its balance, before or while its hold opens. Not awaited by the hold callback. */
+export const recordVoiceRefusal = (userId: string, requiredCredits: number, availableCredits?: number) =>
+  recordInsufficientCredits({
+    userId,
+    reason: 'balance',
+    featureLabel: 'voice session',
+    requiredCredits,
+    availableCredits,
+  });
