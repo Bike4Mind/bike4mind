@@ -1207,6 +1207,30 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(mockValidateNonce).toHaveBeenNthCalledWith(2, NON_DOMAIN_EMAIL, 'jti-1', expect.any(String));
   });
 
+  it('refuses a payment-hold account with the hold notice instead of issuing a session', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true, tags: ['Customer'], disputePending: true }));
+
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toMatch(/on hold pending a payment review/);
+    expect(authSessionService.issueSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses a moderation-suspended account with its notice', async () => {
+    mockFindByEmail.mockResolvedValue(
+      pendingUser({ emailVerified: true, tags: ['Customer'], moderation: { status: 'suspended' } })
+    );
+
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toMatch(/content-policy violations/);
+    expect(authSessionService.issueSession).not.toHaveBeenCalled();
+  });
+
   it('strips secrets and undeclared fields from the flat login body', async () => {
     // Deliberately not `pendingUser`: a loosened schema has to fail on a leaked secret, and a
     // toJSON on the seeded doc would instead serialize the login body without the accessToken.

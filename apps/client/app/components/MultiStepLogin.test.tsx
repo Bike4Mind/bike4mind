@@ -21,6 +21,10 @@ type MfaHookOptions = {
 
 // Factory-safe mock handles (vi.mock is hoisted above imports).
 const mocks = vi.hoisted(() => ({
+  publicConfig: {
+    data: { allowTrustedDevices: true } as { allowTrustedDevices: boolean; supportEmail?: string } | undefined,
+    isLoading: false,
+  },
   sendOTC: vi.fn(),
   formToken: { data: 'form-tok-1' as string | undefined, refetch: vi.fn() },
   verifyOTC: vi.fn(),
@@ -107,7 +111,7 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useBrandingSettings: () => ({}),
-  usePublicConfig: () => ({ data: { allowTrustedDevices: true } }),
+  usePublicConfig: () => mocks.publicConfig,
 }));
 vi.mock('next/image', () => ({ default: () => null }));
 vi.mock('react-i18next', () => ({
@@ -1003,6 +1007,48 @@ describe('MultiStepLogin - OAuth registration_closed redirect', () => {
     await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
     const [, options] = mocks.toast.error.mock.calls[0];
     expect(options.action).toBeUndefined();
+  });
+
+  describe('blocked-account notice', () => {
+    afterEach(() => {
+      mocks.publicConfig = { data: { allowTrustedDevices: true }, isLoading: false };
+    });
+
+    it('names the configured support address', async () => {
+      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: 'help@example.com' }, isLoading: false };
+      window.history.replaceState({}, '', '/login?error=account_on_hold');
+      renderLogin({ enableRegister: false });
+
+      await waitFor(() =>
+        expect(mocks.toast.error).toHaveBeenCalledWith(
+          'Your account is on hold pending a payment review. Please contact support. Support: help@example.com',
+          expect.anything()
+        )
+      );
+      expect(window.location.search).toBe('');
+    });
+
+    it('waits for the public config before showing it', async () => {
+      mocks.publicConfig = { data: undefined, isLoading: true };
+      window.history.replaceState({}, '', '/login?error=account_on_hold');
+      renderLogin({ enableRegister: false });
+
+      expect(mocks.toast.error).not.toHaveBeenCalled();
+      expect(window.location.search).toBe('?error=account_on_hold');
+    });
+
+    it('shows the notice without an address when none is configured', async () => {
+      mocks.publicConfig = { data: { allowTrustedDevices: true, supportEmail: '' }, isLoading: false };
+      window.history.replaceState({}, '', '/login?error=account_on_hold');
+      renderLogin({ enableRegister: false });
+
+      await waitFor(() =>
+        expect(mocks.toast.error).toHaveBeenCalledWith(
+          'Your account is on hold pending a payment review. Please contact support.',
+          expect.anything()
+        )
+      );
+    });
   });
 });
 

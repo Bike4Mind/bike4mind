@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { applyRedirect } from '@client/app/utils/authRedirect';
-import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
+import {
+  getLoginErrorMessage,
+  isBlockedAccountLoginError,
+  withSupportContact,
+} from '@client/app/utils/loginErrorMessages';
 import { markFirstSignupSession } from '@client/app/utils/firstSignupSession';
 import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
@@ -123,7 +127,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   const rateLimit = useOtcRateLimit();
   const [emailError, setEmailError] = useState<string | null>(null);
   const { mutateAsync: verifyOTC, isPending: isVerifying } = useVerifyOTC();
-  const { data: publicConfig } = usePublicConfig();
+  const { data: publicConfig, isLoading: isPublicConfigLoading } = usePublicConfig();
   const mfaChallenge = useMfaChallenge({
     allowRememberDevice: publicConfig?.allowTrustedDevices ?? false,
     onComplete: ({ user }) => setCurrentUser(user),
@@ -183,8 +187,13 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   useEffect(() => {
     const url = new URL(window.location.href);
     const errorCode = url.searchParams.get('error');
-    const message = getLoginErrorMessage(errorCode);
-    if (!message) return;
+    const baseMessage = getLoginErrorMessage(errorCode);
+    if (!baseMessage) return;
+    const blocked = isBlockedAccountLoginError(errorCode);
+    // A blocked-account notice names the support address from the public config, so wait for it;
+    // a failed config fetch still shows the notice, just without the address.
+    if (blocked && isPublicConfigLoading) return;
+    const message = blocked ? withSupportContact(baseMessage, publicConfig?.supportEmail) : baseMessage;
     toast.error(message, {
       duration: 8000,
       ...(errorCode === 'registration_closed' && {
@@ -193,7 +202,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     });
     url.searchParams.delete('error');
     window.history.replaceState({}, '', url.pathname + url.search + url.hash);
-  }, [joinWaitlist, t]);
+  }, [joinWaitlist, t, isPublicConfigLoading, publicConfig?.supportEmail]);
 
   // Cleanup cooldown timer
   useEffect(() => {
