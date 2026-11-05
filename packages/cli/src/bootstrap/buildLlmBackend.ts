@@ -168,6 +168,7 @@ export const defaultLlmBackendDeps: BuildLlmBackendDeps = {
     new OllamaBackend(host, cliLogger(options?.redact), {
       fetch: options?.fetch as typeof globalThis.fetch | undefined,
       requestSettings: options?.requestSettings,
+      settingsWarning: message => logger.warnToFile(options?.redact ? options.redact(message) : message),
     }),
   createOpenAICompatibleBackend: options => new OpenAICompatibleBackend({ logger: cliLogger(), ...options }),
   createMultiBackend: (server, serverModels, routes, defaultModel) =>

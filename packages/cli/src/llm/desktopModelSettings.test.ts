@@ -39,7 +39,7 @@ afterEach(async () => {
 const writeSettings = (models: unknown) => writeFile(file, JSON.stringify({ models }));
 
 describe('desktopModelSettingsFile', () => {
-  it("reads model-settings.json in the first of Desktop's userData folders that exists", async () => {
+  it("reads model-settings.json in the userData folder Desktop's files are read from", async () => {
     const opts = { platform: 'linux' as const, env: {}, home: dir };
     expect(await desktopModelSettingsFile(opts)?.()).toBeNull();
     await mkdir(path.join(dir, '.config', 'Bike4Mind'), { recursive: true });
@@ -50,6 +50,11 @@ describe('desktopModelSettingsFile', () => {
     await mkdir(path.join(dir, '.config', '@bike4mind', 'desktop'), { recursive: true });
     expect((await desktopModelSettingsFile(opts)?.())?.path).toBe(
       path.join(dir, '.config', '@bike4mind', 'desktop', 'model-settings.json')
+    );
+    // An empty packaged folder from a first launch does not hide the older folder's settings.
+    await writeFile(path.join(dir, '.config', 'Bike4Mind', 'model-settings.json'), '{"models": {}}');
+    expect((await desktopModelSettingsFile(opts)?.())?.path).toBe(
+      path.join(dir, '.config', 'Bike4Mind', 'model-settings.json')
     );
     expect(await desktopModelSettingsFile({ platform: 'linux', env: { B4M_DESKTOP_USER_DATA: '/data' } })?.()).toEqual({
       path: '/data/model-settings.json',
