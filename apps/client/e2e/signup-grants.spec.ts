@@ -1,5 +1,5 @@
 import type { APIRequestContext, Browser } from '@playwright/test';
-import { settingsMap } from '@bike4mind/common';
+import { isStoredToggleOn, settingsMap, signupGrantScheduleFromValues, storedGrantCredits } from '@bike4mind/common';
 import { test, expect, openPageAs } from './fixtures';
 import { TIMEOUTS } from './constants';
 import { getTestRunId, getTestUsers } from './helpers/test-users';
@@ -10,40 +10,42 @@ import { BasePage } from './pages/BasePage';
 
 /**
  * Staged signup grants: a new self-serve account gets a small tranche once its email is verified, the
- * rest stays locked until an unlock (activity drip, admin) releases it, and a daily budget holds the
+ * rest stays locked until an unlock (activity drip, admin) releases it, and a spent signup pool holds the
  * tranche of signups past it until an admin releases the hold.
  *
- * The staged grant settings are global, so this file only runs where flipping them is safe (previews,
+ * The grant schedule and pool settings are global, so this file only runs where flipping them is safe (previews,
  * localhost) and puts every touched setting back afterwards. It also lifts the per-IP and per-ASN signup
  * caps for the run, since every run signs up from the same runner. It registers exactly two accounts
  * through the real OTC path because each one spends the email domain's hourly new-account budget,
  * which no setting can raise.
  *
- * Serial mode: the self-serve account walks the grant from tranche to fully released, and the held
- * account relies on the budget day the first account's payouts already drew from.
+ * Serial mode: the self-serve account walks the grant from tranche to fully released before the signup
+ * pool is paused for the held account.
  */
 // No retries: a retry re-runs the group from the first registration and spends more domain budget.
 test.describe.configure({ mode: 'serial', retries: 0 });
 
 const SIGNUP_CREDITS = 7;
+// With a stored drip cap the cap is also the locked remainder a full unlock releases.
 const UNLOCK_CREDITS = 13;
 const DRIP_CREDITS = 5;
-// Large enough that the first account's payouts always reserve, so they touch today's budget row.
-const ROOMY_BUDGET = 1_000_000;
+// Far above what one run pays, so neither pool holds or skips a payout for a reason the test did not set up.
+const ROOMY_POOL = 1_000_000;
 // recordHeartbeat credits the real gap between pings, so the second ping must land past the minimum.
 const MIN_ACTIVE_SECONDS = 60;
 const HEARTBEAT_GAP_MS = (MIN_ACTIVE_SECONDS + 2) * 1000;
 
+// The schedule keys are what resolveSignupGrantSchedule (b4m-core/common/src/signupGrant.ts) reads; the older
+// signupGrantCredits / verifiedUnlockCredits / signupGrantActivity*Credits keys are only its fallback while unset.
 const GRANT_SETTINGS = {
-  stagedSignupGrantEnabled: true,
-  signupGrantCredits: SIGNUP_CREDITS,
-  verifiedUnlockCredits: UNLOCK_CREDITS,
-  signupGrantDailyBudget: ROOMY_BUDGET,
+  signupGrantInitialCredits: SIGNUP_CREDITS,
+  signupGrantDailyCredits: DRIP_CREDITS,
+  signupGrantDripCap: UNLOCK_CREDITS,
+  signupGrantSignupPoolDaily: ROOMY_POOL,
+  signupGrantTricklePoolDaily: ROOMY_POOL,
   signupGrantRiskPolicy: { enabled: false },
-  signupGrantActivityEnabled: true,
   signupGrantActivityMinActiveSeconds: MIN_ACTIVE_SECONDS,
-  signupGrantActivityDailyCredits: DRIP_CREDITS,
-  signupGrantActivityMaxCredits: DRIP_CREDITS,
+  // Off keeps the drip on the UTC day; on, previews pay it per 5-minute window instead.
   signupGrantActivityPreviewTestMode: false,
   maxSignupsPerIpPerDay: 0,
   maxSignupsPerAsnPerHour: 0,
@@ -106,10 +108,20 @@ test.describe('Staged signup grants', () => {
     test.skip(!openRegistration, 'Open registration is off on this env (core.setup enables it on previews).');
 
     const current = await readSettings(request);
+    const schedule = signupGrantScheduleFromValues(key => storedGrantCredits(key, current.get(key)), {
+      staged: isStoredToggleOn(current.get('stagedSignupGrantEnabled')),
+      activity: isStoredToggleOn(current.get('signupGrantActivityEnabled')),
+    });
+    // The schedule keys cannot be cleared once written, so one that had no row goes back to what the env paid.
+    const unsetSchedule: Partial<Record<GrantSettingKey, number>> = {
+      signupGrantInitialCredits: schedule.initialCredits,
+      signupGrantDailyCredits: schedule.dailyCredits,
+      signupGrantDripCap: schedule.dripCap,
+    };
     priorSettings = Object.fromEntries(
       (Object.keys(GRANT_SETTINGS) as GrantSettingKey[]).map(key => [
         key,
-        current.has(key) ? current.get(key) : settingsMap[key].defaultValue,
+        current.has(key) ? current.get(key) : (unsetSchedule[key] ?? settingsMap[key].defaultValue),
       ])
     );
     for (const [key, value] of Object.entries(GRANT_SETTINGS)) {
@@ -225,14 +237,14 @@ test.describe('Staged signup grants', () => {
     }
   });
 
-  test('a spent daily budget holds the tranche until an admin releases it, and revoke takes it back', async ({
+  test('a paused signup pool holds the tranche until an admin releases it, and revoke takes it back', async ({
     request,
     browser,
     baseURL,
     page,
   }) => {
-    // The first account's payouts drew from today's budget row, so a budget of 1 is already spent.
-    await apiUpdateAdminSetting(request, adminToken(), 'signupGrantDailyBudget', 1);
+    // A 0 pool pauses initial grants outright; an admin release bypasses the pool.
+    await apiUpdateAdminSetting(request, adminToken(), 'signupGrantSignupPoolDaily', 0);
     held = await register(request, 'held');
 
     const heldView = await apiGetSignupGrant(request, held.accessToken, held.userId);
