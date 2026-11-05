@@ -42,6 +42,10 @@ export function signedOutHeadlessCloudModelMessage(model: string): string {
   return `Not signed in, and the default model ${clean(model)} is not a local model. Pick a local model with: b4m models use <name>. ${SIGN_IN_OUTSIDE_HINT}`;
 }
 
+export function savedServerDownMessage(model: string, server: string, error: string): string {
+  return `The saved local default ${clean(model)} is on the model server ${clean(server)}, which did not answer: ${clean(error).replace(/\.+$/, '')}. Start it, or pick another model with: b4m models use <name>.`;
+}
+
 /** Signed out and nothing local can chat. `reason` says what was found and how to fix it. */
 export class NoLocalModelsError extends Error {
   constructor(readonly reason: string) {

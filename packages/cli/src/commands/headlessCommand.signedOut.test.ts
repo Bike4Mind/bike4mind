@@ -4,7 +4,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { startFakeVllm } from '@bike4mind/local-models/testing';
+import { startFakeServer, startFakeVllm } from '@bike4mind/local-models/testing';
 import { signedOutHeadlessCloudModelMessage } from '../bootstrap/signedOutLocal.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { handleHeadlessCommand } from './headlessCommand.js';
@@ -100,6 +100,21 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
+/** Saves one model server, id s1 named box, the way Desktop does. */
+async function saveServer(baseUrl: string): Promise<void> {
+  const server = {
+    id: 's1',
+    name: 'box',
+    kind: 'openai-compatible',
+    transport: { type: 'http', baseUrl },
+    access: 'chat',
+    auth: { type: 'none' },
+    models: [],
+    addedAt: '2026-10-01T00:00:00.000Z',
+  };
+  await writeFile(path.join(home, 'model-servers.json'), JSON.stringify({ version: 1, servers: [server] }));
+}
+
 /** `models` null means no Ollama answers; `local` origins (fake model servers) reach the real network. */
 async function runSignedOut(
   config: { defaultModel: string; localDefaultModel?: string },
@@ -158,24 +173,7 @@ describe('b4m -p while signed out', () => {
     async (_case, ollamaModels) => {
       const vllm = await startFakeVllm();
       try {
-        await writeFile(
-          path.join(home, 'model-servers.json'),
-          JSON.stringify({
-            version: 1,
-            servers: [
-              {
-                id: 's1',
-                name: 'box',
-                kind: 'openai-compatible',
-                transport: { type: 'http', baseUrl: vllm.baseUrl },
-                access: 'chat',
-                auth: { type: 'none' },
-                models: [],
-                addedAt: '2026-10-01T00:00:00.000Z',
-              },
-            ],
-          })
-        );
+        await saveServer(vllm.baseUrl);
 
         const output = await runSignedOut(
           { defaultModel: CLOUD_MODEL, localDefaultModel: 'local:srv-s1:qwen-small' },
@@ -190,6 +188,31 @@ describe('b4m -p while signed out', () => {
       } finally {
         await vllm.close();
       }
+    },
+    30_000
+  );
+
+  it.each([
+    ['Ollama is not running', null],
+    ['Ollama has other models', [LOCAL_MODEL]],
+  ])(
+    'names the saved model server holding the saved local default when it does not answer and %s',
+    async (_case, ollamaModels) => {
+      const gone = await startFakeServer({});
+      await gone.close();
+      await saveServer(gone.baseUrl);
+
+      const output = await runSignedOut(
+        { defaultModel: CLOUD_MODEL, localDefaultModel: 'local:srv-s1:qwen-small' },
+        ollamaModels,
+        [gone.baseUrl]
+      );
+
+      expect(output.error).toMatch(
+        /^The saved local default qwen-small is on the model server box, which did not answer: .+\. Start it, or pick another model with: b4m models use <name>\./
+      );
+      expect(output.error).not.toContain('Start Ollama');
+      expect(exitCodes).toEqual([1]);
     },
     30_000
   );

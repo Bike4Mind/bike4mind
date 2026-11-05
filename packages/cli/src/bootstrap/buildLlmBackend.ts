@@ -37,6 +37,7 @@ import {
   NoLocalModelsError,
   SignedOutCloudBackend,
   signedOutDefaultReplacedMessage,
+  savedServerDownMessage,
   signedOutHeadlessCloudModelMessage,
 } from './signedOutLocal.js';
 
@@ -280,7 +281,7 @@ export function resolveHeadlessModel(
 export function resolveSignedOutHeadlessModel(
   models: ModelInfo[],
   config: Pick<CliConfig, 'defaultModel' | 'localDefaultModel'>,
-  ollama: Pick<LocalModelsAttachment, 'ollamaHost'>
+  ollama: Pick<LocalModelsAttachment, 'ollamaHost' | 'serverFailures'>
 ): { modelInfo: ModelInfo; warning: string | null } {
   const { defaultModel, localDefaultModel } = config;
   requireLocalDefaultListed(models, defaultModel);
@@ -295,6 +296,8 @@ export function resolveSignedOutHeadlessModel(
       };
     }
   }
+  const serverDown = savedLocalDefaultDownMessage(config, ollama.serverFailures);
+  if (serverDown) throw new Error(serverDown);
   if (defaultModel === localDefaultModel) {
     throw new Error(
       `Model "${clean(defaultModel)}" is not available from Ollama${ollama.ollamaHost ? ` at ${clean(ollama.ollamaHost)}` : ''}. ` +
@@ -333,9 +336,21 @@ export interface LocalModelsAttachment {
   ollamaDetected: boolean;
   /** Saved model servers listed before startup went on: the default model's, if any, or all that answered when `signedOut` waited for them. */
   servers: { name: string; modelCount: number }[];
+  /** Other saved model servers that did not answer, by server id; complete once `later` settles. */
+  serverFailures: ReadonlyMap<string, { name: string; error: string }>;
   warnings: string[];
   /** Settles once every other saved model server has joined `llm` or been skipped. */
   later: Promise<void>;
+}
+
+/** Why the saved local default cannot be used when the saved model server holding it did not answer; else null. */
+export function savedLocalDefaultDownMessage(
+  config: Pick<CliConfig, 'localDefaultModel'>,
+  failures: LocalModelsAttachment['serverFailures']
+): string | null {
+  const onServer = config.localDefaultModel ? defaultOnServer(config.localDefaultModel) : null;
+  const failure = onServer ? failures.get(onServer.serverId) : undefined;
+  return onServer && failure ? savedServerDownMessage(onServer.model, failure.name, failure.error) : null;
 }
 
 export interface AttachLocalModelsOptions {
@@ -477,7 +492,7 @@ async function attachServers(
   deps: LocalModelsDeps
 ): Promise<{
   owner: (LlmRoute & { name: string }) | null;
-  others: { name: string; settled: Promise<Settled> }[];
+  others: { id: string; name: string; settled: Promise<Settled> }[];
   warnings: string[];
 }> {
   const wanted = defaultOnServer(config.defaultModel);
@@ -499,6 +514,7 @@ async function attachServers(
   const others = (all ? loaded.servers : [])
     .filter(server => server !== owner && !needsCredential(server, config.modelServerCredentials?.[server.id]?.secret))
     .map(server => ({
+      id: server.id,
       name: clean(server.name),
       settled: settle(attachServer(server, config, opts, deps, othersMs)),
     }));
@@ -601,17 +617,24 @@ export async function attachLocalModels(
   // deadline) are waited for before deciding nothing local can chat.
   let others = servers.others;
   const joined: (LlmRoute & { name: string })[] = [];
+  const serverFailures = new Map<string, { name: string; error: string }>();
   if (opts.signedOut && ollamaModels.length === 0 && !servers.owner && others.length > 0) {
-    for (const { name, settled } of others) {
+    for (const { id, name, settled } of others) {
       const result = await settled;
       if (result.route) joined.push({ ...result.route, name });
-      else logger.debug(`Model server ${name} skipped: ${result.error}`);
+      else {
+        serverFailures.set(id, { name, error: result.error });
+        logger.debug(`Model server ${name} skipped: ${result.error}`);
+      }
     }
     others = [];
   }
 
   if (opts.signedOut && ollamaModels.length === 0 && !servers.owner && !joined.some(r => r.models.length > 0)) {
-    throw new NoLocalModelsError(noLocalModelsReason(ollamaHost ?? ollama.emptyHost, ollama.error));
+    throw new NoLocalModelsError(
+      savedLocalDefaultDownMessage(config, serverFailures) ??
+        noLocalModelsReason(ollamaHost ?? ollama.emptyHost, ollama.error)
+    );
   }
 
   if (serverModels.length === 0 && ollamaModels.length === 0 && !servers.owner && joined.length === 0) {
@@ -642,6 +665,7 @@ export async function attachLocalModels(
     ollamaListingFailed: ollama.error !== undefined,
     ollamaDetected: ollama.detected,
     servers: listedServers.map(server => ({ name: server.name, modelCount: server.models.length })),
+    serverFailures,
     warnings,
   };
   if (routes.length === 0 && others.length === 0) {
@@ -649,9 +673,10 @@ export async function attachLocalModels(
   }
   const multi = deps.createMultiBackend(llm, serverModels, routes, config.defaultModel);
   const later = Promise.all(
-    others.map(({ name, settled }) =>
+    others.map(({ id, name, settled }) =>
       settled.then(async result => {
         if (!result.route) {
+          serverFailures.set(id, { name, error: result.error });
           logger.debug(`Model server ${name} skipped: ${result.error}`);
           return;
         }

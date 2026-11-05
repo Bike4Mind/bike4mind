@@ -214,6 +214,7 @@ import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
 import { runTurn } from './session/turnController.js';
+import { restartAfterSignIn } from './session/restartAfterSignIn.js';
 import {
   createFreshSession,
   resumeSession,
@@ -4207,9 +4208,11 @@ function CliApp() {
         configStore={state.configStore}
         onSuccess={() => {
           setState(prev => ({ ...prev, showLoginFlow: false }));
-          console.log('\n✅ Login successful! Initializing CLI...\n');
-          // Reinitialize after successful login
-          init().catch(err => {
+          restartAfterSignIn({
+            mcpManager: state.mcpManager,
+            restart: init,
+            print: line => console.log(`\n${line}\n`),
+          }).catch(err => {
             console.error('\n❌ Initialization failed:', err.message, '\n');
             exit();
           });
