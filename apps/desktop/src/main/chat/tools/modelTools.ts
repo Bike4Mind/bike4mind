@@ -147,7 +147,9 @@ export const modelScreenshot: ToolDefinition = {
     const pose = parsePose(input);
     const requested = typeof input.path === 'string' && input.path.trim() ? input.path.trim() : undefined;
     const report = await openAndBuild(model, requested, context);
-    if (!report.ok) return formatModelSummary(report);
+    // The open model is app-wide, so without a path it may be another session's or the user's own pick.
+    const which = requested ? '' : `No path given; used the model open in the pane: ${model.view.current().path}\n`;
+    if (!report.ok) return `${which}${formatModelSummary(report)}`;
     const png = Buffer.from(await model.view.capture(views, pose));
     const name = model.view.current().path?.split(/[\\/]/).pop() ?? 'model';
     const shownAs = pose === 'open' ? `${views.join(', ')}, joints open` : views.join(', ');
@@ -157,8 +159,8 @@ export const modelScreenshot: ToolDefinition = {
     const shown = showImage(context, png, 'image/png');
     const described = `Rendered ${name} from ${shownAs} (one tile per view, labelled).`;
     if (!shown.ok)
-      return `${described} The user sees it, but you cannot: ${shown.reason}.\n${formatModelSummary(report)}`;
-    return `${described} You see it below this result in this reply only.\n${formatModelSummary(report)}`;
+      return `${which}${described} The user sees it, but you cannot: ${shown.reason}.\n${formatModelSummary(report)}`;
+    return `${which}${described} You see it below this result in this reply only.\n${formatModelSummary(report)}`;
   },
 };
 

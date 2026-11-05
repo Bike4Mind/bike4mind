@@ -121,6 +121,24 @@ describe('model_screenshot', () => {
     );
   });
 
+  it('names the open file when no path is given, and only then', async () => {
+    const { root, context } = setup();
+    const opened = await modelScreenshot.run({ path: 'chest.model.js' }, context);
+    expect(opened).not.toContain('No path given');
+    const reused = await modelScreenshot.run({}, context);
+    expect(reused).toMatch(
+      new RegExp(`^No path given; used the model open in the pane: ${join(root, 'chest.model.js')}\\n`)
+    );
+  });
+
+  it('names the open file on a failed build too when no path is given', async () => {
+    const { root, view, context } = setup({ generation: 1, ok: false, error: 'boom' });
+    await view.open(join(root, 'chest.model.js'));
+    const text = await modelScreenshot.run({}, context);
+    expect(text).toContain(`used the model open in the pane: ${join(root, 'chest.model.js')}`);
+    expect(text).toContain('Build failed: boom');
+  });
+
   it('needs an open model when no path is given, and validates views', async () => {
     const { context } = setup();
     await expect(modelScreenshot.run({}, context)).rejects.toThrow(/No model is open/);
