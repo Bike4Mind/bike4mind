@@ -1,10 +1,9 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
-import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { AdminSubscriptionStripeParamsSchema } from '@client/app/utils/adminSubscriptionStripe';
 import { getAdminSubscriptionStripe } from '@server/admin/subscriptionStripe/getAdminSubscriptionStripe';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { baseApi } from '@server/middlewares/baseApi';
+import { adminApi } from '@server/middlewares/adminApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
 // Every Stripe SDK error (outage, timeout, auth, permission, invalid request) carries a `Stripe*` type. All of
@@ -15,14 +14,15 @@ const isStripeError = (error: unknown): boolean =>
 /**
  * One subscription's live Stripe data: GET /api/admin/subscriptions/[id]/stripe, where `id` is the Mongo id.
  * Read-only. Separate from the detail route so a Stripe failure never blanks the rest of the page.
- * Full admins only, like the detail and admin-log routes it sits beside: a delegated permission must not reach
- * billing data the page itself does not show it.
  */
-const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] })
+const handler = adminApi({
+  auth: 'jwtOnly',
+  requiredScopes: [ApiKeyScope.ADMIN],
+  adminPermissions: { GET: 'support:read' },
+})
   .use(rateLimit({ limit: 60, windowMs: 60_000, bucket: 'admin-subscription-stripe' }))
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
       const parsed = AdminSubscriptionStripeParamsSchema.safeParse(req.query);
       if (!parsed.success) throw new NotFoundError('Subscription not found');
       res.setHeader('Cache-Control', 'private, no-store');

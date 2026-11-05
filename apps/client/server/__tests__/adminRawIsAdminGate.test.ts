@@ -69,7 +69,6 @@ const RAW_GATE_ALLOWLIST = new Set<string>([
   'subscriptions/[id]/admin-log.ts',
   'subscriptions/[id]/comp.ts',
   'subscriptions/[id]/index.ts',
-  'subscriptions/[id]/stripe.ts',
   'subscriptions/[id]/sync.ts',
   'subscriptions/by-stripe/[stripeSubscriptionId].ts',
   'subscriptions/export.ts',
