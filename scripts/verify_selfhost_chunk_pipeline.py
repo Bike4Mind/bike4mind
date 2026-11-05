@@ -196,8 +196,8 @@ class Stack:
         self.api('PUT', url, raw=payload)
         return file_id
 
-    def search(self, query):
-        return self.api('POST', '/api/data-lakes/semantic-search', {'query': query, 'top_k': 10})
+    def search(self, query, tag):
+        return self.api('POST', '/api/data-lakes/semantic-search', {'query': query, 'top_k': 10, 'tags': [tag]})
 
     def sqs_call(self, **params):
         payload = urllib.parse.urlencode(params).encode()
@@ -255,6 +255,16 @@ def setting_value(name):
     )
 
 
+def restore_webhook(command, failing, run=None):
+    # Never let a failed restore mask the scenario error already in flight.
+    try:
+        (run or mc)(command)
+    except Exception:
+        print(f'WEBHOOK NOT RESTORED. Restore it manually with: {command}', file=sys.stderr)
+        if not failing:
+            raise
+
+
 def mc(command):
     return subprocess.run(
         [*COMPOSE, 'run', '--rm', '--no-deps', '--entrypoint', '/bin/sh', 'createbuckets', '-ec',
@@ -294,7 +304,7 @@ class Run:
     def happy_path(self):
         file_id, sentinel = self.new_file('happy')
         state = self.wait_chunked(file_id, self.timeout)
-        hit = poll(lambda: self.stack.search(sentinel), lambda r: search_hit(r, file_id), self.timeout,
+        hit = poll(lambda: self.stack.search(sentinel, self.prefix + 'happy'), lambda r: search_hit(r, file_id), self.timeout,
                    SEARCH_POLL_INTERVAL, what='semantic search to return the file')
         require(search_hit(hit, file_id), 'search did not return the uploaded file')
         self.happy = (file_id, state)
@@ -311,7 +321,8 @@ class Run:
             require(state['status'] == 'complete', f'expected complete after upload, got {state["status"]!r}')
             require(state['chunks'] == 0, f'webhook withheld but file already has {state["chunks"]} chunks')
         finally:
-            mc(f'mc event add local/{bucket} {WEBHOOK} --event put --ignore-existing')
+            restore_webhook(f'mc event add local/{bucket} {WEBHOOK} --event put --ignore-existing',
+                            failing=sys.exc_info()[0] is not None)
         # min age 2 min + 60s sweep tick + chunk/vectorize
         state = self.wait_chunked(file_id, max(self.timeout, 420))
         message = f'rescue sweep chunked and embedded it ({state["chunks"]} chunks)'

@@ -158,6 +158,26 @@ class ReplaySettledTests(unittest.TestCase):
         self.assertFalse(v.replay_verdict(4, 0)[0])
 
 
+class RestoreWebhookTests(unittest.TestCase):
+    @staticmethod
+    def boom(command):
+        raise RuntimeError('mc failed')
+
+    def test_failed_restore_is_swallowed_when_a_scenario_error_is_in_flight(self):
+        with mock.patch('sys.stderr') as err:
+            v.restore_webhook('mc event add x', failing=True, run=self.boom)
+        self.assertIn('NOT RESTORED', ''.join(c.args[0] for c in err.write.call_args_list))
+
+    def test_failed_restore_raises_when_nothing_else_failed(self):
+        with mock.patch('sys.stderr'), self.assertRaises(RuntimeError):
+            v.restore_webhook('mc event add x', failing=False, run=self.boom)
+
+    def test_successful_restore_runs_the_command(self):
+        run = mock.Mock()
+        v.restore_webhook('mc event add x', failing=False, run=run)
+        run.assert_called_once_with('mc event add x')
+
+
 class SearchPacingTests(unittest.TestCase):
     def test_interval_under_rate_limit(self):
         self.assertGreaterEqual(v.SEARCH_POLL_INTERVAL, 6)
