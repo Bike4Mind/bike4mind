@@ -88,7 +88,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | inbox | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
 | integrations | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | internal | 2 | 0 | 0 | 0 | 0 | 2 | 2 |
-| invites | 6 | 0 | 6 | 0 | 0 | 0 | 1 |
+| invites | 6 | 0 | 4 | 2 | 0 | 0 | 1 |
 | jupyter | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
 | keep | 1 | 0 | 0 | 1 | 0 | 0 | 1 |
 | lattice | 7 | 0 | 7 | 0 | 0 | 0 | 0 |
@@ -984,8 +984,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/invites/[id]` | GET, DELETE | jwt+key | - | no | - | 2: `hooks/data/invites.ts`, `utils/invitesAPICalls.ts` |
 | `/api/invites/[id]/accept` | POST | jwt+key | - | no | - | 1: `utils/invitesAPICalls.ts` |
 | `/api/invites/[id]/refuse` | POST | jwt+key | - | no | - | 1: `utils/invitesAPICalls.ts` |
-| `/api/invites/batch` | POST | jwt+key | - | no | - | 1: `hooks/data/invites.ts` |
-| `/api/invites/bulk` | POST | jwt+key | - | no | - | 1: `hooks/data/invites.ts` |
+| `/api/invites/batch` | POST | jwt | - | no | - | 1: `hooks/data/invites.ts` |
+| `/api/invites/bulk` | POST | jwt | - | no | - | 1: `hooks/data/invites.ts` |
 
 ### jupyter
 

@@ -30,7 +30,7 @@ const toItemError = (error: unknown) => {
   return typeof status === 'number' && status < 500 && error instanceof Error ? error.message : 'Could not share';
 };
 
-const handler = baseApi().post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   outboundActionGate(),
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
     const parsed = BatchInviteBodySchema.safeParse(req.body);

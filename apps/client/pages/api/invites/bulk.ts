@@ -29,7 +29,7 @@ const toItemError = (error: unknown, fallback: string) => {
   return typeof status === 'number' && status < 500 && error instanceof Error ? error.message : fallback;
 };
 
-const handler = baseApi().post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, BulkInviteResponse, unknown>(async (req, res) => {
     const parsed = BulkInviteBodySchema.safeParse(req.body);
     if (!parsed.success) {
