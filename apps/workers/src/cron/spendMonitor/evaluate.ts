@@ -17,6 +17,7 @@ import {
 } from './rules';
 import { resolveScopes, scopeMapKey, type ResolvedScope, type ResolveScopeDeps, type ScopeKey } from './resolveScope';
 import { buildSpendAlertMessage, type SpendAlertMessageInput } from './slackMessage';
+import { resolveTrustedScopes, type SpendTrustConfig } from './trust';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOWS_PER_DAY = DAY_MS / SPEND_WINDOW_MS;
@@ -31,7 +32,7 @@ const MONGO_DUPLICATE_KEY = 11000;
 type SpendLogger = { log: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
 
 export type EvaluateDeps = {
-  rollups: Pick<ISpendRollupRepository, 'sumWindow' | 'windowSeries' | 'latestBucketStart'>;
+  rollups: Pick<ISpendRollupRepository, 'sumWindow' | 'windowSeries' | 'latestBucketStart' | 'sourceMix'>;
   alerts: Pick<ISpendAlertRepository, 'findActive' | 'create' | 'update' | 'applyEvaluation'>;
   resolveScopeDeps: ResolveScopeDeps;
   /** Posting is best effort; a disabled Slack integration passes a no-op, which counts as success. */
@@ -88,35 +89,51 @@ async function platformBreaches(
   return evaluatePlatform(observe('credits'), observe('costUsd'), thresholds);
 }
 
-async function scopeBreachesForType(
+type ScopeCandidates = { scopeType: AccountScopeType; totals: AccountTotals; candidates: string[] };
+
+async function scopeCandidatesForType(
   scopeType: AccountScopeType,
   windowStart: Date,
   windowEnd: Date,
   active: SpendAlertRecord[],
   deps: EvaluateDeps,
   thresholds: SpendThresholds
-): Promise<{ breaches: SpendBreach[]; totals: AccountTotals }> {
+): Promise<ScopeCandidates> {
   const totals = await deps.rollups.sumWindow(scopeType, windowStart, windowEnd);
-  const candidateFloor = Math.min(thresholds.accountSpikeFloorCredits, thresholds.accountCeilingCredits);
+  // Trust is not known yet, so the lowest limit of either tier decides who is worth a closer look.
+  const candidateFloor = Math.min(
+    thresholds.accountSpikeFloorCredits,
+    thresholds.accountCeilingCredits,
+    thresholds.trustedAccountSpikeFloorCredits,
+    thresholds.trustedAccountCeilingCredits
+  );
 
   const candidates = new Set<string>();
   for (const [scopeId, rollup] of totals) if (rollup.credits >= candidateFloor) candidates.add(scopeId);
   // An active incident keeps being observed even when its scope fell out of the window, so it can clear.
   for (const alert of active) if (alert.scopeType === scopeType) candidates.add(alert.scopeId);
+  return { scopeType, totals, candidates: [...candidates] };
+}
 
-  if (candidates.size === 0) return { breaches: [], totals };
-
+async function scopeBreaches(
+  { scopeType, totals, candidates }: ScopeCandidates,
+  windowStart: Date,
+  trustedKeys: ReadonlySet<string>,
+  deps: EvaluateDeps,
+  thresholds: SpendThresholds
+): Promise<SpendBreach[]> {
+  if (candidates.length === 0) return [];
   const history = await deps.rollups.windowSeries(
     scopeType,
-    [...candidates],
+    candidates,
     new Date(windowStart.getTime() - SCOPE_BASELINE_DAYS * DAY_MS),
     windowStart
   );
-  const breaches = [...candidates].flatMap(scopeId => {
+  return candidates.flatMap(scopeId => {
     const baseline = scopeBaseline(windowSums(history.get(scopeId) ?? [], windowStart, SCOPE_BASELINE_DAYS, 'credits'));
-    return evaluateScope({ scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline }, thresholds);
+    const tier = trustedKeys.has(scopeMapKey(scopeType, scopeId)) ? 'trusted' : 'standard';
+    return evaluateScope({ scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline }, thresholds, tier);
   });
-  return { breaches, totals };
 }
 
 /** Writes each decision; returns what to announce. A failed write is reported, never silently dropped. */
@@ -185,10 +202,7 @@ const topEntries = (totals: Map<string, ISpendRollup>, size: number): [string, n
     .sort((a, b) => b[1] - a[1])
     .slice(0, size);
 
-/**
- * Model rollups are platform-wide, so the breakdown is only meaningful for platform incidents.
- * The rollup carries no source dimension, so no source mix is produced.
- */
+/** Model rollups are platform-wide, so the model and account breakdown is only meaningful for platform incidents. */
 async function platformBreakdown(
   { start, end, accountTotals }: EvaluatedWindow,
   deps: EvaluateDeps
@@ -222,6 +236,31 @@ async function platformBreakdown(
   };
 }
 
+type SourceMix = Record<string, number>;
+
+/**
+ * Credits per completion source (web, cli, desktop, ...) for each announced scope. Best effort: a failed
+ * read is logged and the alert still goes out without the mix.
+ */
+async function sourceMixByScope(
+  keys: ScopeKey[],
+  window: EvaluatedWindow,
+  deps: EvaluateDeps
+): Promise<Map<string, SourceMix>> {
+  const mix = new Map<string, SourceMix>();
+  if (keys.length === 0) return mix;
+  try {
+    for (const row of await deps.rollups.sourceMix(window.start, window.end, keys)) {
+      if (row.credits <= 0) continue;
+      const key = scopeMapKey(row.scopeType, row.scopeId);
+      mix.set(key, { ...mix.get(key), [row.source]: row.credits });
+    }
+  } catch (error) {
+    deps.logger.error('spend-monitor-source-mix-failed', { error });
+  }
+  return mix;
+}
+
 async function buildMessages(
   notifications: Notification[],
   window: EvaluatedWindow,
@@ -234,6 +273,10 @@ async function buildMessages(
     .filter(n => n.alert.scopeType !== 'platform')
     .map(n => ({ scopeType: n.alert.scopeType, scopeId: n.alert.scopeId }));
   const resolved = await resolveScopes([...accountKeys, ...(platform?.accountKeys ?? [])], deps.resolveScopeDeps);
+  const announcedKeys: ScopeKey[] = notifications
+    .filter(n => n.kind !== 'resolve')
+    .map(n => ({ scopeType: n.alert.scopeType, scopeId: n.alert.scopeId }));
+  const sourceMix = await sourceMixByScope(announcedKeys, window, deps);
 
   const topAccounts = platform?.breakdown.topAccounts?.map(account => ({
     ...account,
@@ -249,7 +292,13 @@ async function buildMessages(
           ...platformScope,
           label: `${alert.scopeType} ${alert.scopeId}`,
         });
-    const breakdown = isPlatform && platform ? { topModels: platform.breakdown.topModels, topAccounts } : undefined;
+    const sources = sourceMix.get(scopeMapKey(alert.scopeType, alert.scopeId));
+    const breakdown =
+      isPlatform && platform
+        ? { topModels: platform.breakdown.topModels, topAccounts, sources }
+        : sources
+          ? { topModels: [], sources }
+          : undefined;
     return {
       notification,
       message: buildSpendAlertMessage({ kind: notification.kind, alert, scope, breakdown, ...deps.messageContext }),
@@ -309,7 +358,8 @@ async function announce(
 export async function evaluateSpend(
   now: Date,
   deps: EvaluateDeps,
-  thresholds: SpendThresholds
+  thresholds: SpendThresholds,
+  trust: SpendTrustConfig
 ): Promise<{ breaches: number; posted: number }> {
   const latestBucket = await deps.rollups.latestBucketStart();
   if (!latestBucket) return { breaches: 0, posted: 0 };
@@ -318,12 +368,26 @@ export async function evaluateSpend(
   const windowStart = new Date(windowEnd.getTime() - SPEND_WINDOW_MS);
   const active = await deps.alerts.findActive();
 
+  // The platform total keeps every account, trusted or not, so a platform-wide anomaly still shows.
   const breaches = await platformBreaches(windowStart, windowEnd, deps, thresholds);
   const accountTotals: WindowAccountTotals = new Map();
+  const perType: ScopeCandidates[] = [];
   for (const scopeType of ACCOUNT_SCOPE_TYPES) {
-    const result = await scopeBreachesForType(scopeType, windowStart, windowEnd, active, deps, thresholds);
-    breaches.push(...result.breaches);
-    accountTotals.set(scopeType, result.totals);
+    const candidates = await scopeCandidatesForType(scopeType, windowStart, windowEnd, active, deps, thresholds);
+    perType.push(candidates);
+    accountTotals.set(scopeType, candidates.totals);
+  }
+  // Failing closed: if the lookup fails every account is held to the standard thresholds, so alerts still fire.
+  const trustedKeys = await resolveTrustedScopes(
+    perType.flatMap(({ scopeType, candidates }) => candidates.map(scopeId => ({ scopeType, scopeId }))),
+    trust,
+    deps.resolveScopeDeps
+  ).catch(error => {
+    deps.logger.error('spend-monitor-trust-lookup-failed', { error });
+    return new Set<string>();
+  });
+  for (const candidates of perType) {
+    breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, deps, thresholds)));
   }
   const window: EvaluatedWindow = { start: windowStart, end: windowEnd, accountTotals };
 

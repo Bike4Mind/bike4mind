@@ -1,4 +1,4 @@
-import mongoose, { AnyBulkWriteOperation, Model, Schema, model } from 'mongoose';
+import mongoose, { AnyBulkWriteOperation, Model, PipelineStage, Schema, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import {
   AI_USAGE_TRANSACTION_TYPES,
@@ -10,6 +10,7 @@ import {
   SPEND_ROLLUP_SCOPE_TYPES,
   SpendRollupScopeType,
   SpendSeriesPoint,
+  SpendSourceTotal,
 } from '@bike4mind/common';
 import { API_KEY_REQUEST_TRANSACTION_TYPES, CreditTransaction } from './CreditTransactionModel';
 import { UsageEvent } from './UsageEventModel';
@@ -17,6 +18,9 @@ import { UsageEvent } from './UsageEventModel';
 export type ISpendRollupDocument = ISpendRollup & IMongoDocument;
 
 const PLATFORM_SCOPE_ID = 'all';
+/** Scope types the ledger keys by ownerType/ownerId. */
+const OWNER_SCOPE_TYPES = ['User', 'Organization', 'Agent'] as const;
+type OwnerScopeType = (typeof OWNER_SCOPE_TYPES)[number];
 
 // 35 days: the longest baseline window the detectors read, plus slack.
 const SPEND_ROLLUP_TTL_SECONDS = 3024000;
@@ -202,6 +206,62 @@ export class SpendRollupRepository extends BaseRepository<ISpendRollupDocument> 
       series.set(doc.scopeId, bucket);
     }
     return series;
+  }
+
+  async sourceMix(
+    from: Date,
+    to: Date,
+    scopes: Array<{ scopeType: SpendRollupScopeType; scopeId: string }>
+  ): Promise<SpendSourceTotal[]> {
+    const owners = scopes.filter((scope): scope is { scopeType: OwnerScopeType; scopeId: string } =>
+      (OWNER_SCOPE_TYPES as readonly string[]).includes(scope.scopeType)
+    );
+    const apiKeyIds = [...new Set(scopes.filter(s => s.scopeType === 'apiKey').map(s => s.scopeId))];
+    const wantsPlatform = scopes.some(s => s.scopeType === 'platform');
+
+    const bySource = (id: Record<string, unknown>): PipelineStage.Group => ({
+      $group: { _id: { ...id, source: { $ifNull: ['$source', 'unknown'] } }, credits: { $sum: { $abs: '$credits' } } },
+    });
+    const facets: Record<string, PipelineStage.FacetPipelineStage[]> = {};
+    if (wantsPlatform) facets.platform = [bySource({})];
+    if (owners.length > 0) {
+      facets.owner = [
+        { $match: { $or: owners.map(o => ({ ownerType: o.scopeType, ownerId: o.scopeId })) } },
+        bySource({ ownerType: '$ownerType', ownerId: '$ownerId' }),
+      ];
+    }
+    if (apiKeyIds.length > 0) {
+      facets.apiKey = [{ $match: { apiKeyId: { $in: apiKeyIds } } }, bySource({ apiKeyId: '$apiKeyId' })];
+    }
+    if (Object.keys(facets).length === 0) return [];
+
+    type Row<Id> = { _id: Id & { source: string }; credits: number };
+    const [result] = await CreditTransaction.aggregate<{
+      platform?: Row<Record<string, never>>[];
+      owner?: Row<{ ownerType: OwnerScopeType; ownerId: string }>[];
+      apiKey?: Row<{ apiKeyId: string }>[];
+    }>([{ $match: ledgerUsageMatch(from, to) }, { $facet: facets }]);
+
+    return [
+      ...(result?.platform ?? []).map(row => ({
+        scopeType: 'platform' as const,
+        scopeId: PLATFORM_SCOPE_ID,
+        source: row._id.source,
+        credits: row.credits,
+      })),
+      ...(result?.owner ?? []).map(row => ({
+        scopeType: row._id.ownerType,
+        scopeId: row._id.ownerId,
+        source: row._id.source,
+        credits: row.credits,
+      })),
+      ...(result?.apiKey ?? []).map(row => ({
+        scopeType: 'apiKey' as const,
+        scopeId: row._id.apiKeyId,
+        source: row._id.source,
+        credits: row.credits,
+      })),
+    ];
   }
 
   private async aggregateLedger(from: Date, to: Date) {

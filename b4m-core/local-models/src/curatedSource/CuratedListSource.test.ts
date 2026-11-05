@@ -16,14 +16,14 @@ import {
 import { CURATED_BACKOFF_BASE_MS, CURATED_CHECK_INTERVAL_MS, CuratedListSource } from './CuratedListSource';
 import { CuratedStore } from './CuratedStore';
 
-// Pinned at sequence 2 so these cases do not move each time the shipped catalog is revised.
+// The repo's list re-pinned at sequence 2, whatever sequence the repo is at; these tests publish lists on both sides of it.
 const BUNDLED_CURATED_TEXT = (() => {
   const list = JSON.parse(
     readFileSync(new URL('../../../../catalog/model-hub/curated-v2.json', import.meta.url), 'utf8')
   ) as { sequence: number; changelog: { sequence: number }[] };
   list.sequence = 2;
-  list.changelog = list.changelog.filter(entry => entry.sequence <= 2);
-  return JSON.stringify(list, null, 2);
+  list.changelog = [{ ...list.changelog[0], sequence: 2 }];
+  return `${JSON.stringify(list, null, 2)}\n`;
 })();
 
 const URL_BASE = 'https://catalog.example.com/model-hub/curated-v2/';

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ISpendAlert, ISpendRollup, SpendAlertRecord, SpendRollupScopeType } from '@bike4mind/common';
+import type {
+  ISpendAlert,
+  ISpendRollup,
+  SpendAlertRecord,
+  SpendRollupScopeType,
+  SpendSourceTotal,
+} from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
 import { evaluateSpend, type EvaluateDeps } from './evaluate';
 import type { SpendThresholds } from './rules';
 import { createSpendPost } from './slackPost';
+import { NO_TRUST, parseSpendTrustConfig, type SpendTrustConfig } from './trust';
 
 const BUCKET_MS = 5 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,6 +25,8 @@ const thresholds: SpendThresholds = {
   accountSpikeRatio: 10,
   accountSpikeFloorCredits: 1000,
   accountCeilingCredits: 5000,
+  trustedAccountSpikeFloorCredits: 20000,
+  trustedAccountCeilingCredits: 40000,
 };
 
 const rollup = (
@@ -81,6 +90,12 @@ function createFakes() {
     return platform.length > 0 ? new Date(Math.max(...platform)) : null;
   });
 
+  let sourceTotals: SpendSourceTotal[] = [];
+  const sourceMix = vi.fn(
+    async (_from: Date, _to: Date, scopes: Array<{ scopeType: SpendRollupScopeType; scopeId: string }>) =>
+      sourceTotals.filter(row => scopes.some(s => s.scopeType === row.scopeType && s.scopeId === row.scopeId))
+  );
+
   const create = vi.fn(async (alert: ISpendAlert) => {
     if (alert.openKey && alerts.some(existing => existing.openKey === alert.openKey)) {
       throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
@@ -120,11 +135,15 @@ function createFakes() {
     posts.push(message);
   });
 
+  const findUsersByIds = vi.fn<EvaluateDeps['resolveScopeDeps']['findUsersByIds']>(async ids =>
+    ids.map(id => ({ id, email: `${id}@example.com`, emailVerified: true }))
+  );
+
   const deps: EvaluateDeps = {
-    rollups: { sumWindow, windowSeries, latestBucketStart },
+    rollups: { sumWindow, windowSeries, latestBucketStart, sourceMix },
     alerts: { findActive, create, update, applyEvaluation } as unknown as EvaluateDeps['alerts'],
     resolveScopeDeps: {
-      findUsersByIds: async ids => ids.map(id => ({ id, email: `${id}@example.com` })),
+      findUsersByIds,
       findOrganizationsByIds: async () => [],
       findApiKeysByIds: async () => [],
       findAgentsByIds: async () => [],
@@ -144,6 +163,11 @@ function createFakes() {
     applyEvaluation,
     sumWindow,
     windowSeries,
+    sourceMix,
+    findUsersByIds,
+    setSourceTotals: (next: SpendSourceTotal[]) => {
+      sourceTotals = next;
+    },
     setRollups: (next: ISpendRollup[]) => {
       storedRollups = next;
     },
@@ -154,7 +178,8 @@ function createFakes() {
   };
 }
 
-const run = (fakes: ReturnType<typeof createFakes>) => evaluateSpend(fakes.now(), fakes.deps, thresholds);
+const run = (fakes: ReturnType<typeof createFakes>, trust: SpendTrustConfig = NO_TRUST) =>
+  evaluateSpend(fakes.now(), fakes.deps, thresholds, trust);
 
 describe('evaluateSpend', () => {
   it('opens and posts once on a platform spike, stays quiet at the same value, escalates at double', async () => {
@@ -430,5 +455,114 @@ describe('evaluateSpend', () => {
       ([scopeType]) => scopeType === 'User' || scopeType === 'Organization'
     );
     expect(accountSums).toHaveLength(2);
+  });
+
+  describe('trusted accounts', () => {
+    const trustedDomain = parseSpendTrustConfig('example.com', '');
+    /** 10,000 credits per bucket: 30,000 in the window, typical heavy desktop use. */
+    const heavyUser = (id: string) => windowBuckets('User', id, 10_000);
+
+    it('keeps a trusted account under its higher ceiling quiet', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 100), ...heavyUser('staff')]);
+
+      await expect(run(fakes, trustedDomain)).resolves.toEqual({ breaches: 0, posted: 0 });
+      expect(fakes.alerts).toEqual([]);
+    });
+
+    it('pages a trusted account past the trusted ceiling and marks it trusted', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 100),
+        ...windowBuckets('User', 'staff', 15_000),
+      ]);
+
+      await run(fakes, trustedDomain);
+
+      const ceiling = fakes.alerts.find(alert => alert.rule === 'account_ceiling');
+      expect(ceiling).toMatchObject({ severity: 'critical', context: { trusted: true } });
+      expect(JSON.stringify(fakes.posts)).toContain('staff@example.com (trusted)');
+    });
+
+    it('holds an untrusted account to the standard ceiling', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 100), ...heavyUser('outsider')]);
+
+      await run(fakes, parseSpendTrustConfig('corp.example.org', ''));
+
+      const ceiling = fakes.alerts.find(alert => alert.rule === 'account_ceiling');
+      expect(ceiling?.severity).toBe('critical');
+      expect(ceiling?.context).not.toHaveProperty('trusted');
+    });
+
+    it('falls back to standard thresholds and still alerts when the trust lookup fails', async () => {
+      const fakes = createFakes();
+      fakes.findUsersByIds.mockRejectedValueOnce(new Error('users down'));
+      fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 100), ...heavyUser('staff')]);
+
+      await run(fakes, trustedDomain);
+
+      const ceiling = fakes.alerts.find(alert => alert.rule === 'account_ceiling');
+      expect(ceiling).toMatchObject({ severity: 'critical' });
+      expect(ceiling?.context).not.toHaveProperty('trusted');
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-trust-lookup-failed', expect.anything());
+    });
+
+    it('loads the users behind every candidate scope in a single batch', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([
+        ...quietPlatformHistory(),
+        ...windowBuckets('platform', 'all', 100),
+        ...heavyUser('staff-1'),
+        ...heavyUser('staff-2'),
+        ...heavyUser('staff-3'),
+      ]);
+
+      await run(fakes, trustedDomain);
+
+      expect(fakes.findUsersByIds).toHaveBeenCalledTimes(1);
+      expect([...fakes.findUsersByIds.mock.calls[0][0]].sort()).toEqual(['staff-1', 'staff-2', 'staff-3']);
+    });
+
+    it('still counts trusted spend toward the platform total', async () => {
+      const fakes = createFakes();
+      fakes.setRollups([...quietPlatformHistory(), ...windowBuckets('platform', 'all', 10_000), ...heavyUser('staff')]);
+
+      await run(fakes, trustedDomain);
+
+      expect(fakes.alerts.map(alert => alert.rule)).toEqual(['platform_spike']);
+    });
+  });
+
+  it('shows where the spend came from on each announced alert', async () => {
+    const fakes = createFakes();
+    fakes.setRollups([
+      ...quietPlatformHistory(),
+      ...windowBuckets('platform', 'all', 100),
+      ...windowBuckets('User', 'u1', 2000),
+    ]);
+    fakes.setSourceTotals([
+      { scopeType: 'User', scopeId: 'u1', source: 'cli', credits: 1000 },
+      { scopeType: 'User', scopeId: 'u1', source: 'desktop', credits: 5000 },
+    ]);
+
+    await run(fakes);
+
+    expect(fakes.sourceMix).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(fakes.posts[0])).toContain('desktop: 5,000\\ncli: 1,000');
+  });
+
+  it('still posts the alert when the source mix read fails', async () => {
+    const fakes = createFakes();
+    fakes.setRollups([
+      ...quietPlatformHistory(),
+      ...windowBuckets('platform', 'all', 100),
+      ...windowBuckets('User', 'u1', 2000),
+    ]);
+    fakes.sourceMix.mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
+    expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-source-mix-failed', expect.anything());
   });
 });

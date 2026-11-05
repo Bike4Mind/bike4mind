@@ -45,7 +45,7 @@ import { handler } from './spendMonitor';
 
 const event = { time: '2026-10-30T10:12:00Z' };
 
-const defaultSettings: Record<string, boolean | number> = {
+const defaultSettings: Record<string, boolean | number | string> = {
   spendMonitorEnabled: true,
   spendMonitorSlackEnabled: false,
   spendMonitorPlatformSpikeRatio: 3,
@@ -55,9 +55,13 @@ const defaultSettings: Record<string, boolean | number> = {
   spendMonitorAccountSpikeRatio: 10,
   spendMonitorAccountSpikeFloorCredits: 1000,
   spendMonitorAccountCeilingCredits: 5000,
+  spendMonitorTrustedEmailDomains: '',
+  spendMonitorTrustedAccountIds: '',
+  spendMonitorTrustedAccountSpikeFloorCredits: 20000,
+  spendMonitorTrustedAccountCeilingCredits: 40000,
 };
 
-const useSettings = (overrides: Record<string, boolean | number> = {}) => {
+const useSettings = (overrides: Record<string, boolean | number | string> = {}) => {
   const settings = { ...defaultSettings, ...overrides };
   mocks.getSettingsValue.mockImplementation((key: string) => settings[key]);
 };
@@ -134,10 +138,28 @@ describe('spendMonitor handler', () => {
       accountSpikeRatio: 10,
       accountSpikeFloorCredits: 1000,
       accountCeilingCredits: 5000,
+      trustedAccountSpikeFloorCredits: 20000,
+      trustedAccountCeilingCredits: 40000,
     });
     expect(mocks.rollupBucket.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.evaluateSpend.mock.invocationCallOrder[0]
     );
+  });
+
+  it('passes the trusted domains and account ids parsed from settings', async () => {
+    mocks.latestBucketStart.mockResolvedValue(new Date('2026-10-30T09:55:00.000Z'));
+    useSettings({
+      spendMonitorTrustedEmailDomains: 'Example.com, @corp.example.org',
+      spendMonitorTrustedAccountIds: 'org-1 user-2',
+    });
+
+    await handler(event);
+
+    const [, , , trust] = mocks.evaluateSpend.mock.calls[0];
+    expect(trust).toEqual({
+      emailDomains: new Set(['example.com', 'corp.example.org']),
+      accountIds: new Set(['org-1', 'user-2']),
+    });
   });
 
   it('wires the post to Slack only when spendMonitorSlackEnabled is true', async () => {

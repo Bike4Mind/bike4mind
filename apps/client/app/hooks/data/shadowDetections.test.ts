@@ -30,6 +30,7 @@ const row = (over: Partial<ShadowDetectionRow> = {}): ShadowDetectionRow => ({
   signals: [{ key: 'ipSignups', label: 'Self-serve signups from this IP', observed: 3, threshold: 1 }],
   windowMinutes: 180,
   group: null,
+  payment: null,
   detectedAt: '2026-10-01T00:00:00.000Z',
   verdict: null,
   verdicts: [],

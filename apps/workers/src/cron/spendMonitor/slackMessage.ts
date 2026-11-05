@@ -70,7 +70,8 @@ function buildResolveMessage(input: SpendAlertMessageInput, title: string): Slac
     alert.rule === 'platform_cost_spike' ? formatUsd(alert.peakValue) : `${formatCredits(alert.peakValue)} credits`;
   const endedAt = alert.resolvedAt ?? new Date();
   const duration = formatDuration(endedAt.getTime() - alert.openedAt.getTime());
-  const line = `Resolved: ${title} - ${scope.label}, peak ${peak}, lasted ${duration}`;
+  const tier = alert.context.trusted === true ? ' (trusted)' : '';
+  const line = `Resolved: ${title} - ${scope.label}${tier}, peak ${peak}, lasted ${duration}`;
 
   return composeAlarmMessage({
     stage: input.stage,
@@ -92,9 +93,10 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   const baseline = numberOrNull(alert.context.baseline);
   const ratio = numberOrNull(alert.context.ratio);
   const isCost = alert.rule === 'platform_cost_spike';
+  const trusted = alert.context.trusted === true;
 
   const fields = [
-    `*Scope*\n${safe(scope.label)}`,
+    `*Scope*\n${safe(scope.label)}${trusted ? ' (trusted)' : ''}`,
     `*Last ${WINDOW_LABEL}*\n${formatAmount(alert.rule, alert.lastValue, creditUsd)}`,
     `*Normal (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
@@ -110,11 +112,11 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     const lines = breakdown.topAccounts.map(a => `${safe(a.label)}: ${formatCredits(a.credits)}`);
     sections.push(`*Top accounts (credits)*\n${lines.join('\n')}`);
   }
-  if (!PLATFORM_RULES.has(alert.rule) && breakdown?.sources && Object.keys(breakdown.sources).length > 0) {
-    const lines = Object.entries(breakdown.sources).map(
-      ([source, credits]) => `${safe(source)}: ${formatCredits(credits)}`
-    );
-    sections.push(`*Source mix (credits)*\n${lines.join('\n')}`);
+  if (breakdown?.sources && Object.keys(breakdown.sources).length > 0) {
+    const lines = Object.entries(breakdown.sources)
+      .sort((left, right) => right[1] - left[1])
+      .map(([source, credits]) => `${safe(source)}: ${formatCredits(credits)}`);
+    sections.push(`*Where it was spent (credits)*\n${lines.join('\n')}`);
   }
 
   const buttons: { label: string; url: string }[] = [];
@@ -125,6 +127,7 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   }
 
   const context = [safe(stage), `${kind === 'escalate' ? 'escalated, ' : ''}${alert.severity}`];
+  if (trusted) context.push('trusted-account limits');
   if (!isCost) context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
 
   return composeAlarmMessage({

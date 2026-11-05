@@ -52,6 +52,9 @@ export * from './registrableDomain';
 // Also available via the lightweight `@bike4mind/utils/escapeRegex` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './escapeRegex';
+// Also available via the lightweight `@bike4mind/utils/escapeHtml` subpath -
+// prefer that everywhere; the barrel is too heavy for the HTML/email builders.
+export * from './escapeHtml';
 // Also available via the lightweight `@bike4mind/utils/safeObjectKey` subpath.
 export * from './safeObjectKey';
 // Also available via the lightweight `@bike4mind/utils/globMatches` subpath.

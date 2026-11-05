@@ -39,7 +39,6 @@ export * from './UserModel';
 export * from './UserUsagePatternSignalsModel';
 export * from './VoiceIdModel';
 export * from './WsConnectTicketModel';
-export * from './GithubUnlockClaimModel';
 
 export * from './SignupProtectionModel';
 export * from './SignupGrantBudgetModel';

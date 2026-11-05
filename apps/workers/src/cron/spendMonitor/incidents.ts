@@ -18,6 +18,13 @@ const ESCALATION_MULTIPLE = 2;
 
 const SEVERITY_RANK: Record<SpendAlertSeverity, number> = { warning: 0, critical: 1 };
 
+/** Snapshot rendered in Slack; `trusted` is only written for a trusted scope, so a standard one keeps its shape. */
+const contextOf = (breach: SpendBreach): Record<string, unknown> => ({
+  baseline: breach.baseline,
+  ratio: breach.ratio,
+  ...(breach.trusted ? { trusted: true } : {}),
+});
+
 const higherSeverity = (a: SpendAlertSeverity, b: SpendAlertSeverity): SpendAlertSeverity =>
   SEVERITY_RANK[a] >= SEVERITY_RANK[b] ? a : b;
 
@@ -27,7 +34,7 @@ function decideForBreach(alert: SpendAlertRecord, breach: SpendBreach, windowEnd
     peakValue: Math.max(alert.peakValue, breach.value),
     clearRuns: 0,
     lastEvaluatedWindowEnd: windowEnd,
-    context: { baseline: breach.baseline, ratio: breach.ratio },
+    context: contextOf(breach),
   };
   const severity = higherSeverity(alert.severity, breach.severity);
   // Compared against what was announced, not the stored severity, so a critical whose post failed is retried.
@@ -96,7 +103,7 @@ export function decideIncidents(
         lastValue: breach.value,
         clearRuns: 0,
         lastEvaluatedWindowEnd: windowEnd,
-        context: { baseline: breach.baseline, ratio: breach.ratio },
+        context: contextOf(breach),
       },
     });
   }
