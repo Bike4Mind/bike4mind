@@ -93,7 +93,8 @@ export class LocalServerSupervisor {
 
   /**
    * Takes back the servers an earlier run listed and did not stop, when `accepts` still wants each one: only a process
-   * with the recorded pid and start time that still listens on the recorded port. Drops every other record.
+   * with the recorded pid and start time that still listens on the recorded port. Drops every other record,
+   * except one whose process cannot be read (see stillRuns).
    */
   async adopt(accepts: (record: OwnedRecord) => boolean): Promise<void> {
     const file = this.deps.records;
@@ -142,7 +143,10 @@ export class LocalServerSupervisor {
     if (this.unverified.size > 0 || this.records.size !== listedCount || reset) await this.persist();
   }
 
-  /** Null when the probe cannot tell after a retry; the record is then kept for later launches, up to three that cannot read it. */
+  /**
+   * Null when the probe cannot tell after a retry; the record is then kept for later launches,
+   * up to three that cannot read it.
+   */
   private async stillRuns(record: OwnedRecord): Promise<boolean | null> {
     for (let attempt = 0; ; attempt++) {
       try {
