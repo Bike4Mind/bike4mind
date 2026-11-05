@@ -393,6 +393,20 @@ describe('firecrawlFetch page no engine could reach', () => {
     expect(context.logger.error).not.toHaveBeenCalled();
   });
 
+  it('maps it for a PDF URL too and reports the page as unreachable', async () => {
+    scrapeUrl.mockRejectedValueOnce(allEnginesFailed());
+    const statusUpdate = vi.fn(async () => {});
+    const context = makeContext(statusUpdate);
+
+    const result = (await webFetchTool
+      .implementation(context, {})
+      .toolFn({ url: 'https://example.com/report.pdf' })) as string;
+
+    expect(result).toContain('The page could not be reached');
+    expect(statusUpdate).toHaveBeenCalledWith({}, 'WebFetch: page unreachable');
+    expect(context.logger.error).not.toHaveBeenCalled();
+  });
+
   it('keeps a Firecrawl auth failure at error', async () => {
     const failure = new FirecrawlError('Unauthorized: Invalid token', 401);
     scrapeUrl.mockRejectedValueOnce(failure);
