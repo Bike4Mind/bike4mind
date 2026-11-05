@@ -116,7 +116,10 @@ function harness(
     findOpenForBranch: vi.fn(async (_cwd: string, _branch: string): Promise<string | null> => null),
   };
   let deployConclusion = 'success';
+  let queuedState = 'MERGED';
   const gh = vi.fn(async (args: readonly string[]) => {
+    if (args.includes('state,mergeCommit'))
+      return JSON.stringify({ state: queuedState, mergeCommit: { oid: 'q-sha' } });
     if (args.includes('labels')) return JSON.stringify({ labels: labels.map(name => ({ name })) });
     if (args.includes('mergeCommit')) return JSON.stringify({ mergeCommit: { oid: 'merge-sha' } });
     if (args[0] === 'run') return JSON.stringify([{ status: 'completed', conclusion: deployConclusion }]);
@@ -176,6 +179,7 @@ function harness(
     setLabels: (next: string[]) => void (labels = next),
     setPr: (next: typeof pr) => void (pr = next),
     setDeploy: (next: string) => void (deployConclusion = next),
+    setQueued: (next: string) => void (queuedState = next),
     setSmoke: (next: number) => void (smokeStatus = next),
   };
 }
@@ -323,6 +327,28 @@ describe('LoopRunner runs', () => {
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'failed', reason: 'model unavailable' });
   });
 
+  it('blocks the ticket, never advances it, when the user stops the run', async () => {
+    await h.runner.tick();
+    h.emit({ type: 'done', sessionId: 's1', messageId: 'm', content: 'Half way', stopReason: 'aborted' });
+    await h.settled();
+    expect(h.completed).toEqual([
+      {
+        runId: 'run-1',
+        outcome: { outcome: 'blocked', reason: 'Stopped on the desktop', durationMs: expect.any(Number) },
+      },
+    ]);
+  });
+
+  it('frees the lane when the user deletes the session mid-run', async () => {
+    await h.runner.tick();
+    // ChatService drops the run marking before the stopped turn's last event arrives.
+    await h.chat.deleteSession('s1');
+    h.emit({ type: 'done', sessionId: 's1', messageId: 'm', content: '', stopReason: 'aborted' });
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'blocked' });
+    expect(h.runner.busy).toBe(0);
+  });
+
   it('releases the ticket at the credit cap, shows it, and does not claim that loop again', async () => {
     await h.runner.tick();
     h.emit({
@@ -343,6 +369,7 @@ describe('LoopRunner runs', () => {
     await h.runner.tick();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'released' });
     expect(h.runner.busy).toBe(0);
+    expect(h.chat.deleteSession).toHaveBeenCalledWith('s1');
   });
 
   it('stops without reporting when the web run view aborts the run', async () => {
@@ -481,6 +508,34 @@ describe('LoopRunner merges', () => {
     h.done();
     await h.settled();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'advanced' });
+  });
+
+  it('advances a merge-queue merge only once the PR has merged', async () => {
+    await started();
+    h.setPr(
+      snapshot({
+        reviewDecision: 'APPROVED',
+        mergeStateStatus: 'CLEAN',
+        checks: [check('Build', 'pass')],
+        nodeId: 'PR_1',
+        mergeQueue: { enabled: true },
+      })
+    );
+    expect(await h.runner.merge('s1', PR)).toMatch(/merge queue/);
+    h.setQueued('OPEN');
+    h.done();
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({
+      outcome: 'blocked',
+      reason: expect.stringMatching(/did not merge from the merge queue/),
+    });
+
+    await h.runner.tick();
+    expect(await h.runner.merge('s2', PR)).toMatch(/merge queue/);
+    h.setQueued('MERGED');
+    h.done('s2');
+    await vi.waitFor(() => expect(h.completed).toHaveLength(2));
+    expect(h.completed[1].outcome).toMatchObject({ outcome: 'advanced' });
   });
 
   it('blocks rather than leaving the claim open when a post-merge check throws', async () => {
