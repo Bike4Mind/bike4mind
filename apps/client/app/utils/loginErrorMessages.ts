@@ -32,6 +32,11 @@ const LOGIN_ERROR_MESSAGES = {
   // Security-forced logout - surfaced cross-tab when a session is revoked rather than
   // merely expired (e.g. the 3-strike MFA lockout via forceLogoutTokens).
   session_revoked: 'You were signed out for security. Please log in again.',
+  // Blocked accounts refused at sign-in; codes emitted by server/auth/blockedSignIn.ts.
+  account_suspended: 'This account has been suspended. Please contact support.',
+  account_on_hold: 'Your account is on hold pending a payment review. Please contact support.',
+  account_policy_suspended:
+    'Your account is suspended for repeated content-policy violations. Please contact support to appeal.',
   // Generic flow failures
   invalid_id_token: 'Sign-in couldn’t be verified. Please try again.',
   invalid_state: 'Your sign-in session expired. Please try again.',

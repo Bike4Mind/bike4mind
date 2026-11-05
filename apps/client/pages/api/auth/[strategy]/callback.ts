@@ -7,6 +7,7 @@ import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository } from '@bike4mind/database';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { issueBrowserSession } from '@server/auth/issueSession';
+import { blockedSignInErrorCode } from '@server/auth/blockedSignIn';
 import { verifyStateToken, BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
@@ -197,6 +198,10 @@ const handler = baseApi({ auth: false })
             console.error('Failed to write AuthFailLog (oauth banned):', logErr);
           }
           return res.redirect('/login?error=account_suspended');
+        }
+        const blockedCode = blockedSignInErrorCode(user);
+        if (blockedCode) {
+          return res.redirect(`/login?error=${blockedCode}`);
         }
 
         // Resume the originally requested path, round-tripped via the signed

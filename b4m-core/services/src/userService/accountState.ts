@@ -61,7 +61,8 @@ export const AI_ACCESS_PENDING_REVIEW_MESSAGE =
 
 export const ACCOUNT_BANNED_MESSAGE = 'This account has been suspended. Please contact support.';
 
-export const ACCOUNT_DISPUTE_PENDING_MESSAGE = 'Account suspended pending dispute resolution. Please contact support.';
+export const ACCOUNT_DISPUTE_PENDING_MESSAGE =
+  'Your account is on hold pending a payment review. Please contact support.';
 
 export const ACCOUNT_SUSPENDED_MESSAGE =
   'Your account is suspended for repeated content-policy violations. Please contact support to appeal.';

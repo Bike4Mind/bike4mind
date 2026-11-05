@@ -198,7 +198,7 @@ describe('POST /api/auth/refreshToken - account state', () => {
 
     it.each([
       ['banned', { isBanned: true }, 'User not found or banned'],
-      ['dispute-suspended', { disputePending: true }, 'pending dispute'],
+      ['dispute-suspended', { disputePending: true }, 'payment review'],
       ['content-suspended', { moderation: { status: 'suspended' } }, 'content-policy'],
     ])('refuses a %s account, revokes the rotated session and hands back no token', async (_label, state, message) => {
       mockRotateSession.mockResolvedValue({
