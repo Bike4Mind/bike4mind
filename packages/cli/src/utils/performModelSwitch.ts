@@ -9,7 +9,7 @@ export const MODEL_SWITCH_BUSY_MESSAGE =
  * local default, since later runs that never detect (`b4m -p`) must reach it instead of a hosted model.
  */
 export function modelSavePatch(
-  model: Pick<ModelInfo, 'id' | 'backend'>,
+  model: { id: string; backend?: ModelInfo['backend'] },
   config: { ollamaHost?: string },
   detectedOllamaHost: string | null
 ): { defaultModel: string; ollamaHost?: string; localDefaultModel?: string } {
