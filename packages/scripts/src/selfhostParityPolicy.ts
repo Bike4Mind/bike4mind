@@ -29,6 +29,13 @@ function reviewed(
 
 const gap = (id: string, fingerprint: string, signals: string[] = []): ParityPolicyEntry =>
   reviewed(id, fingerprint, 'pending', signals);
+// A gap whose reason is specific to the entry: who reaches it on self-host and what wiring it needs.
+// The registered-but-unconsumed ones must stay in sync with REGISTERED_WITHOUT_CONSUMER in
+// b4m-core/resource/src/manifestCoverage.test.ts.
+const gapBecause = (id: string, fingerprint: string, reason: string, signals: string[] = []): ParityPolicyEntry => ({
+  ...reviewed(id, fingerprint, 'pending', signals),
+  reason,
+});
 const broker = (id: string, fingerprint: string, signals: string[] = []): ParityPolicyEntry =>
   reviewed(id, fingerprint, 'excluded', signals);
 // Excluded because the capability only exists on the hosted deployment, so the reason is per entry.
@@ -239,35 +246,39 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/dlqAlarms.ts:DlqAlarmHandlerDlq',
     'a39800cfa48e2ecb2ab17d226bb6fde51c9222a75c61f822abe291e9692d938e'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailIngestion.ts:emailAnalysisQueue',
     'be7217e0e5579a751bc81aa5108d1d74ca0c62d31ee580076eeb8aa445296a64',
+    'Enqueued only by the inbound-email parser, which consumes emailIngestionQueue, so nothing produces it on self-host. Wire both together if inbound email is ever supported.',
     ['bedrock:InvokeModel']
   ),
   broker(
     'queue:infra/emailIngestion.ts:emailAnalysisQueueDLQ',
     '3293f56dff623e68c9514a4305754db7930dabcab9adbc52eb71e63ccecc7c7b'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailIngestion.ts:emailIngestionQueue',
     '7b7c3c3d44c1d0fb097fb10c57e5aadfe970e8d3d02f1246d9930357dad4fd3f',
+    'Filled only by the SES inbound-mail bucket notification, which self-host has no equivalent of. Registered in the manifest, but nothing produces or consumes it locally.',
     ['bedrock:*']
   ),
   broker(
     'queue:infra/emailIngestion.ts:emailIngestionQueueDLQ',
     'f44858b26f2ee8f4fb254d41d172e76694252114fb45ab805e510e34c3897f1a'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailMarketing.ts:emailBatchQueue',
-    '3d8d2085327f0b58158c1cd663e1c3a9481ad4f9d2230e117eb4f87cbc3c1b13'
+    '3d8d2085327f0b58158c1cd663e1c3a9481ad4f9d2230e117eb4f87cbc3c1b13',
+    'Fed only by the email job orchestrator (the emailJobQueue consumer), so it stays empty until emailJobQueue is wired. Wire the two together.'
   ),
   broker(
     'queue:infra/emailMarketing.ts:emailBatchQueueDLQ',
     'ff7a3dc9d711600848964bb4825fac5af480800f91d5018d6e02b08064a17d73'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailMarketing.ts:emailJobQueue',
-    'a12494303f6f19ebd909f57060c2fa52ad7b0f6b9867cf8f495c72990f7f296c'
+    'a12494303f6f19ebd909f57060c2fa52ad7b0f6b9867cf8f495c72990f7f296c',
+    'The admin email-job start and send routes enqueue here, but no self-host consumer runs the email job orchestrator, so a started job never sends. Needs a consumer and an outbound mail provider decision.'
   ),
   broker(
     'queue:infra/emailMarketing.ts:emailJobQueueDLQ',
@@ -303,9 +314,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:agentContinuationQueueDLQ',
     '6a36ae54a4e5ea35b9c34a06d407cee8281bcd6284eeeecf35d7c530dd0c6ffb'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:agentProactiveMessageQueue',
     '3f5dec679a326d5dd3cc12bfed1a94c51bed95f53e9db4abf6beecad50b13766',
+    'The session trigger-proactive-messages route enqueues here and no self-host consumer drains it, so triggered messages are never sent. The handler is in open core: candidate to wire.',
     ['bedrock:*', 'cloudwatch:PutMetricData']
   ),
   broker(
@@ -356,10 +368,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:dataLakeTaxonomyQueueDLQ',
     '09d613eb6bffdc733600b1b2dbb9a68496671babcfb7a2b8769c84b5d65d9bbd'
   ),
-  gap('queue:infra/queues.ts:deepAgentWakeQueue', '7fabc060e567ba3872895852fdecd1c0a371fa8cfbfa14966a1fd89e0dd57ad1', [
-    'bedrock:InvokeModel',
-    'cloudwatch:PutMetricData',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:deepAgentWakeQueue',
+    '7fabc060e567ba3872895852fdecd1c0a371fa8cfbfa14966a1fd89e0dd57ad1',
+    'Deep agent enrollment (/api/deep-agent/spin) enqueues wakes, and self-host runs neither this consumer nor the wake cron, so an enrolled agent never wakes. The handler is in open core: candidate to wire.',
+    ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
+  ),
   broker(
     'queue:infra/queues.ts:deepAgentWakeQueueDLQ',
     '2daf534b0ed080ebdbaf3f323032db39f5ab06e345ebc0df5a73babd0f8c1bb8'
@@ -504,9 +518,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:*']
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:lakeInconsistencyModelQueue',
-    '96472053d974d831a53b57c6bf25016e2ca4fbb2949e6f331cc0af0beceff337'
+    '96472053d974d831a53b57c6bf25016e2ca4fbb2949e6f331cc0af0beceff337',
+    'Optional. Reached only from the inconsistencies route behind the off-by-default EnableLakeModelInconsistencyDetection flag, which refuses the run when no URL is set. Leave it unset on self-host until a consumer is wired.'
   ),
   broker(
     'queue:infra/queues.ts:lakeInconsistencyModelQueueDLQ',
@@ -529,10 +544,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:libreoncologyAudioRenderQueueDLQ',
     '2ee2385d94d02b314ad0029cadb2c26a937f5a674ff43eb5a82816c228b00b6c'
   ),
-  gap('queue:infra/queues.ts:liveOpsTriageQueue', 'e2750f4996f43c5ed1b574c18b535468dc562c2fb3315879bafc3c10c3871372', [
-    'cloudwatch:PutMetricData',
-    'import:@aws-sdk/client-cloudwatch',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:liveOpsTriageQueue',
+    'e2750f4996f43c5ed1b574c18b535468dc562c2fb3315879bafc3c10c3871372',
+    'The admin live-ops trigger route enqueues here and no self-host consumer drains it. The hosted handler uses the CloudWatch client, so wiring needs a local metrics decision first.',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   broker(
     'queue:infra/queues.ts:liveOpsTriageQueueDLQ',
     '396277d7176e9e4839b55c3f4f43ba8107c46a9262e8cfa5859bff0b50bba37b'
@@ -639,10 +656,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:riskEvidenceQueueDLQ',
     'c0f2898d8395eaa08e1c942c2697bdb2180b5d7ea4ce4cb969ae1411db1659fc'
   ),
-  gap('queue:infra/queues.ts:secopsTriageQueue', 'a1112e855d9bd5bbfd10645e4c5e3c6635c31f3b740b640b198026333aa66863', [
-    'cloudwatch:PutMetricData',
-    'import:@aws-sdk/client-cloudwatch',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:secopsTriageQueue',
+    'a1112e855d9bd5bbfd10645e4c5e3c6635c31f3b740b640b198026333aa66863',
+    'Not registered. The admin security-dashboard ingest routes enqueue here; triage works on Prowler and AWS security findings that self-host does not produce.',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   broker(
     'queue:infra/queues.ts:secopsTriageQueueDLQ',
     '5dae60c15cdbc4e123e5ffaafcfdfecbe658a3ac123be20c976beab0dd4f3c2a'
@@ -652,30 +671,38 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:slackExportQueueDLQ',
     'e6f709c7a77ad92a6420578b8802c7199d3580045da4a245ec379dca2b2f2a84'
   ),
-  gap('queue:infra/queues.ts:sreFixQueue', '8105f1b3043f3f0d5c48cb53a593c61a5d9539176905f4e1e256248b8c4ddfbd'),
+  gapBecause(
+    'queue:infra/queues.ts:sreFixQueue',
+    '8105f1b3043f3f0d5c48cb53a593c61a5d9539176905f4e1e256248b8c4ddfbd',
+    'Reached from the SRE Slack approval path and, on hosted, an EventBridge rule. Part of the SRE pipeline with sreJobQueue, which self-host does not run; decide the two together.'
+  ),
   broker('queue:infra/queues.ts:sreFixQueueDLQ', '209afa13455584e3d213f4664f8bb372f97c4047b441a13c140c10a2d3b9950c'),
-  gap('queue:infra/queues.ts:sreJobQueue', '3d20154baf287fd6b05e5ebc5e574208837dab2089e7521cb48d6a7bdf804dee', [
-    'bedrock:InvokeModel',
-    'cloudwatch:PutMetricData',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:sreJobQueue',
+    '3d20154baf287fd6b05e5ebc5e574208837dab2089e7521cb48d6a7bdf804dee',
+    'Not registered. The admin SRE rerun/retry routes and the GitHub SRE webhook enqueue here; the handler needs Bedrock and CloudWatch, which self-host does not provide.',
+    ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
+  ),
   broker('queue:infra/queues.ts:sreJobQueueDLQ', '37a9ace9b78c31a34324c565734ddad57f611e999c69c55b2052ed020cca1435'),
   gap('queue:infra/queues.ts:tavernHeartbeatQueue', '5ece4ce114a9900aeb8e5ce9f67c415d42d1623c8a3bdf99098e93ee613294f4'),
   broker(
     'queue:infra/queues.ts:tavernHeartbeatQueueDLQ',
     '3f2e2017042d9cc8ad66385424a377b2e04b2f1d137b3fcd2b229f1d277966b7'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:webhookDeliveryQueue',
     'def1706d75b2672b2e5cd7edfe51faa7acbf9f281776537f1468036cdb762768',
+    'Not registered, so the webhook retry and replay-dlq admin routes answer 503. The handler is in open core: it needs a self-host consumer before the queue is registered.',
     ['cloudwatch:PutMetricData']
   ),
   broker(
     'queue:infra/queues.ts:webhookDeliveryQueueDLQ',
     '489b16bdceaf15867423fcbfab9344b5e36cefcdbd6473c595f6604d440ad271'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:whatsNewGenerationQueue',
     '7df5242a93aeaf78aa95a16ddb7595d308df55e9ca19a3273809dac56b69b856',
+    'Not registered. Only the release-notes pipeline (releaseNotes.dispatch) produces it, and self-host has no release pipeline.',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
@@ -687,9 +714,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:whatsNewGenerationQueueDLQ',
     'e57a7345766ccd52531a45ce89ad2c994bc132aae123cf9664c62a15dad70b47'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:whatsNewHighlightsQueue',
     '606bf264dcf3693c1579a07bd828bc627684657e755851c8f289fb9798437011',
+    'Not registered, so the admin generate-highlights route fails. Needs the same content-generation decision as whatsNewGenerationQueue.',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
