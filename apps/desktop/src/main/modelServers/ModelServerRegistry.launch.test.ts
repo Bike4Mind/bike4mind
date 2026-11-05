@@ -227,6 +227,21 @@ describe('ModelServerRegistry launching servers', () => {
     expect((await local(unread.registry)).launch).toMatchObject({ observed: null, sizingKvCacheType: 'f16' });
   });
 
+  it('sizes an unmanaged Ollama whose settings cannot be read with its saved launch settings', async () => {
+    const { registry, up } = setup({ readOllamaEnv: async () => null });
+    await registry.check('local');
+    await registry.update('local', { launch: { kvCacheType: 'q8_0' } });
+    up.add(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    expect((await local(registry)).launch).toMatchObject({
+      owner: 'other',
+      observed: null,
+      sizingKvCacheType: 'q8_0',
+      sizingFlashAttention: 'on',
+    });
+    expect(registry.localKvCacheType()).toBe('q8_0');
+  });
+
   it('sizes with the flash attention the Ollama Desktop started runs with, auto when nothing says otherwise', async () => {
     const { registry, localSpecsChanged } = setup();
     await registry.check('local');

@@ -70,7 +70,7 @@ import type { ProcessProbe } from './adoptedServers';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
-import { loopbackLaunchPort, loopbackPortFree } from './loopbackPort';
+import { loopbackLaunchPort, loopbackPortFree, loopbackPortListening } from './loopbackPort';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
@@ -291,8 +291,8 @@ export class ModelServerRegistry {
 
   /**
    * The OLLAMA_KV_CACHE_TYPE the Ollama at `id` runs with, which fit sizes its cache with; undefined is f16. Known for
-   * one Desktop started, for another on this computer whose settings could be read, and as entered under Hardware for
-   * a remote or SSH one.
+   * one Desktop started, for another on this computer from its variables or else its saved launch settings, and as
+   * entered under Hardware for a remote or SSH one.
    */
   kvCacheType(id: string): QuantizedKvCacheType | undefined {
     const owned = this.supervisor.owned(id);
@@ -300,8 +300,11 @@ export class ModelServerRegistry {
     const owner = this.ownerOf(id);
     if (owner === 'remote')
       return this.launchTarget(id)?.runtime === 'ollama' ? this.specs(id)?.kvCacheType : undefined;
+    if (owner !== 'other') return undefined;
     const observed = this.launchStates.get(id)?.observed;
-    return observed && owner === 'other' ? observedKvCacheType(observed) : undefined;
+    if (observed) return observedKvCacheType(observed);
+    const saved = this.unobservedOllamaSettings(id);
+    return saved?.flashAttention === 'off' ? undefined : saved?.kvCacheType;
   }
 
   localKvCacheType(): QuantizedKvCacheType | undefined {
@@ -316,8 +319,19 @@ export class ModelServerRegistry {
       const quantized = owned.runtime === 'ollama' && owned.settings.kvCacheType !== undefined;
       return owned.settings.flashAttention ?? (quantized ? 'on' : undefined);
     }
+    if (this.ownerOf(id) !== 'other') return undefined;
     const observed = this.launchStates.get(id)?.observed;
-    return observed && this.ownerOf(id) === 'other' ? observedFlashAttention(observed) : undefined;
+    if (observed) return observedFlashAttention(observed);
+    const saved = this.unobservedOllamaSettings(id);
+    return saved?.flashAttention ?? (saved?.kvCacheType !== undefined ? 'on' : undefined);
+  }
+
+  /**
+   * The saved launch settings of a local Ollama Desktop did not start and whose variables cannot be read (only Linux
+   * reads them): the user's word for how it runs, such as an Ollama.app given OLLAMA_KV_CACHE_TYPE by launchctl.
+   */
+  private unobservedOllamaSettings(id: string): ModelServerLaunchSettings | null {
+    return this.launchTarget(id)?.runtime === 'ollama' ? this.launchSettings(id) : null;
   }
 
   /** Starts a server at this server's address on this computer, with its saved launch settings. */
@@ -994,8 +1008,10 @@ export class ModelServerRegistry {
     const state = this.launchState(id);
     const unanswered =
       target.port !== null && !answers(target.health) && !this.supervisor.owned(id) && !this.supervisor.busy(id);
-    // As probe decides launchable: a listener that never answers still holds the port.
-    state.portHeld = unanswered && !(await (this.deps.portFree ?? loopbackPortFree)(target.port as number));
+    // A listener that never answers still holds the port. Connect, not bind: a periodic bind could make an Ollama
+    // starting at that moment fail with "address already in use".
+    const portFree = this.deps.portFree ?? (async (port: number) => !(await loopbackPortListening(port)));
+    state.portHeld = unanswered && !(await portFree(target.port as number));
     const owner = this.ownerOf(id);
     if (target.runtime !== 'ollama' || owner === 'remote') state.lastObserved = null;
     if (target.runtime !== 'ollama' || owner !== 'other') {
