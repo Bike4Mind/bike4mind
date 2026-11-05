@@ -4,8 +4,8 @@ import { dirname } from 'node:path';
 import {
   emptyStoredModelSettings,
   parseModelSettingsFile,
+  changedJsonPath,
   quotedForMessage,
-  sameJsonValue,
   storedModelEntry,
   type ModelSettings,
   type StoredModelSettings,
@@ -30,6 +30,16 @@ function invalidProblem(modelId: string, field: string | null): string {
   return field === null
     ? `has an entry for ${model} that is not a set of settings`
     : `has an invalid ${field} for ${model}`;
+}
+
+/** `path` leads from the file's root to a value a JSON round trip changed, which only a non-finite number does. */
+function unwritableProblem(path: string[]): string {
+  const [top, modelId, ...field] = path;
+  const where =
+    top === 'models' && modelId !== undefined
+      ? `${field.length > 0 ? `in ${quotedForMessage(field.join('.'))} ` : ''}for ${quotedForMessage(modelId)}`
+      : `in ${quotedForMessage(path.join('.'))}`;
+  return `has a number ${where} too large to save back as written`;
 }
 
 /** The file as read, with the size and modification time it had then, or null when it did not exist. */
@@ -63,7 +73,7 @@ export class ModelSettingsStore {
    */
   private read(): Promise<Loaded> {
     if (this.loaded) return this.loaded;
-    // Stamped before the read, so an edit landing between the two only makes set() read again.
+    // Stamped before the read, so an edit landing between the two only makes current() read again.
     const loading: Promise<Loaded> = this.stamp()
       .then(async stamp => ({ stamp, text: await readFile(this.filePath, 'utf8') }))
       .then(
@@ -129,9 +139,18 @@ export class ModelSettingsStore {
     return field === undefined ? null : new ModelSettingsFileError(this.filePath, invalidProblem(modelId, field));
   }
 
+  /** The file as it is now: read again once when it changed since it was read, such as by hand while Desktop runs. */
+  private async current(): Promise<Loaded> {
+    const reading = this.read();
+    const loaded = await reading;
+    if ((await this.stamp()) === loaded.stamp) return loaded;
+    if (this.loaded === reading) this.loaded = null;
+    return this.read();
+  }
+
   /** The model's entry as read, rejecting when the file or that model's entry cannot be used. */
   private async readEntry(modelId: string): Promise<StoredModelSettings> {
-    const { stored } = await this.read();
+    const { stored } = await this.current();
     const error = this.entryError(stored, modelId);
     if (error) throw error;
     return stored;
@@ -154,13 +173,7 @@ export class ModelSettingsStore {
    */
   set(modelId: string, settings: ModelSettings): Promise<ModelSettings> {
     const done = this.writing.then(async () => {
-      let loaded = await this.read();
-      if ((await this.stamp()) !== loaded.stamp) {
-        // Changed since it was read, such as by hand while Desktop runs: read it again, never write over it.
-        this.loaded = null;
-        loaded = await this.read();
-      }
-      const { stored } = loaded;
+      const { stored } = await this.current();
       const entryError = this.entryError(stored, modelId);
       if (entryError) throw entryError;
       const entries = new Map(stored.entries);
@@ -170,9 +183,8 @@ export class ModelSettingsStore {
       const file = { ...stored.rest, models: Object.fromEntries(entries) };
       const text = JSON.stringify(file, null, 2);
       const written: unknown = JSON.parse(text);
-      if (!sameJsonValue(file, written)) {
-        throw new ModelSettingsFileError(this.filePath, this.unwritable(file, written));
-      }
+      const changed = changedJsonPath(file, written);
+      if (changed) throw new ModelSettingsFileError(this.filePath, unwritableProblem(changed));
       await mkdir(dirname(this.filePath), { recursive: true });
       const temporary = `${this.filePath}.${randomUUID()}.tmp`;
       let stamp: string | null;
@@ -191,12 +203,5 @@ export class ModelSettingsStore {
     });
     this.writing = done.catch(() => undefined);
     return done;
-  }
-
-  private unwritable(file: { models: Record<string, unknown> }, written: unknown): string {
-    const writtenModels = (written as { models?: Record<string, unknown> }).models ?? {};
-    const modelId = Object.keys(file.models).find(id => !sameJsonValue(file.models[id], writtenModels[id]));
-    const where = modelId === undefined ? 'outside its models' : `for ${quotedForMessage(modelId)}`;
-    return `has a number ${where} too large to save back as written`;
   }
 }

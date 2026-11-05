@@ -3,8 +3,8 @@ import {
   isModelSettingsId,
   parseModelSettingsFile,
   parseModelSettingsInput,
+  changedJsonPath,
   quotedForMessage,
-  sameJsonValue,
   storedModelEntry,
   type ModelSettings,
 } from './modelSettings';
@@ -49,6 +49,8 @@ describe('parseModelSettingsFile', () => {
     [{ generation: { temperature: Infinity } }, 'generation.temperature'],
     [{ context: { mode: 'fixed', tokens: Infinity } }, 'context'],
     [{ context: { mode: 'auto', maxTokens: Infinity } }, 'context'],
+    [{ context: { mode: 'fixed', tokens: 4096, maxTokens: 'x' } }, 'context'],
+    [{ context: { mode: 'auto', tokens: [4096] } }, 'context'],
     [7, null],
   ])('names the known field of %j that holds the wrong type for that model only', (entry, field) => {
     const parsed = parseModelSettingsFile({ models: { 'local:ollama:other': { effort: 'low' }, [QWEN]: entry } });
@@ -100,14 +102,14 @@ describe('quotedForMessage', () => {
   });
 });
 
-describe('sameJsonValue', () => {
-  it('tells a value that survives a JSON round trip from one that does not', () => {
+describe('changedJsonPath', () => {
+  it('names where a value does not survive a JSON round trip', () => {
     const value = { a: [1, { b: 'c' }], d: null, e: -0 };
-    expect(sameJsonValue(value, JSON.parse(JSON.stringify(value)))).toBe(true);
+    expect(changedJsonPath(value, JSON.parse(JSON.stringify(value)))).toBeNull();
     const large = { a: [1, { b: Infinity }] };
-    expect(sameJsonValue(large, JSON.parse(JSON.stringify(large)))).toBe(false);
-    expect(sameJsonValue({ a: 1 }, { a: 1, b: 2 })).toBe(false);
-    expect(sameJsonValue([1], { 0: 1 })).toBe(false);
+    expect(changedJsonPath(large, JSON.parse(JSON.stringify(large)))).toEqual(['a', '1', 'b']);
+    expect(changedJsonPath({ a: 1 }, { a: 1, b: 2 })).toEqual([]);
+    expect(changedJsonPath([1], { 0: 1 })).toEqual([]);
   });
 });
 
@@ -149,6 +151,12 @@ describe('storedModelEntry', () => {
         { context: { mode: 'auto', maxTokens: 65536 } }
       )
     ).toEqual({ context: { rope: { factor: 2 }, mode: 'auto', maxTokens: 65536 } });
+  });
+
+  it('leaves the extra keys of a context this version cannot use behind when a new one is written', () => {
+    expect(
+      storedModelEntry({ context: { mode: 'ratio', ratio: 0.5 } }, { context: { mode: 'fixed', tokens: 4096 } })
+    ).toEqual({ context: { mode: 'fixed', tokens: 4096 } });
   });
 
   it('keeps an entry that only holds unknown fields after a clear, and drops one with nothing left', () => {

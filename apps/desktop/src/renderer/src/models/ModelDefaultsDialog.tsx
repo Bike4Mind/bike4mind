@@ -378,11 +378,12 @@ function ModelDefaultsForm({
   const levels =
     listed.length > 0 && storedEffort && !listed.includes(storedEffort) ? [...listed, storedEffort] : listed;
 
+  // What a save starts from. Only what the user changed here is rewritten; everything else goes back exactly
+  // as stored, including values this model's controls do not draw or would clamp.
+  const base: ModelSettings = clearedAll ? {} : (loaded ?? {});
+  const baseDrafts = draftsOf(base.generation);
+
   const save = async () => {
-    // Only what the user changed here is rewritten; everything else goes back exactly as stored, including
-    // values this model's controls do not draw or would clamp.
-    const base: ModelSettings = clearedAll ? {} : (loaded ?? {});
-    const baseDrafts = draftsOf(base.generation);
     const generation: GenerationSettings = { ...base.generation };
     for (const { field, control } of fields) {
       const text = drafts[field]?.trim() ?? '';
@@ -493,9 +494,11 @@ function ModelDefaultsForm({
                         const text = event.currentTarget.validity.badInput
                           ? (lastGood.current[field] ?? '')
                           : event.currentTarget.value.trim();
-                        const value = text
-                          ? requestGeneration({ [field]: Number(text) }, { [field]: control })[field]
-                          : undefined;
+                        // The value a save starts from stays as stored, even past what the control now allows.
+                        const value =
+                          text && text !== baseDrafts[field]
+                            ? requestGeneration({ [field]: Number(text) }, { [field]: control })[field]
+                            : undefined;
                         const shown = value !== undefined ? String(value) : text;
                         event.currentTarget.value = shown;
                         lastGood.current[field] = shown;

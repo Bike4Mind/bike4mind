@@ -172,22 +172,22 @@ describe('ModelSettingsStore', () => {
   );
 
   it.each([
-    ['a known field', `{"${QWEN}": {"draftTokens": 1e999}}`, `has an invalid draftTokens for "${QWEN}"`],
+    ['draftTokens', `{"${QWEN}": {"draftTokens": 1e999}}`, `has an invalid draftTokens for "${QWEN}"`],
     [
-      'a generation field',
+      'generation.topK',
       `{"${QWEN}": {"generation": {"topK": -1e999}}}`,
       `has an invalid generation.topK for "${QWEN}"`,
     ],
   ])(
-    'takes a number too large for JSON in %s for a broken value, which a save elsewhere cannot write as null',
-    async (_, models, problem) => {
+    'takes a number too large for JSON in %s for a broken value, which a save elsewhere names and cannot write as null',
+    async (field, models, problem) => {
       const path = await fileIn();
       const content = `{"models": ${models}}`;
       await writeFile(path, content, 'utf8');
       const store = new ModelSettingsStore(path);
       await expect(store.get(QWEN)).rejects.toThrow(problem);
       await expect(store.set(GEMMA, { effort: 'high' })).rejects.toThrow(
-        `has a number for "${QWEN}" too large to save back as written`
+        `has a number in "${field}" for "${QWEN}" too large to save back as written`
       );
       expect(await readFile(path, 'utf8')).toBe(content);
       const reopened = new ModelSettingsStore(path);
@@ -202,9 +202,24 @@ describe('ModelSettingsStore', () => {
     await writeFile(path, content, 'utf8');
     const store = new ModelSettingsStore(path);
     expect(await store.get(QWEN)).toEqual({ effort: 'low' });
-    await expect(store.set(QWEN, { effort: 'high' })).rejects.toThrow(ModelSettingsFileError);
+    await expect(store.set(QWEN, { effort: 'high' })).rejects.toThrow(
+      `has a number in "futureOnly" for "${QWEN}" too large to save back as written`
+    );
     expect(await readFile(path, 'utf8')).toBe(content);
     expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ effort: 'low' });
+  });
+
+  it('reads a model again once its bad entry is fixed by hand, with no save between', async () => {
+    const path = await fileIn();
+    await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 3 } } }), 'utf8');
+    const store = new ModelSettingsStore(path);
+    await expect(store.get(QWEN)).rejects.toThrow('has an invalid effort for');
+    await expect(store.unsupported(QWEN)).rejects.toThrow(ModelSettingsFileError);
+    await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'low', keepAlive: 7 } } }), 'utf8');
+    expect(await store.get(QWEN)).toEqual({ effort: 'low' });
+    expect(await store.unsupported(QWEN)).toEqual([{ field: 'keepAlive', value: 7 }]);
+    await writeFile(path, '{"models": {', 'utf8');
+    await expect(store.get(QWEN)).rejects.toThrow('is not valid JSON');
   });
 
   it('stamps what it wrote, so an edit landing right after its write is read before the next save', async () => {

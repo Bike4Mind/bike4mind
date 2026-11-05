@@ -198,8 +198,11 @@ function readStoredField(field: StoredScalarField, value: unknown): StoredRead<u
       return isKeepAlive(value) ? { value } : 'unsupported';
     case 'context': {
       if (!isRecord(value) || typeof value.mode !== 'string') return 'broken';
-      if (value.mode === 'fixed' && !isStorableNumber(value.tokens)) return 'broken';
-      if (value.mode === 'auto' && value.maxTokens !== undefined && !isStorableNumber(value.maxTokens)) return 'broken';
+      if (value.mode === 'fixed' || value.mode === 'auto') {
+        const sizes = [value.tokens, value.maxTokens];
+        if (sizes.some(size => size !== undefined && !isStorableNumber(size))) return 'broken';
+        if (value.mode === 'fixed' && value.tokens === undefined) return 'broken';
+      }
       const context = parseModelContextSetting(value);
       return context ? { value: context } : 'unsupported';
     }
@@ -258,24 +261,25 @@ export function parseModelSettingsFile(raw: unknown): StoredModelSettings | null
   return stored;
 }
 
-/** Whether `written`, a value after a JSON round trip, still holds `value`; false where a number became null. */
-export function sameJsonValue(value: unknown, written: unknown): boolean {
-  if (Array.isArray(value)) {
-    return (
-      Array.isArray(written) &&
-      written.length === value.length &&
-      value.every((item, index) => sameJsonValue(item, written[index]))
-    );
+/**
+ * The keys down to the first place `written`, `value` after a JSON round trip, no longer holds it, such
+ * as a number too large that became null; null when it holds all of it.
+ */
+export function changedJsonPath(value: unknown, written: unknown): string[] | null {
+  if (Array.isArray(value) || isRecord(value)) {
+    if (!(Array.isArray(value) ? Array.isArray(written) : isRecord(written))) return [];
+    const from = value as Record<string, unknown>;
+    const to = written as Record<string, unknown>;
+    const keys = Object.keys(from);
+    if (keys.length !== Object.keys(to).length) return [];
+    for (const key of keys) {
+      if (!Object.hasOwn(to, key)) return [key];
+      const below = changedJsonPath(from[key], to[key]);
+      if (below) return [key, ...below];
+    }
+    return null;
   }
-  if (isRecord(value)) {
-    if (!isRecord(written)) return false;
-    const keys = Object.keys(value);
-    return (
-      keys.length === Object.keys(written).length &&
-      keys.every(key => Object.hasOwn(written, key) && sameJsonValue(value[key], written[key]))
-    );
-  }
-  return value === written;
+  return value === written ? null : [];
 }
 
 /**
@@ -296,9 +300,11 @@ export function storedModelEntry(previous: unknown, settings: ModelSettings): Re
   ]);
   const kept = (field: StoredScalarField): unknown =>
     stored[field] !== undefined && readStoredField(field, stored[field]) === 'unsupported' ? stored[field] : undefined;
-  const storedContextExtras = isRecord(stored.context)
-    ? Object.fromEntries(Object.entries(stored.context).filter(([key]) => !CONTEXT_FIELDS.has(key)))
-    : {};
+  // A context this version cannot use may give its extra keys a meaning under its own mode, so they go with it.
+  const storedContextExtras =
+    isRecord(stored.context) && typeof readStoredField('context', stored.context) === 'object'
+      ? Object.fromEntries(Object.entries(stored.context).filter(([key]) => !CONTEXT_FIELDS.has(key)))
+      : {};
   const known: [string, unknown][] = [
     ['generation', Object.keys(generation).length > 0 ? generation : undefined],
     ['effort', settings.effort ?? kept('effort')],

@@ -246,6 +246,18 @@ describe('ModelDefaultsDialog', () => {
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.7, topK: 500 } });
   });
 
+  it('leaves a stored value past what the control allows unclamped when focus passes through its field', async () => {
+    stored = { generation: { temperature: 0.6, topK: 500 } };
+    await render(QWEN);
+    await act(async () => {
+      input('topK').focus();
+      input('topK').blur();
+    });
+    expect(input('topK').value).toBe('500');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.6, topK: 500 } });
+  });
+
   it('clears the fields it does not draw too on Clear all', async () => {
     stored = { generation: { topK: 30 }, effort: 'xhigh' };
     await render(GPT_OSS);
