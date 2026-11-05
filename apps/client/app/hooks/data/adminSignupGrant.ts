@@ -49,7 +49,7 @@ export const useAdminSignupGrantAction = (userId: string) => {
         queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId, 'signup-grant-pending'] }),
         queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId, 'credit-summary'] }),
         queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId, 'credit-ledger'] }),
-        queryClient.invalidateQueries({ queryKey: ['users'] }),
+        queryClient.invalidateQueries({ queryKey: ['users', userId] }),
       ]),
   });
 };
