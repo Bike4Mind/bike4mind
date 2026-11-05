@@ -1,3 +1,4 @@
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { User, userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
@@ -138,16 +139,12 @@ const handler = baseApi({ auth: false })
 
     // Migrate: mint a fresh session. impersonatedBy is re-stamped so an impersonated session that
     // refreshes keeps the marker (otherwise logout.ts's impersonation guard stops applying).
-    const migrated = await authSessionService.issueSession(
-      user.id,
-      {
-        createdVia: 'legacy-migration',
-        tokenVersion: user.tokenVersion ?? 0,
-        impersonatedBy: decoded.impersonatedBy,
-        device: buildSessionDevice(req),
-      },
-      { db: { authSessions: authSessionRepository }, signAccessToken, logger: req.logger }
-    );
+    const migrated = await issueSessionForRequest(req, user.id, {
+      createdVia: 'legacy-migration',
+      tokenVersion: user.tokenVersion ?? 0,
+      impersonatedBy: decoded.impersonatedBy,
+      device: buildSessionDevice(req),
+    });
 
     return sendSession(
       {

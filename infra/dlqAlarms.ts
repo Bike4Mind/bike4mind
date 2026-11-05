@@ -39,6 +39,7 @@ import {
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueueDLQ,
   dataLakeTaxonomyQueueDLQ,
@@ -85,6 +86,7 @@ import { youngAccountSpendAlertDeadLetter } from './youngAccountSpendAlertDeadLe
 import { apiProbeDetectorDeadLetter } from './apiProbeDetectorDeadLetter';
 import { spendMonitorDeadLetter } from './spendMonitorDeadLetter';
 import { signupGrantHeldReleaseDeadLetter } from './signupGrantHeldReleaseDeadLetter';
+import { accountDeletionSweepDeadLetter } from './accountDeletionSweepDeadLetter';
 import { revenueSnapshotDeadLetter } from './revenueSnapshotDeadLetter';
 import { imageModerationReviewSweepDeadLetter } from './imageModerationReviewSweepDeadLetter';
 
@@ -350,6 +352,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'QuestExport',
     sourceQueue: 'questExportQueue',
     queue: questExportQueueDLQ,
+  },
+  {
+    label: 'account-data-export',
+    displayName: 'Account Data Export',
+    application: 'AccountDataExport',
+    sourceQueue: 'accountDataExportQueue',
+    queue: accountDataExportQueueDLQ,
   },
   {
     label: 'data-lake-cleanup',
@@ -644,6 +653,15 @@ if (isMonitoredStage) {
       displayName: 'Revenue Snapshot',
       application: 'Billing',
       queue: revenueSnapshotDeadLetter.queue,
+    });
+  }
+
+  if (accountDeletionSweepDeadLetter) {
+    createDlqAlarms({
+      label: 'account-deletion-sweep',
+      displayName: 'Account Deletion Sweep',
+      application: 'Account',
+      queue: accountDeletionSweepDeadLetter.queue,
     });
   }
 

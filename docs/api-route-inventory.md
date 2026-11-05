@@ -34,7 +34,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1011 routes: 68 contracted, 9 aliases of another route, 231 with no static caller in `apps/client/app`.
+1009 routes: 68 contracted, 9 aliases of another route, 231 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| credits | 4 | 0 | 1 | 3 | 0 | 0 | 0 |
+| credits | 2 | 0 | 1 | 1 | 0 | 0 | 0 |
 | data-lakes | 60 | 0 | 59 | 1 | 0 | 0 | 8 |
 | deep-agent | 5 | 0 | 3 | 2 | 0 | 0 | 0 |
 | documentation | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
@@ -647,8 +647,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/credits/balance` | GET | jwt | - | no | - | 1: `hooks/data/credits.ts` |
-| `/api/credits/no-card-unlock/github` | POST | jwt | - | no | - | 1: `hooks/data/noCardUnlock.ts` |
-| `/api/credits/no-card-unlock/work-email` | POST | jwt | - | no | - | 1: `hooks/data/noCardUnlock.ts` |
 | `/api/credits/transactions` | GET | jwt+key | - | no | - | 1: `hooks/data/credits.ts` |
 
 ### data-lakes

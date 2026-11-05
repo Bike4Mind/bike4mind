@@ -2,13 +2,19 @@ import React, { useState } from 'react';
 import { FormControl, FormLabel } from '@mui/joy';
 import { COMP_MAX_MONTHS_AHEAD } from '@client/app/utils/adminSubscriptionDetail';
 import { useAdminSubscriptionCompChange } from '@client/app/hooks/data/adminSubscriptionDetail';
-import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, SegmentedControl, useUndoToast } from '../../../shared';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  undoAdminReason,
+  ChangePreview,
+  SegmentedControl,
+  useUndoToast,
+} from '../../../shared';
 import {
   addMonths,
   compExtensionBase,
   formatDate,
   ownerDisplayName,
-  undoReason,
   type SubscriptionDialogProps,
 } from '../subscriptionDetailModel';
 
@@ -45,7 +51,11 @@ export const ExtendCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, on
       // setEndsAt cannot restore "no end date", so a comp that had none gets no Undo.
       onUndo: previousEndsAt
         ? async () => {
-            await change.mutateAsync({ action: 'setEndsAt', periodEndsAt: previousEndsAt, reason: undoReason(reason) });
+            await change.mutateAsync({
+              action: 'setEndsAt',
+              periodEndsAt: previousEndsAt,
+              reason: undoAdminReason(reason),
+            });
           }
         : undefined,
       onViewAudit: onAudit,

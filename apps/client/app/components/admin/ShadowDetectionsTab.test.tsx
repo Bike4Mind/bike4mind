@@ -44,7 +44,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-import ShadowDetectionsTab from './ShadowDetectionsTab';
+import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -68,6 +68,7 @@ const detection = (over: Partial<ShadowDetectionRow> = {}): ShadowDetectionRow =
   signals: [{ key: 'signups', label: 'Signups from one IP', observed: 3, threshold: 3 }],
   windowMinutes: 180,
   group: null,
+  payment: null,
   detectedAt: '2026-10-30T10:00:00.000Z',
   verdict: null,
   verdicts: [],
@@ -247,6 +248,73 @@ describe('ShadowDetectionsTab', () => {
       );
     }
     expect(within(actors).getByText('203.0.113.7 / Example Hosting / NL / Hosting')).toBeTruthy();
+  });
+
+  it('links a payment-risk detection to its Stripe payment in the verdict dialog', async () => {
+    const payment = {
+      paymentIntentId: 'pi_123',
+      chargeId: 'ch_123',
+      kind: 'credits' as const,
+      outcome: 'succeeded' as const,
+      amount: 10000,
+      currency: 'usd',
+      riskLevel: 'elevated',
+      livemode: false,
+    };
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [detection({ detector: 'paymentRisk', wouldAction: 'contain', network: null, payment })],
+          summary: [summaryRow({ detector: 'paymentRisk' })],
+        })
+      )
+    );
+    renderTab();
+    const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+    expect(within(row).getByText('Payment risk')).toBeTruthy();
+    expect(within(row).getByTestId(`shadow-detection-stripe-link-${DETECTION_ID}`).getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/test/payments/pi_123'
+    );
+
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const evidence = await screen.findByTestId('shadow-detection-dialog-payment');
+    expect(within(evidence).getByText('credits payment succeeded, 100.00 USD, Radar risk elevated')).toBeTruthy();
+    expect(within(evidence).getByText('Stripe test mode')).toBeTruthy();
+    expect(within(evidence).getByTestId('shadow-detection-dialog-stripe-link').getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/test/payments/pi_123'
+    );
+  });
+
+  it('links a live-mode payment to the live Stripe Dashboard', () => {
+    const payment = {
+      paymentIntentId: 'pi_123',
+      chargeId: 'ch_123',
+      kind: 'credits' as const,
+      outcome: 'succeeded' as const,
+      amount: 10000,
+      currency: 'usd',
+      riskLevel: 'elevated',
+      livemode: true,
+    };
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [detection({ detector: 'paymentRisk', wouldAction: 'contain', network: null, payment })],
+          summary: [summaryRow({ detector: 'paymentRisk' })],
+        })
+      )
+    );
+    renderTab();
+    const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+    expect(within(row).getByTestId(`shadow-detection-stripe-link-${DETECTION_ID}`).getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/payments/pi_123'
+    );
+  });
+
+  it('formats a payment amount in the currency minor unit', () => {
+    expect(formatPaymentAmount({ amount: 10000, currency: 'usd' })).toBe('100.00 USD');
+    expect(formatPaymentAmount({ amount: 1500, currency: 'jpy' })).toBe('1500 JPY');
+    expect(formatPaymentAmount({ amount: null, currency: 'usd' })).toBe('Unknown amount');
   });
 
   const [direct1, direct2, direct3, transitive] = ['b', 'c', 'd', 'e'].map(char => char.repeat(24));

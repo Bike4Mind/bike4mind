@@ -58,6 +58,8 @@ export const USER_SECRET_FIELDS = [
   'throttle',
   'riskSignals',
   'stripeCustomerId',
+  // Server-side lease against an export racing account cleanup; never client state.
+  'accountDataExportLease',
 ] as const;
 
 /**
@@ -274,6 +276,12 @@ export function redactUserSecretsForSelf(
     if (f === 'securityQuestions' && Array.isArray(user.securityQuestions)) {
       u.securityQuestions = user.securityQuestions.map(({ question }) => ({ question, answer: '' }));
     }
+  }
+
+  // The grant stays visible to its holder (the signup credits UI reads it), but an admin's block is not.
+  if (user.signupGrant?.blocked) {
+    const { blocked: _blocked, ...grant } = user.signupGrant;
+    u.signupGrant = grant;
   }
 
   // Separate door for the admin-only fields, so a viewer check is required to open it.

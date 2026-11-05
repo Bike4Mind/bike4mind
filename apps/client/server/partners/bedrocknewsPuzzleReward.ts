@@ -1,4 +1,4 @@
-import { CreditHolderType, settingsMap, type SettingKey } from '@bike4mind/common';
+import { CreditHolderType, isSignupGrantBlocked, settingsMap, type SettingKey } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   CreditTransaction,
@@ -50,6 +50,7 @@ type RewardUser = {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   currentCredits?: number | null;
+  signupGrant?: { blocked?: { at: Date } } | null;
 } & AccountStateFields;
 
 // suspend_pending is not an accountBlockReason; a money path refuses it too.
@@ -58,6 +59,7 @@ const isPayable = (user: RewardUser) =>
   !user.isSynthetic &&
   !user.deletedAt &&
   accountBlockReasons(user).length === 0 &&
+  !isSignupGrantBlocked(user) &&
   user.moderation?.status !== 'suspend_pending';
 
 const LEDGER_ADAPTERS = {
@@ -95,7 +97,9 @@ export async function grantPuzzleReward({
   hard,
 }: GrantPuzzleRewardInput): Promise<GrantPuzzleRewardResult> {
   const user = await User.findById(userId)
-    .select('emailVerified isSynthetic deletedAt isBanned disputePending moderation.status currentCredits')
+    .select(
+      'emailVerified isSynthetic deletedAt isBanned disputePending moderation.status currentCredits signupGrant.blocked'
+    )
     .lean<RewardUser>();
   if (!user) return { ok: false, status: 404, code: 'USER_NOT_FOUND' };
 

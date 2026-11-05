@@ -143,15 +143,16 @@ describe('sharing a folder into a chat by id', () => {
       },
     });
     root.render(<Harness sessionId="fresh" />);
-    await settle();
+    // The read is asked for in a passive effect, which a fixed delay can outrun on a busy runner.
+    await vi.waitFor(() => expect(reads).toBe(1));
 
     await conversation.addContextDirectoryTo('fresh', NOTES);
     // Another window takes the folder back before main serves the read that was already asked for.
     stored = session([]);
     serveFirstRead(stored);
-    await settle();
+    // The session is set only once a read is not stale, so this waits out the read done again.
+    await vi.waitFor(() => expect(conversation.session?.grantedDirectories).toEqual([]));
 
-    expect(conversation.session?.grantedDirectories).toEqual([]);
     expect(reads).toBe(2);
   });
 });

@@ -94,6 +94,8 @@ export interface CreditPurchaseReconciliationResult {
   ownerDeleted: number;
   /** True when MAX_PAGES was hit before Stripe ran out of intents in the window. */
   truncated: boolean;
+  /** True when Stripe is not configured; nothing was checked. */
+  skipped: boolean;
 }
 
 function isStageCreditPurchase(intent: PaymentIntent, stage: string): boolean {
@@ -158,9 +160,13 @@ function formatAlert(stage: string, result: CreditPurchaseReconciliationResult):
 
 export async function runCreditPurchaseReconciliation(
   logger: Logger = new Logger(),
-  now: Date = new Date()
+  now: Date = new Date(),
+  { stage = Resource.App.stage, emitMetrics = true }: { stage?: string; emitMetrics?: boolean } = {}
 ): Promise<CreditPurchaseReconciliationResult> {
-  const stage = Resource.App.stage;
+  if (!isStripeConfigured()) {
+    logger.log('[CreditPurchaseReconciliation] Stripe not configured, skipping');
+    return { checked: 0, ungranted: [], ownerDeleted: 0, truncated: false, skipped: true };
+  }
   const created = {
     gte: Math.floor((now.getTime() - LOOKBACK_MS) / 1000),
     lte: Math.floor((now.getTime() - GRACE_MS) / 1000),
@@ -171,6 +177,7 @@ export async function runCreditPurchaseReconciliation(
     ungranted: [],
     ownerDeleted: 0,
     truncated: false,
+    skipped: false,
   };
   let startingAfter: string | undefined;
   for (let page = 0; ; page++) {
@@ -217,13 +224,15 @@ export async function runCreditPurchaseReconciliation(
   for (const purchase of result.ungranted) {
     logger.error('[CreditPurchaseReconciliation] Succeeded credit purchase has no grant', purchase);
   }
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'UngrantedPurchases',
-    result.ungranted.length,
-    { Stage: stage },
-    StandardUnit.Count
-  );
+  if (emitMetrics) {
+    await emitMetric(
+      CLOUDWATCH_NAMESPACE,
+      'UngrantedPurchases',
+      result.ungranted.length,
+      { Stage: stage },
+      StandardUnit.Count
+    );
+  }
   if (result.ungranted.length > 0) {
     await postMessageToSlack(formatAlert(stage, result));
   }
@@ -238,6 +247,7 @@ export async function runCreditPurchaseReconciliation(
 
 export async function handler(_event: unknown, context: Context) {
   const logger = new Logger().withMetadata(contextToLogs(context));
+  // Same check as the run's own skip, hoisted so an unconfigured deploy never opens a DB connection.
   if (!isStripeConfigured()) {
     logger.log('[CreditPurchaseReconciliation] Stripe not configured, skipping');
     return { statusCode: 200, body: JSON.stringify({ skipped: true }) };

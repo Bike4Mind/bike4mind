@@ -33,6 +33,12 @@ const notYetTrusted = (maxActiveKeys: number): Assessment => ({
   trustedAfter: new Date('2026-10-29T00:00:00Z'),
 });
 
+const paidStandingRequired = (maxActiveKeys: number): Assessment => ({
+  status: 'untrusted',
+  reason: 'paid_standing_required',
+  maxActiveKeys,
+});
+
 const callEligibility = async (assessment: Assessment) => {
   resolveApiKeyTrust.mockResolvedValue({ assessment });
   const { req, res } = createMocks({ method: 'GET' });
@@ -66,6 +72,22 @@ describe('GET /api/user-api-keys/eligibility', () => {
       canCreate: false,
       message: userApiKeyService.describeApiKeyTrustRequirement(assessment),
     });
+  });
+
+  it('lets a free account with room under its allowance create, counting personal keys only', async () => {
+    countActiveByUserId.mockResolvedValue(0);
+    expect(await callEligibility(paidStandingRequired(1))).toEqual({ canCreate: true, message: null });
+    expect(countActiveByUserId).toHaveBeenCalledWith('u1', 'personal');
+  });
+
+  it('refuses a free account at its allowance with the paid-standing message', async () => {
+    countActiveByUserId.mockResolvedValue(1);
+    expect(await callEligibility(paidStandingRequired(1))).toEqual({
+      canCreate: false,
+      message:
+        'Free accounts may hold 1 active API key. To create more, purchase credits or a plan, or contact support.',
+    });
+    expect(countActiveByUserId).toHaveBeenCalledWith('u1', 'personal');
   });
 
   it('refuses when the untrusted allowance is zero', async () => {
