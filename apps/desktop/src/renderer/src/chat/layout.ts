@@ -10,8 +10,8 @@ import type { SxProps } from '@mui/joy/styles/types';
 export const CONTENT_MAX_WIDTH = 760;
 
 /**
- * The chat window's root: exactly the viewport, never scrolled as a whole. `clip` rather than
- * `hidden`, which is still a scroll container that a `scrollIntoView` could shift with no scrollbar.
+ * The chat window's root: exactly the viewport, never scrolled as a whole (enforced by viewport.css).
+ * `clip` rather than `hidden`, which is still a scroll container that a `scrollIntoView` could shift with no scrollbar.
  */
 export const chatShellRootSx: SxProps = {
   position: 'relative',

@@ -96,7 +96,9 @@ export const desktopTheme = extendTheme({
       defaultProps: { modifiers: avoidPage },
     },
     JoyTooltip: {
-      defaultProps: { modifiers: avoidPage },
+      // Not interactive: a tooltip is only ever text here, and an interactive one stays up while
+      // the pointer crosses it, covering - and taking the click from - whatever it was drawn over.
+      defaultProps: { modifiers: avoidPage, disableInteractive: true },
       styleOverrides: {
         root: ({ theme, ownerState }) => ({
           maxWidth: `min(${TOOLTIP_MAX_WIDTH}px, calc(100vw - 32px))`,
