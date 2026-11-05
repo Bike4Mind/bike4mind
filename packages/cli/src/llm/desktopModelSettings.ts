@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { OllamaModelFacts, OllamaRequestSettings, OllamaRequestSettingsReader } from '@bike4mind/llm-adapters';
 import { modelBlobsOf } from '@bike4mind/local-models';
 import {
@@ -16,7 +15,7 @@ import {
   type ModelEffort,
   type ModelSettings,
 } from '@bike4mind/local-models/model-settings';
-import { desktopUserDataDir, type DesktopDirsOptions } from '@bike4mind/local-models/servers';
+import { desktopUserDataFile, type DesktopDirsOptions } from '@bike4mind/local-models/servers';
 import { DEFAULT_OLLAMA_PORT } from '../utils/ollamaHost.js';
 
 /** A path to read Desktop's per-model settings from instead of its userData folder, or `off` to ignore them. */
@@ -51,18 +50,17 @@ export interface DesktopModelSettingsFile {
 export type DesktopModelSettingsLocator = () => Promise<DesktopModelSettingsFile | null>;
 
 /**
- * Finds the file on each read: the env's path, else model-settings.json in the userData folder Desktop's model
- * servers are read from (null when there is none). Null instead of a locator when the env turns the settings off.
+ * Finds the file on each read: the env's path, else model-settings.json in the first Desktop userData folder
+ * holding it (null when Desktop has none). Null instead of a locator when the env turns the settings off.
  */
 export function desktopModelSettingsFile(opts: DesktopDirsOptions = {}): DesktopModelSettingsLocator | null {
   const env = opts.env ?? process.env;
   const value = env[DESKTOP_MODEL_SETTINGS_ENV]?.trim();
   if (value && OFF_VALUES.has(value.toLowerCase())) return null;
   if (value) return async () => ({ path: value, fromEnv: true });
-  const flavor = (opts.platform ?? process.platform) === 'win32' ? path.win32 : path.posix;
   return async () => {
-    const dir = await desktopUserDataDir(opts);
-    return dir === null ? null : { path: flavor.join(dir, MODEL_SETTINGS_FILE_NAME), fromEnv: false };
+    const file = await desktopUserDataFile(MODEL_SETTINGS_FILE_NAME, opts);
+    return file === null ? null : { path: file, fromEnv: false };
   };
 }
 

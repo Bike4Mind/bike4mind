@@ -1,7 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { MODEL_SETTINGS_FILE_NAME } from '../modelSettings/file';
 import { parseSshDestination } from './ssh';
 
 export type ModelServerKind = 'ollama' | 'openai-compatible';
@@ -248,25 +247,33 @@ export function desktopUserDataDirs(opts: DesktopDirsOptions = {}): string[] {
   return [flavor.join(appData, '@bike4mind', 'desktop'), flavor.join(appData, 'Bike4Mind')];
 }
 
-const DESKTOP_DATA_FILES = [FILE_NAME, MODEL_SETTINGS_FILE_NAME];
-
-const statOf = (target: string) => stat(target).catch(() => null);
+async function entryAt(target: string): Promise<'dir' | 'file' | 'missing' | 'unchecked'> {
+  try {
+    return (await stat(target)).isDirectory() ? 'dir' : 'file';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unchecked';
+  }
+}
 
 /**
- * The one userData folder to read Desktop's files from: `B4M_DESKTOP_USER_DATA` when set, else the first of
- * desktopUserDataDirs holding model servers or model settings, else the first that exists. Null when none does.
+ * Where to read Desktop's file `name`: in `B4M_DESKTOP_USER_DATA` when set, else in the first of
+ * desktopUserDataDirs holding it, else in the first that exists. Null when none does.
  */
-export async function desktopUserDataDir(opts: DesktopDirsOptions = {}): Promise<string | null> {
+export async function desktopUserDataFile(name: string, opts: DesktopDirsOptions = {}): Promise<string | null> {
+  const flavor = (opts.platform ?? process.platform) === 'win32' ? path.win32 : path.posix;
   const override = (opts.env ?? process.env).B4M_DESKTOP_USER_DATA?.trim();
-  if (override) return override;
-  // Electron creates the packaged folder on first launch, so an empty one must not hide the older folder's files.
+  if (override) return flavor.join(override, name);
+  // Electron creates the packaged folder on first launch, and each file may still sit in the older one. An entry
+  // that cannot be checked is taken, so its read reports why instead of falling through to another folder.
   let firstExisting: string | null = null;
   for (const dir of desktopUserDataDirs(opts)) {
-    if (!(await statOf(dir))?.isDirectory()) continue;
-    firstExisting ??= dir;
-    for (const name of DESKTOP_DATA_FILES) {
-      if ((await statOf(path.join(dir, name)))?.isFile()) return dir;
-    }
+    const file = flavor.join(dir, name);
+    const folder = await entryAt(dir);
+    if (folder === 'unchecked') return file;
+    if (folder !== 'dir') continue;
+    firstExisting ??= file;
+    if ((await entryAt(file)) !== 'missing') return file;
   }
   return firstExisting;
 }
@@ -306,13 +313,13 @@ function withoutUserinfo(baseUrl: string): string {
  * Desktop is read as it is. A missing file is not a problem: Desktop may not be installed.
  */
 export async function readDesktopModelServers(opts: ReadDesktopOptions = {}): Promise<DesktopModelServers> {
-  let dirs = opts.dirs;
-  if (!dirs) {
-    const dir = await desktopUserDataDir(opts);
-    dirs = dir === null ? [] : [dir];
+  let files: string[];
+  if (opts.dirs) files = opts.dirs.map(dir => path.join(dir, FILE_NAME));
+  else {
+    const file = await desktopUserDataFile(FILE_NAME, opts);
+    files = file === null ? [] : [file];
   }
-  for (const dir of dirs) {
-    const file = path.join(dir, FILE_NAME);
+  for (const file of files) {
     let raw: string;
     try {
       raw = await readFile(file, 'utf8');
