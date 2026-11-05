@@ -45,6 +45,13 @@ vi.mock('@bike4mind/server-utils/auth/mfaEnforcement', () => ({
 import { verifyWsAccessToken, verifyWsAccessTokenClaims } from './verifyWsAccessToken';
 import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { ACCOUNT_DELETION_PENDING_CODE } from '@bike4mind/common';
+
+const PENDING_DELETION = {
+  requestedAt: new Date('2026-11-01T00:00:00Z'),
+  scheduledFor: new Date('2026-12-01T00:00:00Z'),
+  source: 'self_serve',
+};
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {
@@ -96,6 +103,14 @@ describe('verifyWsAccessToken', () => {
     });
 
     await expect(verifyWsAccessToken('token-123')).rejects.toThrow('blocked');
+  });
+
+  it('rejects a deletion-pending account with the deletion-pending code', async () => {
+    mockFindById.mockResolvedValue({ id: 'user-1', tokenVersion: 3, deletion: PENDING_DELETION });
+
+    await expect(verifyWsAccessToken('token-123')).rejects.toMatchObject({
+      additionalInfo: { code: ACCOUNT_DELETION_PENDING_CODE },
+    });
   });
 
   it('accepts a legacy token carrying no typ and no tokenVersion against a default-version user', async () => {

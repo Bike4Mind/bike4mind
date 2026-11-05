@@ -5,6 +5,7 @@ import { isRotatedSecretWithinGraceWindow } from '@bike4mind/server-utils/auth/s
 import { decryptAtRest } from '@bike4mind/utils/security';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { isMfaEnrollmentOwed, MFA_ENROLLMENT_REQUIRED_MESSAGE } from '@bike4mind/server-utils/auth/mfaEnforcement';
 import { ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import jwt from 'jsonwebtoken';
@@ -71,6 +72,7 @@ export async function verifyWsAccessTokenClaims(accessToken: string | undefined)
     throw new UnauthorizedError('Session expired');
   }
   assertAccountStateUsable(user);
+  assertNoPendingDeletion(user);
   // enforceMFA binds sessions minted before it applied, as on REST (auth.ts). Forbidden, not
   // Unauthorized: the credential is valid, so a client must re-enroll rather than refresh.
   if (await isMfaEnrollmentOwed(user, { impersonatedBy: decoded.impersonatedBy })) {
