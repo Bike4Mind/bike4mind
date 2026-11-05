@@ -17,6 +17,7 @@ import {
   type MarkAuditReviewedSkipReason,
 } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import {
   useAuditReviewQueue,
   useAuditSummary,
@@ -31,6 +32,7 @@ const LIST_ERROR_MESSAGE = 'Could not load entries that need review.';
 const TO_REVIEW_HINT =
   'Critical actions by other admins, waiting for a second pair of eyes. Your own actions go to another admin.';
 const NOT_FULL_ADMIN_HINT = 'Only full admins can sign off on critical entries.';
+const IMPERSONATING_HINT = 'Stop impersonating to review audit entries.';
 
 type ReviewView = 'to-review' | 'all';
 const VIEW_OPTIONS: { value: ReviewView; label: string }[] = [
@@ -139,7 +141,8 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
   const showUndo = useUndoToast();
   const mark = useMarkAuditReviewed();
   const unmark = useUnmarkAuditReviewed();
-  const canReview = isFullAdmin(currentUser);
+  const impersonating = useAccessToken(s => s.impersonating);
+  const canReview = isFullAdmin(currentUser) && !impersonating;
   const [view, setView] = useState<ReviewView>('to-review');
   const [selection, setSelection] = useState<AdminSelection>(noSelection);
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
@@ -281,7 +284,7 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
               <Typography level="body-xs">{describeCriticalRules(alertStatus)}</Typography>
               {view === 'to-review' && !canReview && (
                 <Typography level="body-xs" data-testid="audit-needs-review-not-full-admin">
-                  {NOT_FULL_ADMIN_HINT}
+                  {impersonating ? IMPERSONATING_HINT : NOT_FULL_ADMIN_HINT}
                 </Typography>
               )}
             </Stack>

@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { UndoToastProvider } from '../shared';
 import { AuditNeedsReviewPanel } from './AuditNeedsReviewPanel';
 import { makeAuditReview, makeReviewQueueEntry } from './shared/auditTestFixtures';
@@ -93,6 +94,10 @@ describe('AuditNeedsReviewPanel', () => {
       skipped: [],
     }));
     mocks.unmarkAsync.mockResolvedValue({ unreviewed: [], skipped: [] });
+  });
+
+  afterEach(() => {
+    useAccessToken.setState({ impersonating: false });
   });
 
   it('shows how many entries wait for review, with the hint', () => {
@@ -213,6 +218,15 @@ describe('AuditNeedsReviewPanel', () => {
     mocks.currentUser = { id: 'me', isAdmin: false, adminPermissions: ['support:read'] };
     renderPanel();
     expect(screen.getByTestId('audit-needs-review-not-full-admin').textContent).toContain('Only full admins');
+    expect(screen.queryByTestId('audit-needs-review-row-mark-btn')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByTestId('audit-needs-review-bulk-mark-btn')).toBeNull();
+  });
+
+  it('hides every review control for a full admin who is impersonating', () => {
+    useAccessToken.setState({ impersonating: true });
+    renderPanel();
+    expect(screen.getByTestId('audit-needs-review-not-full-admin').textContent).toContain('Stop impersonating');
     expect(screen.queryByTestId('audit-needs-review-row-mark-btn')).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.queryByTestId('audit-needs-review-bulk-mark-btn')).toBeNull();

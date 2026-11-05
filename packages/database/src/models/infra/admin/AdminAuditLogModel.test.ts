@@ -256,7 +256,7 @@ describe('AdminAuditLogRepository.listReviewQueue', () => {
       critical({ ...byOther, summary: 'baselined' }, new Date('2020-01-01T00:00:00Z'))
     );
     await adminAuditReviewRepository.createMany([
-      { auditEntryId: baselined.id, reviewer: { userId: null, name: 'Rollout baseline' }, baseline: true },
+      { auditEntryId: baselined.id, reviewer: { userId: null, name: 'Baseline' }, baseline: true },
     ]);
     await adminAuditLogRepository.append(
       critical({ ...byOther, summary: 'before floor' }, new Date(Date.now() - 9 * day))

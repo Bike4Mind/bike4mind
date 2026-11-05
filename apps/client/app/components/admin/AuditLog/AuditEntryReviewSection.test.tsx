@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import type { AuditReview } from '@bike4mind/common';
 import { AuditEntryReviewSection } from './AuditEntryReviewSection';
 import { makeAuditEntry, makeAuditReview } from './shared/auditTestFixtures';
@@ -35,6 +36,10 @@ describe('AuditEntryReviewSection', () => {
     mocks.currentUser = { id: 'me', isAdmin: true, adminPermissions: [] };
     mocks.review = null;
     mocks.isLoading = false;
+  });
+
+  afterEach(() => {
+    useAccessToken.setState({ impersonating: false });
   });
 
   it('shows a skeleton while the review loads', () => {
@@ -93,6 +98,15 @@ describe('AuditEntryReviewSection', () => {
     renderSection();
     expect(screen.getByTestId('audit-review-not-allowed').textContent).toBe(
       'Only full admins can sign off on critical entries.'
+    );
+    expect(screen.queryByTestId('audit-review-mark-btn')).toBeNull();
+  });
+
+  it('hides the review controls for a full admin who is impersonating', () => {
+    useAccessToken.setState({ impersonating: true });
+    renderSection();
+    expect(screen.getByTestId('audit-review-not-allowed').textContent).toBe(
+      'Stop impersonating to review audit entries.'
     );
     expect(screen.queryByTestId('audit-review-mark-btn')).toBeNull();
   });

@@ -7,6 +7,7 @@ import { isFullAdmin } from '@bike4mind/common';
 import RestrictedPage from '@client/app/components/common/RestrictedPage';
 import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
 import { useUnreviewedAuditCount } from '@client/app/hooks/data/adminAuditLog';
@@ -64,7 +65,8 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
-  const unreviewedAudit = useUnreviewedAuditCount({ enabled: isFullAdmin(currentUser) });
+  const impersonating = useAccessToken(s => s.impersonating);
+  const unreviewedAudit = useUnreviewedAuditCount({ enabled: isFullAdmin(currentUser) && !impersonating });
   const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);

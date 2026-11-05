@@ -3,6 +3,7 @@ import { Button, Skeleton, Stack, Textarea, Typography } from '@mui/joy';
 import { AUDIT_REVIEW_NOTE_MAX, auditReviewConflict, isFullAdmin, type AuditEntry } from '@bike4mind/common';
 import { useAuditReview, useMarkAuditReviewed, useUnmarkAuditReviewed } from '@client/app/hooks/data/adminAuditLog';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 
 type AuditEntryReviewSectionProps = { entry: AuditEntry };
@@ -10,6 +11,7 @@ type AuditEntryReviewSectionProps = { entry: AuditEntry };
 /** Sign-off controls for one critical entry, shown in the entry drawer. */
 export const AuditEntryReviewSection: React.FC<AuditEntryReviewSectionProps> = ({ entry }) => {
   const { currentUser } = useUser();
+  const impersonating = useAccessToken(s => s.impersonating);
   const { data: review, isLoading } = useAuditReview(entry.id);
   const mark = useMarkAuditReviewed();
   const unmark = useUnmarkAuditReviewed();
@@ -59,10 +61,12 @@ export const AuditEntryReviewSection: React.FC<AuditEntryReviewSectionProps> = (
     );
   }
 
-  if (!isFullAdmin(currentUser)) {
+  if (impersonating || !isFullAdmin(currentUser)) {
     return (
       <Typography level="body-sm" data-testid="audit-review-not-allowed">
-        Only full admins can sign off on critical entries.
+        {impersonating
+          ? 'Stop impersonating to review audit entries.'
+          : 'Only full admins can sign off on critical entries.'}
       </Typography>
     );
   }
