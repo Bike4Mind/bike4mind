@@ -79,24 +79,28 @@ export const billingHolders = {
       },
     ],
   },
-  // Admin attribution on an operator-owned package (`createdBy` is 'migration' on migrated rows).
   GrantPackage: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
   },
-  GrantPackageDayCount: {
-    kind: 'noUserData',
-    note: 'Per-package, per-day redemption counter against the daily cap; names no person.',
-  },
-  // A per-person dedupe claim; the credits themselves are on the ledger.
+  GrantPackageDayCount: { kind: 'noUserData', note: 'Per-package daily redemption counters; aggregate only.' },
+  // Unique on (packageId, userId), so it cannot be anonymized in place. The package totals it counted
+  // stay, and the credits granted are on the ledger.
   GrantPackageRedemption: {
     kind: 'holder',
     references: [{ path: 'userId', matchBy: 'userId', action: 'deleteDocument' }],
   },
-  // A reward queued for payout: held or paused rows are an outstanding financial obligation.
+  // A reward not yet paid; once paid it is on the credit ledger.
   HeldCreditReward: {
     kind: 'holder',
-    references: [{ path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON }],
+    references: [
+      { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
+      // The invited friend whose first answer earned the inviter's referral reward.
+      { path: 'metadata.referredUserId', matchBy: 'userId', action: 'anonymize' },
+    ],
+    unmatchedPaths: {
+      transactionId: 'Ledger idempotency key embedding the inviter and friend ids; unique and immutable.',
+    },
   },
   ModelPrice: {
     kind: 'holder',
@@ -139,7 +143,7 @@ export const billingHolders = {
     kind: 'noUserData',
     note: 'Aggregate MRR figures per day, per plan and per owner type; no row is about one person.',
   },
-  // An alert scoped to a user names them in `scopeId`; the open-incident key repeats it.
+  // Scopes other than 'User' (platform, org, agent, apiKey, model) are not a person.
   SpendAlert: {
     kind: 'holder',
     references: [
@@ -147,8 +151,8 @@ export const billingHolders = {
         path: 'scopeId',
         matchBy: 'userId',
         where: { scopeType: 'User' },
-        action: 'anonymize',
-        alsoRedact: ['openKey'],
+        action: 'retain',
+        reason: FINANCIAL_RECORD_REASON,
       },
       { path: 'acknowledgedBy', matchBy: 'userId', action: 'anonymize' },
     ],
