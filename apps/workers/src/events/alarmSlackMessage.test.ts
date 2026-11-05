@@ -420,10 +420,12 @@ describe('ALARM_CATALOG', () => {
         url: 'https://app.example.com/admin?tab=moderation-incidents',
       });
     }
-    expect(buttonsFor('image-moderation-no-reviewers')).toContainEqual({
-      label: 'Moderation settings',
-      url: 'https://app.example.com/admin?tab=admin-settings&section=security',
-    });
+    for (const suffix of ['image-moderation-incident-unalerted', 'image-moderation-no-reviewers']) {
+      expect(buttonsFor(suffix)).toContainEqual({
+        label: 'Moderation settings',
+        url: 'https://app.example.com/admin?tab=admin-settings&section=security',
+      });
+    }
     expect(buttonsFor('image-moderation-incident-unreviewed').map(b => b.label)).toContain('Open in CloudWatch');
   });
 

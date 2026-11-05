@@ -15,7 +15,7 @@
  * abuse signals in the alarms channel. Cost is for money the provider or Stripe reports.
  */
 
-import { classifyStage } from '@bike4mind/common';
+import { ADMIN_MODERATION_INCIDENTS_TAB_SLUG, classifyStage } from '@bike4mind/common';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
 export type AlarmLevel = 'page' | 'warn' | 'info';
@@ -92,7 +92,7 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
   'rate-limits': { label: 'Rate limits', path: '/admin?tab=rate-limits' },
   'spend-monitor': { label: 'Credit analytics', path: '/admin?tab=credit-analytics' },
-  'moderation-review': { label: 'Moderation review', path: '/admin?tab=moderation-incidents' },
+  'moderation-review': { label: 'Moderation review', path: `/admin?tab=${ADMIN_MODERATION_INCIDENTS_TAB_SLUG}` },
   'moderation-settings': { label: 'Moderation settings', path: '/admin?tab=admin-settings&section=security' },
 };
 
@@ -461,7 +461,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'An image moderation incident has waited over 30 minutes without an alert reaching a reviewer, even though the scheduled sweep keeps retrying. Either the email keeps failing or no reviewer is configured.',
     action:
       'Open the admin settings and check the image moderation reviewer list, then check the sweep Lambda log for send failures. Review the incident in the admin console in the meantime.',
-    links: ['moderation-review'],
+    links: ['moderation-settings', 'moderation-review'],
   },
   'image-moderation-incident-unreviewed': {
     title: 'A moderation incident has waited a day for review',
