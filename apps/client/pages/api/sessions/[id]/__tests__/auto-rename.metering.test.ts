@@ -84,12 +84,11 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
 
 const { default: handler } = await import('@pages/api/sessions/[id]/auto-rename');
 
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() };
+
 async function call() {
   const { req, res } = createMocks({ method: 'POST', query: { id: 's1' } });
-  Object.assign(req, {
-    user: { id: 'u1', tags: [], groups: [] },
-    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn() },
-  });
+  Object.assign(req, { user: { id: 'u1', tags: [], groups: [] }, logger });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
   return res;
@@ -129,5 +128,14 @@ describe('POST /api/sessions/[id]/auto-rename metering', () => {
 
     await expect(call()).rejects.toBeInstanceOf(UnprocessableEntityError);
     expect(m.complete).not.toHaveBeenCalled();
+  });
+
+  it('logs an empty generated title and reports it as a failed rename', async () => {
+    m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
+      await cb(['   ']);
+    });
+
+    await expect(call()).rejects.toMatchObject({ statusCode: 500, message: 'Failed to auto-rename session' });
+    expect(logger.error).toHaveBeenCalledWith('Error in auto-rename:', expect.anything());
   });
 });
