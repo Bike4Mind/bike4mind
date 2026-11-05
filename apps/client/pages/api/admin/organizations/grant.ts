@@ -13,6 +13,7 @@ import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
+import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
@@ -149,6 +150,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
       action: 'invalidate_query',
       queryKey: ['organizations'],
     });
+
+    if (priceAffectsEntitlements(ORGANIZATION_SUBSCRIPTION_PRICE_ID)) {
+      await sendToClient(owner.id, Resource.websocket.managementEndpoint, {
+        action: 'invalidate_query',
+        queryKey: ['entitlements'],
+      });
+    }
 
     return res.status(201).json({
       organizationId: organization.id,

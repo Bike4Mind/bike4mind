@@ -114,6 +114,55 @@ describe('getUserEntitlements', () => {
     expect(findActiveByOwners).not.toHaveBeenCalled();
   });
 
+  describe('questmaster:pro from subscription status', () => {
+    it.each(['price_ladder_basic', 'price_ladder_pro', 'price_standalone'])(
+      'is granted to an active subscriber on %s with no questmaster-pro tag',
+      async priceId => {
+        findActive.mockResolvedValue([{ priceId }]);
+
+        await expect(getUserEntitlements(user)).resolves.toContain('questmaster:pro');
+      }
+    );
+
+    it('is granted to a seat member through an org-owned paid plan row', async () => {
+      findActive.mockResolvedValue([]);
+      findPlanHolderOrgIds.mockResolvedValue(['org1']);
+      findActiveByOwners.mockResolvedValue([
+        { priceId: 'price_ladder_pro', ownerType: 'Organization', ownerId: 'org1' },
+      ]);
+
+      await expect(getUserEntitlements(user)).resolves.toContain('questmaster:pro');
+    });
+
+    it('is not held by a lapsed subscriber, who has no active row left', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements(user)).resolves.not.toContain('questmaster:pro');
+    });
+
+    it('is not held by a user with no subscription', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(getUserEntitlements({ id: 'u-none', tags: [] })).resolves.not.toContain('questmaster:pro');
+    });
+
+    it('is not conferred by the sticky credit-purchase stamp alone', async () => {
+      findActive.mockResolvedValue([]);
+
+      await expect(
+        getUserEntitlements({ ...user, lastCreditsPurchasedAt: new Date('2026-10-01T00:00:00Z') })
+      ).resolves.not.toContain('questmaster:pro');
+    });
+
+    it('is not duplicated when the questmaster-pro tag is also held', async () => {
+      findActive.mockResolvedValue([{ priceId: 'price_ladder_basic' }]);
+
+      const keys = await getUserEntitlements({ id: 'u-tag', tags: ['questmaster-pro'] });
+
+      expect(keys.filter(key => key === 'questmaster:pro')).toHaveLength(1);
+    });
+  });
+
   describe('plan:paid', () => {
     it.each(['price_ladder_basic', 'price_ladder_pro'])(
       'is granted for an active ladder subscription (%s)',
