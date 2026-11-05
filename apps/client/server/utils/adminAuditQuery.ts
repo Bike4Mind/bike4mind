@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import {
   AuditLogFiltersSchema,
+  AuditReviewQueueStatusSchema,
   USER_TIMELINE_TYPES,
   UserActivityDirectionSchema,
   UserTimelineTypeSchema,
   type AuditLogCursor,
   type AuditLogFilters,
+  type AuditReviewQueueStatus,
   type UserActivityDirection,
   type UserTimelineType,
 } from '@bike4mind/common';
@@ -50,8 +52,8 @@ const parseFilters = (values: Record<string, string>): AuditLogFilters => {
   return result.data;
 };
 
-const parseLimit = (raw: string | undefined): number => {
-  if (raw === undefined) return DEFAULT_LIMIT;
+const parseLimit = (raw: string | undefined, defaultLimit: number = DEFAULT_LIMIT): number => {
+  if (raw === undefined) return defaultLimit;
   if (!/^-?\d+$/.test(raw)) throw new BadRequestError('limit must be an integer');
   return Math.min(Math.max(Number(raw), MIN_LIMIT), MAX_LIMIT);
 };
@@ -127,6 +129,25 @@ export const parseUserTimelineQuery = (
     types: parseTimelineTypes(values.types),
     range: { from, to },
     limit: parseLimit(values.limit),
+    cursor: parseCursor(values.cursor),
+  };
+};
+
+const REVIEW_QUEUE_DEFAULT_LIMIT = 25;
+
+/** The review queue query: `all` needs a `from` instant, `unreviewed` ignores it. */
+export const parseAuditReviewQueueQuery = (
+  query: unknown
+): { status: AuditReviewQueueStatus; from?: Date; limit: number; cursor?: AuditLogCursor } => {
+  const values = readSingleValues(query);
+  const status = AuditReviewQueueStatusSchema.safeParse(values.status ?? 'unreviewed');
+  if (!status.success) throw new BadRequestError('status must be unreviewed or all');
+  const from = parseInstant(values.from, 'from');
+  if (status.data === 'all' && !from) throw new BadRequestError('from is required when status is all');
+  return {
+    status: status.data,
+    from,
+    limit: parseLimit(values.limit, REVIEW_QUEUE_DEFAULT_LIMIT),
     cursor: parseCursor(values.cursor),
   };
 };

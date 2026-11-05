@@ -80,11 +80,12 @@ describe('SIDEBAR_SECTIONS', () => {
     expect(allItems.find(i => i.tab === AdminTab.Waitlist)?.label).toBe('Invite Center');
   });
 
-  it('only badges the Waitlist and Subscriptions tabs', () => {
+  it('only badges the Waitlist, Subscriptions and Audit log tabs', () => {
     const badged = allItems.filter(i => i.badge).map(i => [i.tab, i.badge]);
     expect(badged).toEqual([
       [AdminTab.Waitlist, 'waitingSubscribers'],
       [AdminTab.Subscriptions, 'newSubscriptions'],
+      [AdminTab.AuditLog, 'unreviewedAudit'],
     ]);
   });
 });

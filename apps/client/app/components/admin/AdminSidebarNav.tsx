@@ -37,6 +37,7 @@ export type SidebarNavProps = {
   enableUserMigration?: boolean;
   showLiveOpsTriageTab: boolean;
   waitingSubscribersCount?: number;
+  unreviewedAuditCount?: number;
   /** A Stripe-billed subscription started since this browser last opened the Subscriptions tab. */
   newSubscriptions?: boolean;
   hiddenNotifications: string[];
@@ -269,11 +270,37 @@ const SectionLabel = ({ id, children }: { id: string; children: ReactNode }) => 
   </Box>
 );
 
+const CountPill = ({ count, label, testId }: { count: number; label: string; testId?: string }) => (
+  <Box
+    component="span"
+    aria-label={label}
+    title={label}
+    data-testid={testId}
+    sx={{
+      minWidth: 20,
+      height: 20,
+      px: '6px',
+      boxSizing: 'border-box',
+      borderRadius: '999px',
+      fontSize: 11,
+      fontWeight: 600,
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      bgcolor: 'admin.status.neutral.background',
+      color: 'admin.status.neutral.foreground',
+    }}
+  >
+    {count}
+  </Box>
+);
+
 export const SidebarNav = ({
   activeTab,
   enableUserMigration,
   showLiveOpsTriageTab,
   waitingSubscribersCount,
+  unreviewedAuditCount,
   newSubscriptions = false,
   hiddenNotifications,
   canOpenTab,
@@ -332,6 +359,15 @@ export const SidebarNav = ({
         />
       ) : null;
     }
+    if (item.badge === 'unreviewedAudit') {
+      return unreviewedAuditCount && unreviewedAuditCount > 0 ? (
+        <CountPill
+          count={unreviewedAuditCount}
+          label={`${unreviewedAuditCount} audit entries to review`}
+          testId="admin-sidebar-unreviewed-audit-badge"
+        />
+      ) : null;
+    }
     if (
       item.badge !== 'waitingSubscribers' ||
       !waitingSubscribersCount ||
@@ -340,29 +376,7 @@ export const SidebarNav = ({
     ) {
       return null;
     }
-    return (
-      <Box
-        component="span"
-        aria-label={`${waitingSubscribersCount} waiting for an invite`}
-        title={`${waitingSubscribersCount} waiting for an invite`}
-        sx={{
-          minWidth: 20,
-          height: 20,
-          px: '6px',
-          boxSizing: 'border-box',
-          borderRadius: '999px',
-          fontSize: 11,
-          fontWeight: 600,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          bgcolor: 'admin.status.neutral.background',
-          color: 'admin.status.neutral.foreground',
-        }}
-      >
-        {waitingSubscribersCount}
-      </Box>
-    );
+    return <CountPill count={waitingSubscribersCount} label={`${waitingSubscribersCount} waiting for an invite`} />;
   };
 
   const focusables = () => Array.from(navRef.current?.querySelectorAll<HTMLElement>(`[${FOCUSABLE_ATTR}]`) ?? []);
