@@ -1,4 +1,3 @@
-import { useAnimatedText } from '@client/app/hooks/useAnimate';
 import { Box, Typography, IconButton, Stack, Dropdown, MenuButton, MenuItem, ListItemDecorator, Menu } from '@mui/joy';
 import React, { useCallback, useEffect, useId, useState } from 'react';
 import KeyboardArrowUp from '@mui/icons-material/KeyboardArrowUp';
@@ -121,8 +120,6 @@ const ThoughtBubbles = React.memo(({ content, isStreaming, defaultFolded = false
     setThoughts(withoutTags);
   }, [content]);
 
-  const animatedText = useAnimatedText(thoughts || '', !isStreaming);
-
   // Don't render an empty thoughts block: a reply like `<think></think>` (or one with
   // only whitespace between the tags) has non-zero length but no actual thought content.
   const hasThoughtContent =
@@ -208,7 +205,7 @@ const ThoughtBubbles = React.memo(({ content, isStreaming, defaultFolded = false
               <Typography
                 sx={theme => ({ color: theme.palette.chatbox.messageInputColor, opacity: 0.7, whiteSpace: 'pre-wrap' })}
               >
-                {animatedText}
+                {thoughts}
               </Typography>
             </Box>
 
