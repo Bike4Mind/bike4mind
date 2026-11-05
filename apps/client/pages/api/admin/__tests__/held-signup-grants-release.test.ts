@@ -126,6 +126,24 @@ describe('POST /api/admin/held-signup-grants/release', () => {
     expect(audit.record).not.toHaveBeenCalled();
   });
 
+  it('lowercases ids once for the self check, the dry run and the real run', async () => {
+    const upper = 'ABCDEF0123456789ABCDEF01';
+    const lower = upper.toLowerCase();
+    expect((await run({ userIds: [upper] }, true, { id: lower })).statusCode).toBe(403);
+    expect(audit.deny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        target: { kind: 'user', id: lower, displayName: lower },
+      })
+    );
+
+    await run({ userIds: [upper], dryRun: true });
+    expect(preview).toHaveBeenCalledWith({ action: 'release_held', userIds: [lower] }, expect.anything());
+
+    await run({ userIds: [upper] });
+    expect(release).toHaveBeenCalledWith({ actorId: 'admin-1', userIds: [lower] }, expect.anything());
+  });
+
   describe('dry run', () => {
     it('previews with the held-release classification and pays, audits and records nothing', async () => {
       const res = await run({ userIds: [id(1)], dryRun: true });

@@ -25,12 +25,17 @@ export type BulkSignupGrantResult = {
 
 const dedupe = (userIds: string[]) => [...new Set(userIds)].slice(0, MAX_BULK_SIGNUP_GRANT_ACTION);
 
+export type PreviewSignupGrantInput = { userIds: string[] } & (
+  | { action: 'release_remaining'; dripCap: number }
+  | { action: Exclude<SignupGrantAdminAction, 'release_remaining'>; dripCap?: never }
+);
+
 /**
  * Reports, without writing anything, what `action` would do to each account. It uses the same classifier the
  * real actions gate on, so the preview names the same no-op reasons the run would return.
  */
 export async function previewSignupGrantAction(
-  input: { action: SignupGrantAdminAction; userIds: string[]; dripCap?: number },
+  input: PreviewSignupGrantInput,
   adapters: { users: Pick<IUserRepository, 'findById'> }
 ): Promise<BulkSignupGrantResult> {
   const results: BulkSignupGrantRow[] = [];

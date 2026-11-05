@@ -30,8 +30,9 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       const parsed = bodySchema.safeParse(req.body);
       if (!parsed.success)
         throw new BadRequestError(`Expected 1 to ${userService.MAX_BULK_RELEASE} user ids in userIds`);
+      const userIds = parsed.data.userIds.map(userId => userId.toLowerCase());
       // The whole request is refused, like the single-account credit route, rather than partly paid.
-      for (const userId of parsed.data.userIds) {
+      for (const userId of userIds) {
         if (!isSelfOrImpersonator(req.user, userId)) continue;
         await denySelfAdminAction(req, {
           action: 'user.credits.denied',
@@ -41,13 +42,13 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       }
       if (parsed.data.dryRun) {
         const preview = await userService.previewSignupGrantAction(
-          { action: 'release_held', userIds: parsed.data.userIds },
+          { action: 'release_held', userIds },
           { users: userRepository }
         );
         return res.status(200).json(preview);
       }
       const result = await userService.bulkReleaseHeldGrants(
-        { actorId: req.user.id, userIds: parsed.data.userIds },
+        { actorId: req.user.id, userIds },
         { ...buildHeldGrantAdapters(req.logger), batches: heldGrantBatches }
       );
       let policy: ReturnType<typeof loadCreditGrantPolicy> | undefined;
