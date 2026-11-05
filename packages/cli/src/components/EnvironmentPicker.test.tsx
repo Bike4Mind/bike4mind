@@ -36,6 +36,20 @@ describe('EnvironmentPicker', () => {
       stdin.write('\r');
       expect(onSelect).toHaveBeenCalledWith({ target: 'prod' });
     });
+
+    it('cancels on Esc when it can be cancelled', async () => {
+      const onSelect = vi.fn();
+      const onCancel = vi.fn();
+      const { lastFrame, stdin } = render(
+        <EnvironmentPicker onSelect={onSelect} onCancel={onCancel} defaultUrl={defaultUrl} />
+      );
+      expect(lastFrame()).toContain('Esc to cancel');
+
+      stdin.write('\x1b');
+
+      await vi.waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+      expect(onSelect).not.toHaveBeenCalled();
+    });
   });
 
   describe('without a baked default', () => {

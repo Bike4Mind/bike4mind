@@ -81,4 +81,26 @@ describe('DeviceFlowClient.waitForAuthorization', () => {
       access_token: 'at',
     });
   });
+
+  it('stops polling as soon as the signal aborts', async () => {
+    respondWith({ error: 'authorization_pending', error_description: 'pending' });
+    const abort = new AbortController();
+
+    const waiting = new DeviceFlowClient(BASE).waitForAuthorization('dc', 60, undefined, abort.signal);
+    abort.abort(new Error('cancelled'));
+
+    await expect(waiting).rejects.toThrow('cancelled');
+    expect(sentBodies).toEqual([]);
+  });
+
+  it('does not poll at all with an already-aborted signal', async () => {
+    respondWith({ access_token: 'at', refresh_token: 'rt', token_type: 'Bearer', expires_in: 3600 });
+    const abort = new AbortController();
+    abort.abort(new Error('cancelled'));
+
+    await expect(new DeviceFlowClient(BASE).waitForAuthorization('dc', 0, undefined, abort.signal)).rejects.toThrow(
+      'cancelled'
+    );
+    expect(sentBodies).toEqual([]);
+  });
 });

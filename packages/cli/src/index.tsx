@@ -4106,6 +4106,12 @@ function CliApp() {
 
   // A /login from a signed-out local session returns to that session when it does not complete.
   const localSessionRunning = isInitialized && state.signedOutLocal;
+  const backToLocalSession = localSessionRunning
+    ? () => {
+        setState(prev => ({ ...prev, showLoginFlow: false, showEnvironmentPicker: false }));
+        console.log(`\n${LOCAL_SESSION_CONTINUES}\n`);
+      }
+    : undefined;
 
   // Backend picker, checked before the login flow since a backend must be chosen first.
   if (state.showEnvironmentPicker) {
@@ -4136,6 +4142,7 @@ function CliApp() {
             }
           })();
         }}
+        onCancel={backToLocalSession}
       />
     );
   }
@@ -4182,6 +4189,7 @@ function CliApp() {
           console.log("Run b4m again when you're ready to authenticate.\n");
           exit();
         }}
+        onCancel={backToLocalSession}
       />
     );
   }

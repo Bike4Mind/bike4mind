@@ -368,6 +368,69 @@ describe('LoginFlow', () => {
     expect(onError.mock.calls[0][0].message).toBe(']0;pwnedboom');
   });
 
+  it('cancels on Esc while waiting, stops polling, and stores nothing', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockImplementation(
+      (_code: string, _interval: number, _onStatus: unknown, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason)))
+    );
+    const onCancel = vi.fn();
+    const onError = vi.fn();
+    const store = { setAuthTokens: vi.fn() } as unknown as ConfigStore;
+    const { lastFrame, stdin } = render(
+      <LoginFlow
+        apiUrl="https://app.example.com"
+        configStore={store}
+        onSuccess={vi.fn()}
+        onError={onError}
+        onCancel={onCancel}
+      />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Press Esc to cancel'));
+    stdin.write('\x1b');
+
+    await vi.waitFor(() => expect(onCancel).toHaveBeenCalledOnce());
+    const signal = oauth.waitForAuthorization.mock.calls[0][3] as AbortSignal;
+    expect(signal.aborted).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+    expect(store.setAuthTokens).not.toHaveBeenCalled();
+  });
+
+  it('aborts the poll when unmounted', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame, unmount } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+    await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
+
+    unmount();
+
+    expect((oauth.waitForAuthorization.mock.calls[0][3] as AbortSignal).aborted).toBe(true);
+  });
+
+  it('keeps one device flow across re-renders with new callbacks', async () => {
+    oauth.initiateDeviceFlow.mockReset().mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    let authorize!: (t: typeof tokens) => void;
+    oauth.waitForAuthorization.mockReturnValue(new Promise(resolve => (authorize = resolve)));
+    const first = vi.fn();
+    const latest = vi.fn();
+    const { lastFrame, rerender } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={first} onError={vi.fn()} />
+    );
+    await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
+
+    rerender(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={latest} onError={vi.fn()} />
+    );
+    authorize(tokens);
+
+    await vi.waitFor(() => expect(latest).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(first).not.toHaveBeenCalled();
+    expect(oauth.initiateDeviceFlow).toHaveBeenCalledOnce();
+  });
+
   it('opens a localhost dev URL on the matching origin', async () => {
     oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('http://localhost:3000'));
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
