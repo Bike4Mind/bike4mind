@@ -42,6 +42,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
         priority: ticket.priority,
         demoted: ticket.prioritySetBy === 'demote',
         epic: !!ticket.epic,
+        // An epic's children are its dependencies; a gone one counts as done, as for readiness.
+        ...(ticket.epic && { childrenDone: ticket.dependencies.filter(depId => !openDeps.has(depId)).length }),
         stale: !!serviceLevelBreach(ticket, loop, now),
         blockedOn: ticket.blockedOn,
         ready:
