@@ -9,6 +9,8 @@ export interface IAnalyticsUserDayOrg {
   orgId: string;
   requests: number;
   creditsCharged: number;
+  /** First-party activity billed to this org; absent on older rollups. */
+  active?: boolean;
 }
 
 /** One row per (UTC day, user) with activity; the source for DAU/WAU/MAU and per-user rollups. */
@@ -45,6 +47,7 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
             orgId: { type: String, required: true },
             requests: { type: Number, required: true },
             creditsCharged: { type: Number, required: true },
+            active: { type: Boolean, required: false },
           },
           { _id: false }
         ),

@@ -19,9 +19,11 @@ const overview = {
     bucket: 'day',
   },
   signupsMode: 'legit',
+  accounts: 'external',
   lastUpdated: null,
   stale: false,
   missingDays: ['2026-06-14'],
+  internalMissingDays: [],
   stats: {
     mau: { value: 1, previous: null },
     avgDau: { value: 1, previous: null },
@@ -29,7 +31,18 @@ const overview = {
     newSignups: { value: 0, previous: null, suspected: 0 },
   },
   activeUsers: {
-    days: [{ day: '2026-06-14', dau: null, wau: null, mau: null, partial: false }],
+    days: [
+      {
+        day: '2026-06-14',
+        dau: null,
+        wau: null,
+        mau: null,
+        apiDau: null,
+        partial: false,
+        external: null,
+        internal: null,
+      },
+    ],
     bySource: [{ day: '2026-06-14', partial: false, counts: null }],
     sources: ['web'],
   },
@@ -72,7 +85,9 @@ const fileNamed = (files: ReturnType<typeof buildAnalyticsCsvFiles>, name: strin
   return file.csv.replace(/^\uFEFF/, '').split('\r\n');
 };
 
-beforeEach(() => download.downloadData.mockReset());
+beforeEach(() => {
+  download.downloadData.mockReset();
+});
 
 describe('buildAnalyticsCsvFiles', () => {
   it('writes one file per section with units in the headers', () => {
@@ -97,6 +112,40 @@ describe('buildAnalyticsCsvFiles', () => {
   it('leaves a missing rollup day empty rather than zero', () => {
     const rows = fileNamed(buildAnalyticsCsvFiles(overview, topAccounts), 'credits-consumed.csv');
     expect(rows.slice(1)).toEqual(['2026-06-14,no,', '2026-06-15,yes,12.5']);
+  });
+
+  it('exports external API users separately and preserves missing-day gaps', () => {
+    const apiOverview: AnalyticsOverview = {
+      ...overview,
+      activeUsers: {
+        ...overview.activeUsers,
+        days: [
+          overview.activeUsers.days[0],
+          { ...overview.activeUsers.days[0], day: '2026-06-15', dau: 0, wau: 0, mau: 0, apiDau: 5, partial: true },
+        ],
+      },
+    };
+    const rows = fileNamed(buildAnalyticsCsvFiles(apiOverview, topAccounts), 'active-users.csv');
+    expect(rows).toEqual([
+      'Day (UTC),Partial day (today),DAU (users),WAU (users),MAU (users),External API users (not counted)',
+      '2026-06-14,no,,,,',
+      '2026-06-15,yes,0,0,0,5',
+    ]);
+  });
+
+  it('exports the Real and Suspected signup counts without an unclassified column', () => {
+    const signupOverview: AnalyticsOverview = {
+      ...overview,
+      signups: {
+        ...overview.signups,
+        buckets: [{ start: '2026-06-14', end: '2026-06-15', legit: 3, suspected: 1, partial: false }],
+      },
+    };
+    const rows = fileNamed(buildAnalyticsCsvFiles(signupOverview, topAccounts), 'signups.csv');
+    expect(rows).toEqual([
+      'Bucket start (UTC),"Bucket end, exclusive (UTC)",Partial bucket,Real (signups),Suspected (signups)',
+      '2026-06-14,2026-06-15,no,3,1',
+    ]);
   });
 
   it('adds the other-models row with its share', () => {

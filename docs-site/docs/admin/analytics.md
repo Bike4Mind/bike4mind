@@ -77,9 +77,11 @@ Three cards show what people use. Rankings and totals cover the complete days in
 
 Two tables list the 10 heaviest users and the 10 heaviest organizations over the complete days of the range. Rows are ranked by active days, then by AI requests. Each row shows the plan, active days, AI requests, credits consumed and its share of all requests. Click a column header to sort, or a row to open the user's profile or the organization. A user or organization that has since been deleted is listed by its id and does not open.
 
+Active days require first-party AI requests. API requests and credits still contribute to the usage totals. For an organization to have an active day, a first-party request must be billed to that organization; personal activity does not make an API-only organization active.
+
 Suspected signups and suspended users are left out of both tables, and their usage is not added to any organization. The line under each table says how many accounts were left out.
 
-An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it. Days rolled up before per-organization usage was recorded still credit a member's whole day to their most-used organization until you re-run the day with `--force`.
+An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it. Days rolled up before per-organization usage was recorded still credit a member's whole day to their most-used organization until you re-run the day with `--force`. Re-running also fills the per-organization active-day flags on older rows.
 
 Both tables cover the complete days that have a nightly rollup. A day still waiting for its rollup is left out, and the line under each table says how many. The **Usage** cards say the same in their captions.
 

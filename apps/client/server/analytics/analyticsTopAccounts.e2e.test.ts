@@ -40,6 +40,7 @@ const seedDay = (userId: mongoose.Types.ObjectId | string, day: string, extra: R
     features: ['chat'],
     sources: ['web'],
     suspected: false,
+    active: true,
     ...extra,
   });
 
@@ -100,6 +101,77 @@ describe('getTopAccounts', () => {
     expect(result.excluded).toEqual({ suspected: 1, suspended: 1 });
     expect(result.orgs).toHaveLength(1);
     expect(result.orgs[0]).toMatchObject({ id: String(ids.org), activeDays: 1, requests: 10 });
+  });
+
+  it('retains API-only requests, credits and shares without counting them as active days', async () => {
+    await seedRollups();
+    await seedUser(ids.heavy);
+    await seedUser(ids.busy);
+    await seedDay(ids.heavy, '2026-06-10', {
+      active: false,
+      sources: ['api'],
+      requests: 100,
+      creditsCharged: 50,
+      orgs: [{ orgId: String(ids.org), requests: 100, creditsCharged: 50, active: false }],
+    });
+    await seedDay(ids.busy, '2026-06-10', {
+      orgs: [{ orgId: String(ids.quietOrg), requests: 10, creditsCharged: 5, active: true }],
+    });
+
+    const result = await getTopAccounts(QUERY, NOW);
+    expect(result.users.map(row => row.id)).toEqual([String(ids.busy), String(ids.heavy)]);
+    expect(result.users[1]).toMatchObject({ activeDays: 0, requests: 100, credits: 50 });
+    expect(result.users[1].share).toBeCloseTo((100 / 110) * 100);
+    expect(result.orgs.map(row => row.id)).toEqual([String(ids.quietOrg), String(ids.org)]);
+    expect(result.orgs[1]).toMatchObject({ activeDays: 0, requests: 100, credits: 50 });
+    expect(result.orgs[1].share).toBeCloseTo((100 / 110) * 100);
+  });
+
+  it('counts only first-party activity billed to each org and combines its members once per day', async () => {
+    await seedRollups();
+    await seedDay(ids.heavy, '2026-06-10', {
+      requests: 30,
+      creditsCharged: 15,
+      sources: ['web', 'api'],
+      orgs: [{ orgId: String(ids.org), requests: 20, creditsCharged: 10, active: false }],
+    });
+    await seedDay(ids.busy, '2026-06-10', {
+      requests: 6,
+      creditsCharged: 3,
+      orgs: [{ orgId: String(ids.quietOrg), requests: 6, creditsCharged: 3, active: true }],
+    });
+    await seedDay(ids.bot, '2026-06-10', {
+      active: false,
+      sources: ['api'],
+      orgs: [{ orgId: String(ids.quietOrg), requests: 10, creditsCharged: 5, active: false }],
+    });
+
+    const { orgs } = await getTopAccounts(QUERY, NOW);
+    expect(orgs.map(row => [row.id, row.activeDays, row.requests, row.credits])).toEqual([
+      [String(ids.quietOrg), 1, 16, 8],
+      [String(ids.org), 0, 20, 10],
+    ]);
+  });
+
+  it('falls back to row activity for older org splits and counts older rows without flags', async () => {
+    await seedRollups();
+    await seedDay(ids.heavy, '2026-06-10', { orgId: String(ids.org) });
+    await AnalyticsUserDay.collection.updateOne({ userId: String(ids.heavy) }, { $unset: { active: '' } });
+    await seedDay(ids.busy, '2026-06-11', {
+      active: false,
+      sources: ['api'],
+      orgs: [{ orgId: String(ids.quietOrg), requests: 10, creditsCharged: 5 }],
+    });
+
+    const result = await getTopAccounts(QUERY, NOW);
+    expect(result.users.map(row => [row.id, row.activeDays, row.requests])).toEqual([
+      [String(ids.heavy), 1, 10],
+      [String(ids.busy), 0, 10],
+    ]);
+    expect(result.orgs.map(row => [row.id, row.activeDays, row.requests])).toEqual([
+      [String(ids.org), 1, 10],
+      [String(ids.quietOrg), 0, 10],
+    ]);
   });
 
   it('counts an org day once however many members were active, and names its plan', async () => {

@@ -230,7 +230,7 @@ type DayUsageAcc = {
   sources: Set<string>;
   byOwner: Map<
     string,
-    { ownerType: IAnalyticsUserDay['ownerType']; ownerId: string; requests: number; credits: number }
+    { ownerType: IAnalyticsUserDay['ownerType']; ownerId: string; requests: number; credits: number; active: boolean }
   >;
 };
 
@@ -301,9 +301,10 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
     acc.features.add(feature);
     if (source) acc.sources.add(source);
     const ownerKey = `${ownerType}:${ownerId}`;
-    const owner = acc.byOwner.get(ownerKey) ?? { ownerType, ownerId, requests: 0, credits: 0 };
+    const owner = acc.byOwner.get(ownerKey) ?? { ownerType, ownerId, requests: 0, credits: 0, active: false };
     owner.requests += group.requests;
     owner.credits += group.credits;
+    if (active) owner.active = true;
     acc.byOwner.set(ownerKey, owner);
     bump(byFeature, feature, group.requests);
     bump(bySource, source ?? UNCLASSIFIED_SOURCE, group.requests);
@@ -359,7 +360,12 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
             // Per org, so an org is credited only with the work billed to it (analyticsTopAccounts.ts).
             orgs: owners
               .filter(owner => owner.ownerType === 'Organization')
-              .map(owner => ({ orgId: owner.ownerId, requests: owner.requests, creditsCharged: owner.credits })),
+              .map(owner => ({
+                orgId: owner.ownerId,
+                requests: owner.requests,
+                creditsCharged: owner.credits,
+                active: owner.active,
+              })),
             requests: acc.requests,
             creditsCharged: acc.credits,
             features: [...acc.features].sort(),

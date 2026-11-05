@@ -572,9 +572,32 @@ describe('rollupDay', () => {
     const row = await AnalyticsUserDay.findOne({ userId: String(users.a) }).lean();
     expect(row).toMatchObject({ requests: 6, creditsCharged: 18, orgId: 'globex' });
     expect(row?.orgs).toEqual([
-      { orgId: 'globex', requests: 2, creditsCharged: 10 },
-      { orgId: 'acme', requests: 1, creditsCharged: 2 },
+      { orgId: 'globex', requests: 2, creditsCharged: 10, active: true },
+      { orgId: 'acme', requests: 1, creditsCharged: 2, active: true },
     ]);
+  });
+
+  it('records activity per billed org while retaining API-only org usage', async () => {
+    const org = (ownerId: string, source: 'web' | 'api') => ({ ownerType: 'Organization', ownerId, source });
+    await seedEvent(users.a, `${DAY}T10:00:00Z`);
+    await seedEvent(users.a, `${DAY}T11:00:00Z`, org('api-only', 'api'));
+    await seedEvent(users.a, `${DAY}T12:00:00Z`, org('mixed', 'web'));
+    await seedEvent(users.a, `${DAY}T13:00:00Z`, org('mixed', 'api'));
+
+    await rollupDay(DAY, { now: NOW });
+
+    const row = await AnalyticsUserDay.findOne({ userId: String(users.a), day: DAY }).lean();
+    expect(row).toMatchObject({ active: true, requests: 4, creditsCharged: 8 });
+    expect(row?.orgs).toEqual([
+      { orgId: 'mixed', requests: 2, creditsCharged: 4, active: true },
+      { orgId: 'api-only', requests: 1, creditsCharged: 2, active: false },
+    ]);
+    expect(await AnalyticsDaily.findOne({ day: DAY }).lean()).toMatchObject({
+      dau: 1,
+      api: { dau: 1 },
+      requestsByFeature: { chat: 4 },
+      creditsConsumed: 8,
+    });
   });
 
   it('clears stale organization attribution when a day is recomputed with only personal usage', async () => {
