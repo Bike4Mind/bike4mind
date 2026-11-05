@@ -113,16 +113,43 @@ describe('readDesktopModelServers', () => {
     expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['first']);
   });
 
-  it('reads only the first folder that exists, so both Desktop files come from one install', async () => {
-    await mkdir(path.join(root, '.config', '@bike4mind', 'desktop'), { recursive: true });
-    await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'second' })] }));
-    expect(await desktopUserDataDir(opts())).toBe(path.join(root, '.config', '@bike4mind', 'desktop'));
-    expect(await readDesktopModelServers(opts())).toEqual({ servers: [], path: null, problem: null });
-  });
+  describe('desktopUserDataDir', () => {
+    const packaged = () => path.join(root, '.config', '@bike4mind', 'desktop');
+    const older = () => path.join(root, '.config', 'Bike4Mind');
 
-  it('finds no folder when Desktop is not installed, and takes B4M_DESKTOP_USER_DATA as given', async () => {
-    expect(await desktopUserDataDir(opts())).toBeNull();
-    expect(await desktopUserDataDir(opts({ B4M_DESKTOP_USER_DATA: '/not/there' }))).toBe('/not/there');
+    it("reads the older folder's servers past the empty folder Electron created on first launch", async () => {
+      await mkdir(packaged(), { recursive: true });
+      await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'older' })] }));
+      expect(await desktopUserDataDir(opts())).toBe(older());
+      expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['older']);
+    });
+
+    it('takes the folder holding model settings the same way', async () => {
+      await mkdir(packaged(), { recursive: true });
+      await mkdir(older(), { recursive: true });
+      await writeFile(path.join(older(), 'model-settings.json'), '{"models": {}}');
+      expect(await desktopUserDataDir(opts())).toBe(older());
+    });
+
+    it('prefers the packaged folder once it holds either file', async () => {
+      await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'older' })] }));
+      await mkdir(packaged(), { recursive: true });
+      await writeFile(path.join(packaged(), 'model-settings.json'), '{"models": {}}');
+      expect(await desktopUserDataDir(opts())).toBe(packaged());
+    });
+
+    it('uses the first folder that exists when none holds a file, and none when Desktop is not installed', async () => {
+      expect(await desktopUserDataDir(opts())).toBeNull();
+      await mkdir(older(), { recursive: true });
+      expect(await desktopUserDataDir(opts())).toBe(older());
+      await mkdir(packaged(), { recursive: true });
+      expect(await desktopUserDataDir(opts())).toBe(packaged());
+    });
+
+    it('takes B4M_DESKTOP_USER_DATA as given', async () => {
+      await put('Bike4Mind', JSON.stringify({ servers: [stored()] }));
+      expect(await desktopUserDataDir(opts({ B4M_DESKTOP_USER_DATA: '/not/there' }))).toBe('/not/there');
+    });
   });
 
   it('honors B4M_DESKTOP_USER_DATA', async () => {

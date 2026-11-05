@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { MODEL_SETTINGS_FILE_NAME } from '../modelSettings/file';
 import { parseSshDestination } from './ssh';
 
 export type ModelServerKind = 'ollama' | 'openai-compatible';
@@ -247,21 +248,27 @@ export function desktopUserDataDirs(opts: DesktopDirsOptions = {}): string[] {
   return [flavor.join(appData, '@bike4mind', 'desktop'), flavor.join(appData, 'Bike4Mind')];
 }
 
+const DESKTOP_DATA_FILES = [FILE_NAME, MODEL_SETTINGS_FILE_NAME];
+
+const statOf = (target: string) => stat(target).catch(() => null);
+
 /**
  * The one userData folder to read Desktop's files from: `B4M_DESKTOP_USER_DATA` when set, else the first of
- * desktopUserDataDirs that exists. Null when Desktop has none here.
+ * desktopUserDataDirs holding model servers or model settings, else the first that exists. Null when none does.
  */
 export async function desktopUserDataDir(opts: DesktopDirsOptions = {}): Promise<string | null> {
   const override = (opts.env ?? process.env).B4M_DESKTOP_USER_DATA?.trim();
   if (override) return override;
+  // Electron creates the packaged folder on first launch, so an empty one must not hide the older folder's files.
+  let firstExisting: string | null = null;
   for (const dir of desktopUserDataDirs(opts)) {
-    const found = await stat(dir).then(
-      entry => entry.isDirectory(),
-      () => false
-    );
-    if (found) return dir;
+    if (!(await statOf(dir))?.isDirectory()) continue;
+    firstExisting ??= dir;
+    for (const name of DESKTOP_DATA_FILES) {
+      if ((await statOf(path.join(dir, name)))?.isFile()) return dir;
+    }
   }
-  return null;
+  return firstExisting;
 }
 
 export interface DesktopModelServers {
