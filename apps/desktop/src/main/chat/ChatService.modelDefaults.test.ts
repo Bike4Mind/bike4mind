@@ -182,12 +182,20 @@ describe('per-model defaults and catalog sampling on a local turn', () => {
     expect(turn()?.think).toBe('low');
   });
 
-  it('goes on with the catalog sampling when the defaults cannot be read', async () => {
-    const { service, send, turn } = await setup(option(), () => Promise.reject(new Error('EACCES')));
+  it('fails the turn with the read error, in its own conversation, when the defaults cannot be read', async () => {
+    const unreadable = 'The model settings file /data/model-settings.json is not valid JSON.';
+    const { service, bodies } = await setup(option(), () => Promise.reject(new Error(unreadable)));
     const { id } = await service.createSession();
+    const { id: other } = await service.createSession();
     await service.renameSession(id, 'Named');
-    await send(id);
-    expect(turn()?.options).toMatchObject(WIRE_THINKING);
+    await service.send(id, 'how big is a widget?');
+    await vi.waitUntil(async () => (await service.getSession(id))?.messages.at(-1)?.error !== undefined, {
+      timeout: 3000,
+      interval: 5,
+    });
+    expect((await service.getSession(id))?.messages.at(-1)?.error).toContain(unreadable);
+    expect((await service.getSession(other))?.messages ?? []).toEqual([]);
+    expect(bodies).toEqual([]);
   });
 
   it('looks defaults up by the listed id when the chat is saved on an alias of it', async () => {

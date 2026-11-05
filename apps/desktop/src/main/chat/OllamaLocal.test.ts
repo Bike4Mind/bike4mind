@@ -1863,6 +1863,62 @@ describe('OllamaLocal context sizing', () => {
       }
     );
 
+    it('keeps a model listed while its settings cannot be read, and fails its turn with why', async () => {
+      const sent = ollama(trainedFor(131072));
+      const read = vi.fn(async (): Promise<ModelLoadSettings> => {
+        throw new Error('The model settings file /data/model-settings.json is not valid JSON.');
+      });
+      const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13), undefined, read);
+      expect((await local.models()).map(model => model.id)).toEqual([longTurn.model]);
+      await expect(local.stream(longTurn, () => undefined)).rejects.toThrow(
+        '/data/model-settings.json is not valid JSON'
+      );
+      expect(sent()).toEqual([]);
+    });
+
+    it('stops reading again after three saves land mid-read, sends the last read, and caches none of it', async () => {
+      ollama(mtp(131072));
+      const sizes = [16384, 32768, 65536, 131072];
+      let reads = 0;
+      let saving = true;
+      const read = vi.fn(async (): Promise<ModelLoadSettings> => {
+        reads++;
+        if (saving) forgetLocalContextOf(longTurn.model);
+        return { context: { mode: 'fixed', tokens: sizes[reads - 1] }, draftTokens: reads };
+      });
+      const local = new OllamaLocal(undefined, undefined, undefined, read);
+      await local.stream(longTurn, () => undefined);
+      expect(read).toHaveBeenCalledTimes(3);
+      saving = false;
+      await local.stream(longTurn, () => undefined);
+      expect(read).toHaveBeenCalledTimes(4);
+      expect(chatBodies().map(body => body.options)).toEqual([
+        { num_ctx: 65536, draft_num_predict: 3 },
+        { num_ctx: 131072, draft_num_predict: 4 },
+      ]);
+    });
+
+    it('stops sizing again after three Settings changes land mid-sizing, without caching the result', async () => {
+      ollama(trainedFor(131072));
+      let saving = true;
+      const footprint = vi.fn(async () => {
+        if (saving) forgetLocalContexts();
+        return footprintOn(13);
+      });
+      const local = new OllamaLocal(undefined, {
+        setting: async () => AUTO_LOCAL_CONTEXT,
+        footprint,
+        cachedFootprint: () => footprintOn(13),
+      });
+      expect(await local.contextTokens(longTurn.model)).toBe(65536);
+      expect(footprint).toHaveBeenCalledTimes(3);
+      saving = false;
+      expect(await local.contextTokens(longTurn.model)).toBe(65536);
+      expect(footprint).toHaveBeenCalledTimes(4);
+      expect(await local.contextTokens(longTurn.model)).toBe(65536);
+      expect(footprint).toHaveBeenCalledTimes(4);
+    });
+
     it('stops Auto at its cap and says the cap is why a prompt was not given more room', async () => {
       const sent = ollama(trainedFor(131072), () => overflow(40_000));
       const local = new OllamaLocal(

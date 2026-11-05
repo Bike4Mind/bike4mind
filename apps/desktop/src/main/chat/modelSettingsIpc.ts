@@ -40,17 +40,17 @@ function resizes(before: ModelSettings | undefined, after: ModelSettings): boole
 
 export function registerModelSettingsIpc(
   ipc: Pick<IpcMain, 'handle'>,
-  store: Pick<ModelSettingsStore, 'getStrict' | 'set'>,
+  store: Pick<ModelSettingsStore, 'get' | 'set'>,
   hooks: ModelSettingsIpcHooks = {}
 ): void {
   ipc.handle(IPC_CHANNELS.chatGetModelSettings, (_event, modelId: unknown) =>
-    isModelSettingsId(modelId) ? store.getStrict(modelId) : null
+    isModelSettingsId(modelId) ? store.get(modelId) : null
   );
   // Null rather than storing part of a set the renderer never meant, as for a session's overrides.
   ipc.handle(IPC_CHANNELS.chatSetModelSettings, async (_event, modelId: unknown, settings: unknown) => {
     const parsed = parseModelSettingsInput(settings);
     if (!isModelSettingsId(modelId) || !parsed) return null;
-    const before = await store.getStrict(modelId).catch(() => undefined);
+    const before = await store.get(modelId).catch(() => undefined);
     const saved = await store.set(modelId, parsed);
     hooks.changed?.(modelId, resizes(before, saved));
     return saved;

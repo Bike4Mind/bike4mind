@@ -58,7 +58,7 @@ describe('registerModelSettingsIpc', () => {
     }
   );
 
-  it('rejects the read when the file cannot be read, and reads a corrupt one as empty', async () => {
+  it('rejects the read when the file cannot be read, and names a corrupt one with how to fix it', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'b4m-model-settings-ipc-'));
     roots.push(directory);
     const path = join(directory, 'model-settings.json');
@@ -71,7 +71,10 @@ describe('registerModelSettingsIpc', () => {
     await expect(get()).rejects.toThrow('denied');
     await writeFile(path, '[]', 'utf8');
     registerModelSettingsIpc({ handle }, new ModelSettingsStore(path));
-    await expect(get()).resolves.toEqual({});
+    await expect(get()).rejects.toThrow(
+      `The model settings file ${path} does not hold model settings. Fix it, or delete it`
+    );
+    expect(await readFile(path, 'utf8')).toBe('[]');
   });
 
   it.each([42, 'gpt-5', ''])('answers null for the model id %j', async id => {

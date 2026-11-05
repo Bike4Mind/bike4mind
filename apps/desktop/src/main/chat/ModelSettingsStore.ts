@@ -3,6 +3,19 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { isEmptyModelSettings, parseModelSettingsFile, type ModelSettings } from '@shared/modelSettings';
 
+/** A settings file that exists but cannot be used; the message names it and says how to recover. */
+export class ModelSettingsFileError extends Error {
+  constructor(
+    readonly filePath: string,
+    problem: string
+  ) {
+    super(
+      `The model settings file ${filePath} ${problem}. Fix it, or delete it to clear the saved settings of every model.`
+    );
+    this.name = 'ModelSettingsFileError';
+  }
+}
+
 /** Per-model defaults from the Models screen, by chat model id; per machine, like local-context.json. */
 export class ModelSettingsStore {
   private loaded: Promise<Map<string, ModelSettings>> | null = null;
@@ -14,27 +27,24 @@ export class ModelSettingsStore {
   ) {}
 
   /**
-   * A missing file holds no defaults; an unparseable one is moved aside to .corrupt and holds none
-   * either. Any other failure, including a failed move, rejects and is not cached, so a later read
-   * retries and set() never overwrites a file that could not be set aside.
+   * A missing file holds no defaults. Any other failure, an unparseable or wrong-shape file included,
+   * rejects and is not cached, so a fixed or deleted file is read again next time and set() never
+   * writes over a file it could not read.
    */
   private read(): Promise<Map<string, ModelSettings>> {
     if (this.loaded) return this.loaded;
     const loading: Promise<Map<string, ModelSettings>> = readFile(this.filePath, 'utf8')
       .then(
-        async text => {
-          let parsed: Map<string, ModelSettings> | null = null;
+        text => {
+          let raw: unknown;
           try {
-            parsed = parseModelSettingsFile(JSON.parse(text));
+            raw = JSON.parse(text);
           } catch {
-            parsed = null;
+            throw new ModelSettingsFileError(this.filePath, 'is not valid JSON');
           }
-          if (parsed) return parsed;
-          this.warn(`MODEL SETTINGS: moving aside an unreadable ${this.filePath}`);
-          await rename(this.filePath, `${this.filePath}.corrupt`).catch((error: NodeJS.ErrnoException) => {
-            if (error.code !== 'ENOENT') throw error;
-          });
-          return new Map<string, ModelSettings>();
+          const parsed = parseModelSettingsFile(raw);
+          if (!parsed) throw new ModelSettingsFileError(this.filePath, 'does not hold model settings');
+          return parsed;
         },
         (error: NodeJS.ErrnoException) => {
           if (error.code === 'ENOENT') return new Map<string, ModelSettings>();
@@ -50,16 +60,8 @@ export class ModelSettingsStore {
     return loading;
   }
 
-  /** For a turn's sampling and effort defaults: a file that cannot be read or parsed holds no defaults. */
+  /** Rejects when the file cannot be read or parsed, so neither the Models screen nor a turn takes blanks for it. */
   async get(modelId: string): Promise<ModelSettings> {
-    return (await this.read().catch(() => new Map<string, ModelSettings>())).get(modelId) ?? {};
-  }
-
-  /**
-   * For the Models screen and a request's load settings: rejects on an unreadable file, so the screen
-   * can say so and a request does not reload the model at the wrong size.
-   */
-  async getStrict(modelId: string): Promise<ModelSettings> {
     return (await this.read()).get(modelId) ?? {};
   }
 

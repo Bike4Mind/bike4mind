@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ModelSettingsStore } from './ModelSettingsStore';
+import { ModelSettingsFileError, ModelSettingsStore } from './ModelSettingsStore';
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -65,81 +65,65 @@ describe('ModelSettingsStore', () => {
     expect(Object.keys(JSON.parse(await readFile(path, 'utf8')).models).sort()).toEqual([GEMMA, QWEN].sort());
   });
 
-  it.each(['{"models": {"local:ollama:qwen', '[]', '{}', '{"model": {}}', '"text"'])(
-    'moves a corrupt or wrong-shape file %s aside on first read, reads empty, and set writes a fresh file',
-    async content => {
-      const path = await fileIn();
-      await writeFile(path, content, 'utf8');
-      const warn = vi.fn();
-      const store = new ModelSettingsStore(path, warn);
-      expect(await store.getStrict(QWEN)).toEqual({});
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('unreadable'));
-      expect(await readFile(`${path}.corrupt`, 'utf8')).toBe(content);
-      await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await store.set(GEMMA, { effort: 'medium' });
-      expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ models: { [GEMMA]: { effort: 'medium' } } });
-      expect(await readFile(`${path}.corrupt`, 'utf8')).toBe(content);
-    }
-  );
-
-  it('tolerates the file vanishing before it can be moved aside', async () => {
+  it.each([
+    ['{"models": {"local:ollama:qwen', 'is not valid JSON'],
+    ['[]', 'does not hold model settings'],
+    ['{}', 'does not hold model settings'],
+    ['{"model": {}}', 'does not hold model settings'],
+    ['"text"', 'does not hold model settings'],
+  ])('rejects a corrupt or wrong-shape file %s by name, and never writes over it', async (content, problem) => {
     const path = await fileIn();
-    await writeFile(path, '[]', 'utf8');
-    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error('gone'), { code: 'ENOENT' }));
-    expect(await new ModelSettingsStore(path).getStrict(QWEN)).toEqual({});
+    await writeFile(path, content, 'utf8');
+    const warn = vi.fn();
+    const store = new ModelSettingsStore(path, warn);
+    const error = await store.get(QWEN).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(ModelSettingsFileError);
+    expect((error as ModelSettingsFileError).filePath).toBe(path);
+    expect((error as Error).message).toBe(
+      `The model settings file ${path} ${problem}. Fix it, or delete it to clear the saved settings of every model.`
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(path));
+    await expect(store.set(GEMMA, { effort: 'medium' })).rejects.toThrow(ModelSettingsFileError);
+    expect(await readFile(path, 'utf8')).toBe(content);
+    expect(await readdir(dirname(path))).toEqual(['model-settings.json']);
   });
 
-  it('answers a chat turn with no defaults when the file cannot be moved aside, leaving it in place', async () => {
+  it('reads a corrupt file again once it is fixed by hand', async () => {
     const path = await fileIn();
-    await writeFile(path, '[]', 'utf8');
-    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }));
-    expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({});
-    expect(await readFile(path, 'utf8')).toBe('[]');
-  });
-
-  it('does not cache a failed move, rejects the strict read and set, and retries', async () => {
-    const path = await fileIn();
-    await writeFile(path, '[]', 'utf8');
+    await writeFile(path, '{"models": {', 'utf8');
     const store = new ModelSettingsStore(path);
-    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }));
-    await expect(store.getStrict(QWEN)).rejects.toThrow('busy');
-    expect(await readFile(path, 'utf8')).toBe('[]');
-    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }));
-    await expect(store.set(GEMMA, { effort: 'high' })).rejects.toThrow('busy');
-    expect(await readFile(path, 'utf8')).toBe('[]');
-    await store.set(GEMMA, { effort: 'high' });
-    expect(await readFile(`${path}.corrupt`, 'utf8')).toBe('[]');
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ models: { [GEMMA]: { effort: 'high' } } });
-  });
-
-  it('lets a retry succeed after the file is deleted by hand following a failed read', async () => {
-    const path = await fileIn();
-    await writeFile(path, '[]', 'utf8');
-    const store = new ModelSettingsStore(path);
-    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }));
-    await expect(store.getStrict(QWEN)).rejects.toThrow('busy');
-    await rm(path);
-    expect(await store.getStrict(QWEN)).toEqual({});
-    await store.set(GEMMA, { effort: 'high' });
-    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ models: { [GEMMA]: { effort: 'high' } } });
-  });
-
-  it('rejects a strict read only on a read error, and reads a good file', async () => {
-    const path = await fileIn();
-    const store = new ModelSettingsStore(path);
-    expect(await store.getStrict(QWEN)).toEqual({});
-    vi.mocked(readFile).mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
-    await expect(new ModelSettingsStore(path).getStrict(QWEN)).rejects.toThrow('denied');
+    await expect(store.get(QWEN)).rejects.toThrow(ModelSettingsFileError);
     await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'low' } } }), 'utf8');
-    expect(await new ModelSettingsStore(path).getStrict(QWEN)).toEqual({ effort: 'low' });
+    expect(await store.get(QWEN)).toEqual({ effort: 'low' });
   });
 
-  it('does not cache a failed read as empty: warns, answers none, rejects set, and retries', async () => {
+  it('lets a retry succeed after a corrupt file is deleted by hand', async () => {
+    const path = await fileIn();
+    await writeFile(path, '[]', 'utf8');
+    const store = new ModelSettingsStore(path);
+    await expect(store.get(QWEN)).rejects.toThrow(ModelSettingsFileError);
+    await rm(path);
+    expect(await store.get(QWEN)).toEqual({});
+    await store.set(GEMMA, { effort: 'high' });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ models: { [GEMMA]: { effort: 'high' } } });
+  });
+
+  it('rejects a read on a read error, and reads a good file', async () => {
+    const path = await fileIn();
+    const store = new ModelSettingsStore(path);
+    expect(await store.get(QWEN)).toEqual({});
+    vi.mocked(readFile).mockRejectedValueOnce(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    await expect(new ModelSettingsStore(path).get(QWEN)).rejects.toThrow('denied');
+    await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'low' } } }), 'utf8');
+    expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ effort: 'low' });
+  });
+
+  it('does not cache a failed read as empty: warns, rejects get and set, and retries', async () => {
     const path = await fileIn();
     await mkdir(path);
     const warn = vi.fn();
     const store = new ModelSettingsStore(path, warn);
-    expect(await store.get(QWEN)).toEqual({});
+    await expect(store.get(QWEN)).rejects.toThrow();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not read'));
     await expect(store.set(GEMMA, { effort: 'high' })).rejects.toThrow();
     expect((await readdir(path)).length).toBe(0);
