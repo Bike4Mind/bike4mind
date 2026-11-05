@@ -109,6 +109,11 @@ describe('parseRule', () => {
       'WebSearch(x)',
       'not a rule!',
       'mcp__x(y)',
+      'constructor',
+      'toString(x)',
+      '__proto__',
+      'valueOf',
+      'hasOwnProperty(x)',
     ]) {
       const result = parseRule(bad);
       expect(result.ok, bad).toBe(false);

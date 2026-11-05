@@ -264,6 +264,7 @@ describe('signupGrantDripOpen', () => {
     [{ stage: 'unlocked', unlockedBy: 'card_verified' }, false],
     [{ stage: 'unlocked' }, false],
     [{ stage: 'pending_email' }, false],
+    [{ stage: 'signup', unlockForfeited: { cause: 'refund', at: new Date(0) } }, false],
   ] as const)('%j is open: %s', (grant, open) => {
     expect(signupGrantDripOpen(grant)).toBe(open);
   });

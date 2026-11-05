@@ -120,6 +120,9 @@ export const func = withContext(async (event, context, logger) => {
     // The verdict this invocation scanned, once it has one. Written by writeVerdict rather than
     // through `metadata.save()` below, and doubles as the withTransaction retry guard.
     let verdictPatch: ModerationVerdictPatch | null = null;
+    // Set when the uploader's moderation allowance deferred the scan: the row stays 'pending' and the
+    // claim is handed back after the transaction. Also a retry guard, so a retry does not spend again.
+    let deferred = false;
 
     // Terminal verdict write, guarded on THIS invocation's claim stamp (see writeModerationVerdict):
     // a superseded claim must not overwrite a successor's verdict.
@@ -156,6 +159,8 @@ export const func = withContext(async (event, context, logger) => {
         // already completed a scan in a prior attempt of THIS invocation, re-apply that verdict (the
         // rolled-back attempt's write is gone) instead of re-invoking Rekognition a second time.
         if (!(await writeVerdict(verdictPatch, session))) moderationStatus = 'pending';
+      } else if (deferred) {
+        // Retry of a deferred scan: nothing to write, the row is still this invocation's claim.
       } else if (!scanClaimed) {
         // Another invocation already owns this file's scan (or already finalized it) -
         // read a FRESH copy inside the transaction (not the stale pre-claim `metadata`) so
@@ -178,9 +183,6 @@ export const func = withContext(async (event, context, logger) => {
         );
       } else {
         const result = await scanUploadedObject({ fabFile: metadata, objectKey, logger });
-        // blockReason travels with the verdict (vs. just logging) so ops can distinguish an
-        // unscannable format from a confirmed-explicit match without CloudWatch.
-        verdictPatch = toVerdictPatch(result);
         if (result.correctedMimeType && result.correctedMimeType !== metadata.mimeType) {
           // Persist the byte-sniffed real type so downstream consumers (e.g.
           // isImageServeable) see the truth instead of the client-declared mimeType. Left on
@@ -190,10 +192,19 @@ export const func = withContext(async (event, context, logger) => {
           // the successor computes.
           metadata.mimeType = result.correctedMimeType;
         }
-        if (result.blockReason) logger.warn(`[Q2b] ${objectKey} blocked with reason=${result.blockReason}`);
-        // 'pending' on a superseded claim, matching the losing-claim branch above: the client reads
-        // it as "not yet servable, keep waiting", and the successor reports the real verdict.
-        moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
+        if (result.moderationStatus === 'pending') {
+          // Not rethrown: a redelivery would only be deferred again. The on-demand route or the
+          // rescue sweep scans the file later.
+          deferred = true;
+        } else {
+          // blockReason travels with the verdict (vs. just logging) so ops can distinguish an
+          // unscannable format from a confirmed-explicit match without CloudWatch.
+          verdictPatch = toVerdictPatch(result);
+          if (result.blockReason) logger.warn(`[Q2b] ${objectKey} blocked with reason=${result.blockReason}`);
+          // 'pending' on a superseded claim, matching the losing-claim branch above: the client reads
+          // it as "not yet servable, keep waiting", and the successor reports the real verdict.
+          moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
+        }
       }
 
       // A won claim records the measured size as `fileSize` itself; a late event for an earlier write
@@ -213,6 +224,11 @@ export const func = withContext(async (event, context, logger) => {
       }
       throw err;
     });
+    if (deferred) {
+      await releaseModerationClaim(metadata._id, claimedAt, { countAttempt: false }).catch((releaseErr: unknown) =>
+        logger.warn(`[Q2b] could not release deferred moderation claim for ${objectKey}: ${String(releaseErr)}`)
+      );
+    }
     // No owner means no charge and no retry, so nothing is left to judge by the old status.
     if (!user && deferStatusFlip) await markComplete();
 

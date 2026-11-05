@@ -55,6 +55,7 @@ const campaign = (members: [number, AccountCampaignMembership][], observedAt: Da
     signals: [],
     windowMinutes: 72 * 60,
     group: evidence,
+    payment: null,
     detectedAt: observedAt,
   };
 };
@@ -181,6 +182,7 @@ describe('shadowDetectionRepository campaign groups', () => {
       signals: [],
       windowMinutes: 180,
       group: null,
+      payment: null,
       detectedAt: at(0),
     });
 

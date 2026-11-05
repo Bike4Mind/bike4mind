@@ -368,6 +368,7 @@ function executeAdapters(users: IUser[], credits: CreditRow[], liveKeys: Record<
     },
     withTransaction: async fn => fn(),
     audit,
+    cancelSubscriptions: vi.fn(async () => ({ canceled: [] as string[], failed: [] as { reason: string }[] })),
   };
   return { adapters, store, audit, createTransaction };
 }
@@ -395,6 +396,44 @@ describe('executeBulkAbuse', () => {
       'abuse.bulk.ban',
       'abuse.bulk.revoke_keys',
     ]);
+  });
+
+  it('settles a signup risk review as banned, keeping its score', async () => {
+    const riskScore = { score: 60, signals: [], computedAt: new Date('2026-10-20'), reviewState: 'pending' as const };
+    const user = makeUser(1, { riskScore });
+    const { adapters, store, audit } = executeAdapters([user], []);
+
+    await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore).toEqual({ ...riskScore, reviewState: 'banned' });
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'abuse.bulk.ban',
+        changes: [
+          { field: 'isBanned', before: false, after: true },
+          { field: 'riskScore.reviewState', before: 'pending', after: 'banned' },
+        ],
+      })
+    );
+  });
+
+  it('bans an unscored account without inventing a risk score', async () => {
+    const user = makeUser(1);
+    const { adapters, store } = executeAdapters([user], []);
+
+    await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore).toBeUndefined();
+  });
+
+  it('leaves the risk review alone when only revoking keys', async () => {
+    const riskScore = { score: 60, signals: [], computedAt: new Date('2026-10-20'), reviewState: 'pending' as const };
+    const user = makeUser(1, { riskScore });
+    const { adapters, store } = executeAdapters([user], [], { [id(1)]: 1 });
+
+    await executeBulkAbuse([user], ONLY('revokeApiKeys'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore?.reviewState).toBe('pending');
   });
 
   it('still bumps tokenVersion but skips the audit row and sockets when nothing was left to revoke', async () => {
@@ -542,5 +581,73 @@ describe('executeBulkAbuse', () => {
     expect(results.map(result => result.status)).toEqual(['failed', 'succeeded']);
     expect(results[0].error).toBe('write conflict');
     expect(store.get(id(2))?.isBanned).toBe(true);
+  });
+
+  it('cancels the Stripe subscriptions of a banned user after the ban commits, outside the transaction', async () => {
+    const user = makeUser(1);
+    const { adapters } = executeAdapters([user], []);
+    const order: string[] = [];
+    adapters.withTransaction = async fn => {
+      order.push('tx:start');
+      const result = await fn();
+      order.push('tx:end');
+      return result;
+    };
+    vi.mocked(adapters.cancelSubscriptions).mockImplementation(async () => {
+      order.push('cancel');
+      return { canceled: ['sub_a'], failed: [] };
+    });
+
+    const [result] = await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(order).toEqual(['tx:start', 'tx:end', 'cancel']);
+    expect(result).toMatchObject({ status: 'succeeded', canceledSubscriptions: ['sub_a'] });
+    expect(result.subscriptionCancelError).toBeUndefined();
+  });
+
+  it('keeps the ban when Stripe refuses or the cancel throws, and reports it', async () => {
+    const users = [makeUser(1), makeUser(2)];
+    const { adapters, store } = executeAdapters(users, []);
+    vi.mocked(adapters.cancelSubscriptions).mockImplementation(async user => {
+      if (user.id === id(1)) return { canceled: [], failed: [{ reason: 'stripe down' }] };
+      throw new Error('boom');
+    });
+
+    const results = await executeBulkAbuse(users, ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(results.map(result => [result.status, result.subscriptionCancelError])).toEqual([
+      ['succeeded', 'stripe down'],
+      ['succeeded', 'boom'],
+    ]);
+    expect(store.get(id(1))?.isBanned).toBe(true);
+    expect(store.get(id(2))?.isBanned).toBe(true);
+  });
+
+  it('cancels for an already-banned user, and never without a ban', async () => {
+    const banned = makeUser(1, { isBanned: true });
+    const other = makeUser(2);
+    const { adapters } = executeAdapters([banned, other], []);
+
+    await executeBulkAbuse([banned], ONLY('ban'), ACTOR_ID, adapters);
+    expect(adapters.cancelSubscriptions).toHaveBeenCalledWith(
+      expect.objectContaining({ id: id(1) }),
+      expect.any(Number)
+    );
+
+    vi.mocked(adapters.cancelSubscriptions).mockClear();
+    await executeBulkAbuse([other], ONLY('revokeSessions'), ACTOR_ID, adapters);
+    expect(adapters.cancelSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('starts no new chunk past the time budget and reports its users as failed', async () => {
+    const users = Array.from({ length: 9 }, (_, index) => makeUser(index + 1));
+    const { adapters, store } = executeAdapters(users, []);
+
+    const results = await executeBulkAbuse(users, ONLY('ban'), ACTOR_ID, adapters, { budgetMs: 0 });
+
+    expect(results.slice(0, 8).every(result => result.status === 'succeeded')).toBe(true);
+    expect(results[8]).toMatchObject({ userId: id(9), status: 'failed', error: 'time budget exhausted' });
+    expect(store.get(id(9))?.isBanned).toBeFalsy();
+    expect(adapters.cancelSubscriptions).toHaveBeenCalledTimes(8);
   });
 });

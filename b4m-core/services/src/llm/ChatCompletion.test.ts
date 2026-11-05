@@ -25,6 +25,7 @@ import {
   OUTPUT_BUDGET_EXHAUSTED_REPLY,
   OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY,
 } from './ChatCompletionProcess';
+import { outOfCreditsNotice } from './chatCreditCap';
 import {
   buildAndSortMessages,
   calculateTotalTokenLength,
@@ -74,6 +75,8 @@ import {
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
+  CREDITS_PER_USD_COST,
+  PAID_PLAN_ENTITLEMENT_KEY,
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
   REPLY_CHOICES_GUIDANCE,
@@ -1162,6 +1165,7 @@ describe('ChatCompletionProcess', () => {
           substituteId: 'cheap-model',
           identityId: requested.id,
           displayName: requested.name,
+          chargedModel: requested,
         });
       } finally {
         buildTools.mockRestore();
@@ -7531,13 +7535,28 @@ describe('ChatCompletionProcess', () => {
       const OVERSHOOT_OUTPUT_TOKENS = 1_000_000;
       const actual = realUsdToCreditsStochastic((OVERSHOOT_OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
 
-      it('charges the whole overshoot into a negative balance instead of writing it off', async () => {
-        expect(actual).toBeGreaterThan(BALANCE);
-        const { state, incrementCredits } = fakeBalance(BALANCE);
-        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+      const overdraftAllowance = (credits: number) => {
+        const prev = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'paidCompletionOverdraftCredits'
+            ? credits
+            : prev?.(key as never, settings)) as typeof getSettingsValue);
+      };
+      const onPaidPlan = () =>
+        vi
+          .spyOn(service, 'resolveEntitlementKeys')
+          .mockResolvedValue({ keys: [PAID_PLAN_ENTITLEMENT_KEY], resolved: true });
+      const overshootingComplete = () =>
+        vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
           await cb(['A long answer'], { inputTokens: 10, outputTokens: OVERSHOOT_OUTPUT_TOKENS });
         });
-        setupPersonalTurn(incrementCredits, complete);
+
+      // A provider count past the cap (drift, or an adapter that overshot it) is floored, never charged into debt.
+      it('floors an account without a paid plan at zero and writes off the overshoot', async () => {
+        expect(actual).toBeGreaterThan(BALANCE);
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        setupPersonalTurn(incrementCredits, overshootingComplete());
+        overdraftAllowance(500);
         const usageEventsRecord = vi.fn().mockResolvedValue(null);
         mockDb.usageEvents = { record: usageEventsRecord };
 
@@ -7545,23 +7564,54 @@ describe('ChatCompletionProcess', () => {
 
         const hold = -incrementCredits.mock.calls[0][1];
         expect(hold).toBeGreaterThan(0);
-        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - actual);
-        expect(state.balance).toBe(BALANCE - actual);
+        expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - BALANCE);
+        expect(state.balance).toBe(0);
         expect(usageEventsRecord).toHaveBeenCalledWith(
-          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: undefined })
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE })
         );
         expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
-          expect.objectContaining({ ownerId: 'user1', balanceAfter: BALANCE - actual, shortfall: actual - hold })
+          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.objectContaining({ ownerId: 'user1', writtenOff: actual - BALANCE })
         );
         expect(mockLogger.warn).not.toHaveBeenCalledWith(
-          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
           expect.anything()
         );
       });
 
-      // The thrown-abort settlement (settleReservation) charges a personal account the same way.
-      it('charges a stopped turn past the balance in full too', async () => {
+      it('lets a paid account go no lower than minus its overdraft allowance', async () => {
+        const ALLOWANCE = 500;
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        setupPersonalTurn(incrementCredits, overshootingComplete());
+        overdraftAllowance(ALLOWANCE);
+        onPaidPlan();
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(state.balance).toBe(-ALLOWANCE);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE - ALLOWANCE })
+        );
+      });
+
+      it('charges a usage the balance covers exactly, so settlement equals usage', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const OUTPUT_TOKENS = 50;
+        const used = realUsdToCreditsStochastic((OUTPUT_TOKENS * 30) / 1_000_000, () => 0);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['A short answer'], { inputTokens: 10, outputTokens: OUTPUT_TOKENS });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(state.balance).toBe(BALANCE - used);
+      });
+
+      // The thrown-abort settlement (settleReservation) floors text the same way; tools are never floored.
+      it("charges a stopped turn's tool credits in full past the balance", async () => {
         const { state, incrementCredits } = fakeBalance(BALANCE);
         const TOOL_CHARGE = BALANCE * 3;
         const complete = vi.fn().mockImplementation(async () => {
@@ -7579,10 +7629,349 @@ describe('ChatCompletionProcess', () => {
         expect(incrementCredits).toHaveBeenCalledTimes(2);
         expect(incrementCredits).toHaveBeenNthCalledWith(2, 'user1', hold - TOOL_CHARGE);
         expect(state.balance).toBe(BALANCE - TOOL_CHARGE);
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.stringContaining('[BILLING_SHORTFALL_DEBT]'),
-          expect.objectContaining({ balanceAfter: BALANCE - TOOL_CHARGE })
+      });
+
+      it('charges tool credits in full and floors only the text past the balance', async () => {
+        expect(actual).toBeGreaterThan(BALANCE);
+        const TOOL_CHARGE = 300;
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          (service as any).toolCreditsMap.set('image_generation', [TOOL_CHARGE]);
+          await cb(['A long answer'], {
+            inputTokens: 10,
+            outputTokens: OVERSHOOT_OUTPUT_TOKENS,
+            toolsUsed: [{ name: 'image_generation', arguments: '{}' }],
+          });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        mockQuest.sessionId = 'session1';
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(state.balance).toBe(-TOOL_CHARGE);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE })
         );
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[BILLING_SHORTFALL_CLAMP]'),
+          expect.objectContaining({ writtenOff: actual - BALANCE })
+        );
+        expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+          'tool_usage',
+          expect.objectContaining({ credits: -TOOL_CHARGE })
+        );
+      });
+
+      it('sends the provider an output ceiling the balance can pay for', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        // Input is free on this model, so the whole balance (hold included) buys output.
+        const affordable = Math.floor(BALANCE / ((30 / 1_000_000) * CREDITS_PER_USD_COST) + 1e-9);
+        expect(complete).toHaveBeenCalledWith(
+          ChatModels.GPT4,
+          expect.anything(),
+          expect.objectContaining({ outputTokenCeiling: affordable }),
+          expect.any(Function)
+        );
+        expect(complete.mock.calls[0][2].maxTokens).toBeLessThanOrEqual(affordable);
+      });
+
+      it('refuses up front, without calling the model, when the balance cannot buy a short answer', async () => {
+        // The hold prices input at the plain rate, the cap at the cache-write rate (2x here), so
+        // a balance between the two passes the hold and fails the cap.
+        const inputUsdPerToken = BALANCE / 1.5 / 80 / CREDITS_PER_USD_COST;
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn();
+        setupPersonalTurn(incrementCredits, complete);
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            ...overshootModel,
+            pricing: { 200000: { input: inputUsdPerToken, output: 1e-9, cache_write: inputUsdPerToken * 2 } },
+          },
+        ]);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(complete).not.toHaveBeenCalled();
+        expect(state.balance).toBe(BALANCE);
+        expect(mockQuest.type).toBe('error');
+        expect(mockQuest.reply).toMatch(/credits/i);
+      });
+
+      describe('cap pricing for an account without a paid plan', () => {
+        const perOutputTokenCredits = (30 / 1_000_000) * CREDITS_PER_USD_COST;
+        const answering = () =>
+          vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+          });
+        const sentOptions = (complete: ReturnType<typeof vi.fn>) =>
+          complete.mock.calls[0][2] as { maxTokens?: number; outputTokenCeiling?: number };
+
+        it('prices the input side into the cap at its cache-write rate', async () => {
+          const inputUsdPerToken = 20 / 80 / CREDITS_PER_USD_COST;
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const complete = answering();
+          setupPersonalTurn(incrementCredits, complete);
+          mockedGetAvailableModels.mockResolvedValue([
+            {
+              ...overshootModel,
+              pricing: {
+                200000: { input: inputUsdPerToken, output: 30 / 1_000_000, cache_write: inputUsdPerToken * 2 },
+              },
+            },
+          ]);
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          // 80 input tokens cost 20 credits plain and 40 as a cache write; the cap leaves room for the dearer.
+          expect(sentOptions(complete).outputTokenCeiling).toBe(
+            Math.floor((BALANCE - 40) / perOutputTokenCredits + 1e-9)
+          );
+        });
+
+        it('caps an account whose plan could not be read', async () => {
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const complete = answering();
+          setupPersonalTurn(incrementCredits, complete);
+          vi.spyOn(service, 'resolveEntitlementKeys').mockResolvedValue({ keys: [], resolved: false });
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(sentOptions(complete).outputTokenCeiling).toEqual(expect.any(Number));
+        });
+      });
+
+      it('stops a tool loop before a round the balance cannot pay for, and bills the rounds it ran', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const ROUND_OUTPUT = 200;
+        const rounds: Array<Record<string, unknown>> = [];
+        // Recurses through this.complete like the real adapters, carrying usage in _internal.
+        const complete = vi.fn(async function (this: any, model: string, messages: any[], options: any, cb: any) {
+          rounds.push(options);
+          // A provider never answers past the ceiling it was sent.
+          const accum =
+            (options._internal?.accumOutputTokens ?? 0) + Math.min(ROUND_OUTPUT, options.outputTokenCeiling);
+          await cb(['round text '], { toolsUsed: [] });
+          if (rounds.length > 50) throw new Error('loop was never stopped');
+          return this.complete(
+            model,
+            [...messages, { role: 'user', content: 'tool result' }],
+            {
+              ...options,
+              _internal: { ...options._internal, accumInputTokens: 10 * rounds.length, accumOutputTokens: accum },
+            },
+            cb
+          );
+        });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(rounds.length).toBeGreaterThan(1);
+        // Billed on the provider usage the stopped loop carried, every round it ran included.
+        const ranOutput = rounds.reduce(
+          (sum: number, round: any) => sum + Math.min(ROUND_OUTPUT, round.outputTokenCeiling as number),
+          0
+        );
+        const ranUsd = (ranOutput * 30) / 1_000_000;
+        expect(BALANCE - state.balance).toBe(realUsdToCreditsStochastic(ranUsd, () => 0));
+        // Each round after the first was sent with what was left.
+        expect(rounds[1]).toEqual(expect.objectContaining({ outputTokenCeiling: expect.any(Number) }));
+        expect(state.balance).toBeGreaterThanOrEqual(0);
+        expect(mockQuest.reply).toContain(outOfCreditsNotice());
+      });
+
+      describe('tool charges against later rounds', () => {
+        const perOutputTokenCredits = (30 / 1_000_000) * CREDITS_PER_USD_COST;
+        const ROUND_OUTPUT = 200;
+        // An image call in the first round charges `toolCharge`; the second round ends the turn.
+        const toolThenAnswer = (toolCharge: number, rounds: Array<Record<string, unknown>>) =>
+          vi.fn(async function (this: any, model: string, messages: any[], options: any, cb: any) {
+            rounds.push(options);
+            if (rounds.length > 1) {
+              await cb(['done'], { inputTokens: 20, outputTokens: 5 });
+              return;
+            }
+            await cb(['round one '], { toolsUsed: [{ name: 'image_generation', arguments: '{}' }] });
+            (service as any).toolCreditsMap.set('image_generation', [toolCharge]);
+            return this.complete(
+              model,
+              [...messages, { role: 'user', content: 'tool result' }],
+              {
+                ...options,
+                _internal: { ...options._internal, accumInputTokens: 10, accumOutputTokens: ROUND_OUTPUT },
+              },
+              cb
+            );
+          });
+
+        it('sends the next round only what the tool charge left', async () => {
+          const TOOL_CHARGE = 50;
+          const { incrementCredits } = fakeBalance(BALANCE);
+          const rounds: Array<Record<string, unknown>> = [];
+          setupPersonalTurn(incrementCredits, toolThenAnswer(TOOL_CHARGE, rounds));
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(rounds).toHaveLength(2);
+          const left = BALANCE - TOOL_CHARGE - ROUND_OUTPUT * perOutputTokenCredits;
+          expect(rounds[1].outputTokenCeiling).toBe(Math.floor(left / perOutputTokenCredits + 1e-9));
+          expect(rounds[1].outputTokenCeiling as number).toBeLessThan(rounds[0].outputTokenCeiling as number);
+        });
+
+        it('stops the turn when the tool charge spent what the balance had left', async () => {
+          const TOOL_CHARGE = BALANCE - 1;
+          const { state, incrementCredits } = fakeBalance(BALANCE);
+          const rounds: Array<Record<string, unknown>> = [];
+          setupPersonalTurn(incrementCredits, toolThenAnswer(TOOL_CHARGE, rounds));
+          mockQuest.sessionId = 'session1';
+
+          await service.process({ body: personalBody(), logger: mockLogger });
+
+          expect(rounds).toHaveLength(1);
+          expect(mockQuest.reply).toContain(outOfCreditsNotice());
+          const roundOneCredits = realUsdToCreditsStochastic((ROUND_OUTPUT * 30) / 1_000_000, () => 0);
+          expect(state.balance).toBe(BALANCE - TOOL_CHARGE - roundOneCredits);
+          expect(mockDb.creditTransactions.createTransaction).toHaveBeenCalledWith(
+            'tool_usage',
+            expect.objectContaining({ credits: -TOOL_CHARGE })
+          );
+        });
+      });
+
+      it('keeps the partial answer and says why when the stream runs past the limit', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, options: { abortSignal: AbortSignal }, cb) => {
+          for (let i = 0; i < 1_000; i++) {
+            if (options.abortSignal.aborted) {
+              const abort = new Error('The operation was aborted');
+              abort.name = 'AbortError';
+              throw abort;
+            }
+            await cb(['x'.repeat(600)], {});
+          }
+        });
+        setupPersonalTurn(incrementCredits, complete);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.reply).toMatch(/^x+/);
+        expect(mockQuest.reply).toContain(outOfCreditsNotice());
+        expect(state.balance).toBeGreaterThanOrEqual(0);
+      });
+
+      it('floors an org-billed turn at zero, as computeSettlementDelta did', async () => {
+        const user = fakeBalance(BALANCE);
+        const org = fakeBalance(BALANCE);
+        const complete = overshootingComplete();
+        setupPersonalTurn(user.incrementCredits, complete);
+        overdraftAllowance(500);
+        mockDb.organizations.findById.mockResolvedValue({
+          id: 'org1',
+          name: 'Acme',
+          currentCredits: BALANCE,
+          maxCreditsPerMember: null,
+          userDetails: [],
+        });
+        mockDb.organizations.incrementCredits = org.incrementCredits;
+        const usageEventsRecord = vi.fn().mockResolvedValue(null);
+        mockDb.usageEvents = { record: usageEventsRecord };
+
+        await service.process({ body: { ...personalBody(), organizationId: 'org1' }, logger: mockLogger });
+
+        expect(complete.mock.calls[0][2].outputTokenCeiling).toEqual(expect.any(Number));
+        expect(user.incrementCredits).not.toHaveBeenCalled();
+        expect(org.state.balance).toBe(0);
+        expect(usageEventsRecord).toHaveBeenCalledWith(
+          expect.objectContaining({ creditsCharged: actual, writtenOffCredits: actual - BALANCE })
+        );
+      });
+
+      it('leaves a Research Mode turn to the hold alone', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE);
+        const complete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+        });
+        setupPersonalTurn(incrementCredits, complete);
+        const body = {
+          ...personalBody(),
+          researchMode: {
+            enabled: true,
+            configurations: [{ id: 'cfg-1', enabled: true, model: ChatModels.GPT4, parameters: {} }],
+          },
+        };
+
+        await service.process({ body: body as any, logger: mockLogger });
+
+        expect(incrementCredits).toHaveBeenCalled();
+        expect(complete).toHaveBeenCalled();
+        for (const call of complete.mock.calls) expect(call[2].outputTokenCeiling).toBeUndefined();
+        expect((service as any).turnCreditLimiter).toBeNull();
+      });
+
+      it('does nothing when credits are not enforced', async () => {
+        const { state, incrementCredits } = fakeBalance(BALANCE);
+        const complete = overshootingComplete();
+        setupPersonalTurn(incrementCredits, complete);
+        const prev = mockedGetSettingsValue.getMockImplementation();
+        mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+          key === 'enforceCredits' ? false : prev?.(key as never, settings)) as typeof getSettingsValue);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(complete.mock.calls[0][2].outputTokenCeiling).toBeUndefined();
+        expect((service as any).turnCreditLimiter).toBeNull();
+        expect(incrementCredits).not.toHaveBeenCalled();
+        expect(state.balance).toBe(BALANCE);
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.replies).toEqual(['A long answer']);
+      });
+
+      it('prices a fallback hop on its own, dearer model', async () => {
+        const { incrementCredits } = fakeBalance(BALANCE);
+        const primaryComplete = vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down'));
+        setupPersonalTurn(incrementCredits, primaryComplete);
+        const dearModel = {
+          ...overshootModel,
+          id: 'dear-fallback',
+          name: 'Dear fallback',
+          pricing: { 200000: { input: 0, output: 90 / 1_000_000 } },
+        };
+        const fallbackComplete = vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['answer'], { inputTokens: 10, outputTokens: 5 });
+        });
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+        mockedGetLlmWithFallback
+          .mockResolvedValueOnce({
+            model: dearModel,
+            backend: {
+              currentModel: dearModel.id,
+              complete: fallbackComplete,
+              getModelInfo: vi.fn().mockResolvedValue([dearModel]),
+              pushToolMessages: vi.fn(),
+            },
+            attempt: 1,
+          } as any)
+          .mockResolvedValue(null);
+        mockedGetAvailableModels.mockResolvedValue([overshootModel, dearModel]);
+
+        await service.process({ body: personalBody(), logger: mockLogger });
+
+        expect(fallbackComplete).toHaveBeenCalledTimes(1);
+        const primaryCeiling = primaryComplete.mock.calls[0][2].outputTokenCeiling;
+        const fallbackCeiling = fallbackComplete.mock.calls[0][2].outputTokenCeiling;
+        expect(fallbackCeiling).toBe(Math.floor(BALANCE / ((90 / 1_000_000) * CREDITS_PER_USD_COST) + 1e-9));
+        expect(fallbackCeiling).toBeLessThan(primaryCeiling);
       });
 
       it('refuses the next turn while the balance is negative, without calling the model', async () => {

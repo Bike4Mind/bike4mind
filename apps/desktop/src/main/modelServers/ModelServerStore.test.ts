@@ -155,6 +155,7 @@ describe('ModelServerStore', () => {
     const original = JSON.stringify({
       version: 2,
       servers: [{ ...base, id: 'aaaaaaaaaaaa', auth: { type: 'none' } }],
+      thinkers: { aaaaaaaaaaaa: [{ model: 'qwen3-8b' }] },
     });
     const file = memoryFile(original);
     const warn = vi.fn();
@@ -164,6 +165,8 @@ describe('ModelServerStore', () => {
     await expect(store.add({ ...base, name: 'other' }, { type: 'none' })).rejects.toThrow(/newer Desktop/);
     await expect(store.remove('aaaaaaaaaaaa')).rejects.toThrow(/newer Desktop/);
     await store.setModels('aaaaaaaaaaaa', ['m1']);
+    await store.addThinker('aaaaaaaaaaaa', 'phi-4');
+    await store.forgetThinker('aaaaaaaaaaaa', 'qwen3-8b');
     expect(file.contents).toBe(original);
     expect(warn.mock.calls.flat().join('\n')).toMatch(/version 2/);
   });
@@ -284,6 +287,73 @@ describe('ModelServerStore', () => {
     const reopened = new ModelServerStore(cipher(), odd, logger);
     expect((await reopened.get('abc'))?.specs).toBeNull();
     expect(await reopened.localSpecs()).toBeNull();
+  });
+
+  it('remembers the models a server found thinking across a restart, and forgets them with the server', async () => {
+    const file = memoryFile();
+    const store = new ModelServerStore(cipher(), file, logger);
+    const record = await store.add(base, { type: 'none' });
+    await store.addThinker(record.id, 'qwen3-8b');
+    const written = file.contents;
+    await store.addThinker(record.id, 'qwen3-8b');
+    await store.addThinker('gone', 'qwen3-8b');
+    expect(file.contents).toBe(written);
+
+    const reopened = new ModelServerStore(cipher(), file, logger);
+    expect(await reopened.thinkers(record.id)).toEqual([{ model: 'qwen3-8b' }]);
+    await reopened.remove(record.id);
+    expect(await reopened.thinkers(record.id)).toEqual([]);
+    expect(JSON.parse(file.contents!)).not.toHaveProperty('thinkers');
+  });
+
+  it('keeps the identity a thinker was learned with, replaces it, and forgets the model', async () => {
+    const file = memoryFile();
+    const store = new ModelServerStore(cipher(), file, logger);
+    const record = await store.add(base, { type: 'none' });
+    await store.addThinker(record.id, 'qwen3-8b', 'a');
+    await store.addThinker(record.id, 'phi-4');
+    await store.addThinker(record.id, 'qwen3-8b', 'b');
+    expect(await new ModelServerStore(cipher(), file, logger).thinkers(record.id)).toEqual([
+      { model: 'phi-4' },
+      { model: 'qwen3-8b', identity: 'b' },
+    ]);
+    await store.forgetThinker(record.id, 'qwen3-8b');
+    await store.forgetThinker(record.id, 'phi-4');
+    expect(JSON.parse(file.contents!)).not.toHaveProperty('thinkers');
+  });
+
+  it('forgets the thinkers of a server whose kind changes', async () => {
+    const file = memoryFile();
+    const store = new ModelServerStore(cipher(), file, logger);
+    const record = await store.add({ ...base, kind: 'openai-compatible' }, { type: 'none' });
+    await store.addThinker(record.id, 'qwen3-8b');
+    await store.update(record.id, { kind: 'openai-compatible', name: 'renamed' });
+    expect(await store.thinkers(record.id)).toEqual([{ model: 'qwen3-8b' }]);
+    await store.update(record.id, { kind: 'ollama' });
+    expect(await new ModelServerStore(cipher(), file, logger).thinkers(record.id)).toEqual([]);
+  });
+
+  it('keeps only the latest thinkers per server', async () => {
+    const store = new ModelServerStore(cipher(), memoryFile(), logger);
+    const record = await store.add(base, { type: 'none' });
+    for (let index = 0; index <= 200; index++) await store.addThinker(record.id, `model-${index}`);
+    const kept = await store.thinkers(record.id);
+    expect(kept).toHaveLength(200);
+    expect(kept[0]).toEqual({ model: 'model-1' });
+    expect(kept.at(-1)).toEqual({ model: 'model-200' });
+  });
+
+  it('reads only well-formed thinkers from a stored map', async () => {
+    const file = memoryFile(
+      JSON.stringify({
+        version: 1,
+        servers: [],
+        thinkers: { a: ['qwen3', 7, null, { model: 'phi-4', identity: 'x' }, { model: 3 }], b: 'x' },
+      })
+    );
+    const store = new ModelServerStore(cipher(), file, logger);
+    expect(await store.thinkers('a')).toEqual([{ model: 'qwen3' }, { model: 'phi-4', identity: 'x' }]);
+    expect(await store.thinkers('b')).toEqual([]);
   });
 
   it(`stops at ${MAX_MODEL_SERVERS} servers`, async () => {

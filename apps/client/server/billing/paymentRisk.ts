@@ -1,6 +1,17 @@
-import { adminSettingsRepository, paymentAttemptRepository, userRepository } from '@bike4mind/database';
-import type { PaymentAttempt, PaymentAttemptKind } from '@bike4mind/database';
-import { escapeSlackText, type INetworkMeta } from '@bike4mind/common';
+import {
+  adminSettingsRepository,
+  paymentAttemptRepository,
+  paymentRiskActionRepository,
+  shadowDetectionRepository,
+  userRepository,
+} from '@bike4mind/database';
+import type { PaymentAttempt, PaymentAttemptKind, RecordShadowDetectionInput } from '@bike4mind/database';
+import {
+  escapeSlackText,
+  type INetworkMeta,
+  type ShadowDetectionPayment,
+  type ShadowDetectionSignal,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { stripe } from '@bike4mind/server-utils/integrations/stripe/stripe';
@@ -96,9 +107,19 @@ export function evaluatePaymentRiskSignals(input: {
   return signals;
 }
 
+/** Minor-unit digits of an ISO currency (0 for JPY), falling back to 2 for a code Intl rejects. */
+export function currencyDecimals(currency: string): number {
+  try {
+    return new Intl.NumberFormat('en', { style: 'currency', currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+
 export function formatAmount(amountMinor: number | null, currency: string | null): string {
   if (amountMinor === null || !currency) return 'unknown';
-  return `${(amountMinor / 100).toFixed(2)} ${currency.toUpperCase()}`;
+  const decimals = currencyDecimals(currency);
+  return `${(amountMinor / 10 ** decimals).toFixed(decimals)} ${currency.toUpperCase()}`;
 }
 
 function describeSignal(signal: PaymentRiskSignal, thresholds: PaymentRiskThresholds): string {
@@ -131,6 +152,127 @@ export function formatPaymentRiskAlert(
     `*Radar risk:* ${attempt.riskLevel ?? 'not reported'}`,
     `*Signals:* ${signals.map(signal => describeSignal(signal, thresholds)).join('; ')}`,
   ].join('\n');
+}
+
+/** Bump when the signals-to-wouldAction mapping changes, so detection precision is graded per policy. */
+export const PAYMENT_RISK_POLICY_VERSION = 1;
+
+function toDetectionSignal(signal: PaymentRiskSignal, thresholds: PaymentRiskThresholds): ShadowDetectionSignal {
+  switch (signal.type) {
+    case 'youngAccount':
+      return {
+        key: signal.type,
+        label: 'Account age at payment (minutes)',
+        observed: signal.accountAgeMinutes,
+        threshold: thresholds.youngAccountMinutes,
+      };
+    case 'sharedCard':
+      return {
+        key: signal.type,
+        label: 'Accounts that used this card',
+        observed: signal.accounts,
+        threshold: thresholds.maxAccountsPerCard,
+      };
+    case 'manyCardsPerAccount':
+      return {
+        key: signal.type,
+        label: `Cards tried by this account in ${thresholds.cardWindowMinutes} min`,
+        observed: signal.cards,
+        threshold: thresholds.maxCardsPerWindow,
+      };
+    case 'manyCardsPerNetwork':
+      return {
+        key: signal.type,
+        label: `Cards tried from this network in ${thresholds.cardWindowMinutes} min`,
+        observed: signal.cards,
+        threshold: thresholds.maxCardsPerWindow,
+      };
+    case 'hostingNetwork':
+      return { key: signal.type, label: 'Hosting/VPN network', observed: null, threshold: null };
+    case 'radarRisk':
+      return { key: signal.type, label: `Radar risk ${signal.riskLevel}`, observed: null, threshold: null };
+  }
+}
+
+export type PaymentRiskShadowDetection = RecordShadowDetectionInput & { payment: ShadowDetectionPayment };
+
+/**
+ * The shadow detection one screened payment records, next to its LiveOps alert, so admins can grade
+ * the app-side signals on the Detections page. `contain` is the closest admin action to the
+ * automatic response to a confirmed payment risk (lockAccountForPaymentRisk, linkedAccounts.ts:
+ * spend refused, API keys off, sessions ended); this record does none of it.
+ */
+export function buildPaymentRiskShadowDetection(input: {
+  attempt: PaymentAttempt;
+  outcome: 'succeeded' | 'failed';
+  chargeId: string | null;
+  signals: [PaymentRiskSignal, ...PaymentRiskSignal[]];
+  thresholds: PaymentRiskThresholds;
+  livemode: boolean;
+  detectedAt: Date;
+}): PaymentRiskShadowDetection {
+  const { attempt, outcome, chargeId, signals, thresholds, livemode, detectedAt } = input;
+  return {
+    detector: 'paymentRisk',
+    policyVersion: PAYMENT_RISK_POLICY_VERSION,
+    wouldAction: 'contain',
+    summary: `${attempt.kind} payment ${outcome} (${formatAmount(attempt.amount, attempt.currency)}): ${signals
+      .map(signal => describeSignal(signal, thresholds))
+      .join('; ')}`,
+    userIds: [attempt.userId],
+    // PaymentAttempt keeps only a hashed IP, so the hosting flag is the one network fact on hand.
+    network:
+      attempt.hostingNetwork === null
+        ? null
+        : { ip: null, asn: null, asnOrg: null, country: null, hosting: attempt.hostingNetwork },
+    signals: signals.map(signal => toDetectionSignal(signal, thresholds)),
+    windowMinutes: signals.some(signal => signal.type === 'manyCardsPerAccount' || signal.type === 'manyCardsPerNetwork')
+      ? thresholds.cardWindowMinutes
+      : null,
+    group: null,
+    payment: {
+      paymentIntentId: attempt.paymentIntentId,
+      chargeId,
+      kind: attempt.kind,
+      outcome,
+      amount: attempt.amount,
+      currency: attempt.currency,
+      riskLevel: attempt.riskLevel,
+      livemode,
+    },
+    detectedAt,
+  };
+}
+
+/**
+ * One detection per screened (payment, outcome, card). `changed` in recordOutcome is not enough:
+ * a retried failure delivered after the intent succeeded flips the outcome back and screens again.
+ */
+const detectionClaimKey = (paymentIntentId: string, outcome: string, cardFingerprint: string | null): string =>
+  `payment-risk-detection:${paymentIntentId}:${outcome}:${cardFingerprint ?? 'no-card'}`;
+
+/**
+ * Best-effort: a failed write is logged and never blocks the Slack alert or the webhook. The claim
+ * is taken first and not released, so a write that fails is not retried on a later screening.
+ */
+async function recordPaymentRiskDetection(
+  detection: PaymentRiskShadowDetection,
+  cardFingerprint: string | null,
+  settings: Record<string, string>,
+  logger: Logger
+): Promise<void> {
+  if (!getSettingsValue('shadowDetectionRecordingEnabled', settings, true)) return;
+  const { paymentIntentId, outcome } = detection.payment;
+  try {
+    const claimKey = detectionClaimKey(paymentIntentId, outcome, cardFingerprint);
+    if (!(await paymentRiskActionRepository.claimStep(claimKey, 'detection', detection.userIds[0] ?? null))) return;
+    await shadowDetectionRepository.record(detection);
+  } catch (error) {
+    logger.error('[PaymentRisk] shadow detection was not recorded', {
+      paymentIntentId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 const idOf = (ref: string | { id: string } | null | undefined): string | null =>
@@ -219,6 +361,8 @@ export async function screenPaymentOutcome(
     currency: string | null;
     outcome: 'succeeded' | 'failed';
     chargeRef: string | Stripe.Charge | null | undefined;
+    /** Stripe's livemode flag of the intent, for the Dashboard link a recorded detection carries. */
+    livemode: boolean;
     /** For a failed confirmation the charge may be missing; the error's payment method still has the card. */
     fallbackCardFingerprint?: string | null;
   },
@@ -289,9 +433,22 @@ export async function screenPaymentOutcome(
       outcome: attempt.outcome,
       signals: signals.map(signal => signal.type),
     });
-    if (signals.length === 0) return;
+    const [firstSignal, ...otherSignals] = signals;
+    if (!firstSignal) return;
 
-    await postMessageToSlack(formatPaymentRiskAlert(attempt, signals, thresholds));
+    const detection = buildPaymentRiskShadowDetection({
+      attempt,
+      outcome: input.outcome,
+      chargeId: risk?.chargeId ?? null,
+      signals: [firstSignal, ...otherSignals],
+      thresholds,
+      livemode: input.livemode,
+      detectedAt: now,
+    });
+    await Promise.all([
+      postMessageToSlack(formatPaymentRiskAlert(attempt, signals, thresholds)),
+      recordPaymentRiskDetection(detection, cardFingerprint, settings, logger),
+    ]);
   } catch (error) {
     logger.error('[PaymentRisk] screening failed', {
       paymentIntentId: input.paymentIntentId,

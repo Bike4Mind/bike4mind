@@ -28,6 +28,7 @@ export * from './modelSunsetDashboard';
 export * from './dataLakeSearchDashboard';
 export * from './dlqAlarms';
 export * from './mailAlarms';
+export * from './vectorizeAlarms';
 export * from './signupAlarms';
 export * from './turnstileAlarms';
 export * from './imageModerationReviewAlarms';

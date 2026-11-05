@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   createInvite: vi.fn(),
   publish: vi.fn(),
   audit: vi.fn(),
+  requirePackage: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
@@ -31,7 +32,9 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: { findById: h.findSubscriber, markInviteGenerated: h.markInviteGenerated },
   registrationInviteRepository: { findOne: h.findInvite, create: h.createInvite },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
+  grantPackageRepository: {},
 }));
+vi.mock('@bike4mind/services', () => ({ referService: { requireActiveGrantPackage: h.requirePackage } }));
 vi.mock('@server/managers/regInviteManager', () => ({ generateCode: () => 'CODE-123' }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: h.publish } } }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: h.audit }));
@@ -41,9 +44,13 @@ await import('../generate-invite');
 
 const body = { subscriberId: 'sub-1', email: 'jane@example.test', firstName: 'Jane', lastName: 'Doe' };
 
-const run = async () => {
+const run = async (extra: Record<string, unknown> = {}) => {
   const { req, res } = createMocks({ method: 'POST' });
-  Object.assign(req, { body, user: { id: 'admin-1', isAdmin: true }, logger: { error: vi.fn() } });
+  Object.assign(req, {
+    body: { ...body, ...extra },
+    user: { id: 'admin-1', isAdmin: true },
+    logger: { error: vi.fn() },
+  });
   await h.handler!(req, res);
   return { req, res };
 };
@@ -117,5 +124,36 @@ describe('POST /api/subscribers/generate-invite - delegated permission', () => {
 
   it('allows a full admin', () => {
     expect(guard({ isAdmin: true })).toHaveBeenCalledOnce();
+  });
+});
+
+describe('POST /api/subscribers/generate-invite - grant package', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.findSubscriber.mockResolvedValue({ id: 'sub-1', inviteGenerated: false });
+    h.findInvite.mockResolvedValue(null);
+    h.createInvite.mockResolvedValue({ id: 'inv-1', status: 'open', unlimitedUse: false });
+    h.publish.mockResolvedValue(undefined);
+    h.audit.mockResolvedValue(null);
+  });
+
+  it('points the invite at the package and records the package amounts on the subscriber', async () => {
+    h.requirePackage.mockResolvedValue({ id: 'pkg-1', credits: 250, storageMb: 300, active: true });
+    const { res } = await run({ grantPackageId: 'pkg-1', startingCredits: 9999 });
+    expect(res._getStatusCode()).toBe(201);
+    expect(h.createInvite).toHaveBeenCalledWith(expect.objectContaining({ grantPackageId: 'pkg-1' }));
+    expect(h.markInviteGenerated).toHaveBeenCalledWith('sub-1', 'CODE-123', 'admin-1', 250, 300);
+  });
+
+  it('creates nothing when the package is unknown or inactive', async () => {
+    h.requirePackage.mockRejectedValue(new Error('Grant package not found'));
+    await expect(run({ grantPackageId: 'missing' })).rejects.toThrow('Grant package not found');
+    expect(h.createInvite).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty package id', async () => {
+    await expect(run({ grantPackageId: '' })).rejects.toThrow();
+    expect(h.requirePackage).not.toHaveBeenCalled();
+    expect(h.createInvite).not.toHaveBeenCalled();
   });
 });

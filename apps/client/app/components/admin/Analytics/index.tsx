@@ -19,6 +19,7 @@ import {
 } from '../shared';
 import { adminSearchForTab, type AdminSearch } from '../adminTabParams';
 import { ActiveUsersSection } from './ActiveUsersSection';
+import { CohortsSection } from './CohortsSection';
 import { SignupsSection } from './SignupsSection';
 import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
@@ -324,6 +325,8 @@ const AnalyticsTab = () => {
         <ActiveUsersSection {...sectionProps} />
         <SignupsSection {...sectionProps} onSelectWindow={openSignupWindow} />
       </Box>
+
+      <CohortsSection signups={query.signups} />
 
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
         {FOOTERS[data?.accounts ?? query.accounts]}

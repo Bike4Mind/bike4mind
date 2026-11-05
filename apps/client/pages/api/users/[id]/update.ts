@@ -26,6 +26,13 @@ import * as z from 'zod';
 import { requireStepUp } from '@server/auth/stepUp';
 import { propagateAccountRisk } from '@server/billing/linkedAccounts';
 import {
+  cancelAccountSubscriptions,
+  SINGLE_USER_CANCEL_BUDGET_MS,
+  subscriptionCancellationAudit,
+  subscriptionCancellationResponse,
+  type AccountSubscriptionCancellation,
+} from '@server/billing/cancelAccountSubscriptions';
+import {
   diffProfileFields,
   profileFieldsSent,
   readProfileSnapshot,
@@ -36,6 +43,7 @@ import {
   isSameUserId,
   isSelfOrImpersonator,
   parseAdminActionReason,
+  readAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
 
@@ -43,6 +51,12 @@ const idParamSchema = z.object({ id: z.string() });
 
 const updateUserResponseSchema = selfUserProfileResponseSchema.extend({
   ignoredFields: z.array(z.string()).optional(),
+  subscriptionCancellation: z
+    .object({
+      canceled: z.array(z.string()),
+      failed: z.array(z.object({ customerId: z.string(), subscriptionId: z.string().nullable(), reason: z.string() })),
+    })
+    .optional(),
 });
 
 /** Fields that change how the account signs in; see the credential gates in the handler. */
@@ -393,6 +407,26 @@ const handler = baseApi().put(
         );
       }
 
+      let cancellation: AccountSubscriptionCancellation | null = null;
+      // A banned or suspended account must not renew. Stripe failures are logged and audited, never
+      // undo the block.
+      if (blockSnapshot && blockUpdated && userService.entersSuspension(blockSnapshot, blockUpdated)) {
+        cancellation = await cancelAccountSubscriptions(
+          { userId, reason: 'suspended', deadline: Date.now() + SINGLE_USER_CANCEL_BUDGET_MS },
+          req.logger
+        );
+        const cancellationEntry = subscriptionCancellationAudit(cancellation, 'suspended');
+        if (cancellationEntry) {
+          await recordAdminActionFromRequest(req, {
+            ...cancellationEntry,
+            target: auditTarget,
+            // A moderation-only suspension carries no status reason; this runs after the commit and
+            // the Stripe cancel, so it must not throw.
+            reason: statusChangeReason ?? readAdminActionReason(body.statusChangeReason),
+          });
+        }
+      }
+
       if (profileFields.length > 0) {
         await recordProfileUpdate(req, {
           target: auditTarget,
@@ -404,6 +438,8 @@ const handler = baseApi().put(
       if (incomingTelemetryLevel) {
         await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
       }
+
+      const subscriptionCancellationBody = subscriptionCancellationResponse(cancellation);
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
@@ -417,7 +453,13 @@ const handler = baseApi().put(
       return respond(
         res,
         updateUserResponseSchema.nullable(),
-        safeUser && ignoredFields.length > 0 ? { ...safeUser, ignoredFields } : safeUser
+        safeUser && (ignoredFields.length > 0 || subscriptionCancellationBody.subscriptionCancellation)
+          ? {
+              ...safeUser,
+              ...(ignoredFields.length > 0 && { ignoredFields }),
+              ...subscriptionCancellationBody,
+            }
+          : safeUser
       );
     } else {
       // Parse with the self-service schema -- excludes isAdmin, tags, email, etc.

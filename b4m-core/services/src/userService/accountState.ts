@@ -39,6 +39,20 @@ export function entersBlockedState(previous: AccountStateFields, next: AccountSt
   return accountBlockReasons(next).some(reason => !before.includes(reason));
 }
 
+/** The block reasons that end an account's billing: every one except the reversible dispute hold. */
+export function suspensionReasons(user: AccountStateFields): AccountBlockReason[] {
+  return accountBlockReasons(user).filter(reason => reason !== 'disputePending');
+}
+
+/**
+ * True when the edit newly bans or suspends the account. A dispute flag alone does not count: it is
+ * a reversible payment hold (a won dispute clears it), and the dispute webhook cancels nothing either.
+ */
+export function entersSuspension(previous: AccountStateFields, next: AccountStateFields): boolean {
+  const before = suspensionReasons(previous);
+  return suspensionReasons(next).some(reason => !before.includes(reason));
+}
+
 export const AI_ACCESS_REVOKED_MESSAGE =
   'AI features are disabled on your account by an administrator. Please contact support.';
 

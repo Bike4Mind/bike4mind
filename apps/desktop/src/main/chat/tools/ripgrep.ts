@@ -35,9 +35,10 @@ export interface RipgrepSearch {
 /**
  * `unavailable` and `unsupported` mean nothing was searched and the caller should use its own
  * engine: there is no `rg` on the user's PATH, or the pattern is JavaScript syntax the Rust
- * regex engine rejects (lookaround, backreferences).
+ * regex engine rejects (lookaround, backreferences). `cut-short` means rg died partway (a signal
+ * or the WSL wrapper) after reporting files: keep them, and say the list is partial.
  */
-export type RipgrepOutcome = 'done' | 'stopped' | 'timed-out' | 'unavailable' | 'unsupported';
+export type RipgrepOutcome = 'done' | 'stopped' | 'timed-out' | 'cut-short' | 'unavailable' | 'unsupported';
 
 const SEARCH_TIMEOUT_MS = 30_000;
 /** A missing rg is re-checked now and then, so installing one does not need an app restart. */
@@ -190,11 +191,12 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
       // the caller searches again itself rather than report a clean miss: a size-limited or
       // otherwise rejected pattern would look exactly like that.
       if (code === 2 && (reported === 0 || REGEX_REJECTED.test(stderr))) return finish('unsupported');
-      // rg itself exits 0, 1 or 2. Anything else in a WSL folder is the wrapper failing - its cd
-      // (125) or wsl.exe starting the distro (-1) - so the search never ran and is no clean miss.
-      if (wsl && code !== 0 && code !== 1 && code !== 2) {
-        console.warn(`[ripgrep] WSL search in ${wsl.distro} exited ${code}: ${stderr.trim().slice(0, 200)}`);
-        return finish('unsupported');
+      // rg exits 0, 1 or 2. In WSL anything else is the wrapper (cd 125, wsl.exe -1) or rg killed by a
+      // signal (wsl.exe exits with its number); after files were reported a rescan would list them twice.
+      const abnormal = wsl ? code !== 0 && code !== 1 && code !== 2 : code === null;
+      if (abnormal) {
+        if (wsl) console.warn(`[ripgrep] WSL search in ${wsl.distro} exited ${code}: ${stderr.trim().slice(0, 200)}`);
+        return finish(reported === 0 ? 'unsupported' : 'cut-short');
       }
       finish('done');
     });

@@ -1,6 +1,12 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { userService } from '@bike4mind/services';
-import { newSignupGrant, PENDING_FREE_CREDITS_TAG, signupGrantDripRemaining } from '@bike4mind/common';
+import { creditService, userService } from '@bike4mind/services';
+import {
+  CreditHolderType,
+  newSignupGrant,
+  PENDING_FREE_CREDITS_TAG,
+  signupGrantDripRemaining,
+  signupGrantRemaining,
+} from '@bike4mind/common';
 import type { SignupGrantBudgetAlert, SignupProtection } from '@bike4mind/common';
 import {
   mongoose,
@@ -19,6 +25,8 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { unlockSignupGrantFromSubscription } from './subscriptionUnlock';
+import { unlockSignupGrantFromCreditPurchase } from './creditPurchaseUnlock';
+import { grantCreditPurchase } from '../billing/grantCreditPurchase';
 
 vi.mock('@server/integrations/slack/slack', () => ({ postMessageToSlackWithOutcome: vi.fn() }));
 
@@ -91,6 +99,7 @@ beforeEach(async () => {
   config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = UNCAPPED;
   config.signupGrantActivityDailyCredits = '1000';
   config.signupGrantActivityMaxCredits = '9000';
+  config.signupGrantCredits = '1000';
   config.verifiedUnlockCredits = '9000';
   delete config.signupGrantRiskPolicy;
   delete config.signupGrantDailyCredits;
@@ -384,6 +393,87 @@ describe('signup activity drip', () => {
     expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
   });
 
+  it('pays a credit pack buyer the rest of the schedule under the default cap, even with the pools at 0', async () => {
+    config.signupGrantCredits = '0';
+    config.signupGrantDailyCredits = '500';
+    const user = await createSignupStageUser();
+    for (let n = 0; n < 5; n++) expect((await drip(user.id, n)).creditsGranted).toBe(500);
+    // The release reads the real settings collection: no drip cap set, so the 9000 default applies.
+    await AdminSettings.create([
+      { settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' },
+      { settingName: 'signupGrantSignupPoolDaily', settingValue: '0' },
+      { settingName: 'signupGrantTricklePoolDaily', settingValue: '0' },
+    ]);
+    await User.updateOne({ _id: user.id }, { $inc: { currentCredits: 1000 } });
+
+    expect((await unlockSignupGrantFromCreditPurchase(user.id)).creditsGranted).toBe(6500);
+    expect(await creditsOf(user.id)).toBe(2500 + 1000 + 6500);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({
+      stage: 'unlocked',
+      unlockedBy: 'credit_purchase',
+      creditsReleased: 9000,
+      dripCredits: 2500,
+    });
+    expect(await CreditTransaction.countDocuments({ reason: 'signup_unlock:credit_purchase' })).toBe(1);
+
+    expect((await unlockSignupGrantFromCreditPurchase(user.id)).creditsGranted).toBe(0);
+    expect((await drip(user.id, 5)).creditsGranted).toBe(0);
+    expect(await creditsOf(user.id)).toBe(10000);
+  });
+
+  it('leaves a budget-held tranche of an unverified payer unreleased without failing the webhook', async () => {
+    const user = await createUser();
+    await User.updateOne(
+      { _id: user.id },
+      { $set: { emailVerified: false, signupGrantHeldReason: 'budget_exhausted' } }
+    );
+
+    await expect(unlockSignupGrantFromCreditPurchase(user.id)).resolves.toMatchObject({ creditsGranted: 0 });
+    await expect(unlockSignupGrantFromSubscription(user.id)).resolves.toMatchObject({ creditsGranted: 0 });
+    expect((await User.findById(user.id))?.signupGrant?.stage).toBe('pending_email');
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
+  it.each(['refund', 'dispute', 'fraud_warning'] as const)(
+    'after a %s forfeit, pays no drip or non-admin unlock but still honors an admin release',
+    async cause => {
+      const user = await createSignupStageUser();
+      expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+      const paidAt = new Date('2030-01-01T00:00:00Z');
+      await User.updateOne({ _id: user.id }, { lastCreditsPurchasedAt: paidAt });
+      const forfeit = () => userService.forfeitPaymentUnlock(user.id, cause, adapters);
+      expect(await forfeit()).toEqual({ outcome: 'forfeited' });
+      expect(await forfeit()).toEqual({ outcome: 'already_forfeited' });
+
+      expect((await drip(user.id, 1)).creditsGranted).toBe(0);
+      const unlock = (reason: 'org_invite' | 'activity' | 'credit_purchase' | 'admin') =>
+        userService.unlockSignupGrant(user.id, reason, {
+          ...adapters,
+          audit: async () => {},
+          validators: { [reason]: async () => true },
+        });
+      for (const reason of ['org_invite', 'activity', 'credit_purchase'] as const)
+        expect((await unlock(reason)).creditsGranted).toBe(0);
+      expect(await creditsOf(user.id)).toBe(2000);
+      const after = await User.findById(user.id);
+      expect(after?.lastCreditsPurchasedAt).toEqual(paidAt);
+      expect(after?.signupGrant?.unlockForfeited).toMatchObject({ cause });
+
+      expect((await unlock('admin')).creditsGranted).toBe(8000);
+      expect(await creditsOf(user.id)).toBe(10000);
+    }
+  );
+
+  it('drops the budget hold of a forfeited account so it never queues new signups', async () => {
+    config.signupGrantSignupPoolDaily = '0';
+    const user = await createUser();
+    expect(await userService.releaseSignupTranche(user.id, adapters)).toMatchObject({ budgetExhausted: true });
+    expect(await userService.forfeitPaymentUnlock(user.id, 'refund', adapters)).toEqual({ outcome: 'forfeited' });
+    expect((await User.findById(user.id))?.signupGrantHeldReason).toBeFalsy();
+    config.signupGrantSignupPoolDaily = UNCAPPED;
+    expect((await userService.releaseSignupTranche(user.id, adapters)).creditsGranted).toBe(0);
+  });
+
   it('pays no free grant with both pools at 0', async () => {
     const dripper = await createSignupStageUser(0);
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '0';
@@ -561,5 +651,60 @@ describe('signup activity drip', () => {
     });
     expect(result.creditsGranted).toBe(10000);
     expect(await spentToday('signup')).toBe(1000);
+  });
+});
+
+describe('paid credits and the signup grant schedule', () => {
+  const poolCounters = async () =>
+    (await SignupGrantBudgetDayModel.find({}).sort({ _id: 1 }).lean()).map(({ _id, spent, reservedIds }) => ({
+      _id,
+      spent,
+      reservedIds,
+    }));
+  const addPlanCredits = (userId: string, credits: number, stripePaymentIntentId: string, type?: string) =>
+    creditService.addCredits(
+      {
+        type: 'subscription',
+        ownerId: userId,
+        ownerType: CreditHolderType.User,
+        credits,
+        stripePaymentIntentId,
+        metadata: type ? { type } : {},
+      },
+      { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+    );
+
+  it('keeps a pack, plan credits and a renewal out of the pool counters and the released schedule', async () => {
+    const user = await createSignupStageUser();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(1000);
+    const grantBefore = (await User.findById(user.id).lean())?.signupGrant;
+    const countersBefore = await poolCounters();
+    expect(countersBefore.map(row => row.spent)).toEqual([1000, 1000]);
+    expect(signupGrantRemaining(grantBefore!)).toBe(8000);
+
+    expect(
+      await grantCreditPurchase({ userId: user.id, paymentIntentId: 'pi_schedule_e2e', credits: 500, amount: 999 })
+    ).toBe('granted');
+    await addPlanCredits(user.id, 300, 'in_plan_schedule_e2e');
+    await addPlanCredits(user.id, 300, 'in_renewal_schedule_e2e', 'subscription_renewal');
+
+    expect(await creditsOf(user.id)).toBe(2000 + 1100);
+    const grantAfter = (await User.findById(user.id).lean())?.signupGrant;
+    expect(grantAfter).toEqual(grantBefore);
+    expect(signupGrantRemaining(grantAfter!)).toBe(8000);
+    expect(await poolCounters()).toEqual(countersBefore);
+
+    // An uncapped pool still counts every draw, so an unlock that drew from either pool would show here.
+    await AdminSettings.create([
+      { settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' },
+      { settingName: 'signupGrantSignupPoolDaily', settingValue: UNCAPPED },
+      { settingName: 'signupGrantTricklePoolDaily', settingValue: UNCAPPED },
+    ]);
+    expect((await unlockSignupGrantFromCreditPurchase(user.id)).creditsGranted).toBe(8000);
+    expect(await creditsOf(user.id)).toBe(2000 + 1100 + 8000);
+    const unlocked = (await User.findById(user.id))?.signupGrant;
+    expect(unlocked).toMatchObject({ stage: 'unlocked', unlockedBy: 'credit_purchase', creditsReleased: 10000 });
+    expect(signupGrantRemaining(unlocked!)).toBe(0);
+    expect(await poolCounters()).toEqual(countersBefore);
   });
 });

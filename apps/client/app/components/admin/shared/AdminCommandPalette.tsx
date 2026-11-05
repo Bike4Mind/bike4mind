@@ -62,7 +62,7 @@ export function AdminCommandPalette({
     ...(onOpenHelp ? [{ id: 'help', label: 'Open Help Center', run: onOpenHelp }] : []),
   ];
   // A user profile belongs to the Users tab.
-  const userId = canOpenTab(AdminTab.Users) ? parseUserId(query.trim().toLowerCase()) : undefined;
+  const userId = canOpenTab(AdminTab.Users) ? parseUserId(query.trim()) : undefined;
   const results: AdminCommand[] = [
     ...(userId
       ? [

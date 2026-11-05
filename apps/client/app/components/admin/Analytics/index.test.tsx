@@ -17,6 +17,10 @@ import { parseAdminSearch } from '../adminTabParams';
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
+// The cohorts section fetches on its own and is tested in CohortsSection.test.tsx; here only what the page hands it.
+vi.mock('./CohortsSection', () => ({
+  CohortsSection: ({ signups }: { signups: string }) => <div data-testid="cohorts-stub" data-signups={signups} />,
+}));
 
 vi.mock('recharts', async importOriginal => {
   const actual = await importOriginal<typeof import('recharts')>();
@@ -223,6 +227,13 @@ describe('AnalyticsTab', () => {
     );
     fireEvent.click(screen.getByTestId('analytics-missing-toggle-btn'));
     expect(screen.getByTestId('analytics-missing-days')).toHaveTextContent('2026-06-01, 2026-06-03');
+  });
+
+  it('hands the retention cohorts the Signups toggle from the URL and follows a change', async () => {
+    await renderPage('/admin?tab=analytics&signups=all');
+    expect(await screen.findByTestId('cohorts-stub')).toHaveAttribute('data-signups', 'all');
+    fireEvent.click(screen.getByTestId('analytics-signups-mode-legit'));
+    await waitFor(() => expect(screen.getByTestId('cohorts-stub')).toHaveAttribute('data-signups', 'legit'));
   });
 
   it('seeds a custom range from the range on screen', async () => {

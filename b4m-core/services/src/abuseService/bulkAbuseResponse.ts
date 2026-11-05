@@ -39,6 +39,11 @@ export const signupGrantTransactionIds = (userId: string): string[] => [
 
 // Users run in parallel up to this many at a time; each holds its own transaction.
 const EXECUTE_CONCURRENCY = 8;
+// ms. Execute stops starting new chunks after this; the route's Lambda times out at 60 s.
+export const EXECUTE_BUDGET_MS = 40_000;
+// ms. A chunk already started past the budget may still finish its Stripe cancels.
+export const SUBSCRIPTION_CANCEL_GRACE_MS = 10_000;
+const TIME_BUDGET_EXHAUSTED = 'time budget exhausted';
 
 type UserFinder = {
   find: (
@@ -350,6 +355,14 @@ export type BulkAbuseExecuteAdapters = {
   withTransaction: <T>(fn: () => Promise<T>) => Promise<T>;
   /** A strict audit write; called inside the user's transaction so the entry and the step commit together. */
   audit: (entry: BulkAbuseAuditEntry) => Promise<unknown>;
+  /**
+   * Cancels the banned user's Stripe subscriptions, and audits it, after the ban commits. Should
+   * not throw; a Stripe refusal comes back in `failed` and never undoes the ban.
+   */
+  cancelSubscriptions: (
+    user: Pick<IUser, 'id' | 'email' | 'username'>,
+    deadline?: number
+  ) => Promise<{ canceled: string[]; failed: { reason: string }[] }>;
   logger?: Logger;
 };
 
@@ -358,12 +371,21 @@ type StepResult = { outcome: BulkAbuseStepOutcome; revokedApiKeys?: number; claw
 async function banStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapters): Promise<StepResult> {
   const current = await db.users.findById(user.id);
   if (!current || current.isBanned) return { outcome: 'skipped' };
-  await db.users.update({ id: user.id, isBanned: true });
+  // Settles a signup risk review too, so the risk sweep (findRiskScoringCandidateIds) stops refreshing it.
+  const unsettled = current.riskScore?.reviewState !== 'banned' ? current.riskScore : null;
+  await db.users.update({
+    id: user.id,
+    isBanned: true,
+    ...(unsettled ? { riskScore: { ...unsettled, reviewState: 'banned' } } : {}),
+  });
   await audit({
     action: 'abuse.bulk.ban',
     user,
     summary: 'banned in a bulk abuse response',
-    changes: [{ field: 'isBanned', before: false, after: true }],
+    changes: [
+      { field: 'isBanned', before: false, after: true },
+      ...(unsettled ? [{ field: 'riskScore.reviewState', before: unsettled.reviewState, after: 'banned' }] : []),
+    ],
   });
   return { outcome: 'applied' };
 }
@@ -440,11 +462,27 @@ const withBanImpliedKeyRevoke = (actions: BulkAbuseActions): BulkAbuseActions =>
   revokeApiKeys: actions.revokeApiKeys || actions.ban,
 });
 
+/** Outside the transaction: a Stripe cancel cannot roll back, so it runs only once the ban has committed. */
+async function cancelSubscriptionsAfterBan(
+  user: IUser,
+  adapters: BulkAbuseExecuteAdapters,
+  deadline: number
+): Promise<{ canceled: string[]; error?: string }> {
+  try {
+    const { canceled, failed } = await adapters.cancelSubscriptions(user, deadline);
+    return failed.length > 0 ? { canceled, error: failed.map(failure => failure.reason).join('; ') } : { canceled };
+  } catch (error) {
+    adapters.logger?.error('Bulk abuse subscription cancel failed for user', user.id, error);
+    return { canceled: [], error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 async function executeForUser(
   user: IUser,
   requested: BulkAbuseActions,
   actorId: string,
-  adapters: BulkAbuseExecuteAdapters
+  adapters: BulkAbuseExecuteAdapters,
+  cancelDeadline: number
 ): Promise<BulkAbuseUserResult> {
   const actions = withBanImpliedKeyRevoke(requested);
   try {
@@ -467,6 +505,8 @@ async function executeForUser(
           ? { userId: user.id, sessionsOnly: true }
           : null;
     if (endFilter) await endRealtimeConnections(endFilter, { db: adapters.db, logger: adapters.logger });
+    // Also when the user was already banned: a ban from before this step existed may still renew.
+    const subscriptions = actions.ban ? await cancelSubscriptionsAfterBan(user, adapters, cancelDeadline) : null;
     return {
       userId: user.id,
       email: user.email,
@@ -479,6 +519,8 @@ async function executeForUser(
       },
       revokedApiKeys: steps.revokeApiKeys.revokedApiKeys ?? 0,
       clawedBackCredits: steps.clawbackFreeCredits.clawedBackCredits ?? 0,
+      canceledSubscriptions: subscriptions?.canceled ?? [],
+      ...(subscriptions?.error && { subscriptionCancelError: subscriptions.error }),
     };
   } catch (error) {
     adapters.logger?.error('Bulk abuse response failed for user', user.id, error);
@@ -489,6 +531,7 @@ async function executeForUser(
       steps: { ban: 'skipped', revokeApiKeys: 'skipped', revokeSessions: 'skipped', clawbackFreeCredits: 'skipped' },
       revokedApiKeys: 0,
       clawedBackCredits: 0,
+      canceledSubscriptions: [],
       error: error instanceof Error ? error.message : String(error),
     };
   }
@@ -497,18 +540,40 @@ async function executeForUser(
 /**
  * Applies the selected actions to each included user. Each user is one transaction, so a failure
  * rolls back only that user and is reported; the rest continue. Every step is idempotent, so a
- * re-run over the same cohort skips what was already done.
+ * re-run over the same cohort skips what was already done. Past the time budget no further chunk
+ * is started; its users are reported as failed so a re-run can finish them.
  */
 export async function executeBulkAbuse(
   included: IUser[],
   actions: BulkAbuseActions,
   actorId: string,
-  adapters: BulkAbuseExecuteAdapters
+  adapters: BulkAbuseExecuteAdapters,
+  options: { budgetMs?: number } = {}
 ): Promise<BulkAbuseUserResult[]> {
+  const deadline = Date.now() + (options.budgetMs ?? EXECUTE_BUDGET_MS);
+  const cancelDeadline = deadline + SUBSCRIPTION_CANCEL_GRACE_MS;
   const results: BulkAbuseUserResult[] = [];
   for (let start = 0; start < included.length; start += EXECUTE_CONCURRENCY) {
     const chunk = included.slice(start, start + EXECUTE_CONCURRENCY);
-    results.push(...(await Promise.all(chunk.map(user => executeForUser(user, actions, actorId, adapters)))));
+    // The first chunk always runs, so every batch makes progress.
+    if (start > 0 && Date.now() >= deadline) {
+      results.push(...chunk.map(unattemptedResult));
+      continue;
+    }
+    results.push(
+      ...(await Promise.all(chunk.map(user => executeForUser(user, actions, actorId, adapters, cancelDeadline))))
+    );
   }
   return results;
 }
+
+const unattemptedResult = (user: IUser): BulkAbuseUserResult => ({
+  userId: user.id,
+  email: user.email,
+  status: 'failed',
+  steps: { ban: 'skipped', revokeApiKeys: 'skipped', revokeSessions: 'skipped', clawbackFreeCredits: 'skipped' },
+  revokedApiKeys: 0,
+  clawedBackCredits: 0,
+  canceledSubscriptions: [],
+  error: TIME_BUDGET_EXHAUSTED,
+});

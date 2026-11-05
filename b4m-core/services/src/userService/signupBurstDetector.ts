@@ -1,4 +1,4 @@
-import type { SignupObservation } from '@bike4mind/common';
+import type { SignupDomainReview, SignupObservation } from '@bike4mind/common';
 import { emailDomainOf } from '@bike4mind/common';
 import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
@@ -6,6 +6,25 @@ export const signupDomain = (email: string): string | null =>
   registrableDomain(emailDomainOf(email), { allowPrivateDomains: true });
 
 export type SignupBurstVerdict = { suspicious: boolean; reason: string; signupCount: number };
+
+export const SIGNUP_BURST_HOLD_REASONS = {
+  generated: 'Verified signup burst with generated local parts',
+  rotatingSubdomains: 'Verified signup burst with generated local parts and rotating short subdomains',
+} as const;
+const burstHoldReasons: ReadonlySet<string> = new Set(Object.values(SIGNUP_BURST_HOLD_REASONS));
+
+/**
+ * The account is in a burst this detector held: one of the cohort it was triggered on, or a later
+ * signup on the held domain. Domain-reputation holds (domainHoldReason) and domains an admin released
+ * do not count, nor do accounts on the domain from before the burst.
+ */
+export function isInSignupBurst(
+  review: Pick<SignupDomainReview, 'reason' | 'status' | 'cohortUserIds' | 'triggeredAt'>,
+  user: { id: string; createdAt: Date }
+): boolean {
+  if (!burstHoldReasons.has(review.reason) || review.status === 'released') return false;
+  return review.cohortUserIds.includes(user.id) || user.createdAt >= review.triggeredAt;
+}
 
 // A time-derived counter climbs across nearly the whole generated cohort. Random ID-style suffixes
 // also contain an increasing subsequence (about 2*sqrt(n) long), so its length alone is not a signal.
@@ -60,8 +79,6 @@ export function detectSignupBurst(
     suspicious: true,
     signupCount: cohort.length,
     reason:
-      shortSubdomains.size >= 3
-        ? 'Verified signup burst with generated local parts and rotating short subdomains'
-        : 'Verified signup burst with generated local parts',
+      shortSubdomains.size >= 3 ? SIGNUP_BURST_HOLD_REASONS.rotatingSubdomains : SIGNUP_BURST_HOLD_REASONS.generated,
   };
 }

@@ -39,6 +39,8 @@ import { registerSignupIpRetention } from './signupIpRetention';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
+import { registerSpendReconciliation } from './spendReconciliation';
+import { registerCreditPurchaseReconciliation } from './creditPurchaseReconciliation';
 import { registerVoiceHoldSweep } from './voiceHoldSweep';
 import { registerCreditHoldSweep } from './creditHoldSweep';
 import { registerReferralRewardRelease } from './referralRewardRelease';
@@ -143,6 +145,8 @@ async function main() {
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);
+  registerSpendReconciliation(worker);
+  registerCreditPurchaseReconciliation(worker);
   registerVoiceHoldSweep(worker);
   registerCreditHoldSweep(worker);
   registerReferralRewardRelease(worker);

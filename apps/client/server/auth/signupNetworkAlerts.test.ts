@@ -379,6 +379,7 @@ describe('buildSignupNetworkShadowDetection', () => {
       signals: [{ key: 'asnSignups', label: 'Self-serve signups from this network', observed: 3, threshold: 2 }],
       windowMinutes: 60,
       group: null,
+      payment: null,
       detectedAt,
     });
   });

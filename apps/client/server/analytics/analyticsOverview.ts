@@ -122,10 +122,11 @@ export type LiveDay = Omit<OverviewDailyRow, 'day' | 'computedAt'>;
 
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
 const mean = (values: readonly number[]) => (values.length ? sum(values) / values.length : null);
+/** Differs from `cohortSignupCount` (analyticsCohorts.ts), which also counts unclassified signups as legit; keep the two in step. */
 const signupTotal = (signups: IAnalyticsDailySignups, mode: AnalyticsSignupsMode) =>
   mode === 'legit' ? signups.legit : signups.legit + signups.suspected + signups.unclassified;
 
-const mondayOf = (day: string) => shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
+export const mondayOf = (day: string) => shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
 const bucketStart = (day: string, bucket: AnalyticsBucket) =>
   bucket === 'day' ? day : bucket === 'week' ? mondayOf(day) : `${day.slice(0, 7)}-01`;
 const counts = ({ dau, wau, mau }: ActiveUserCounts): ActiveUserCounts => ({ dau, wau, mau });

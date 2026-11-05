@@ -50,6 +50,29 @@ describe('SubscriptionDetailHeader', () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
+  it('shows Cancel and no Resume on a live Stripe row with nothing scheduled', () => {
+    const { onAction } = setup(buildDetail({ subscription: STRIPE_ROW }));
+    expect(screen.queryByTestId('subscription-detail-resume-btn')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('subscription-detail-cancel-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('cancel');
+  });
+
+  it('swaps Cancel for Resume while a cancellation is scheduled', () => {
+    const future = new Date(Date.now() + 10 * 86_400_000).toISOString();
+    const { onAction } = setup(
+      buildDetail({ subscription: { ...STRIPE_ROW, periodEndsAt: future, cancelAt: future } })
+    );
+    expect(screen.queryByTestId('subscription-detail-cancel-btn')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('subscription-detail-resume-btn'));
+    expect(onAction).toHaveBeenLastCalledWith('resume');
+  });
+
+  it('offers no Stripe actions on a comp', () => {
+    setup(buildDetail());
+    expect(screen.queryByTestId('subscription-detail-cancel-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('subscription-detail-resume-btn')).not.toBeInTheDocument();
+  });
+
   it('gives an ended row Remove only, with no comp actions or credits', () => {
     setup(buildDetail({ subscription: { status: 'canceled' } }));
 

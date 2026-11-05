@@ -10,6 +10,8 @@ import {
  * the server's `parseAdminActionReason`.
  */
 export const ADMIN_REASON_PRESETS = {
+  subscriptionCancel: ['Customer request', 'Billing dispute', 'Duplicate subscription', 'Account closure'],
+  subscriptionResume: ['Customer changed their mind', 'Canceled in error', 'Customer request'],
   creditAdjustment: ['Goodwill credit', 'Refund', 'Support request', 'Abuse / automated signups'],
   suspension: ['Abuse / automated signups', 'Payment fraud', 'Terms violation', 'Customer request'],
   reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
@@ -39,6 +41,12 @@ export const ADMIN_REASON_PRESETS = {
     'Internal testing',
   ],
   organizationGrant: ['Pilot or partner access', 'Sales-approved trial', 'Internal testing'],
+  grantPackage: [
+    'Pilot or partner access',
+    'Sales-approved campaign',
+    'Event or conference signups',
+    'Internal testing',
+  ],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
   compChange: ['Pilot or trial ended', 'Granted in error', 'Customer request', 'Account cleanup'],

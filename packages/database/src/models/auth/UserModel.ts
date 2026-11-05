@@ -20,6 +20,7 @@ import {
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
+  riskEvidenceSummarySchema,
   type RiskEvidenceTrigger,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
@@ -654,7 +655,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     return this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email username lastActiveAt isOnline photoUrl');
+      .select('name email emailVerified username lastActiveAt isOnline photoUrl');
   }
 
   /**
@@ -1078,6 +1079,24 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .exec();
   }
 
+  /**
+   * The stored evidence summary and creation time of each id, and nothing else from the account:
+   * advisory abuse assessments read only this. Unparseable or absent summaries come back null.
+   */
+  async findRiskEvidenceSummaries(
+    ids: string[]
+  ): Promise<{ id: string; createdAt: Date | null; summary: RiskEvidenceSummary | null }[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } }, { createdAt: 1, 'riskEvidence.summary': 1 })
+      .lean<{ _id: mongoose.Types.ObjectId; createdAt?: Date; riskEvidence?: { summary?: unknown } }[]>();
+    return docs.map(doc => {
+      const parsed = riskEvidenceSummarySchema.safeParse(doc.riskEvidence?.summary);
+      return { id: doc._id.toString(), createdAt: doc.createdAt ?? null, summary: parsed.success ? parsed.data : null };
+    });
+  }
+
   async riskEvidenceCoverage(since: Date): Promise<RiskEvidenceCoverage> {
     const isType = (path: string, type: string) => ({ $eq: [{ $type: path }, type] });
     const countIf = (condition: unknown) => ({ $sum: { $cond: [condition, 1, 0] } });
@@ -1136,10 +1155,21 @@ const AcquisitionTouchSchema = new Schema(
   { _id: false }
 );
 
+const VerifiedTouchSchema = new Schema(
+  {
+    srcProductId: { type: String, required: true },
+    hopId: { type: String, required: true },
+    redeemedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const UserAcquisitionSchema = new Schema(
   {
     firstTouch: { type: AcquisitionTouchSchema, required: false },
     lastTouch: { type: AcquisitionTouchSchema, required: false },
+    // A verified hop the signup followed - see IUserAcquisition.verifiedTouch.
+    verifiedTouch: { type: VerifiedTouchSchema, required: false },
     signupMethod: { type: String, required: true },
     capturedAt: { type: Date, required: true },
   },
@@ -1221,6 +1251,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Invite-resolved credits awaiting proof of email ownership; paired with
     // the pending-free-credits tag and nulled once granted.
     pendingCreditGrant: { type: Number, default: null },
+    grantPackageId: { type: String, default: null },
     // Canonical inbox (canonicalizeEmail) this account claimed its free-credit grant under; unset
     // until a grant is claimed. Unique, so one inbox earns one grant however many aliases sign up.
     freeCreditClaimEmail: { type: String },
@@ -1264,6 +1295,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
               },
               { _id: false }
             ),
+            default: undefined,
+          },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
             default: undefined,
           },
         },

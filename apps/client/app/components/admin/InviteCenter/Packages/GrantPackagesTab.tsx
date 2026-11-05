@@ -1,0 +1,230 @@
+import { useState } from 'react';
+import { Box, Button, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import AddIcon from '@mui/icons-material/Add';
+import EditIcon from '@mui/icons-material/Edit';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { IGrantPackageDocument } from '@bike4mind/common';
+import {
+  AdminPageHeader,
+  DataTable,
+  EmptyState,
+  StatusChip,
+  type DataColumn,
+} from '@client/app/components/admin/shared';
+import {
+  fetchGrantPackages,
+  GRANT_PACKAGES_QUERY_KEY,
+  type GrantPackageRow,
+} from '@client/app/utils/grantPackageAPICalls';
+import { getErrorMessage } from '@client/app/utils/error';
+import { GrantPackageFormModal } from './GrantPackageFormModal';
+import { capState } from './capState';
+
+const formatCount = (value: number) => value.toLocaleString('en-US');
+const capLabel = (used: number, cap: number | null) =>
+  cap === null ? `${formatCount(used)} / unlimited` : `${formatCount(used)} / ${formatCount(cap)}`;
+
+const columns: DataColumn<GrantPackageRow>[] = [
+  {
+    id: 'name',
+    label: 'Name',
+    render: row => (
+      <>
+        {row.name}
+        {row.legacy && (
+          <Chip size="sm" variant="soft" sx={{ ml: 1 }} data-testid={`grant-package-legacy-chip-${row.id}`}>
+            Legacy
+          </Chip>
+        )}
+      </>
+    ),
+  },
+  { id: 'credits', label: 'Credits', numeric: true, width: '5.5rem', render: row => formatCount(row.credits) },
+  {
+    id: 'total',
+    label: 'Redeemed',
+    numeric: true,
+    width: '7.5rem',
+    render: row => capLabel(row.redeemedTotal, row.totalCap),
+  },
+  {
+    id: 'today',
+    label: 'Today',
+    numeric: true,
+    width: '6rem',
+    render: row => (row.dailyCap === null ? '-' : capLabel(row.redeemedToday, row.dailyCap)),
+  },
+  {
+    id: 'capHits',
+    label: 'Cap hits',
+    numeric: true,
+    width: '5.5rem',
+    render: row => (
+      <Tooltip title={row.lastCapHitAt ? `Last refused ${new Date(row.lastCapHitAt).toUTCString()}` : 'Never refused'}>
+        <span data-testid={`grant-package-cap-hits-${row.id}`}>{formatCount(row.capHits)}</span>
+      </Tooltip>
+    ),
+  },
+  {
+    id: 'codes',
+    label: 'Codes',
+    numeric: true,
+    width: '8rem',
+    render: row =>
+      row.usage ? (
+        <Tooltip title="Active codes (not expired, and not yet used unless unlimited-use) out of all codes linked to this package">
+          <span data-testid={`grant-package-codes-${row.id}`}>
+            {formatCount(row.usage.activeCodes)} active / {formatCount(row.usage.codes)}
+          </span>
+        </Tooltip>
+      ) : (
+        '-'
+      ),
+  },
+  {
+    id: 'partnerDomains',
+    label: 'Partner domains',
+    numeric: true,
+    width: '8.5rem',
+    render: row =>
+      row.usage ? (
+        <Tooltip
+          title={`${formatCount(row.usage.enabledPartnerDomains)} enabled out of ${formatCount(row.usage.partnerDomains)} linked partner signup rules`}
+        >
+          <span data-testid={`grant-package-domains-${row.id}`}>{formatCount(row.usage.enabledPartnerDomains)}</span>
+        </Tooltip>
+      ) : (
+        '-'
+      ),
+  },
+  {
+    id: 'nextCodeExpiry',
+    label: 'Next code expiry',
+    width: '9rem',
+    render: row => (
+      <Tooltip title="Packages do not expire; this is the soonest expiry among linked active codes">
+        <span data-testid={`grant-package-next-expiry-${row.id}`}>
+          {row.usage?.nextCodeExpiry ? new Date(row.usage.nextCodeExpiry).toLocaleDateString('en-US') : '-'}
+        </span>
+      </Tooltip>
+    ),
+  },
+  {
+    id: 'status',
+    label: 'Status',
+    width: '10rem',
+    render: row => {
+      const cap = capState(row);
+      return (
+        <Stack direction="row" gap={0.5} flexWrap="wrap">
+          <StatusChip tone={row.active ? 'good' : 'neutral'} label={row.active ? 'Active' : 'Inactive'} dot />
+          {cap && (
+            <StatusChip
+              tone="warn"
+              label={cap === 'total' ? 'Cap reached' : 'Daily cap reached'}
+              data-testid={`grant-package-cap-reached-${row.id}`}
+            />
+          )}
+        </Stack>
+      );
+    },
+  },
+];
+
+const GrantPackagesTab = ({ embedded = false }: { embedded?: boolean }) => {
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<IGrantPackageDocument | null>(null);
+
+  const { data, isPending, error, refetch } = useQuery({
+    queryKey: [GRANT_PACKAGES_QUERY_KEY, { page, pageSize, usage: true }],
+    queryFn: () => fetchGrantPackages({ page, limit: pageSize, usage: true }),
+  });
+
+  const openForm = (pkg: IGrantPackageDocument | null) => {
+    setEditing(pkg);
+    setFormOpen(true);
+  };
+
+  const createButton = (
+    <Button
+      startDecorator={<AddIcon />}
+      onClick={() => openForm(null)}
+      disabled={!data}
+      data-testid="grant-packages-create-btn"
+    >
+      Create package
+    </Button>
+  );
+
+  return (
+    <Box sx={embedded ? undefined : { px: 3, py: 2 }}>
+      <AdminPageHeader
+        title="Grant packages"
+        count={data?.meta.total}
+        description="Signup credits that invite codes and partner rules draw from, with optional caps."
+        actions={createButton}
+      />
+      <DataTable
+        rows={data?.data ?? []}
+        columns={columns}
+        getRowId={row => row.id}
+        label="Grant packages"
+        minWidth="72rem"
+        loading={isPending}
+        error={error ? getErrorMessage(error) : undefined}
+        onRetry={() => void refetch()}
+        testId="grant-packages-table"
+        rowTestId={row => `grant-package-row-${row.id}`}
+        onRowActivate={row => openForm(row)}
+        rowActions={row => (
+          <IconButton
+            size="sm"
+            variant="plain"
+            aria-label={`Edit ${row.name}`}
+            onClick={() => openForm(row)}
+            data-testid={`grant-package-edit-btn-${row.id}`}
+          >
+            <EditIcon />
+          </IconButton>
+        )}
+        empty={
+          <EmptyState
+            title="No grant packages yet"
+            description="Create one to give invite signups a capped credit grant."
+            action={createButton}
+          />
+        }
+        pagination={{
+          page,
+          pageSize,
+          total: data?.meta.total ?? 0,
+          onPageChange: setPage,
+          onPageSizeChange: size => {
+            setPageSize(size);
+            setPage(1);
+          },
+        }}
+      />
+      {data && (
+        <Typography level="body-xs" sx={{ mt: 1, color: 'text.tertiary' }}>
+          Packages above {formatCount(data.reasonPolicy.singleGrantCredits)} credits per signup, or able to hand out
+          more than {formatCount(data.reasonPolicy.dailyTotalCredits)} in total, need a reason.
+        </Typography>
+      )}
+      {formOpen && data && (
+        <GrantPackageFormModal
+          open
+          editing={editing}
+          reasonPolicy={data.reasonPolicy}
+          onClose={() => setFormOpen(false)}
+          onSaved={() => void queryClient.invalidateQueries({ queryKey: [GRANT_PACKAGES_QUERY_KEY] })}
+        />
+      )}
+    </Box>
+  );
+};
+
+export default GrantPackagesTab;

@@ -50,6 +50,12 @@ import {
   type OrganizationOption,
 } from '@client/app/utils/partnerSignupRuleAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
+import type { GrantPackageRow } from '@client/app/utils/grantPackageAPICalls';
+import GrantPackageSelect, {
+  grantPackageUsage,
+  useGrantPackageOptions,
+  useSelectedGrantPackage,
+} from './InviteCenter/shared/GrantPackageSelect';
 
 // Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
 const ENTITLEMENT_OPTIONS = [...KNOWN_ENTITLEMENT_KEYS];
@@ -73,6 +79,7 @@ type FormState = {
   subscriptionPriceId: string | null;
   subscriptionMonths: string;
   signupCredits: string;
+  grantPackageId: string | null;
   notes: string;
   enabled: boolean;
   // `organizationId` is the value persisted; `organization` carries the name so the picker can
@@ -89,6 +96,7 @@ const emptyForm: FormState = {
   subscriptionPriceId: null,
   subscriptionMonths: '1',
   signupCredits: '0',
+  grantPackageId: null,
   notes: '',
   enabled: true,
   organizationId: null,
@@ -103,6 +111,7 @@ const ruleToForm = (rule: IPartnerSignupRuleDocument): FormState => ({
   subscriptionPriceId: rule.subscription?.priceId ?? null,
   subscriptionMonths: String(rule.subscription?.durationMonths ?? 1),
   signupCredits: String(rule.signupCredits ?? 0),
+  grantPackageId: rule.grantPackageId ?? null,
   notes: rule.notes ?? '',
   enabled: rule.enabled,
   organizationId: rule.organizationId ?? null,
@@ -125,6 +134,8 @@ export default function PartnerSignupRulesTab() {
     planOptions.push({ priceId: form.subscriptionPriceId, label: `${form.subscriptionPriceId} (unavailable)` });
   }
   const [formError, setFormError] = useState<string | null>(null);
+  const { data: packageList } = useGrantPackageOptions();
+  const selectedPackage = useSelectedGrantPackage(form.grantPackageId);
   // Rule pending deletion (drives the confirm dialog); null when closed.
   const [deleteTarget, setDeleteTarget] = useState<IPartnerSignupRuleDocument | null>(null);
 
@@ -148,6 +159,7 @@ export default function PartnerSignupRulesTab() {
           ? { priceId: form.subscriptionPriceId, durationMonths: Number(form.subscriptionMonths) }
           : null,
         signupCredits: Number(form.signupCredits),
+        grantPackageId: form.grantPackageId,
         label: form.label.trim(),
         notes: form.notes.trim(),
         enabled: form.enabled,
@@ -402,7 +414,12 @@ export default function PartnerSignupRulesTab() {
                       )}
                     </td>
                     <td style={{ textAlign: 'right' }}>
-                      {rule.signupCredits > 0 ? (
+                      {rule.grantPackageId ? (
+                        <PackageCell
+                          ruleId={rule.id}
+                          pkg={packageList?.data.find(pkg => pkg.id === rule.grantPackageId)}
+                        />
+                      ) : rule.signupCredits > 0 ? (
                         <Typography level="body-sm">{rule.signupCredits.toLocaleString()}</Typography>
                       ) : (
                         <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
@@ -623,12 +640,20 @@ export default function PartnerSignupRulesTab() {
                 type="number"
                 slotProps={{ input: { min: 0 } }}
                 endDecorator={<Typography level="body-xs">credits</Typography>}
-                value={form.signupCredits}
+                value={selectedPackage ? String(selectedPackage.credits) : form.signupCredits}
                 onChange={e => setForm(f => ({ ...f, signupCredits: e.target.value }))}
+                disabled={form.grantPackageId !== null}
                 data-testid="partner-rule-credits-input"
               />
               <FormHelperText>One-time bonus granted at email verification. 0 = access only, no bonus.</FormHelperText>
             </FormControl>
+
+            <GrantPackageSelect
+              value={form.grantPackageId}
+              onChange={id => setForm(f => ({ ...f, grantPackageId: id }))}
+              testId="partner-rule-grant-package-select"
+              helperText="A package replaces the credits above and caps them; at the cap, signups still join the org and plan without credits."
+            />
 
             <FormControl>
               <FormLabel>Organization</FormLabel>
@@ -814,5 +839,33 @@ export default function PartnerSignupRulesTab() {
         </ModalDialog>
       </Modal>
     </Box>
+  );
+}
+
+function PackageCell({ ruleId, pkg }: { ruleId: string; pkg: GrantPackageRow | undefined }) {
+  if (!pkg) {
+    return (
+      <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
+        package
+      </Typography>
+    );
+  }
+  return (
+    <Tooltip title={grantPackageUsage(pkg)}>
+      <Typography level="body-sm" data-testid={`partner-rule-package-${ruleId}`}>
+        {pkg.credits.toLocaleString()} ({pkg.name})
+        {pkg.capHits > 0 && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="warning"
+            sx={{ ml: 0.5 }}
+            data-testid={`partner-rule-cap-hits-${ruleId}`}
+          >
+            {pkg.capHits.toLocaleString()} cap hits
+          </Chip>
+        )}
+      </Typography>
+    </Tooltip>
   );
 }
