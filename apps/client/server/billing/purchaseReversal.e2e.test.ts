@@ -8,6 +8,7 @@ import type { Logger } from '@bike4mind/observability';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
+  settleAutoIndexBuilds,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
 import { hasPurchasedCredits } from '@server/entitlements/paidStanding';
@@ -37,6 +38,7 @@ let replSet: MongoMemoryReplSet;
 beforeAll(async () => {
   replSet = await createMongoReplSet();
   await mongoose.connect(replSet.getUri());
+  await settleAutoIndexBuilds(mongoose);
 });
 
 afterAll(async () => {
