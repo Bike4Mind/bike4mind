@@ -402,6 +402,43 @@ describe('POST /api/sessions/bulk - tags', () => {
     expect(results[3]).toEqual({ id: id(4), ok: false, error: 'Cannot update session' });
   });
 
+  it('reports jobs already queued when a later publish fails', async () => {
+    mockTag.findTaggable.mockResolvedValue([{ id: id(1) }, { id: id(2) }]);
+    mockTag.publish.mockResolvedValueOnce('job-1').mockRejectedValueOnce(new Error('queue down'));
+
+    const { req, res } = fireWith('POST', { action: 'generateTags', sessionIds: [id(1), id(2)] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const { results, okCount } = res._getJSONData();
+    expect(okCount).toBe(1);
+    expect(results).toEqual([
+      { id: id(1), ok: true },
+      { id: id(2), ok: false, error: 'Could not queue tagging' },
+    ]);
+  });
+
+  it('refuses generateTags in a write-enabled impersonation before anything is billed', async () => {
+    mockFindById.mockResolvedValue({
+      id: 'user-1',
+      _id: 'user-1',
+      isBanned: false,
+      disputePending: false,
+      aupAcceptedVersion: 'grandfathered',
+      impersonatedBy: 'admin-1',
+      // Write-enabled, so the gate admits the POST and the route's own refusal is what answers.
+      impersonationWriteEnabled: true,
+    });
+    mockTag.findTaggable.mockResolvedValue([{ id: id(1) }]);
+
+    const { req, res } = fireWith('POST', { action: 'generateTags', sessionIds: [id(1)] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockTag.credits).not.toHaveBeenCalled();
+    expect(mockTag.publish).not.toHaveBeenCalled();
+  });
+
   it('queues nothing when the credit pre-flight refuses', async () => {
     mockTag.findTaggable.mockResolvedValue([{ id: id(1) }, { id: id(2) }]);
     mockTag.credits.mockRejectedValue(Object.assign(new Error('Insufficient credits'), { status: 402 }));

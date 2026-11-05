@@ -11,6 +11,8 @@ export type QueueSessionTagsResult = {
   queued: { sessionId: string; requestId: Awaited<ReturnType<typeof SessionEvents.Tag.publish>> }[];
   /** Malformed ids and sessions the caller cannot update. Nothing is queued or billed for them. */
   inaccessible: string[];
+  /** Accessible sessions whose job could not be published. */
+  failed: string[];
 };
 
 /**
@@ -31,7 +33,7 @@ export async function queueSessionTags(
     : [];
   const accessible = new Set(sessions.map(s => String(s.id)));
   const inaccessible = sessionIds.filter(id => !accessible.has(id));
-  if (sessions.length === 0) return { queued: [], inaccessible };
+  if (sessions.length === 0) return { queued: [], inaccessible, failed: [] };
 
   assertAiAccessAllowed(req.user);
 
@@ -48,9 +50,16 @@ export async function queueSessionTags(
   // re-check can't express, so their job re-checks as the owner instead (still not-deleted).
   const requesterId = req.user?.isAdmin ? undefined : req.user?.id;
   const queued: QueueSessionTagsResult['queued'] = [];
+  const failed: string[] = [];
   for (const session of sessions) {
-    const requestId = await SessionEvents.Tag.publish({ sessionId: session.id, requesterId, payerId: req.user!.id });
-    queued.push({ sessionId: String(session.id), requestId });
+    // Per session, so a publish failure mid-loop still reports the jobs already queued.
+    try {
+      const requestId = await SessionEvents.Tag.publish({ sessionId: session.id, requesterId, payerId: req.user!.id });
+      queued.push({ sessionId: String(session.id), requestId });
+    } catch (error) {
+      req.logger?.warn('[queueSessionTags] publish failed', { sessionId: String(session.id), error });
+      failed.push(String(session.id));
+    }
   }
-  return { queued, inaccessible };
+  return { queued, inaccessible, failed };
 }

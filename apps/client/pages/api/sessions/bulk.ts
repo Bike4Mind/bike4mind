@@ -1,6 +1,7 @@
 import {
   ApiKeyScope,
   BadRequestError,
+  ForbiddenError,
   MAX_BULK_ITEMS,
   SessionEvents,
   redactSessionForClient,
@@ -116,12 +117,16 @@ async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string
 
 async function generateTags(req: BulkWriteRequest, sessionIds: string[]): Promise<BulkWriteResponse> {
   assertCanWriteNotebooks(req);
+  // impersonationGate admits POST here for favorite/addTags; AI tagging stays off-limits, as on /[id]/tag.
+  if (req.user?.impersonatedBy) throw new ForbiddenError('Not available while impersonating');
   const ids = [...new Set(sessionIds)];
-  const { queued } = await queueSessionTags(req, ids);
+  const { queued, failed } = await queueSessionTags(req, ids);
   const queuedIds = new Set(queued.map(q => q.sessionId));
-  const results: BulkItemResult[] = ids.map(id =>
-    queuedIds.has(id) ? { id, ok: true } : { id, ok: false, error: 'Cannot update session' }
-  );
+  const failedIds = new Set(failed);
+  const results: BulkItemResult[] = ids.map(id => {
+    if (queuedIds.has(id)) return { id, ok: true };
+    return { id, ok: false, error: failedIds.has(id) ? 'Could not queue tagging' : 'Cannot update session' };
+  });
   return { results, okCount: queued.length };
 }
 
