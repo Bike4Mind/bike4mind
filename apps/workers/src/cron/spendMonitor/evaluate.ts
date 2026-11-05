@@ -207,30 +207,28 @@ async function scopeBreaches(
   });
 }
 
-const PAYER_RULE: Partial<Record<SpendRuleId, SpendRuleId>> = {
-  apikey_spike: 'account_spike',
-  apikey_ceiling: 'account_ceiling',
-};
 const KEY_RULES: SpendRuleId[] = ['apikey_spike', 'apikey_ceiling'];
 
-/** True while the payer's incident that already folded this key is still active (clearing or not). */
-const payerIncidentNamesKey = (
+/** True while a payer incident that already folded this key (by id) is still active, clearing or not. */
+const payerIncidentFoldedKey = (
   active: SpendAlertRecord[],
   payerType: string,
   payerId: string,
-  keyName: string
+  keyId: string
 ): boolean =>
   active.some(
     alert =>
       alert.scopeType === payerType &&
       alert.scopeId === payerId &&
-      Array.isArray(alert.context.viaKeys) &&
-      (alert.context.viaKeys as unknown[]).includes(keyName)
+      Array.isArray(alert.context.viaKeyIds) &&
+      (alert.context.viaKeyIds as unknown[]).includes(keyId)
   );
 
 /**
- * Drops an api key breach when its paying user or organization breached the same rule kind this run,
- * naming the key on the payer's breach instead, or while a payer incident that already names the key is active. Best effort: a failed lookup leaves the breaches as they were.
+ * Drops an api key breach when its paying user or organization breached this run (a scope carries at
+ * most one breach, so the rule kinds need not match), naming the key on the payer's breach instead, or
+ * while a payer incident that already names the key is active. Best effort: a failed lookup leaves the
+ * breaches as they were.
  */
 async function foldKeyBreaches(
   breaches: SpendBreach[],
@@ -249,20 +247,19 @@ async function foldKeyBreaches(
     const activeKeys = new Set(
       active.map(alert => alert.openKey ?? spendAlertOpenKey(alert.rule, alert.scopeType, alert.scopeId))
     );
-    const viaKeys = new Map<SpendBreach, string[]>();
+    const viaKeys = new Map<SpendBreach, { names: string[]; ids: string[] }>();
     const folded = new Set<SpendBreach>();
 
     for (const keyBreach of keyBreaches) {
       const scope = resolved.get(scopeMapKey(keyBreach.scopeType, keyBreach.scopeId));
-      const payerRule = PAYER_RULE[keyBreach.rule];
-      if (!scope?.payerId || scope.payerType === 'unknown' || !payerRule) continue;
-      const keyName = scope.name ?? keyBreach.scopeId;
-      const payer = breaches.find(
-        b => b.rule === payerRule && b.scopeType === scope.payerType && b.scopeId === scope.payerId
-      );
+      if (!scope?.payerId || scope.payerType === 'unknown') continue;
+      const payer = breaches.find(b => b.scopeType === scope.payerType && b.scopeId === scope.payerId);
       if (payer) {
-        viaKeys.set(payer, [...(viaKeys.get(payer) ?? []), keyName]);
-      } else if (!payerIncidentNamesKey(active, scope.payerType, scope.payerId, keyName)) {
+        const via = viaKeys.get(payer) ?? { names: [], ids: [] };
+        via.names.push(scope.name ?? keyBreach.scopeId);
+        via.ids.push(keyBreach.scopeId);
+        viaKeys.set(payer, via);
+      } else if (!payerIncidentFoldedKey(active, scope.payerType, scope.payerId, keyBreach.scopeId)) {
         continue;
       }
       folded.add(keyBreach);
@@ -273,7 +270,12 @@ async function foldKeyBreaches(
     }
 
     return {
-      breaches: breaches.filter(b => !folded.has(b)).map(b => (viaKeys.has(b) ? { ...b, viaKeys: viaKeys.get(b) } : b)),
+      breaches: breaches
+        .filter(b => !folded.has(b))
+        .map(b => {
+          const via = viaKeys.get(b);
+          return via ? { ...b, viaKeys: via.names, viaKeyIds: via.ids } : b;
+        }),
       superseded,
     };
   } catch (error) {

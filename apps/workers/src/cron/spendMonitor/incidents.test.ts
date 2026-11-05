@@ -318,13 +318,15 @@ describe('decideIncidents', () => {
     });
 
     it('writes viaKeys into the context on open and on a breach patch', () => {
-      const withKeys = { ...ceiling, viaKeys: ['ci-key'] };
+      const withKeys = { ...ceiling, viaKeys: ['ci-key'], viaKeyIds: ['k1'] };
       const [opened] = decideIncidents([], [withKeys], now, windowEnd);
       const ceilingAlert = active({ id: 'a2', rule: 'account_ceiling', openKey: 'account_ceiling:User:u1' });
       const [patched] = decideIncidents([ceilingAlert], [withKeys], now, windowEnd);
 
-      expect(opened).toMatchObject({ alert: { context: { viaKeys: ['ci-key'] } } });
-      expect(patched).toMatchObject({ patch: { context: { baseline: 10, ratio: 10, viaKeys: ['ci-key'] } } });
+      expect(opened).toMatchObject({ alert: { context: { viaKeys: ['ci-key'], viaKeyIds: ['k1'] } } });
+      expect(patched).toMatchObject({
+        patch: { context: { baseline: 10, ratio: 10, viaKeys: ['ci-key'], viaKeyIds: ['k1'] } },
+      });
     });
   });
 });

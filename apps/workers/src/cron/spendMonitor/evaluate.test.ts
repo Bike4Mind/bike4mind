@@ -48,6 +48,12 @@ const quietPlatformHistory = (creditsPerBucket = 100): ISpendRollup[] =>
     rollup('platform', 'all', new Date(WINDOW_START.getTime() - (i + 1) * BUCKET_MS), creditsPerBucket)
   );
 
+/** A steady 7 days on one scope: every 15-minute window sums to 3 x creditsPerBucket, so that is its p95 baseline. */
+const steadyHistory = (scopeType: SpendRollupScopeType, scopeId: string, creditsPerBucket: number): ISpendRollup[] =>
+  Array.from({ length: (7 * DAY_MS) / BUCKET_MS }, (_, i) =>
+    rollup(scopeType, scopeId, new Date(WINDOW_START.getTime() - (i + 1) * BUCKET_MS), creditsPerBucket)
+  );
+
 function createFakes() {
   let storedRollups: ISpendRollup[] = [];
   // Each later window shifts every rollup (and the run time) forward one bucket, as the real cron sees it.
@@ -498,6 +504,26 @@ describe('evaluateSpend', () => {
         scopeType: 'Organization',
         scopeId: 'o1',
         context: { viaKeys: ['ci-key'] },
+      });
+    });
+
+    it('folds a spiking key into its owner at the ceiling, as one card', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      // Key: 3,000 over a 300 baseline is a 10x spike below the 5,000 ceiling. Owner: 6,000, past the ceiling.
+      fakes.setRollups([
+        ...platform,
+        ...steadyHistory('apiKey', 'k1', 100),
+        ...windowBuckets('apiKey', 'k1', 1000),
+        ...windowBuckets('User', 'u1', 2000),
+      ]);
+
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({
+        rule: 'account_ceiling',
+        scopeType: 'User',
+        context: { viaKeys: ['ci-key'], viaKeyIds: ['k1'] },
       });
     });
 

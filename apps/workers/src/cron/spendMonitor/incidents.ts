@@ -28,6 +28,7 @@ const breachContext = (breach: SpendBreach): Record<string, unknown> => ({
   ...(breach.trusted ? { trusted: true } : {}),
   ...(breach.trustedExcluded ? { trustedExcluded: breach.trustedExcluded } : {}),
   ...(breach.viaKeys ? { viaKeys: breach.viaKeys } : {}),
+  ...(breach.viaKeyIds ? { viaKeyIds: breach.viaKeyIds } : {}),
 });
 
 const SPIKE_RULES: ReadonlySet<string> = new Set(['account_spike', 'apikey_spike']);

@@ -27,8 +27,9 @@ export type SpendBreach = {
   trusted?: true;
   /** Platform breaches only: the part of `value` spent by trusted accounts, left out of the ratio and floors. */
   trustedExcluded?: number;
-  /** Names of API keys whose own breach was folded into this payer's. */
+  /** Names of API keys whose own breach was folded into this payer's, and their ids. */
   viaKeys?: string[];
+  viaKeyIds?: string[];
 };
 
 /**
