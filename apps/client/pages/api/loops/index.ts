@@ -17,6 +17,7 @@ import {
   LOOP_RATE_WINDOW_MS,
   validateLoopAgentId,
   validateLoopBudget,
+  validateLoopMaxConcurrent,
   validateLoopGoal,
   validateLoopInterval,
   validateLoopModel,
@@ -65,6 +66,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
     const agentId = body.agentId === undefined ? undefined : validateLoopAgentId(body.agentId);
     const budgetCreditsPerDay =
       body.budgetCreditsPerDay === undefined ? undefined : validateLoopBudget(body.budgetCreditsPerDay);
+    const maxConcurrent = body.maxConcurrent === undefined ? undefined : validateLoopMaxConcurrent(body.maxConcurrent);
     const oversees =
       body.oversees === undefined ? null : await validateLoopOversees(body.oversees, undefined, req.user!.id);
 
@@ -101,6 +103,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
       ...(stageConfig?.length && { stageConfig }),
       ...(agentId && { agentId }),
       ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
+      ...(maxConcurrent !== undefined && { maxConcurrent }),
       ...(oversees && { oversees }),
       status: 'draft',
     } as Omit<ILoop, 'id' | 'createdAt' | 'updatedAt'>);

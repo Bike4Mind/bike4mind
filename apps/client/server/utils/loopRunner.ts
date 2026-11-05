@@ -3,7 +3,7 @@
  * `runner: 'desktop'` stages. It lists them, claims one with a lease (a run doc no executor touches),
  * heartbeats and posts progress against the lease, and completes the run. Routes:
  * apps/client/pages/api/loops/runner. Cloud runs of the same loop are the scheduler's
- * (apps/workers/src/cron/loopScheduler.ts); a desktop run never becomes the loop's `activeExecutionId`.
+ * (apps/workers/src/cron/loopScheduler.ts); a desktop run never joins the loop's `activeExecutionIds`.
  */
 import { Types } from 'mongoose';
 import {
@@ -463,7 +463,12 @@ export async function completeRunnerRun(
     await loopRepository.foldRunnerRun(
       loop.id,
       userId,
-      { ...parseLoopMemory(answer, loop.memory), updatedAt: now },
+      {
+        ...parseLoopMemory(answer, loop.memory),
+        startedAt: run.createdAt,
+        updatedAt: now,
+        ...(ticket && { ticketTitle: ticket.title }),
+      },
       now
     );
   }

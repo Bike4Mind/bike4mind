@@ -409,6 +409,27 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 
+  it('accepts a whole maxConcurrent from 1 to 5, rejects anything else, and resets it with null', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ maxConcurrent: 3 }));
+    for (const maxConcurrent of [0, 6, 1.5, '2']) {
+      await expect(call('item', 'patch', { query: { id: OID }, body: { maxConcurrent } }).result).rejects.toMatchObject(
+        { statusCode: 400 }
+      );
+      await expect(call('collection', 'post', { body: { ...validBody, maxConcurrent } }).result).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    }
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+    expect(repo.create).not.toHaveBeenCalled();
+
+    for (const maxConcurrent of [1, 5, null]) {
+      await call('item', 'patch', { query: { id: OID }, body: { maxConcurrent } }).result;
+      expect(repo.updateForUser.mock.lastCall![2]).toEqual({ maxConcurrent });
+    }
+    await call('collection', 'post', { body: { ...validBody, maxConcurrent: 5 } }).result;
+    expect(repo.create.mock.lastCall![0]).toMatchObject({ maxConcurrent: 5 });
+  });
+
   it('clears agentId and budgetCreditsPerDay with null', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ agentId: 'a1', budgetCreditsPerDay: 5 }));
     await call('item', 'patch', { query: { id: OID }, body: { agentId: null, budgetCreditsPerDay: null } }).result;
@@ -497,13 +518,14 @@ describe('/api/loops/budget', () => {
       userDailyCredits: 30,
       adminDailyCredits: 50,
       effectiveCap: 30,
+      laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 },
     });
   });
 
   it('reports no cap when neither is set', async () => {
     const { res, result } = call('budget', 'get');
     await result;
-    expect(res._getJSONData()).toEqual({ creditsToday: 0 });
+    expect(res._getJSONData()).toEqual({ creditsToday: 0, laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 } });
   });
 
   it('sets, clears and validates the user cap', async () => {

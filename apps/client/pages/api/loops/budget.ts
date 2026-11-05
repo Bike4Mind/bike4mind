@@ -3,7 +3,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { agentExecutionRepository, userRepository } from '@bike4mind/database';
 import { ILoopsBudget, startOfUtcDay } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { userLoopsDailyCap } from '@server/utils/loopBudget';
+import { loopLaneLimits, userLoopsDailyCap } from '@server/utils/loopBudget';
 import {
   assertLoopsEnabled,
   LOOP_RATE_LIMIT,
@@ -12,11 +12,18 @@ import {
 } from '@server/utils/loopValidation';
 
 async function budgetFor(userId: string): Promise<ILoopsBudget> {
-  const [cap, creditsToday] = await Promise.all([
+  const [cap, creditsToday, laneLimits] = await Promise.all([
     userLoopsDailyCap(userId),
     agentExecutionRepository.sumLoopCreditsForUser(userId, startOfUtcDay(new Date())),
+    loopLaneLimits(),
   ]);
-  return { creditsToday, userDailyCredits: cap.user, adminDailyCredits: cap.admin, effectiveCap: cap.effective };
+  return {
+    creditsToday,
+    userDailyCredits: cap.user,
+    adminDailyCredits: cap.admin,
+    effectiveCap: cap.effective,
+    laneLimits,
+  };
 }
 
 /** The caller's all-loops daily budget: today's spend across their loops, and their own cap (PUT; null clears). */
