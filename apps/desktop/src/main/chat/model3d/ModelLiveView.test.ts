@@ -114,6 +114,24 @@ describe('ModelLiveView', () => {
     expect(view.current().source).toBe('newer');
   });
 
+  it('makes a superseded refresh wait for the newer read', async () => {
+    await view.open(file);
+    const releaseOld = holdNextRead();
+    const older = view.refresh();
+    const releaseNew = holdNextRead();
+    void view.refresh();
+    let settled = false;
+    void older.then(() => {
+      settled = true;
+    });
+    releaseOld({ source: 'older', missing: false });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+    releaseNew({ source: 'newer', missing: false });
+    await older;
+    expect(view.current().source).toBe('newer');
+  });
+
   it('waitForBuild times out when no window builds', async () => {
     await view.open(file);
     await expect(view.waitForBuild()).rejects.toThrow(/did not finish building/);

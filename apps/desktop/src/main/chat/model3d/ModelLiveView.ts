@@ -50,6 +50,7 @@ export class ModelLiveView {
   private lastGlb: string | null = null;
   private waiters: Waiter[] = [];
   private readSeq = 0;
+  private refreshing: Promise<void> | null = null;
   /** The last generation each renderer reported, by webContents id. */
   private reported = new Map<number, number>();
   private glbWrite: { generation: number; written: Promise<string | null> } | null = null;
@@ -99,12 +100,19 @@ export class ModelLiveView {
    * Re-read the file now rather than waiting for the watcher's debounce, so a tool call made
    * straight after an edit never sees the previous build.
    */
-  async refresh(): Promise<void> {
+  refresh(): Promise<void> {
+    const run = this.refreshOnce(++this.readSeq);
+    this.refreshing = run;
+    return run;
+  }
+
+  private async refreshOnce(seq: number): Promise<void> {
     const { path, kind } = this.state;
     if (!path || !kind) return;
-    const seq = ++this.readSeq;
     const { source, missing } = await this.read(path, kind === 'model');
-    if (seq !== this.readSeq || this.state.path !== path) return;
+    if (this.state.path !== path) return;
+    // A newer read started meanwhile: its result wins, and callers wait for it rather than return early.
+    if (seq !== this.readSeq) return this.refreshing ?? undefined;
     // Binary assets read as null both times; their content changes arrive via refreshFromWatch.
     if (source === this.state.source && missing === this.state.missing) return;
     this.lastGlb = null;
