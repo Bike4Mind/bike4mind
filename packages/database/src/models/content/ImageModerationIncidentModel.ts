@@ -168,10 +168,13 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       .lean() as unknown as IImageModerationIncidentDocument[];
   }
 
-  /** Incidents with a final verdict (see CLOSED_REVIEW_STATUSES), newest first. */
-  async findClosed(limit: number): Promise<IImageModerationIncidentDocument[]> {
+  /**
+   * Incidents with a final verdict (see CLOSED_REVIEW_STATUSES), newest first. `before` pages
+   * back: only incidents created strictly before it.
+   */
+  async findClosed(limit: number, before?: Date): Promise<IImageModerationIncidentDocument[]> {
     return this.model
-      .find({ reviewStatus: { $in: CLOSED_REVIEW_STATUSES } })
+      .find({ reviewStatus: { $in: CLOSED_REVIEW_STATUSES }, ...(before ? { createdAt: { $lt: before } } : {}) })
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];

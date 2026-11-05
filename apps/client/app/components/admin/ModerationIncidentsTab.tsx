@@ -32,8 +32,14 @@ const QUEUE_STATUS_OPTIONS = [
  */
 export const ModerationIncidentsTab: React.FC = () => {
   const [queueStatus, setQueueStatus] = useState<ModerationIncidentQueueStatus>('open');
-  const queue = useModerationIncidentQueue(queueStatus);
+  // Closed verdicts never drain, so the Closed list pages back by createdAt instead.
+  const [closedBefore, setClosedBefore] = useState<string | undefined>(undefined);
+  const queue = useModerationIncidentQueue(queueStatus, closedBefore);
   const closed = queueStatus === 'closed';
+  const changeQueueStatus = (status: ModerationIncidentQueueStatus) => {
+    setQueueStatus(status);
+    setClosedBefore(undefined);
+  };
   const navigate = useNavigate();
   const { [MODERATION_INCIDENT_ID_PARAM]: incidentId } = useSearch({ strict: false }) as { incidentId?: string };
   const [now] = useState(() => Date.now());
@@ -118,7 +124,7 @@ export const ModerationIncidentsTab: React.FC = () => {
     >
       <AdminPageHeader
         title="Moderation review"
-        count={queue.data && !queue.data.truncated ? rows.length : undefined}
+        count={queue.data && !queue.data.truncated && !closedBefore ? rows.length : undefined}
         description={
           closed
             ? 'Image moderation incidents with a verdict, newest first. Opening one records a view in the audit log.'
@@ -128,16 +134,43 @@ export const ModerationIncidentsTab: React.FC = () => {
       <SegmentedControl
         options={QUEUE_STATUS_OPTIONS}
         value={queueStatus}
-        onChange={setQueueStatus}
+        onChange={changeQueueStatus}
         aria-label="Which incidents to show"
         data-testid="moderation-incidents-status"
       />
-      {queue.data?.truncated && (
+      {!closed && queue.data?.truncated && (
         <Alert color="warning" data-testid="moderation-incidents-truncated">
-          {closed
-            ? `Showing the newest ${rows.length.toLocaleString()} closed incidents.`
-            : `Showing the oldest ${rows.length.toLocaleString()}; more are waiting. Decide these to see the rest.`}
+          Showing the oldest {rows.length.toLocaleString()}; more are waiting. Decide these to see the rest.
         </Alert>
+      )}
+      {closed && (queue.data?.truncated || closedBefore) && (
+        <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap" data-testid="moderation-incidents-paging">
+          <Typography level="body-sm" sx={{ color: 'admin.inkMuted', mr: 'auto' }}>
+            {closedBefore
+              ? `Showing closed incidents from before ${formatUtc(new Date(closedBefore))}.`
+              : `Showing the newest ${rows.length.toLocaleString()} closed incidents.`}
+          </Typography>
+          {closedBefore && (
+            <Button
+              size="sm"
+              variant="plain"
+              onClick={() => setClosedBefore(undefined)}
+              data-testid="moderation-incidents-newest-btn"
+            >
+              Show newest
+            </Button>
+          )}
+          {queue.data?.truncated && rows.length > 0 && (
+            <Button
+              size="sm"
+              variant="outlined"
+              onClick={() => setClosedBefore(rows[rows.length - 1].createdAt)}
+              data-testid="moderation-incidents-older-btn"
+            >
+              Show older
+            </Button>
+          )}
+        </Stack>
       )}
       <DataTable
         rows={rows}

@@ -13,7 +13,8 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
  *   - incidents stuck in 'confirmed_csam' for more than 10 minutes (NCMEC submission had
  *     an unknown outcome -- the admin should verify with NCMEC before retrying).
  * `status=closed` returns incidents with a final verdict, newest first, in `incidents`
- * (`staleConfirmedCsam` is empty), so past verdicts can be looked up.
+ * (`staleConfirmedCsam` is empty), so past verdicts can be looked up. Page back with
+ * `before=<createdAt of the oldest row>`.
  *
  * Each incident carries `userEmail` (null when the account is gone) so the queue can name who
  * was flagged.
@@ -24,6 +25,7 @@ import { ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   status: z.enum(['open', 'closed']).default('open'),
+  before: z.coerce.date().optional(),
 });
 
 type QueueIncident = { userId: string };
@@ -45,9 +47,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req:
     return res.status(400).json({ error: 'Invalid query', details: parsed.error.issues });
   }
 
-  const { limit, status } = parsed.data;
+  const { limit, status, before } = parsed.data;
   if (status === 'closed') {
-    const [incidents] = await withUserEmails([await imageModerationIncidentRepository.findClosed(limit)]);
+    const [incidents] = await withUserEmails([await imageModerationIncidentRepository.findClosed(limit, before)]);
     return res.status(200).json({ incidents, staleConfirmedCsam: [] });
   }
 

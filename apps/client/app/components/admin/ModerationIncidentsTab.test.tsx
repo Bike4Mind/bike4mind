@@ -78,7 +78,7 @@ describe('ModerationIncidentsTab', () => {
     expect(first.textContent).toMatch(/ago/);
     expect(second.textContent).toContain('Report stuck');
     expect(screen.getByTestId('admin-page-header').textContent).toContain('(2)');
-    expect(m.queue).toHaveBeenCalledWith('open');
+    expect(m.queue).toHaveBeenCalledWith('open', undefined);
   });
 
   it('names the flagged user and the top label, falling back to the user id', () => {
@@ -93,8 +93,27 @@ describe('ModerationIncidentsTab', () => {
     renderTab();
     m.queue.mockReturnValue(ready([row({ id: 'inc-closed', reviewStatus: 'no_action' })]));
     fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
-    expect(m.queue).toHaveBeenLastCalledWith('closed');
+    expect(m.queue).toHaveBeenLastCalledWith('closed', undefined);
     expect(screen.getByTestId('moderation-incident-row-inc-closed').textContent).toContain('No action');
+    expect(screen.queryByTestId('moderation-incidents-paging')).toBeNull();
+  });
+
+  it('pages a full closed list back from its oldest row, and returns to the newest', () => {
+    const page = [
+      row({ id: 'inc-new', createdAt: '2026-10-05T10:00:00.000Z', reviewStatus: 'reported' }),
+      row({ id: 'inc-oldest', createdAt: '2026-10-03T10:00:00.000Z', reviewStatus: 'no_action' }),
+    ];
+    m.queue.mockReturnValue(ready(page, true));
+    renderTab();
+    fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
+    expect(screen.queryByTestId('moderation-incidents-truncated')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('moderation-incidents-older-btn'));
+    expect(m.queue).toHaveBeenLastCalledWith('closed', '2026-10-03T10:00:00.000Z');
+    expect(screen.getByTestId('moderation-incidents-paging').textContent).toContain('from before');
+
+    fireEvent.click(screen.getByTestId('moderation-incidents-newest-btn'));
+    expect(m.queue).toHaveBeenLastCalledWith('closed', undefined);
   });
 
   it('opens an incident through the incidentId search param', () => {

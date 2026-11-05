@@ -498,6 +498,8 @@ describe('ImageModerationIncidentRepository', () => {
 
       expect(found.map(incident => String(incident._id))).toEqual([noAction, falsePositive, reported]);
       expect(await imageModerationIncidentRepository.findClosed(1)).toHaveLength(1);
+      const older = await imageModerationIncidentRepository.findClosed(10, new Date('2026-10-03T00:00:00Z'));
+      expect(older.map(incident => String(incident._id))).toEqual([falsePositive, reported]);
     });
   });
 

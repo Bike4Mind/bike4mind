@@ -58,14 +58,18 @@ const toRow = (incident: QueueIncidentJson, stuck: boolean): ModerationIncidentR
 
 const createdAtMs = (row: ModerationIncidentRow) => new Date(row.createdAt).getTime();
 
-/** Open: unreviewed incidents plus stuck confirmed claims, oldest first. Closed: past verdicts, newest first. */
-export function useModerationIncidentQueue(status: ModerationIncidentQueueStatus = 'open') {
+/**
+ * Open: unreviewed incidents plus stuck confirmed claims, oldest first. Closed: past verdicts, newest
+ * first; `closedBefore` (an ISO createdAt) pages back to the ones created before it.
+ */
+export function useModerationIncidentQueue(status: ModerationIncidentQueueStatus = 'open', closedBefore?: string) {
+  const before = status === 'closed' ? closedBefore : undefined;
   return useQuery({
-    queryKey: [...MODERATION_INCIDENT_QUEUE_QUERY_KEY, status],
+    queryKey: [...MODERATION_INCIDENT_QUEUE_QUERY_KEY, status, before ?? null],
     queryFn: async () => {
       const { incidents, staleConfirmedCsam } = (
         await api.get<{ incidents: QueueIncidentJson[]; staleConfirmedCsam: QueueIncidentJson[] }>(ENDPOINT, {
-          params: { limit: QUEUE_LIST_LIMIT, status },
+          params: { limit: QUEUE_LIST_LIMIT, status, ...(before ? { before } : {}) },
         })
       ).data;
       const rows = [...incidents.map(i => toRow(i, false)), ...staleConfirmedCsam.map(i => toRow(i, true))];

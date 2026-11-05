@@ -60,7 +60,7 @@ describe('admin/moderation-incidents', () => {
     const res = makeRes();
     await runHandler(makeReq({ status: 'closed', limit: '20' }), res);
 
-    expect(m.findClosed).toHaveBeenCalledWith(20);
+    expect(m.findClosed).toHaveBeenCalledWith(20, undefined);
     expect(m.findPendingReview).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith({
       incidents: [{ _id: 'inc-3', userId: 'u1', reviewStatus: 'no_action', userEmail: 'one@example.com' }],
@@ -68,7 +68,16 @@ describe('admin/moderation-incidents', () => {
     });
   });
 
-  it('rejects an unknown status', async () => {
+  it('pages closed incidents back from a before cursor', async () => {
+    await runHandler(makeReq({ status: 'closed', before: '2026-10-03T00:00:00.000Z' }), makeRes());
+    expect(m.findClosed).toHaveBeenCalledWith(50, new Date('2026-10-03T00:00:00.000Z'));
+  });
+
+  it('rejects an unknown status or a malformed cursor', async () => {
+    const badCursor = makeRes();
+    await runHandler(makeReq({ status: 'closed', before: 'not-a-date' }), badCursor);
+    expect(badCursor.status).toHaveBeenCalledWith(400);
+
     const res = makeRes();
     await runHandler(makeReq({ status: 'everything' }), res);
     expect(res.status).toHaveBeenCalledWith(400);
