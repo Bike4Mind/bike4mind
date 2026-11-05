@@ -12,6 +12,7 @@ import {
   siblingGlbPath,
   writeParamValue,
 } from '@shared/model3d';
+import { isModelPaneGlb, stampModelPaneGlb } from './glbMarker';
 
 export type ModelCaptureRequest = { id: string; views: ModelView[]; pose: ModelPose };
 
@@ -79,7 +80,7 @@ export class ModelLiveView {
 
   async open(path: string): Promise<ModelViewState> {
     const kind = modelKindFor(path);
-    if (!kind) throw new Error(`Not a model file: ${path}. Use a .model.js, .glb, .gltf or .stl file.`);
+    if (!kind) throw new Error(`Not a model file: ${path}. Use a .model.js, .glb or .stl file.`);
     this.stopWatching();
     this.lastReport = null;
     this.lastGlb = null;
@@ -157,7 +158,8 @@ export class ModelLiveView {
 
   /**
    * Writes the sibling `.glb` of the open `.model.js`, and nothing else; an opened asset has no
-   * sibling, so it is never overwritten. Stale generations are dropped, before the write and again
+   * sibling, so it is never overwritten. An existing sibling is replaced only when it carries the
+   * model pane's marker (glbMarker.ts); otherwise the write is refused. Stale generations are dropped, before the write and again
    * before the rename into place, so an older build that finishes writing last cannot win.
    */
   writeGlb(generation: number, bytes: Uint8Array): Promise<string | null> {
@@ -173,9 +175,11 @@ export class ModelLiveView {
     if (generation !== this.state.generation || kind !== 'model' || !path || this.state.missing) return null;
     const target = siblingGlbPath(path);
     if (!target) return null;
+    const stamped = stampModelPaneGlb(bytes);
+    await this.assertReplaceable(target);
     const temporary = `${target}.${randomUUID()}.tmp`;
     try {
-      await writeFile(temporary, bytes);
+      await writeFile(temporary, stamped);
       if (generation !== this.state.generation) {
         await rm(temporary, { force: true });
         return null;
@@ -187,6 +191,23 @@ export class ModelLiveView {
     }
     this.lastGlb = target;
     return target;
+  }
+
+  /** The user approved writing the `.model.js`, never replacing a GLB they made themselves. */
+  private async assertReplaceable(target: string): Promise<void> {
+    let existing: Uint8Array;
+    try {
+      existing = await readFile(target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    if (!isModelPaneGlb(existing)) {
+      throw new Error(
+        `${basename(target)} already exists and was not made by the model pane, so it was left alone. ` +
+          'Rename or move it to let this model write its GLB.'
+      );
+    }
   }
 
   /** Read-modify-write of one param's default value; false means nothing was written. */
@@ -201,7 +222,7 @@ export class ModelLiveView {
     return true;
   }
 
-  /** Bytes of the open binary asset (glb/gltf/stl); the renderer cannot read the disk itself. */
+  /** Bytes of the open binary asset (glb/stl); the renderer cannot read the disk itself. */
   async readAsset(): Promise<Uint8Array | null> {
     const { path, kind } = this.state;
     if (!path || !kind || kind === 'model') return null;

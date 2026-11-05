@@ -1078,7 +1078,7 @@ export interface DesktopApi {
   /** The 3D model pane's bridge to main. */
   model: {
     getState(): Promise<ModelViewState>;
-    /** Opens a picked .glb/.gltf/.stl/.model.js; resolves to the new state, or null when cancelled. */
+    /** Opens a picked .glb/.stl/.model.js; resolves to the new state, or null when cancelled. */
     openDialog(): Promise<ModelViewState | null>;
     close(): Promise<void>;
     readAsset(): Promise<Uint8Array | null>;

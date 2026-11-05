@@ -1,9 +1,20 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelViewState } from '@shared/model3d';
+import { isModelPaneGlb } from './glbMarker';
+
+const fsControl = vi.hoisted(() => ({ failRename: false }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rename: (from: string, to: string) =>
+      fsControl.failRename ? Promise.reject(new Error('EXDEV: cross-device link')) : actual.rename(from, to),
+  };
+});
 import { ModelLiveView, type ModelCaptureRequest } from './ModelLiveView';
 
 const SOURCE = `export const params = { width: { value: 60, min: 20, max: 200, step: 1 } };
@@ -11,6 +22,25 @@ export default function model({ m, p }) { return m.Manifold.cube([p.width, 10, 1
 `;
 
 const WINDOW = 7;
+
+/** A minimal GLB whose JSON names `generator`, so tests can tell two writes apart. */
+function glb(generator: string, extras?: Record<string, unknown>): Uint8Array {
+  const json = new TextEncoder().encode(JSON.stringify({ asset: { version: '2.0', generator, extras } }).padEnd(64));
+  const out = new Uint8Array(20 + json.byteLength);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 0x46546c67, true);
+  view.setUint32(4, 2, true);
+  view.setUint32(8, out.byteLength, true);
+  view.setUint32(12, json.byteLength, true);
+  view.setUint32(16, 0x4e4f534a, true);
+  out.set(json, 20);
+  return out;
+}
+
+const generatorOf = (path: string) =>
+  (readFileSync(path)
+    .toString()
+    .match(/"generator":"([^"]*)"/) ?? [])[1];
 
 describe('ModelLiveView', () => {
   let dir: string;
@@ -21,6 +51,7 @@ describe('ModelLiveView', () => {
   let view: ModelLiveView;
 
   beforeEach(() => {
+    fsControl.failRename = false;
     dir = mkdtempSync(join(tmpdir(), 'model-view-'));
     file = join(dir, 'chest.model.js');
     writeFileSync(file, SOURCE);
@@ -54,8 +85,15 @@ describe('ModelLiveView', () => {
 
   it('bumps the generation when the file changes on disk', async () => {
     await view.open(file);
-    writeFileSync(file, SOURCE.replace('60', '70'));
-    await vi.waitFor(() => expect(view.current().generation).toBe(2), { timeout: 2000 });
+    // FSEvents arms the watch asynchronously, so a write in the first few ms can go unseen; keep
+    // writing the same text until it is noticed (an unchanged re-read never bumps the generation).
+    await vi.waitFor(
+      () => {
+        writeFileSync(file, SOURCE.replace('60', '70'));
+        expect(view.current().generation).toBe(2);
+      },
+      { timeout: 2000, interval: 100 }
+    );
     expect(view.current().source).toContain('value: 70');
   });
 
@@ -146,17 +184,37 @@ describe('ModelLiveView', () => {
 
   it('writes only the sibling GLB, and drops stale generations', async () => {
     await view.open(file);
-    expect(await view.writeGlb(0, new Uint8Array([1]))).toBeNull();
-    const target = await view.writeGlb(1, new Uint8Array([103, 108, 84, 70]));
+    expect(await view.writeGlb(0, glb('stale'))).toBeNull();
+    const target = await view.writeGlb(1, glb('current'));
     expect(target).toBe(join(dir, 'chest.glb'));
-    expect(readFileSync(join(dir, 'chest.glb')).toString()).toBe('glTF');
+    expect(generatorOf(join(dir, 'chest.glb'))).toBe('current');
+    expect(isModelPaneGlb(readFileSync(join(dir, 'chest.glb')))).toBe(true);
     expect(view.glbPath()).toBe(target);
+  });
+
+  it('refuses to replace a sibling GLB the model pane did not write', async () => {
+    const existing = join(dir, 'chest.glb');
+    writeFileSync(existing, glb('Blender'));
+    await view.open(file);
+    await expect(view.writeGlb(1, glb('model'))).rejects.toThrow(
+      /chest\.glb already exists and was not made by the model pane/
+    );
+    expect(generatorOf(existing)).toBe('Blender');
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    expect(view.glbPath()).toBeNull();
+  });
+
+  it('replaces a sibling GLB that an earlier build wrote', async () => {
+    writeFileSync(join(dir, 'chest.glb'), glb('earlier', { bike4mindModel: true }));
+    await view.open(file);
+    expect(await view.writeGlb(1, glb('later'))).toBe(join(dir, 'chest.glb'));
+    expect(generatorOf(join(dir, 'chest.glb'))).toBe('later');
   });
 
   it('removes its temporary file when the GLB cannot be moved into place', async () => {
     await view.open(file);
-    mkdirSync(join(dir, 'chest.glb', 'occupied'), { recursive: true });
-    await expect(view.writeGlb(1, new Uint8Array([1]))).rejects.toThrow();
+    fsControl.failRename = true;
+    await expect(view.writeGlb(1, glb('model'))).rejects.toThrow(/EXDEV/);
     expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
     expect(view.glbPath()).toBeNull();
   });
@@ -182,12 +240,12 @@ describe('ModelLiveView', () => {
   it('writes the GLB once per generation however many windows build it', async () => {
     await view.open(file);
     const [first, second] = await Promise.all([
-      view.writeGlb(1, new Uint8Array([1])),
-      view.writeGlb(1, new Uint8Array([2])),
+      view.writeGlb(1, glb('first window')),
+      view.writeGlb(1, glb('second window')),
     ]);
     expect(first).toBe(join(dir, 'chest.glb'));
     expect(second).toBe(first);
-    expect([...readFileSync(join(dir, 'chest.glb'))]).toEqual([1]);
+    expect(generatorOf(join(dir, 'chest.glb'))).toBe('first window');
   });
 
   it('captures only after the target window has built the current generation', async () => {

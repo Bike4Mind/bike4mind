@@ -139,6 +139,16 @@ describe('model_screenshot', () => {
     expect(text).toContain('Build failed: boom');
   });
 
+  it("will not use an open model outside the session's folders when no path is given", async () => {
+    const { view, context } = setup();
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), 'other-project-')));
+    writeFileSync(join(elsewhere, 'lamp.model.js'), 'export default () => null');
+    await view.open(join(elsewhere, 'lamp.model.js'));
+    await expect(modelScreenshot.run({}, context)).rejects.toThrow(/outside this session's folders/);
+    expect(view.waitForBuild).not.toHaveBeenCalled();
+    expect(view.capture).not.toHaveBeenCalled();
+  });
+
   it('needs an open model when no path is given, and validates views', async () => {
     const { context } = setup();
     await expect(modelScreenshot.run({}, context)).rejects.toThrow(/No model is open/);

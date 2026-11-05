@@ -57,8 +57,7 @@ function requireModel(context: ToolContext): ModelContext {
 
 async function resolveModelPath(requested: string, context: ToolContext): Promise<string> {
   const path = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
-  if (!modelKindFor(path))
-    throw new Error(`Not a model file: ${requested}. Use a .model.js, .glb, .gltf or .stl file.`);
+  if (!modelKindFor(path)) throw new Error(`Not a model file: ${requested}. Use a .model.js, .glb or .stl file.`);
   return path;
 }
 
@@ -84,8 +83,19 @@ async function openAndBuild(model: ModelContext, requested: string | undefined, 
   if (requested) {
     const path = await resolveModelPath(requested, context);
     if (model.view.current().path !== path) await model.view.open(path);
-  } else if (!model.view.current().path) {
-    throw new Error('No model is open. Pass the path of a .model.js file.');
+  } else {
+    const open = model.view.current().path;
+    if (!open) throw new Error('No model is open. Pass the path of a .model.js file.');
+    // The pane is app-wide: the open model may be another project's, or one the user picked
+    // anywhere. Without a path, only act on it when it sits inside this session's folders.
+    const inside = await resolveWithinRoots(open, context.roots, context.workingDirectory).then(
+      () => true,
+      () => false
+    );
+    if (!inside)
+      throw new Error(
+        "The model open in the pane is outside this session's folders. Pass the path of your model file."
+      );
   }
   return model.view.waitForBuild();
 }
@@ -97,7 +107,7 @@ export const modelView: ToolDefinition = {
       'Open a 3D model in the live model pane beside the chat and build it. The pane re-renders on every save of the file,',
       'and every good build of a .model.js also writes <name>.glb beside it (metres, per-part materials) for game engines.',
       'Returns the build result: size, parts, triangle count and params, or the error with its line so you can fix it.',
-      'Create the file first with the file tools, then call this. Also opens existing .glb, .gltf and .stl files to look at.',
+      'Create the file first with the file tools, then call this. Also opens existing .glb and .stl files to look at.',
       'Check the result with model_screenshot before telling the user it is done.',
       '',
       MODEL_FILE_CONTRACT,

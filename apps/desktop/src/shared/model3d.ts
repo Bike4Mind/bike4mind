@@ -6,7 +6,7 @@
  * The renderer owns the build (the b4m-model: engine frame) and drawing (three.js).
  */
 
-export type ModelKind = 'model' | 'glb' | 'gltf' | 'stl';
+export type ModelKind = 'model' | 'glb' | 'stl';
 
 export type ModelUnits = 'mm' | 'm';
 
@@ -110,7 +110,6 @@ export function modelKindFor(path: string): ModelKind | null {
   const lower = path.toLowerCase();
   if (lower.endsWith('.model.js')) return 'model';
   if (lower.endsWith('.glb')) return 'glb';
-  if (lower.endsWith('.gltf')) return 'gltf';
   if (lower.endsWith('.stl')) return 'stl';
   return null;
 }
@@ -122,6 +121,45 @@ export function siblingGlbPath(modelPath: string): string | null {
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Brace depth for each offset of the `{...}` block that opens at `start`, skipping strings,
+ * template literals and comments so a `{` in `label: '{w}'` does not count. Offsets inside a
+ * string or comment get depth 0. Null when the block never closes.
+ */
+function scanBraces(source: string, start: number): { end: number; depths: Int32Array } | null {
+  const depths = new Int32Array(source.length - start);
+  let depth = 0;
+  let index = start;
+  while (index < source.length) {
+    const char = source[index];
+    const next = source[index + 1];
+    let skipTo = -1;
+    if (char === '"' || char === "'" || char === '`') {
+      let cursor = index + 1;
+      while (cursor < source.length && source[cursor] !== char) cursor += source[cursor] === '\\' ? 2 : 1;
+      skipTo = cursor + 1;
+    } else if (char === '/' && next === '/') {
+      const newline = source.indexOf('\n', index);
+      skipTo = newline < 0 ? source.length : newline;
+    } else if (char === '/' && next === '*') {
+      const close = source.indexOf('*/', index + 2);
+      skipTo = close < 0 ? source.length : close + 2;
+    }
+    if (skipTo >= 0) {
+      index = Math.min(skipTo, source.length);
+      continue;
+    }
+    if (char === '{') depth += 1;
+    depths[index - start] = depth;
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return { end: index, depths };
+    }
+    index += 1;
+  }
+  return null;
 }
 
 /**
@@ -137,36 +175,20 @@ export function writeParamValue(source: string, key: string, value: number): str
   const head = /export\s+const\s+params\s*=\s*\{/.exec(source);
   if (!head) return null;
   const start = head.index + head[0].length - 1;
-  let depth = 0;
-  let end = -1;
-  for (let index = start; index < source.length; index += 1) {
-    const char = source[index];
-    if (char === '{') depth += 1;
-    else if (char === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        end = index;
-        break;
-      }
-    }
-  }
-  if (end < 0) return null;
+  const scan = scanBraces(source, start);
+  if (!scan) return null;
+  const { end, depths } = scan;
   const block = source.slice(start, end + 1);
   const pattern = new RegExp(
     `((?<![\\w$-])(['"]?)${escapeRegExp(key)}\\2\\s*:\\s*(\\{[^{}]*?\\bvalue\\s*:\\s*)?)(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?=\\s*[,}\\r\\n])`,
     'g'
   );
-  // The bare `key: N` form only counts at the block's top level, so it never matches another
-  // param's `min`/`max`/`step`/`value` field.
-  const depthAt = (offset: number): number => {
-    let level = 0;
-    for (let index = 0; index < offset; index += 1) {
-      if (block[index] === '{') level += 1;
-      else if (block[index] === '}') level -= 1;
-    }
-    return level;
-  };
-  const matches = [...block.matchAll(pattern)].filter(match => match[3] !== undefined || depthAt(match.index) === 1);
+  // Judged by where the number sits: in a string or comment it has depth 0 and is not code. The
+  // bare `key: N` form counts only at the block's top level (depth 1), and `key: { value: N }`
+  // only one level in, so neither matches another param's `min`/`max`/`step`/`value` field.
+  const matches = [...block.matchAll(pattern)].filter(
+    match => depths[match.index + match[1].length] === (match[3] === undefined ? 1 : 2)
+  );
   if (matches.length !== 1) return null;
   const [match] = matches;
   const rounded = Number(value.toPrecision(12));

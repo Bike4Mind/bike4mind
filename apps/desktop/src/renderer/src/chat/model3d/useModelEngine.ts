@@ -47,7 +47,7 @@ export type ModelEngine = {
   joints: ModelJoint[];
   /** Slider angles in degrees by part name; the viewer's pose only, never written or exported. */
   jointAngles: Record<string, number>;
-  /** Animation names in an opened GLB or glTF, for the pane's play buttons. Empty for model files. */
+  /** Animation names in an opened GLB, for the pane's play buttons. Empty for model files. */
   clips: string[];
   setJointAngles(angles: Record<string, number>): void;
   previewParam(key: string, value: number): void;

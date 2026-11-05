@@ -61,7 +61,7 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     const options: Electron.OpenDialogOptions = {
       title: 'Open a 3D model',
       properties: ['openFile'],
-      filters: [{ name: '3D models', extensions: ['glb', 'gltf', 'stl', 'js'] }],
+      filters: [{ name: '3D models', extensions: ['glb', 'stl', 'js'] }],
     };
     const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     const path = picked.canceled ? undefined : picked.filePaths[0];
@@ -93,7 +93,7 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     }
     const format = value.format;
     const current = view.current().path;
-    const stem = current ? basename(current).replace(/\.(model\.js|glb|gltf|stl)$/i, '') : 'model';
+    const stem = current ? basename(current).replace(/\.(model\.js|glb|stl)$/i, '') : 'model';
     const window = windowOf(event);
     const options: Electron.SaveDialogOptions = {
       title: `Export ${format.toUpperCase()}`,

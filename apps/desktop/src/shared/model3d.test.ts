@@ -27,7 +27,8 @@ describe('modelKindFor', () => {
   it('maps supported extensions and refuses the rest', () => {
     expect(modelKindFor('/a/chest.model.js')).toBe('model');
     expect(modelKindFor('/a/CHEST.GLB')).toBe('glb');
-    expect(modelKindFor('/a/b.gltf')).toBe('gltf');
+    // A .gltf points at sibling .bin and image files the sandboxed loader cannot reach.
+    expect(modelKindFor('/a/b.gltf')).toBeNull();
     expect(modelKindFor('/a/b.stl')).toBe('stl');
     expect(modelKindFor('/a/b.js')).toBeNull();
     expect(modelKindFor('/a/b.txt')).toBeNull();
@@ -94,6 +95,19 @@ describe('writeParamValue', () => {
     );
     const min = 'export const params = { min: { value: 2 * 3 }, width: { value: 10, min: 1 } };\n';
     expect(writeParamValue(min, 'min', 9)).toBeNull();
+  });
+
+  it('is not thrown off by braces or keys inside strings and comments', () => {
+    const labelled = [
+      'export const params = {',
+      "  width: { value: 10, label: '{w} mm' }, // set {width: 5} here",
+      '  /* depth: { value: 1 } */ depth: 4,',
+      '  note: "width: 7",',
+      '};',
+      '',
+    ].join('\n');
+    expect(writeParamValue(labelled, 'width', 12)).toBe(labelled.replace('value: 10', 'value: 12'));
+    expect(writeParamValue(labelled, 'depth', 6)).toBe(labelled.replace('depth: 4', 'depth: 6'));
   });
 
   it('returns null when the key is missing', () => {
