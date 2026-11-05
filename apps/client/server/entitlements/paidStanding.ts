@@ -1,3 +1,4 @@
+import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
 
 /**
@@ -21,6 +22,27 @@ export const hasPurchasedCredits = (user: PaidStandingUser): boolean => Boolean(
 /** Whether any active subscription is on a paid plan, ladder or standalone. */
 export function hasPaidSubscription(activeSubscriptions: readonly { priceId: string }[]): boolean {
   return activeSubscriptions.some(subscription => getEntitlingPlanByPriceId(subscription.priceId) !== undefined);
+}
+
+/**
+ * Keys every active paid subscription grants, independent of which plan it is. Driven by subscription
+ * status only: a credit purchase (`lastCreditsPurchasedAt`) is sticky and never confers these, so the
+ * grant ends the moment the last active paid subscription lapses.
+ */
+export const SUBSCRIBER_ENTITLEMENT_KEYS: readonly string[] = ['questmaster:pro'];
+
+export function entitlementsForPaidSubscription(
+  activeSubscriptions: readonly { priceId: string }[]
+): readonly string[] {
+  return hasPaidSubscription(activeSubscriptions) ? SUBSCRIBER_ENTITLEMENT_KEYS : [];
+}
+
+/**
+ * Whether a subscription change on this price can flip any entitlement, so the owner's client cache needs a
+ * refresh: a registry price row, or any paid plan (which grants SUBSCRIBER_ENTITLEMENT_KEYS).
+ */
+export function priceAffectsEntitlements(priceId: string): boolean {
+  return entitlementsForPriceIds([priceId]).size > 0 || hasPaidSubscription([{ priceId }]);
 }
 
 export function holdsPaidStanding(
