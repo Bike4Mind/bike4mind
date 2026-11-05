@@ -164,10 +164,31 @@ function supportsThinkingSwitch(product: OpenAICompatibleProduct | null): boolea
   return product === 'llama-server' || product === 'vllm';
 }
 
-/** vLLM's refusal of a prompt plus max_tokens past max_model_len. */
-async function overflowsContext(response: Response): Promise<boolean> {
-  if (response.status !== 400) return false;
-  return /maximum context length/i.test(await response.clone().text());
+/** vLLM's refusal of a prompt plus max_tokens past max_model_len, as its text; null for any other response. */
+async function contextRefusal(response: Response): Promise<string | null> {
+  if (response.status !== 400) return null;
+  const text = await response.clone().text();
+  return /maximum context length/i.test(text) ? text : null;
+}
+
+/**
+ * The max_tokens a context refusal leaves room for, from the counts in its text (vLLM's and OpenAI's wordings),
+ * with `context` standing in for a limit the text does not name. Undefined when the text gives no prompt count.
+ */
+function roomAfterRefusal(refusal: string, sent: number, context: number | undefined): number | undefined {
+  const count = (pattern: RegExp) => {
+    const value = Number(pattern.exec(refusal)?.[1]);
+    return Number.isSafeInteger(value) ? value : undefined;
+  };
+  const limit = count(/maximum context length is (\d+)/i) ?? context;
+  if (limit === undefined) return undefined;
+  const prompt =
+    count(/(\d+) (?:tokens )?in the messages/i) ??
+    count(/(\d+) input tokens/i) ??
+    count(/messages resulted in (\d+) tokens/i);
+  if (prompt !== undefined) return limit - prompt;
+  const requested = count(/you requested (\d+) tokens/i);
+  return requested === undefined ? undefined : sent - (requested - limit);
 }
 
 /**
@@ -395,9 +416,12 @@ export class OpenAICompatibleChat implements LocalChat {
       withTools = false;
       response = await post(withTools, limit);
     }
-    // The estimate can run short of the server's own count; without max_tokens it answers in what is left.
-    if (!response.ok && limit !== undefined && context !== undefined && (await overflowsContext(response))) {
-      response = await post(withTools, undefined);
+    // The estimate can run short of the server's own count. One retry, with the room the server's count leaves;
+    // `limit` is already at or under the turn's cap, so the retry is too, and a refusal with no count stands.
+    if (!response.ok && limit !== undefined) {
+      const refusal = await contextRefusal(response);
+      const room = refusal === null ? undefined : roomAfterRefusal(refusal, limit, context);
+      if (room !== undefined && room >= 1 && room < limit) response = await post(withTools, room);
     }
     const why = this.toolsOffFor(model)
       ? toolsOffHint(this.server.label, this.server.product)
