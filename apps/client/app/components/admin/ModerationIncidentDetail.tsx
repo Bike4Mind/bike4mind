@@ -185,6 +185,24 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                   <Mono>{data.fabFileId}</Mono>
                 </Fact>
               )}
+              <Fact label="Reviewer alert" data-testid="moderation-incident-alerted">
+                {data.alertedAt ? formatUtc(new Date(data.alertedAt)) : 'No alert delivered yet'}
+              </Fact>
+              {data.lastReminderAt && (
+                <Fact label="Last reminder" data-testid="moderation-incident-reminded">
+                  {formatUtc(new Date(data.lastReminderAt))}
+                </Fact>
+              )}
+              {data.falsePositiveAt && (
+                <Fact label="False positive at" data-testid="moderation-incident-false-positive-at">
+                  {formatUtc(new Date(data.falsePositiveAt))}
+                </Fact>
+              )}
+              {data.reportedAt && (
+                <Fact label="Report recorded at" data-testid="moderation-incident-reported-at">
+                  {formatUtc(new Date(data.reportedAt))}
+                </Fact>
+              )}
               {data.ncmecReportId && (
                 <Fact label="Report id">
                   <Mono>{data.ncmecReportId}</Mono>

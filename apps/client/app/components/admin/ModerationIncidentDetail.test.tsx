@@ -53,6 +53,10 @@ const view = (over: Partial<ModerationIncidentView> = {}): ModerationIncidentVie
   questId: 'quest-1',
   fabFileId: null,
   ncmecReportId: null,
+  alertedAt: null,
+  lastReminderAt: null,
+  reportedAt: null,
+  falsePositiveAt: null,
   image: { availability: 'ready', url: 'https://signed.example/img', expiresAt: '2026-10-30T10:05:00.000Z' },
   ...over,
 });
@@ -217,6 +221,35 @@ describe('ModerationIncidentDetail', () => {
       { id: 'inc-1', verdict: { kind: 'confirmed', reportId: '12345-AB' } },
       expect.anything()
     );
+  });
+
+  it('says no alert went out when none was delivered', () => {
+    renderDetail();
+    expect(screen.getByTestId('moderation-incident-alerted').textContent).toContain('No alert delivered yet');
+    expect(screen.queryByTestId('moderation-incident-reminded')).toBeNull();
+  });
+
+  it('shows the alert time once one was delivered', () => {
+    m.view.mockReturnValue(loaded(view({ alertedAt: '2026-10-30T10:01:00.000Z' })));
+    renderDetail();
+    expect(screen.getByTestId('moderation-incident-alerted').textContent).toMatch(/30 Oct 2026/);
+  });
+
+  it('shows when a reminder went out and when a verdict was recorded', () => {
+    m.view.mockReturnValue(
+      loaded(
+        view({
+          reviewStatus: 'reported',
+          lastReminderAt: '2026-10-31T08:00:00.000Z',
+          falsePositiveAt: '2026-10-30T12:00:00.000Z',
+          reportedAt: '2026-10-31T09:00:00.000Z',
+        })
+      )
+    );
+    renderDetail();
+    expect(screen.getByTestId('moderation-incident-reminded')).toBeTruthy();
+    expect(screen.getByTestId('moderation-incident-false-positive-at')).toBeTruthy();
+    expect(screen.getByTestId('moderation-incident-reported-at')).toBeTruthy();
   });
 
   it('disables every verdict once the incident is not awaiting review', () => {

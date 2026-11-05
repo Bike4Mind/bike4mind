@@ -15,7 +15,7 @@
  * abuse signals in the alarms channel. Cost is for money the provider or Stripe reports.
  */
 
-import { classifyStage } from '@bike4mind/common';
+import { ADMIN_MODERATION_INCIDENTS_TAB_SLUG, classifyStage } from '@bike4mind/common';
 import type { CloudWatchAlarmPayload } from './cloudwatchAlarmTypes';
 
 export type AlarmLevel = 'page' | 'warn' | 'info';
@@ -43,7 +43,9 @@ export type AlarmLinkKey =
   | 'integration-health'
   | 'system-secrets'
   | 'rate-limits'
-  | 'spend-monitor';
+  | 'spend-monitor'
+  | 'moderation-review'
+  | 'moderation-settings';
 
 export interface AlarmCatalogEntry {
   title: string;
@@ -90,6 +92,8 @@ export const ADMIN_LINKS: Record<AlarmLinkKey, { label: string; path: string }> 
   'system-secrets': { label: 'System secrets', path: '/admin?tab=system-secrets' },
   'rate-limits': { label: 'Rate limits', path: '/admin?tab=rate-limits' },
   'spend-monitor': { label: 'Credit analytics', path: '/admin?tab=credit-analytics' },
+  'moderation-review': { label: 'Moderation review', path: `/admin?tab=${ADMIN_MODERATION_INCIDENTS_TAB_SLUG}` },
+  'moderation-settings': { label: 'Moderation settings', path: '/admin?tab=admin-settings&section=security' },
 };
 
 const SIGNUP_ACTION =
@@ -457,6 +461,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'An image moderation incident has waited over 30 minutes without an alert reaching a reviewer, even though the scheduled sweep keeps retrying. Either the email keeps failing or no reviewer is configured.',
     action:
       'Open the admin settings and check the image moderation reviewer list, then check the sweep Lambda log for send failures. Review the incident in the admin console in the meantime.',
+    links: ['moderation-settings', 'moderation-review'],
   },
   'image-moderation-incident-unreviewed': {
     title: 'A moderation incident has waited a day for review',
@@ -466,6 +471,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     meaning:
       'An image moderation incident has been waiting over 24 hours for a review verdict. Reviewers are reminded once a day, and this clears only when a verdict is recorded.',
     action: 'Open the moderation incidents in the admin console and record a verdict, or ask a reviewer to.',
+    links: ['moderation-review'],
   },
   'image-moderation-no-reviewers': {
     title: 'Moderation incidents are waiting and nobody is set to review them',
@@ -476,6 +482,7 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
       'Image moderation incidents are waiting for review, but the reviewer list in admin settings has no valid email address, so no alert can be sent.',
     action:
       'Add at least one valid address to the image moderation reviewer list in admin settings. The next sweep, within 15 minutes, alerts for everything waiting.',
+    links: ['moderation-settings'],
   },
   'mail-send-failures': {
     title: 'Emails are failing to send',
