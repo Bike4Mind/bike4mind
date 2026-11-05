@@ -15,8 +15,9 @@ export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
 /**
  * How long the completion POST waits for response headers (ms), overriding the shared client's
  * 30 s. The server holds its headers until auth, model resolution and the credit hold are done,
- * so a cold start or a queued request can take well past 30 s before any byte arrives. With a
- * stream response axios stops this timer once headers land, so it never caps a long reply.
+ * so a cold start or a queued request can take well past 30 s before any byte arrives. It does
+ * not cap total reply length, but axios also keeps it as a socket idle limit after headers, so a
+ * silent gap this long mid-reply still aborts the stream.
  */
 export const COMPLETION_HEADER_TIMEOUT_MS = 120_000;
 
