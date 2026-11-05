@@ -214,7 +214,8 @@ import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
 import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
 import { runTurn } from './session/turnController.js';
-import { restartAfterSignIn } from './session/restartAfterSignIn.js';
+import { SESSION_RELEASE_TIMEOUT_MS, restartAfterSignIn } from './session/restartAfterSignIn.js';
+import { releaseSession, type SessionResources } from './session/releaseSession.js';
 import {
   createFreshSession,
   resumeSession,
@@ -389,78 +390,31 @@ function CliApp() {
   const setShowMcpViewer = useCliStore(state => state.setShowMcpViewer);
   const setExitRequested = useCliStore(state => state.setExitRequested);
 
+  // Everything the running session holds. Shell sessions are SIGTERMed by process group so a `pnpm dev` or
+  // watcher is not orphaned; bridge presence is stopped so the tavern sprite despawns promptly.
+  const sessionResources = (reason: 'cli_exit' | 'sign_in'): SessionResources => {
+    // session is read fresh from the store, so it is intentionally not a dependency of the callers.
+    const session = useCliStore.getState().session;
+    return {
+      killShellSessions: () => getShellSessionManager().killAll(),
+      killBangCommands: killRunningBangCommands,
+      commandHistory: state.commandHistoryStore,
+      saveSession: session ? () => state.sessionStore.save(session) : null,
+      mcpManager: state.mcpManager,
+      featureRegistry: state.featureRegistry,
+      wsManager: state.wsManager,
+      clearWebSocketToolExecutor: () => setWebSocketToolExecutor(null),
+      stopBridgePresence: () => bridgePresence.stop(reason),
+      agent: state.agent,
+      backgroundManager: state.backgroundManager,
+      // The image store outlives a sign-in restart: init() does not open a new one.
+      imageStore: reason === 'cli_exit' ? state.imageStore : null,
+    };
+  };
+
   // Cleanup function to close all handles and allow natural process exit
   const performCleanup = useCallback(async () => {
-    const cleanupTasks: Promise<void>[] = [];
-
-    // Reap background shell sessions (SIGTERM the whole process group) so we don't
-    // orphan a `pnpm dev` / watcher when the CLI exits. Synchronous, best-effort.
-    try {
-      getShellSessionManager().killAll();
-    } catch (err) {
-      logger.debug(`[CLEANUP] Shell session reap error: ${err}`);
-    }
-    killRunningBangCommands();
-
-    cleanupTasks.push(state.commandHistoryStore.whenIdle());
-
-    // Save session
-    const session = useCliStore.getState().session;
-    if (session) {
-      cleanupTasks.push(
-        state.sessionStore.save(session).catch(err => {
-          logger.debug(`[CLEANUP] Session save error: ${err.message}`);
-        })
-      );
-    }
-
-    // Disconnect MCP - this closes all open connections
-    if (state.mcpManager) {
-      cleanupTasks.push(
-        state.mcpManager.disconnect().catch(err => {
-          logger.debug(`[CLEANUP] MCP disconnect error: ${err.message}`);
-        })
-      );
-    }
-
-    // Dispose feature modules (unsubscribes WS handlers)
-    if (state.featureRegistry) {
-      state.featureRegistry.disposeAll();
-    }
-
-    // Disconnect WebSocket
-    if (state.wsManager) {
-      state.wsManager.disconnect();
-      setWebSocketToolExecutor(null);
-    }
-
-    // Tear down tavern presence - best-effort disconnect so the sprite
-    // despawns promptly rather than waiting for the bridge's WS sweep.
-    cleanupTasks.push(
-      bridgePresence.stop('cli_exit').catch(err => {
-        logger.debug(`[CLEANUP] Bridge presence stop error: ${err.message}`);
-      })
-    );
-
-    // Remove all event listeners from agent
-    if (state.agent) {
-      state.agent.removeAllListeners();
-    }
-
-    // Close image store database connection
-    if (state.imageStore) {
-      try {
-        state.imageStore.close();
-      } catch (err) {
-        logger.debug(`[CLEANUP] Image store close error: ${err}`);
-      }
-    }
-
-    // Wait for cleanup with timeout
-    await Promise.race([
-      Promise.all(cleanupTasks),
-      new Promise(resolve => setTimeout(resolve, 500)), // 500ms timeout
-    ]);
+    await releaseSession(sessionResources('cli_exit'), 500);
 
     // Force exit after a short delay if process hasn't exited naturally
     // This handles any remaining open handles we can't close
@@ -468,8 +422,6 @@ function CliApp() {
       process.exit(0);
     }, 100);
   }, [
-    // session is read fresh from the store (useCliStore.getState()), so it is
-    // intentionally not a dependency here.
     state.sessionStore,
     state.commandHistoryStore,
     state.mcpManager,
@@ -477,6 +429,7 @@ function CliApp() {
     state.imageStore,
     state.wsManager,
     state.featureRegistry,
+    state.backgroundManager,
   ]);
 
   // Mirror background shell-session lifecycle into the store so the UI can render
@@ -4208,8 +4161,10 @@ function CliApp() {
         configStore={state.configStore}
         onSuccess={() => {
           setState(prev => ({ ...prev, showLoginFlow: false }));
+          // Holds input on the initializing screen so nothing typed during the restart reaches the old agent.
+          setIsInitialized(false);
           restartAfterSignIn({
-            mcpManager: state.mcpManager,
+            release: () => releaseSession(sessionResources('sign_in'), SESSION_RELEASE_TIMEOUT_MS),
             restart: init,
             print: line => console.log(`\n${line}\n`),
           }).catch(err => {
