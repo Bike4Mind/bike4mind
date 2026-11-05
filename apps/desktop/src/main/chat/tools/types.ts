@@ -21,6 +21,7 @@ import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 
 import type { MemoryStore } from '../project/memory';
+import type { BranchReservation } from '../project/workspace';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
 import type { VideoJobScheduler } from '../media/VideoJobScheduler';
@@ -484,7 +485,15 @@ export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnReje
  * checkout back and be isolated in name only. `base` is what that branch is cut from - the
  * parent's own branch, never the parent's checkout - see HostContext.spawnBase.
  */
-export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: string; base: string };
+export type SpawnPlacement =
+  | { kind: 'local' }
+  | {
+      kind: 'worktree';
+      branch: string;
+      base: string;
+      /** Set when the app picked `branch` and already holds it; the spawn then owns releasing it. */
+      reservation?: BranchReservation | null;
+    };
 
 /**
  * A delivered message, and whether the target took it up straight away.
@@ -584,6 +593,26 @@ export interface HostContext {
    * session, which keeps the approval-gated start.
    */
   suggestions?: SpawnSuggestionHost;
+  /**
+   * Set when Orchestrate is in effect for this conversation (orchestratesAgents): session_spawn
+   * then starts the child at once with no card. The spawn caps still apply. Never set together
+   * with `suggestions`.
+   */
+  delegates?: DelegationHost;
+  /** Set with `delegates`: whether the orchestrated job may be declared complete (quest_complete). */
+  quest?: QuestHost;
+}
+
+export interface QuestHost {
+  /** Whether the job can be declared complete now; both texts are for the model. */
+  readiness(): Promise<QuestReadiness>;
+}
+
+export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
+
+export interface DelegationHost {
+  /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
+  placement(title: string | undefined, prompt: string): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {

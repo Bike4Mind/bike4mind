@@ -288,6 +288,7 @@ it('tells the conversation when Auto grows the context past what fits on the GPU
     type: 'context-notice',
     sessionId: id,
     message: expect.stringContaining('replies will be slower'),
+    kind: 'context-size',
   });
 });
 

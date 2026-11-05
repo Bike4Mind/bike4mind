@@ -314,6 +314,21 @@ describe('a conversation saved on a served-model alias', () => {
     if (!withTools) expect(sent?.toolPromptTokens).toBeGreaterThan(0);
   });
 
+  it.each([true, false])('marks a turn whose tools were withheld for no tool support (tools: %s)', async tools => {
+    const { service, stream, settled } = await fixture({
+      mode: 'device-local',
+      local: [served(tools)],
+      last: [served(tools)],
+    });
+    const session = await service.createSession();
+    await service.setSessionModel(session.id, ALIAS);
+    expect(await service.send(session.id, 'hello')).toMatchObject({ ok: true });
+    await settled(session.id);
+    const sent = stream.mock.calls.find(([request]) => request.sessionId === session.id)?.[0];
+    expect((sent?.tools?.length ?? 0) > 0).toBe(tools);
+    expect(sent?.toolsUnsupported).toBe(tools ? undefined : true);
+  });
+
   it('drops tools exactly when prompt, tools and the reply room pass the fixed window', () => {
     const wire = [
       { role: 'system' as const, content: 'You are Desktop. '.repeat(200) },

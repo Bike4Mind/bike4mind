@@ -75,7 +75,14 @@ export const createFileUploadContract = defineEndpoint({
         'the per-file cap, so `org_storage_limit_exceeded` is never returned here.',
       schema: StorageLimitErrorSchema,
     },
-    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
+    429: {
+      description:
+        'Per-user rate limit exceeded, the hourly file allowance shared with uploads is spent, or too many ' +
+        'uploads are already in progress. The in-progress case carries `code: pending_upload_limit` and a ' +
+        '`Retry-After` header when waiting for them to finish will help; it has no `Retry-After` when uploads are ' +
+        'blocked for the account or the request alone exceeds the cap.',
+      schema: ApiErrorSchema,
+    },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',

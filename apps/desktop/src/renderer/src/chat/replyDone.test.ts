@@ -131,4 +131,10 @@ describe('applyReplyDone', () => {
 
     expect(roundsOf(settled).map(round => round.text)).toEqual(['Plain answer.']);
   });
+
+  it('carries the quest_complete mark onto the settled reply, and adds none without it', () => {
+    const message = streaming([{ text: 'Summary.', toolCallIds: [] }]);
+    expect(applyReplyDone(message, done({ content: 'Summary.', questComplete: true })).questComplete).toBe(true);
+    expect(applyReplyDone(message, done({ content: 'Summary.' }))).not.toHaveProperty('questComplete');
+  });
 });

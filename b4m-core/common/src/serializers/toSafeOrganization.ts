@@ -20,7 +20,11 @@ import type { IOrganization } from '../types/entities/OrganizationTypes';
  * Callers pass a hydrated Mongoose doc (normalized via toJSON here) or a plain object.
  */
 
-export const ORGANIZATION_SECRET_FIELDS = ['stripeCustomerId', 'signupGrantUnlockCount'] as const;
+export const ORGANIZATION_SECRET_FIELDS = [
+  'stripeCustomerId',
+  'signupGrantUnlockCount',
+  'signupInviteBonusCount',
+] as const;
 export const ORGANIZATION_OWNER_ONLY_FIELDS = ['billingContact'] as const;
 
 export type OrgViewer = { userId?: string | null; isAdmin?: boolean | null };

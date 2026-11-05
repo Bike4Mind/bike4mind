@@ -102,7 +102,9 @@ export async function resolveAdminUsersBulk(
 
 /**
  * Signed balance change the action makes for one user. A deduction never takes a balance below
- * zero; `set` and `contain` land the balance exactly on the target.
+ * zero; `set` lands the balance exactly on the target. `contain` removes a positive balance and
+ * leaves a negative one alone: that is debt still owed, and writing it off would be a credit grant
+ * (counted against the batch credit cap and audited as one) that an unsuspend would hand back.
  */
 export function creditDeltaFor(action: AdminUsersBulkAction, balance: number): number {
   return signedDelta(action, balance) || 0; // normalizes -0, which would leak into JSON and equality checks

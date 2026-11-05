@@ -29,6 +29,8 @@ import { ActualFileObject } from 'filepond';
 import { toast } from 'sonner';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
+const FILE_UPLOAD_CONCURRENCY = 5;
+
 export function useDeleteAllFiles(options: { onSuccess?: () => void } = {}) {
   const { onSuccess } = options;
   const queryClient = useQueryClient();
@@ -279,16 +281,33 @@ export function useCreateFabFile(callbacks?: {
         fileSize: number;
       }[]
     ) => {
-      const result = await Promise.all(
-        data.map(async item => {
-          const { file, ...rest } = item;
-          const fabfile = await createFabFileOnServerWithUpload(rest, file);
-          return fabfile;
-        })
-      );
-
-      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
-      return result;
+      const result: Awaited<ReturnType<typeof createFabFileOnServerWithUpload>>[] = [];
+      try {
+        for (let index = 0; index < data.length; index += FILE_UPLOAD_CONCURRENCY) {
+          const uploads = await Promise.allSettled(
+            data.slice(index, index + FILE_UPLOAD_CONCURRENCY).map(async item => {
+              const { file, ...parameters } = item;
+              return createFabFileOnServerWithUpload(parameters, file);
+            })
+          );
+          const failed = uploads.find(upload => upload.status === 'rejected');
+          if (failed) {
+            const created = result.length + uploads.filter(upload => upload.status === 'fulfilled').length;
+            if (created === 0) throw failed.reason;
+            // The toast reads this message; `cause` keeps the original error for inspection.
+            throw new Error(`Uploaded ${created} of ${data.length} files; ${getErrorMessage(failed.reason)}`, {
+              cause: failed.reason,
+            });
+          }
+          for (const upload of uploads) {
+            if (upload.status === 'fulfilled') result.push(upload.value);
+          }
+        }
+        return result;
+      } finally {
+        // A refused upload can follow successful files in the same group.
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
+      }
     },
     onSuccess: files => {
       callbacks?.onSuccess?.(files);

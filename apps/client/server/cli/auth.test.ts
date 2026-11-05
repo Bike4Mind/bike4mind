@@ -409,7 +409,7 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
 
     it('rejects a chargeback/dispute-pending owner', async () => {
       vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', disputePending: true }));
-      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('dispute resolution');
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('on hold pending a payment review');
       await expect(verifyJwtToken(sign('u1'))).rejects.toBeInstanceOf(ForbiddenError);
     });
 
@@ -628,7 +628,7 @@ describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
   it('refuses an owner with a pending payment dispute with a ForbiddenError', async () => {
     vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false, disputePending: true });
     await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
-    await expect(verifyApiKey({})).rejects.toThrow(/dispute/i);
+    await expect(verifyApiKey({})).rejects.toThrow(/payment review/i);
   });
 
   it('refuses a moderation-suspended owner with a ForbiddenError and the full appeal message', async () => {

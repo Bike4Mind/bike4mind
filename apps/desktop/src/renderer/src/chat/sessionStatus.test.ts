@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatSessionStatus } from '@shared/chat';
-import { applyStatusEvents, STATUS_LABEL } from './sessionStatus';
+import { applyPreparingEvents, applyStatusEvents, STATUS_LABEL } from './sessionStatus';
 
 const empty: ReadonlyMap<string, ChatSessionStatus> = new Map();
 
@@ -58,5 +58,27 @@ describe('applyStatusEvents', () => {
   it('names every state, so a badge always has a label', () => {
     const states: ChatSessionStatus[] = ['processing', 'needs-action', 'done'];
     for (const state of states) expect(STATUS_LABEL[state]).toBeTruthy();
+  });
+});
+
+describe('applyPreparingEvents', () => {
+  const none: ReadonlySet<string> = new Set();
+
+  it('adds on a preparing event and removes on one without the flag', () => {
+    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: true }]);
+    expect(preparing.has('a')).toBe(true);
+
+    const replying = applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing' }]);
+    expect(replying.has('a')).toBe(false);
+    expect(preparing.has('a')).toBe(true);
+  });
+
+  it('returns the same set when nothing changed', () => {
+    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: true }]);
+
+    expect(applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing', preparing: true }])).toBe(
+      preparing
+    );
+    expect(applyPreparingEvents(none, [{ sessionId: 'b', status: 'done' }])).toBe(none);
   });
 });

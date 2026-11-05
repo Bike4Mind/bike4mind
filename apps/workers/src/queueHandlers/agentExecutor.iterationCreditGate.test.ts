@@ -147,7 +147,7 @@ describe('stopUnfundedIteration', () => {
 });
 
 describe('stopBlockedAccountIteration', () => {
-  const denial = 'Account suspended pending dispute resolution. Please contact support.';
+  const denial = 'Your account is on hold pending a payment review. Please contact support.';
   const gateArgs = (readAccessDenial: () => Promise<string | null>) => ({
     executionId: 'exec-1',
     readAccessDenial,

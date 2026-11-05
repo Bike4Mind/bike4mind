@@ -37,3 +37,26 @@ export function applyStatusEvents(
 
   return next ?? current;
 }
+
+/**
+ * Fold the same pushes into the set of sessions still being prepared (worktree, held first turn).
+ * Kept apart from the status map because it is orthogonal to it: a preparing agent is 'processing'
+ * either way. Returns the set it was given when nothing changed.
+ */
+export function applyPreparingEvents(
+  current: ReadonlySet<string>,
+  events: readonly ChatSessionStatusEvent[]
+): ReadonlySet<string> {
+  let next: Set<string> | null = null;
+
+  for (const event of events) {
+    const soFar = next ?? current;
+    if (soFar.has(event.sessionId) === (event.preparing === true)) continue;
+
+    next ??= new Set(current);
+    if (event.preparing) next.add(event.sessionId);
+    else next.delete(event.sessionId);
+  }
+
+  return next ?? current;
+}

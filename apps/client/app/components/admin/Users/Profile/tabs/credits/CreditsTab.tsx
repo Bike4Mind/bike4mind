@@ -28,6 +28,7 @@ import {
 import { formatCreditDelta, formatCredits } from '../../actions/creditAdjustment';
 import type { AdminUserProfile } from '../../userProfileModel';
 import { LedgerFilterBar } from './LedgerFilterBar';
+import { SignupGrantPendingCard } from './SignupGrantPendingCard';
 import { SpendBreakdownChart, SpendChart } from './SpendChart';
 import {
   EMPTY_LEDGER_FILTER,
@@ -337,6 +338,7 @@ export const CreditsTab: React.FC<{ user: AdminUserProfile; onAdjust: () => void
   return (
     <Stack gap={2} data-testid="user-profile-credits">
       <SummaryStrip summary={summary.data} balance={user.currentCredits ?? 0} />
+      <SignupGrantPendingCard user={user} />
       <SpendCard summary={summary} />
       <SystemCostCard summary={summary.data} />
       <SectionCard

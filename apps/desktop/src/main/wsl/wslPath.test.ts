@@ -18,6 +18,7 @@ import {
   withWslEnv,
   wslCommand,
   wslCommandEnv,
+  wslDrivePath,
   wslEnvNames,
   wslLocation,
   wslOperandPlaces,
@@ -65,6 +66,28 @@ describe('parseWslPath', () => {
   it('only treats them as WSL on Windows', () => {
     expect(wslLocation('\\\\wsl.localhost\\Ubuntu\\home', 'win32')?.distro).toBe('Ubuntu');
     expect(wslLocation('\\\\wsl.localhost\\Ubuntu\\home', 'linux')).toBeNull();
+  });
+});
+
+describe('wslDrivePath', () => {
+  it('reads a share path under /mnt/<x> as the drive path it reaches, from either share name', () => {
+    expect(wslDrivePath('\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\App')).toBe('C:\\Users\\me\\App');
+    expect(wslDrivePath('\\\\wsl$\\Debian\\mnt\\d\\data')).toBe('D:\\data');
+    expect(wslDrivePath('//wsl$/Debian/mnt/c/Users/me')).toBe('C:\\Users\\me');
+    expect(wslDrivePath('\\\\?\\UNC\\wsl.localhost\\Ubuntu\\mnt\\c\\x')).toBe('C:\\x');
+  });
+
+  it('upper-cases the drive letter whichever case it was given in', () => {
+    expect(wslDrivePath('\\\\wsl.localhost\\Ubuntu\\mnt\\C\\Users')).toBe('C:\\Users');
+    expect(wslDrivePath('\\\\wsl.localhost\\Ubuntu\\mnt\\c')).toBe('C:\\');
+  });
+
+  it('leaves every other path unmapped', () => {
+    expect(wslDrivePath('\\\\wsl.localhost\\Ubuntu\\home\\me\\mnt\\c')).toBeNull();
+    expect(wslDrivePath('\\\\wsl.localhost\\Ubuntu\\mnt\\wsl\\x')).toBeNull();
+    expect(wslDrivePath('\\\\wsl.localhost\\Ubuntu\\mnt')).toBeNull();
+    expect(wslDrivePath('C:\\Users\\me')).toBeNull();
+    expect(wslDrivePath('/mnt/c/Users')).toBeNull();
   });
 });
 

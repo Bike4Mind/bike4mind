@@ -159,9 +159,9 @@ the original conversations or disable future capture in opted-in sessions.
 Run Ollama locally on `127.0.0.1:11434` with a downloaded chat model, then choose that model
 in the model picker. From the signed-out screen, choose **Use local models**. These models
 send inference requests to the local daemon; cloud-backed Ollama models are excluded.
-Local requests use a 4,096-token context by default, capped at the model's supported window.
-To use a larger window, set `PARAMETER num_ctx 8192` (or another supported size) in the
-model's Ollama Modelfile; discovery and inference use the same explicit context size.
+Local context follows the choice in Settings. Auto estimates a size from this computer's
+memory, starting at 16K tokens when it cannot measure the model, capped at the model's trained
+length. Without a GPU, Auto starts at no more than 32K; conversations can grow when needed.
 Local Code sessions can still use network tools when permitted, so offline inference does not
 make tool execution offline.
 
@@ -169,6 +169,29 @@ If a model is missing, check that Ollama is running at that address and the inst
 supports chat, then refresh the model list. If history is missing, check the conversation's
 switch and the selected account. A clear or search error is shown in the interface; retry after
 resolving the reported problem. The search index is separate from the saved conversations.
+
+### Per-model load settings
+
+Open Models > Installed > Settings on a chat model to set its Context, Draft tokens and
+Keep loaded where its server supports them, then Save. These choices apply to every request
+for that model, including titles, suggestions and summaries. Clear all restores the defaults.
+
+For Ollama, Context can follow Settings, use Auto where Desktop measures the model, or use a
+fixed size. Auto can also have a cap below the trained length. The Runs at note shows the
+resulting size; a memory warning means the model may fail to load. A changed context or draft
+count can reload the model on the next request. Draft tokens appears only for models with
+a draft layer or embedded MTP head: blank uses the model default, 0 disables drafting, and
+whole numbers up to 16 set the count. Keep loaded controls how long Ollama keeps the model
+after its last request; Until Ollama stops keeps it loaded indefinitely.
+
+On a saved Ollama server, Desktop cannot measure that computer's memory, so context choices
+have no memory ratings. On an OpenAI-compatible server that reports its context, Context
+offers smaller client budgets that make chats summarise sooner; it does not reload the server.
+
+If load controls are missing, check that the server is reachable and reopen the dialog.
+Unsupported options stay hidden. A failed settings read disables Save; a failed save keeps
+the dialog open with an error. Resolve the reported problem and retry. If a model will not
+load, lower Context or Draft tokens, or close other applications before trying again.
 
 ## Import from Claude
 

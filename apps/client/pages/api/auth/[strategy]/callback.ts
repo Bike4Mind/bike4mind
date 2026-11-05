@@ -7,6 +7,7 @@ import { AuthStrategy } from '@bike4mind/common';
 import { authFailLogRepository } from '@bike4mind/database';
 import type { OAuthUser } from '@server/utils/auth/verifyCallback';
 import { issueBrowserSession } from '@server/auth/issueSession';
+import { blockedSignInErrorCode } from '@server/auth/blockedSignIn';
 import { verifyStateToken, BaseStatePayload } from '@bike4mind/server-utils/auth/jwtStateStore';
 import { authSuccessRedirectQuery, mfaHandoffFragment } from '@server/auth/authSuccessRedirect';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
@@ -25,6 +26,7 @@ import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { emitSignupFunnelEvents, recordSignupAcquisition } from '@server/analytics/funnel';
 import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
+import { recordSignupLanding } from '@server/auth/signupLanding';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureLoginErrorCode } from '@server/utils/auth/oauthFailureReason';
@@ -198,6 +200,10 @@ const handler = baseApi({ auth: false })
           }
           return res.redirect('/login?error=account_suspended');
         }
+        const blockedCode = blockedSignInErrorCode(user);
+        if (blockedCode) {
+          return res.redirect(`/login?error=${blockedCode}`);
+        }
 
         // Resume the originally requested path, round-tripped via the signed
         // state JWT (embedded by PassportOAuthStateStore.store). /auth/success
@@ -235,6 +241,7 @@ const handler = baseApi({ auth: false })
           }
           await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
           await recordSignupNetwork({ req, userId: user.id, method: strategy });
+          await recordSignupLanding({ userId: user.id, redirectTo }, req.logger);
           // After recordSignupNetwork so the datacenter signal sees the stored signup network.
           await refreshSignupRiskScore(user.id, req.logger);
           // Credit the signup to the product the visitor came through, if any, and only with

@@ -181,7 +181,11 @@ const STRING_LIST_SETTING_KEYS = new Set<string>([
 ]);
 
 // Structured operator configs get a JSON editor; the server parses them with the setting's schema.
-const JSON_SETTING_KEYS = new Set<string>(['abuseAssessmentConfig', 'usagePatternSignalsConfig']);
+const JSON_SETTING_KEYS = new Set<string>([
+  'abuseAssessmentConfig',
+  'autoContainmentConfig',
+  'usagePatternSignalsConfig',
+]);
 
 const AdminSettingsTab: React.FC = () => {
   const { section, setSection, searchTerm, setSearchTerm } = useAdminSettingsSearchParams();

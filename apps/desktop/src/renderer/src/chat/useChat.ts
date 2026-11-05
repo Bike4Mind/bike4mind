@@ -11,11 +11,13 @@ import type {
   ChatSession,
   ChatSessionStatus,
   ChatSessionSummary,
+  ContextNoticeKind,
   CreateCodeSessionRequest,
   ModelPhase,
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { summarizeSession } from '@shared/agentOutcome';
 import { normalizeSessionTitle } from '@shared/chat';
 import { isUntouchedImport } from './grouping';
 import type { GenerationSettings } from '@shared/generation';
@@ -24,10 +26,11 @@ import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { addDirPath } from './commands';
+import { forgetSessionPrefs } from './orchestrator/orchestratorPrefs';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
-import { applyStatusEvents } from './sessionStatus';
+import { applyPreparingEvents, applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
@@ -69,6 +72,27 @@ export interface SessionPlacement {
   /** Main could not save the placement; the row still exists and starts in the default groups. */
   failed: () => void;
 }
+
+/** Newest context notice of each kind per conversation that was not open when it arrived; shown when it opens. */
+const backgroundNotices = new Map<string, ContextNotice[]>();
+
+interface ContextNotice {
+  message: string;
+  kind?: ContextNoticeKind;
+}
+
+/** A notice replaces the earlier one of its kind; one without a kind replaces only an identical message. */
+function addNotice(current: ContextNotice[] | undefined, next: ContextNotice): ContextNotice[] {
+  const list = current ?? [];
+  const at = list.findIndex(item =>
+    next.kind ? item.kind === next.kind : !item.kind && item.message === next.message
+  );
+  if (at === -1) return [...list, next];
+  return list.map((item, index) => (index === at ? next : item));
+}
+
+const noticeText = (notices: ContextNotice[]): string | null =>
+  notices.length > 0 ? notices.map(item => item.message).join('\n') : null;
 
 export function useSessions(): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
@@ -162,6 +186,8 @@ export function useSessions(): SessionsController {
 
   const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
     await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+    backgroundNotices.delete(sessionId);
+    forgetSessionPrefs(sessionId);
     editSessions(current => current.filter(session => session.id !== sessionId));
   }, []);
 
@@ -257,7 +283,24 @@ export function useSessions(): SessionsController {
  * window happened to witness would draw it as idle.
  */
 export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
-  const [statuses, setStatuses] = useState<ReadonlyMap<string, ChatSessionStatus>>(() => new Map());
+  return useSessionStatusFeed().statuses;
+}
+
+export interface SessionStatusFeed {
+  statuses: ReadonlyMap<string, ChatSessionStatus>;
+  /** Busy sessions still being prepared; a subset of the 'processing' ones in `statuses`. */
+  preparing: ReadonlySet<string>;
+  /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
+  loaded: boolean;
+}
+
+/** `useSessionStatuses` plus whether the initial snapshot has arrived; see that hook for the model. */
+export function useSessionStatusFeed(): SessionStatusFeed {
+  const [feed, setFeed] = useState<SessionStatusFeed>(() => ({
+    statuses: new Map(),
+    preparing: new Set(),
+    loaded: false,
+  }));
 
   useEffect(() => {
     let live = true;
@@ -268,17 +311,23 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
     const unsubscribe = window.b4m.chat.onSessionStatus(event => {
       pushed.add(event.sessionId);
-      setStatuses(current => applyStatusEvents(current, [event]));
+      setFeed(current => {
+        const statuses = applyStatusEvents(current.statuses, [event]);
+        const preparing = applyPreparingEvents(current.preparing, [event]);
+        // Same object for a no-op push, so React skips re-rendering everything that reads the feed.
+        if (statuses === current.statuses && preparing === current.preparing) return current;
+        return { ...current, statuses, preparing };
+      });
     });
 
     void window.b4m.chat.getSessionStatuses().then(snapshot => {
       if (!live) return;
-      setStatuses(current =>
-        applyStatusEvents(
-          current,
-          snapshot.filter(entry => !pushed.has(entry.sessionId))
-        )
-      );
+      const unspoken = snapshot.filter(entry => !pushed.has(entry.sessionId));
+      setFeed(current => ({
+        loaded: true,
+        statuses: applyStatusEvents(current.statuses, unspoken),
+        preparing: applyPreparingEvents(current.preparing, unspoken),
+      }));
     });
 
     return () => {
@@ -287,7 +336,7 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
     };
   }, []);
 
-  return statuses;
+  return feed;
 }
 
 export interface ModelCatalogController {
@@ -514,6 +563,8 @@ export interface ConversationController {
    * click, and from nothing else: this is the only path to the mode in the renderer.
    */
   setApprovalMode: (mode: ChatApprovalMode) => Promise<void>;
+  /** Turn Orchestrate on or off for this conversation; see ChatSessionMeta.orchestrate. */
+  setOrchestrate: (orchestrate: boolean) => Promise<void>;
   /** Where this Code session is grounded, for the chip row. Inert on a Chat session. */
   project: ProjectBindingController;
   /**
@@ -550,7 +601,9 @@ export function useConversation(
   const [phase, setPhase] = useState<ModelPhase | null>(null);
   const [preparing, setPreparing] = useState<WorkspaceProgress | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notices, setNotices] = useState<ContextNotice[]>([]);
+  const notice = useMemo(() => noticeText(notices), [notices]);
+  const setNotice = useCallback((text: string | null) => setNotices(text ? [{ message: text }] : []), []);
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
@@ -593,7 +646,8 @@ export function useConversation(
 
   useEffect(() => {
     setSendError(null);
-    setNotice(null);
+    setNotices(backgroundNotices.get(sessionId ?? '') ?? []);
+    if (sessionId) backgroundNotices.delete(sessionId);
     setProjectError(null);
     setReturned(null);
     setQueued([]);
@@ -802,6 +856,13 @@ export function useConversation(
         // background conversation spends from the same balance as this one.
         setSettledTurns(count => count + 1);
       }
+      if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
+        backgroundNotices.set(
+          event.sessionId,
+          addNotice(backgroundNotices.get(event.sessionId), { message: event.message, kind: event.kind })
+        );
+        return;
+      }
       if (event.sessionId !== activeSessionId.current) return;
 
       if (event.type === 'phase') {
@@ -876,7 +937,7 @@ export function useConversation(
       }
 
       if (event.type === 'context-notice') {
-        setNotice(event.message);
+        setNotices(current => addNotice(current, { message: event.message, kind: event.kind }));
         return;
       }
 
@@ -1008,8 +1069,7 @@ export function useConversation(
       const summary = await window.b4m.chat.getSession(sessionId);
       if (summary) {
         setSession(summary);
-        const { messages: _messages, spawnSuggestions: _suggestions, ...rest } = summary;
-        onSummaryChanged({ ...rest, messageCount: summary.messages.length });
+        onSummaryChanged(summarizeSession(summary));
       }
       return true;
     },
@@ -1283,6 +1343,27 @@ export function useConversation(
     [sessionId, saveSetting]
   );
 
+  const setOrchestrate = useCallback(
+    async (orchestrate: boolean) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setSessionOrchestrate(sessionId, orchestrate).catch((error: unknown) => {
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not change Orchestrate. ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return null;
+      });
+      if (!updated) return;
+      // The reply can land after a switch to another conversation, which must keep its own flag.
+      setSession(current => {
+        if (current?.id !== sessionId) return current;
+        const { orchestrate: _previous, ...rest } = current;
+        return updated.orchestrate ? { ...rest, orchestrate: true } : rest;
+      });
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
     void window.b4m.chat.respondToApproval(approvalId, answer);
   }, []);
@@ -1460,6 +1541,7 @@ export function useConversation(
     setPromptCacheTtl,
     setGeneration,
     setApprovalMode,
+    setOrchestrate,
     project,
     addContextDirectoryTo,
     respondToApproval,

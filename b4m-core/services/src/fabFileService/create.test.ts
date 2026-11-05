@@ -280,6 +280,18 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });
 
+  it('mints no PUT and stamps no client upload when the caller uploads the bytes itself', async () => {
+    const result = await createFabFile(
+      mockUserId,
+      { fileName: 'page.txt', mimeType: 'text/plain', fileSize: 12, type: KnowledgeType.URL },
+      { ...mockAdapters, serverUpload: true }
+    );
+
+    expect(storageGenerateSignedUrl).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty('presignedUrl');
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('clientUpload');
+  });
+
   // Audio (generated TTS / sound effects) is storable-but-not-ingestable: it was
   // previously rejected by the mime gate (audio isn't in SupportedFabFileMimeTypes),
   // and must now be accepted via isStorableFabFileMimeType and stored as AUDIO.
@@ -727,6 +739,36 @@ describe('createFabFile - owning organization', () => {
     ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', owner: 'org' } });
     expect(adapters.db.organizations.findById).toHaveBeenCalledWith('org-1');
     expect(adapters.db.fabFiles.create).not.toHaveBeenCalled();
+  });
+
+  it("counts the owning org's in-flight upload bytes as used", async () => {
+    const adapters = ownerAdapters();
+    vi.mocked(adapters.db.organizations.findById).mockResolvedValue({
+      id: 'org-1',
+      storageLimit: 1,
+      currentStorageSize: 0,
+    } as unknown as IOrganizationDocument);
+    const pendingUploadBytes = vi.fn(() => 950_000);
+
+    await expect(
+      createFabFile(
+        'u1',
+        { ...file, fileSize: 100_000, tags: [{ name: orgLake.datalakeTag, strength: 1 }] },
+        { ...adapters, pendingUploadBytes }
+      )
+    ).rejects.toMatchObject({ info: { errorCode: 'org_storage_limit_exceeded', used_bytes: 950_000 } });
+    expect(pendingUploadBytes).toHaveBeenCalledWith('org-1');
+  });
+
+  it("counts the uploader's personal in-flight upload bytes for a personal file", async () => {
+    const adapters = ownerAdapters();
+    vi.mocked(adapters.db.users.findById).mockResolvedValue({ id: 'u1', storageLimit: 1 } as never);
+    const pendingUploadBytes = vi.fn(() => 950_000);
+
+    await expect(
+      createFabFile('u1', { ...file, fileSize: 100_000 }, { ...adapters, pendingUploadBytes })
+    ).rejects.toMatchObject({ info: { errorCode: 'storage_limit_exceeded', used_bytes: 950_000 } });
+    expect(pendingUploadBytes).toHaveBeenCalledWith(undefined);
   });
 
   it('persists the derived owner, not the caller-supplied org, when both are present', async () => {

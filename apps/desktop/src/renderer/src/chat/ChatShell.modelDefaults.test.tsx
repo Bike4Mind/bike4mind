@@ -208,3 +208,73 @@ describe('the effort default shown for the conversation model', () => {
     expect(await defaultLabel()).toBe('Default');
   });
 });
+
+describe('a failed read of the model defaults', () => {
+  const readError = () => document.querySelector('[data-testid="chat-model-defaults-error"]')?.textContent ?? null;
+
+  async function roundTripModels() {
+    await act(async () => document.querySelector<HTMLElement>('[data-testid="chat-models-btn"]')?.click());
+    await act(async () => closeModels?.());
+    await act(async () => undefined);
+  }
+
+  it('says so in the chat when the first read fails, and not in another chat', async () => {
+    getModelSettings.mockImplementation(id =>
+      id === QWEN ? Promise.reject(new Error('store unreadable')) : Promise.resolve({ effort: 'high' })
+    );
+    await openShell();
+    await openSession('Qwen chat');
+    expect(readError()).toContain('built-in ones');
+    expect(readError()).toContain('store unreadable');
+    expect(await defaultLabel()).toBe('Default');
+
+    await openSession('Gemma chat');
+    expect(readError()).toBeNull();
+    expect(await defaultLabel()).toBe('Default (High)');
+  });
+
+  it('keeps a failure that lands after the chat was left out of the chat now open', async () => {
+    let failQwen: ((error: Error) => void) | undefined;
+    getModelSettings.mockImplementation(id => {
+      if (id !== QWEN) return Promise.resolve({ effort: 'high' });
+      if (failQwen) return Promise.reject(new Error('store unreadable'));
+      return new Promise<ModelSettings>((_resolve, reject) => {
+        failQwen = reject;
+      });
+    });
+    await openShell();
+    await openSession('Qwen chat');
+    await openSession('Gemma chat');
+    await act(async () => failQwen?.(new Error('store unreadable')));
+    expect(readError()).toBeNull();
+    expect(await defaultLabel()).toBe('Default (High)');
+
+    await openSession('Qwen chat');
+    expect(readError()).toContain('store unreadable');
+  });
+
+  it('keeps the last good defaults and says they may be stale when a later read fails', async () => {
+    getModelSettings.mockResolvedValue({ effort: 'low' });
+    await openShell();
+    await openSession('Qwen chat');
+    expect(readError()).toBeNull();
+
+    getModelSettings.mockRejectedValue(new Error('store unreadable'));
+    await roundTripModels();
+    expect(getModelSettings).toHaveBeenCalledTimes(2);
+    expect(readError()).toContain('last ones it read');
+    expect(await defaultLabel()).toBe('Default (Low)');
+  });
+
+  it('clears the notice once a later read succeeds', async () => {
+    getModelSettings.mockRejectedValue(new Error('store unreadable'));
+    await openShell();
+    await openSession('Qwen chat');
+    expect(readError()).toContain('built-in ones');
+
+    getModelSettings.mockResolvedValue({ effort: 'high' });
+    await roundTripModels();
+    expect(readError()).toBeNull();
+    expect(await defaultLabel()).toBe('Default (High)');
+  });
+});

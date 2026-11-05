@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   findOne: vi.fn(),
   findOneAndUpdate: vi.fn(),
   recordAdminSettingChange: vi.fn(),
+  requestAuditWriter: vi.fn(),
+  writer: vi.fn(),
   invalidateSettingsCache: vi.fn(),
 }));
 
@@ -26,7 +28,8 @@ vi.mock('@bike4mind/database/infra', () => ({
   },
 }));
 vi.mock('@bike4mind/utils', () => ({ invalidateSettingsCache: mocks.invalidateSettingsCache }));
-vi.mock('@server/utils/adminSettingsAudit', () => ({ recordAdminSettingChange: mocks.recordAdminSettingChange }));
+vi.mock('@server/utils/adminSettingsAudit', () => ({ recordAdminSettingChangeWith: mocks.recordAdminSettingChange }));
+vi.mock('@server/utils/adminAudit', () => ({ requestAuditWriter: mocks.requestAuditWriter }));
 
 import { addBlockedEmailDomain } from './addBlockedEmailDomain';
 
@@ -35,6 +38,7 @@ const req = { user: { id: 'admin-1' } } as unknown as Parameters<typeof addBlock
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.findOne.mockResolvedValue({ settingValue: ['old.com'] });
+  mocks.requestAuditWriter.mockReturnValue(mocks.writer);
 });
 
 describe('addBlockedEmailDomain', () => {
@@ -65,13 +69,14 @@ describe('addBlockedEmailDomain', () => {
       { upsert: true }
     );
     expect(mocks.recordAdminSettingChange).toHaveBeenCalledWith(
-      req,
+      mocks.writer,
       expect.objectContaining({
         settingName: 'blockedEmailDomains',
         before: ['old.com'],
         after: ['old.com', 'kashre.com'],
       })
     );
+    expect(mocks.requestAuditWriter).toHaveBeenCalledWith(req);
     expect(order).toEqual(['audit-in-tx', 'invalidate-after-tx']);
     expect(mocks.invalidateSettingsCache).toHaveBeenCalledWith('blockedEmailDomains');
   });
@@ -81,7 +86,7 @@ describe('addBlockedEmailDomain', () => {
 
     expect(await addBlockedEmailDomain(req, 'kashre.com')).toBe(true);
     expect(mocks.recordAdminSettingChange).toHaveBeenCalledWith(
-      req,
+      mocks.writer,
       expect.objectContaining({ before: null, after: ['kashre.com'] })
     );
   });

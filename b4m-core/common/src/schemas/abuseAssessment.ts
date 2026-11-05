@@ -6,8 +6,9 @@ import { SHADOW_DETECTION_VERDICTS, SHADOW_DETECTORS } from './shadowDetection';
 /**
  * Advisory abuse assessments: a Decisions model's judgment of a shadow detection, made from an
  * allowlisted, pseudonymous feature summary (counts and flags; no IP, email, prompt or document
- * text) and stored for admin review next to the detection. Advisory only: nothing reads an
- * assessment to change access, credits, group membership, riskScore or reviewState. Produced by
+ * text) and stored for admin review next to the detection. The assessment itself writes nothing to
+ * an account; automated containment (schemas/autoContainment.ts, autoContainmentConfig) is the one
+ * reader that may act on it, and only in enforce mode. Produced by
  * apps/client/server/security/abuseAssessment/abuseAssessment.ts; stored in the AbuseAssessment collection.
  */
 
@@ -35,7 +36,8 @@ export const ABUSE_ASSESSMENT_FAILURE_CODES = [
 ] as const;
 export type AbuseAssessmentFailureCode = (typeof ABUSE_ASSESSMENT_FAILURE_CODES)[number];
 
-export const ABUSE_ASSESSMENT_TRIGGERS = ['admin', 'sweep'] as const;
+/** strong_link: assessed at signup by the strong-link rule (autoContainment/strongLink.ts), not the sweep. */
+export const ABUSE_ASSESSMENT_TRIGGERS = ['admin', 'sweep', 'strong_link'] as const;
 export type AbuseAssessmentTrigger = (typeof ABUSE_ASSESSMENT_TRIGGERS)[number];
 
 /** Input caps: accounts summarized per detection, signals copied, and the serialized summary size. */

@@ -6,6 +6,7 @@ import {
   type ModelArch,
 } from '@bike4mind/local-models';
 import type { LocalContextSetting } from '@shared/localContextSetting';
+import type { QuantizedKvCacheType } from '@shared/modelServers';
 import { installedProjectorBytes } from '../models/projectorBytes';
 import type { LocalModelFootprint } from './localContext';
 import type { LocalContextSizing, LocalModelFacts } from './OllamaLocal';
@@ -63,6 +64,8 @@ export interface LocalContextSizingDeps {
   projectorBytes?(modelfile: string): Promise<number>;
   /** The curated list's projector sizes by digest, for a projector blob this computer cannot read. */
   pinnedProjectors?(): ReadonlyMap<string, number>;
+  /** The OLLAMA_KV_CACHE_TYPE entered for this computer in Settings; undefined is f16. */
+  kvCacheType?(): QuantizedKvCacheType | undefined;
   now?(): number;
 }
 
@@ -125,6 +128,7 @@ export function localContextSizing({
   pinnedProjectors,
   projectorBytes = modelfile =>
     installedProjectorBytes(modelBlobsOf(modelfile), { pinned: pinnedProjectors?.(), onThisComputer: true }),
+  kvCacheType = () => undefined,
   now = Date.now,
 }: LocalContextSizingDeps): LocalContextSizing {
   const arches = new Map<string, ArchEntry>();
@@ -182,10 +186,12 @@ export function localContextSizing({
     weightsBytes: facts.sizeBytes ?? null,
     projectorBytes: projector,
     hardware: machine,
+    kvCacheType: kvCacheType(),
   });
 
   return {
     setting,
+    kvCacheType,
     async footprint(facts): Promise<LocalModelFootprint> {
       const entry = entryFor(facts);
       const projector = projectorFor(facts);
