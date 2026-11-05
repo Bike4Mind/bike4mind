@@ -37,7 +37,7 @@ import {
   splitImportBlock,
   splitImportName,
   splitImportSpace,
-  splitImportStageDir,
+  stagedPartBytes,
   type ApprovalFailure,
   type DownloadOptions,
   type DownloadResult,
@@ -406,7 +406,13 @@ interface PullEntry {
   curated: { entry: HubEntry; build: HubBuild; hadTag: boolean | null } | null;
   /** Set for a split build Desktop downloads itself and creates in Ollama. */
   import?: SplitImportPlan;
+  /** Shown with a successful import that went ahead without something it could not read. */
+  importNotice?: string;
 }
+
+const NO_REGISTRY_PARAMS =
+  'The registry settings for this model (stop words, temperature and similar) could not be read, so it was ' +
+  'created without them.';
 
 /** `local-only`: a saved server, which has no way to take the uploaded parts. */
 type SplitSupport = 'import' | 'local-only' | 'none';
@@ -627,6 +633,7 @@ function toView(
       installedNames: ref ? ollamaRefAliases(ref) : [],
       blockedReason: blockedReason(detail, build, tokenSent, split),
       importParts: imported ? build.files.length : null,
+      importLargestBytes: imported ? Math.max(...build.files.map(file => file.sizeBytes)) : null,
       fit: fit(build),
     };
   });
@@ -663,6 +670,7 @@ function libraryView(
     installedNames: ollamaRefAliases(library.ref),
     blockedReason: null,
     importParts: null,
+    importLargestBytes: null,
     fit,
   };
   return {
@@ -1605,7 +1613,7 @@ export class ModelHubService {
     const { ref } = prepared;
 
     if (prepared.split) {
-      let planned: { ok: true; plan: SplitImportPlan } | Refusal;
+      let planned: { ok: true; plan: SplitImportPlan; notice?: string } | Refusal;
       try {
         planned = await this.#planImport(prepared.split, target, controller.signal);
       } catch (error) {
@@ -1615,6 +1623,7 @@ export class ModelHubService {
       if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
       if (!planned.ok) return planned.listed ? this.#fail(key, entry, planned.error) : refuse(planned.error);
       entry.import = planned.plan;
+      entry.importNotice = planned.notice;
     }
 
     const hadTag = curated ? await this.#hadTagBefore(target, ref) : null;
@@ -1696,9 +1705,10 @@ export class ModelHubService {
     split: SplitApproval,
     target: Target,
     signal: AbortSignal
-  ): Promise<{ ok: true; plan: SplitImportPlan } | Refusal> {
+  ): Promise<{ ok: true; plan: SplitImportPlan; notice?: string } | Refusal> {
     const { hub } = await this.#hub();
     let sibling: SiblingLayers = { projectorSha256: null, parameters: null };
+    let notice: string | undefined;
     const readJson = hub.ollamaRegistryJson?.bind(hub);
     if (readJson) {
       try {
@@ -1710,6 +1720,7 @@ export class ModelHubService {
         );
       } catch (error) {
         if (signal.aborted) throw error;
+        notice = NO_REGISTRY_PARAMS;
         // Without them the model still imports; Ollama reads its template from the GGUF.
         this.#deps.warn(`MODELS: no projector or params from a sibling build of ${split.detail.id}: ${String(error)}`);
       }
@@ -1719,8 +1730,10 @@ export class ModelHubService {
     if (!runtimeImports(runtime)) return refused('cannot-pull', SPLIT_LOCAL_ONLY);
     const present = new Set<string>();
     for (const part of plan.parts) if (await runtime.hasBlob(part.digest, { signal })) present.add(part.digest);
-    const space = await this.#importSpace(plan, present);
-    if (space.ok) return { ok: true, plan };
+    const root = this.#deps.importDir?.();
+    const staged = root ? await stagedPartBytes(root, plan, present) : undefined;
+    const space = await this.#importSpace(plan, present, staged);
+    if (space.ok) return { ok: true, plan, notice };
     const where = space.where === 'store' ? "on the disk with Ollama's models" : 'on the disk Desktop downloads to';
     return refused(
       'cannot-pull',
@@ -1729,21 +1742,29 @@ export class ModelHubService {
     );
   }
 
-  async #importSpace(plan: SplitImportPlan, present: ReadonlySet<string>): Promise<ImportSpace> {
+  async #importSpace(
+    plan: SplitImportPlan,
+    present: ReadonlySet<string>,
+    staged?: ReadonlyMap<string, number>
+  ): Promise<ImportSpace> {
     const staging = this.#deps.importDir?.() ?? null;
     const store = await this.storeLocation(LOCAL_SERVER_ID);
     const free = (path: string) => this.#deps.freeSpace?.(path).catch(() => null) ?? Promise.resolve(null);
+    // An 'elsewhere' store is not on this computer's disks, so its device cannot be compared: unknown.
     const sameDisk =
-      store.source === 'elsewhere'
-        ? false
-        : staging && store.path
-          ? ((await this.#deps.sameDisk?.(staging, store.path).catch(() => null)) ?? null)
-          : null;
-    return splitImportSpace(plan, present, {
-      stagingFreeBytes: staging ? await free(staging) : null,
-      storeFreeBytes: store.freeBytes,
-      sameDisk,
-    });
+      store.source !== 'elsewhere' && staging && store.path
+        ? ((await this.#deps.sameDisk?.(staging, store.path).catch(() => null)) ?? null)
+        : null;
+    return splitImportSpace(
+      plan,
+      present,
+      {
+        stagingFreeBytes: staging ? await free(staging) : null,
+        storeFreeBytes: store.freeBytes,
+        sameDisk,
+      },
+      staged
+    );
   }
 
   /** Downloads each part Ollama lacks, hands it over, then creates the model; a failed run keeps its staging so a retry resumes. */
@@ -1767,7 +1788,7 @@ export class ModelHubService {
       await runSplitImport(plan, {
         hub,
         runtime,
-        dir: splitImportStageDir(root, plan),
+        dir: root,
         signal,
         onProgress: progress => {
           const phase = progress.status === 'creating' ? 'finishing' : 'downloading';
@@ -1783,7 +1804,8 @@ export class ModelHubService {
       });
     } catch (error) {
       if (signal.aborted) {
-        await removeSplitStaging(splitImportStageDir(root, plan));
+        // Quitting aborts every pull; its parts stay so the next import resumes them.
+        if (!this.#disposed) await removeSplitStaging(root, plan);
         this.#drop(key, entry);
         return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
       }
@@ -1791,7 +1813,7 @@ export class ModelHubService {
     }
     this.#deps.onInstalledChanged(target.id);
     this.#drop(key, entry);
-    return { ok: true, ref: plan.model };
+    return { ok: true, ref: plan.model, ...(entry.importNotice ? { notice: entry.importNotice } : {}) };
   }
 
   /**
@@ -1948,7 +1970,7 @@ export class ModelHubService {
     if (this.#pulls.get(key) !== entry) return;
     this.#pulls.delete(key);
     const root = this.#deps.importDir?.();
-    if (entry.import && root) void removeSplitStaging(splitImportStageDir(root, entry.import));
+    if (entry.import && root && !this.#disposed) void removeSplitStaging(root, entry.import);
     this.#push(true);
   }
 

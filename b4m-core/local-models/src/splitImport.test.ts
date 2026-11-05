@@ -5,15 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions } from './download';
 import type { HubGgufBuild, HubGgufFile, HubGgufProjector } from './huggingface';
 import {
+  createFileNameProblem,
   importParameters,
   importProjector,
   planSplitImport,
+  removeSplitStaging,
   runSplitImport,
   siblingLayers,
   splitImportBlock,
   splitImportCreateRequest,
   splitImportSpace,
-  splitImportStageDir,
+  splitPartPath,
+  stagedPartBytes,
+  stagedPath,
   sweepSplitImports,
   type SplitImportPlan,
 } from './splitImport';
@@ -250,6 +254,22 @@ describe('splitImportSpace', () => {
     ).toMatchObject({ ok: false, neededBytes: 800 });
   });
 
+  it('counts bytes already staged as progress, not as missing room', () => {
+    const staged = new Map([
+      [`sha256:${hex('1')}`, 300],
+      [`sha256:${hex('2')}`, 100],
+    ]);
+    const one = (free: number) =>
+      splitImportSpace(plan, none, { stagingFreeBytes: free, storeFreeBytes: free, sameDisk: true }, staged);
+    expect(one(1100)).toEqual({ ok: true });
+    expect(one(1099)).toMatchObject({ ok: false, neededBytes: 1100 });
+    const two = (staging: number, store: number) =>
+      splitImportSpace(plan, none, { stagingFreeBytes: staging, storeFreeBytes: store, sameDisk: false }, staged);
+    expect(two(400, 1000)).toEqual({ ok: true });
+    expect(two(399, 1000)).toMatchObject({ ok: false, where: 'staging', neededBytes: 400 });
+    expect(two(400, 999)).toMatchObject({ ok: false, where: 'store', neededBytes: 1000 });
+  });
+
   it('passes when no free space can be read', () => {
     expect(splitImportSpace(plan, none, { stagingFreeBytes: null, storeFreeBytes: null, sameDisk: true })).toEqual({
       ok: true,
@@ -311,11 +331,11 @@ describe('runSplitImport', () => {
     });
     expect(events).toEqual([
       'download model-Q8_0-00001-of-00003.gguf with 0 staged',
-      'upload model-Q8_0-00001-of-00003.gguf',
+      `upload ${hex('1')}.gguf`,
       'download model-Q8_0-00003-of-00003.gguf with 0 staged',
-      'upload model-Q8_0-00003-of-00003.gguf',
+      `upload ${hex('3')}.gguf`,
       'download mmproj-F16.gguf with 0 staged',
-      'upload mmproj-F16.gguf',
+      `upload ${hex('f')}.gguf`,
       'create',
     ]);
     expect(runtime.create).toHaveBeenCalledWith(splitImportCreateRequest(plan()), expect.anything());
@@ -323,32 +343,41 @@ describe('runSplitImport', () => {
     expect(progress.at(-1)).toBe('creating 1050/1050');
     const numbers = progress.map(line => Number(line.split(' ')[1]?.split('/')[0]));
     expect(numbers).toEqual([...numbers].sort((a, b) => a - b));
-    await expect(stat(dir)).rejects.toThrow();
+    expect(await readdir(dir)).toEqual([]);
   });
 
-  it('keeps its folder and creates nothing when a part fails', async () => {
+  it('keeps the staged parts and creates nothing when a part fails', async () => {
     const { hub, runtime } = fakes({ failUpload: `sha256:${hex('2')}` });
     const dir = join(root, 'run');
     await expect(runSplitImport(plan(), { hub, runtime, dir })).rejects.toThrow('upload refused');
     expect(runtime.create).not.toHaveBeenCalled();
-    await expect(stat(dir)).resolves.toBeDefined();
+    expect(await readdir(dir)).toEqual([`${hex('2')}.gguf`]);
   });
 
-  it('keeps its folder when Ollama refuses the create', async () => {
+  it('keeps the staged parts when Ollama refuses the create', async () => {
     const { hub, runtime } = fakes({ failCreate: true });
     const dir = join(root, 'run');
     await expect(runSplitImport(plan(), { hub, runtime, dir })).rejects.toThrow('invalid split GGUF');
     await expect(stat(dir)).resolves.toBeDefined();
   });
 
-  it('leaves a partial download in place so the next run resumes it', async () => {
+  it('stages each part under its digest, whatever its name or url', () => {
+    const [first] = plan().parts;
+    expect(splitPartPath(root, first)).toBe(join(root, `${hex('1')}.gguf`));
+    const moved = { ...first, name: 'other-00001-of-00003.gguf', file: { ...first.file, url: 'https://hf.test/x' } };
+    expect(splitPartPath(root, moved)).toBe(splitPartPath(root, first));
+  });
+
+  it('resumes a partial after a failed run even when the retry fetches a different revision', async () => {
     const { runtime } = fakes();
     const controller = new AbortController();
-    const dir = splitImportStageDir(root, plan());
+    const dir = join(root, 'run');
     const seen: string[] = [];
+    const urls: string[] = [];
     const hub = {
       download: vi.fn(async (file: HubGgufFile, destination: string) => {
         seen.push(destination);
+        urls.push(file.url);
         if (seen.length === 1) {
           await writeFile(`${destination}.partial`, 'half');
           controller.abort();
@@ -361,18 +390,39 @@ describe('runSplitImport', () => {
     };
     await expect(runSplitImport(plan(), { hub, runtime, dir, signal: controller.signal })).rejects.toThrow('aborted');
     expect(runtime.uploadBlob).not.toHaveBeenCalled();
-    expect(splitImportStageDir(root, plan())).toBe(dir);
-    await runSplitImport(plan(), { hub, runtime, dir });
+    const moved = plan();
+    for (const part of moved.parts) part.file = { ...part.file, url: part.file.url.replace('hf.test', 'hf.test/rev2') };
+    await runSplitImport(moved, { hub, runtime, dir });
     expect(seen[1]).toBe(seen[0]);
-    await expect(stat(dir)).rejects.toThrow();
+    expect(urls[1]).toContain('/rev2/');
+    expect(await readdir(dir)).toEqual([]);
   });
 
-  it('keys the staging folder to the repo, revision and file set', () => {
-    const base = plan();
-    const moved = plan();
-    moved.parts[0] = { ...moved.parts[0], file: { ...moved.parts[0].file, url: 'https://hf.test/other-revision' } };
-    expect(splitImportStageDir(root, base)).toBe(splitImportStageDir(root, plan()));
-    expect(splitImportStageDir(root, moved)).not.toBe(splitImportStageDir(root, base));
+  it('counts staged bytes by digest, from a finished file or a partial', async () => {
+    await writeFile(join(root, `${hex('1')}.gguf`), Buffer.alloc(120));
+    await writeFile(join(root, `${hex('2')}.gguf.partial`), Buffer.alloc(40));
+    await writeFile(join(root, `${hex('3')}.gguf`), Buffer.alloc(9999));
+    const present = new Set([`sha256:${hex('3')}`]);
+    expect(await stagedPartBytes(root, plan(), present)).toEqual(
+      new Map([
+        [`sha256:${hex('1')}`, 120],
+        [`sha256:${hex('2')}`, 40],
+      ])
+    );
+  });
+
+  it('removes only this build staged files, partials and locks', async () => {
+    const build = plan();
+    const names = [
+      `${hex('1')}.gguf`,
+      `${hex('2')}.gguf.partial`,
+      `${hex('2')}.gguf.partial.json`,
+      `${hex('f')}.gguf.lock`,
+    ];
+    for (const name of [...names, `${hex('9')}.gguf`, `${hex('9')}.gguf.partial`])
+      await writeFile(join(root, name), 'x');
+    await removeSplitStaging(root, build);
+    expect((await readdir(root)).sort()).toEqual([`${hex('9')}.gguf`, `${hex('9')}.gguf.partial`]);
   });
 
   it('refuses a bad name before downloading anything', async () => {
@@ -382,9 +432,71 @@ describe('runSplitImport', () => {
     await expect(runSplitImport(bad, { hub, runtime, dir: join(root, 'run') })).rejects.toThrow(/cannot be imported/);
     expect(hub.download).not.toHaveBeenCalled();
   });
+
+  it('refuses two parts with the same file name before downloading anything', async () => {
+    const { hub, runtime } = fakes();
+    const twin = plan();
+    twin.parts[1] = { ...twin.parts[1], name: twin.parts[0].name };
+    await expect(runSplitImport(twin, { hub, runtime, dir: join(root, 'run') })).rejects.toThrow(
+      `two files are both named ${twin.parts[0].name}`
+    );
+    expect(hub.download).not.toHaveBeenCalled();
+  });
+});
+
+describe('stagedPath', () => {
+  const dir = join(tmpdir(), 'split-staged-path');
+
+  it('accepts a name that merely starts with two dots', () => {
+    expect(stagedPath(dir, '..foo-00001-of-00002.gguf')).toBe(join(dir, '..foo-00001-of-00002.gguf'));
+  });
+
+  it('refuses a name that leaves the folder or is not a plain file name', () => {
+    for (const name of ['..', '.', '', '../x.gguf', '..\\x.gguf', 'a/../../x.gguf', '/etc/passwd', 'C:x.gguf'])
+      expect(() => stagedPath(dir, name), name).toThrow(/cannot be staged/);
+  });
+});
+
+describe('createFileNameProblem on Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+  afterEach(() => Object.defineProperty(process, 'platform', platform));
+
+  it.each(['a<b.gguf', 'a>b.gguf', 'a|b.gguf', 'a?b.gguf', 'a*b.gguf', 'a"b.gguf'])(
+    'rejects %s only on win32',
+    name => {
+      Object.defineProperty(process, 'platform', { ...platform, value: 'linux' });
+      expect(createFileNameProblem(name)).toBeNull();
+      Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+      expect(createFileNameProblem(name)).toMatch(/Windows refuses/);
+    }
+  );
+
+  it('refuses such a Hub file name before planning', () => {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    const build = splitBuild({ files: [shard(1, 300, { path: 'Q8_0/model-Q8_0-00001-of-00003?.gguf' })] });
+    expect(splitImportBlock(hubDetail(), build)).toBe('unsupported-name');
+  });
 });
 
 describe('sweepSplitImports', () => {
+  it('removes staged part files untouched for the age limit and keeps recent ones', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'split-sweep-'));
+    try {
+      const week = 7 * 24 * 60 * 60 * 1000;
+      const aged = new Date(Date.now() - 2 * week);
+      for (const name of [`${hex('a')}.gguf.partial`, `${hex('a')}.gguf.partial.json`, `${hex('b')}.gguf.partial`])
+        await writeFile(join(root, name), 'x');
+      for (const name of [`${hex('a')}.gguf.partial`, `${hex('a')}.gguf.partial.json`])
+        await utimes(join(root, name), aged, aged);
+      await sweepSplitImports(root, week);
+      expect(await readdir(root)).toEqual([`${hex('b')}.gguf.partial`]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('sweepSplitImports of pre-digest folders', () => {
   it('removes staging folders untouched for longer than the age limit and keeps recent ones', async () => {
     const root = await mkdtemp(join(tmpdir(), 'split-sweep-'));
     try {

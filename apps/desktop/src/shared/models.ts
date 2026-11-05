@@ -170,6 +170,8 @@ export interface HubBuildView {
   blockedReason: string | null;
   /** For a split build Desktop downloads itself and adds to Ollama on this computer: how many files it has. */
   importParts: number | null;
+  /** With `importParts`: the size of its largest file, which is staged next to the copy Ollama keeps. */
+  importLargestBytes: number | null;
   fit: ModelFit | null;
 }
 
@@ -336,7 +338,8 @@ export interface ModelPull {
 }
 
 /** `listed`: the failure stays in the pull list, so the screen need not show it again. */
-export type ModelPullResult = { ok: true; ref: string } | { ok: false; error: ModelHubError; listed: boolean };
+export type ModelPullResult =
+  { ok: true; ref: string; notice?: string } | { ok: false; error: ModelHubError; listed: boolean };
 
 export type ModelRemoveResult = { ok: true } | { ok: false; error: ModelHubError };
 

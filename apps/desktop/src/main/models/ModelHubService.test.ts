@@ -3429,11 +3429,11 @@ describe('ModelHubService split builds', () => {
 
       expect(t.events).toEqual([
         `download ${SPLIT_ID}-00001-of-00002.gguf`,
-        `upload ${SPLIT_ID}-00001-of-00002.gguf`,
+        `upload ${'1'.repeat(64)}.gguf`,
         `download ${SPLIT_ID}-00002-of-00002.gguf`,
-        `upload ${SPLIT_ID}-00002-of-00002.gguf`,
+        `upload ${'2'.repeat(64)}.gguf`,
         'download mmproj-F16.gguf',
-        'upload mmproj-F16.gguf',
+        `upload ${PROJECTOR_SHA}.gguf`,
         'create',
       ]);
       expect(t.runtime.create).toHaveBeenCalledWith(
@@ -3464,9 +3464,82 @@ describe('ModelHubService split builds', () => {
     const t = await importing({ detail: splitDetail({ projectors: [] }) });
     try {
       t.hub.ollamaLayers.mockRejectedValue(new Error('registry down'));
-      await expect(t.service.pull(splitRequest)).resolves.toEqual({ ok: true, ref: SPLIT_REF });
+      const result = await t.service.pull(splitRequest);
+      expect(result).toMatchObject({ ok: true, ref: SPLIT_REF, notice: expect.stringMatching(/could not be read/) });
       expect(t.runtime.create.mock.calls[0]?.[0]).not.toHaveProperty('parameters');
       expect(t.warn).toHaveBeenCalledWith(expect.stringMatching(/registry down/));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('counts a store Desktop cannot see as one disk with staging', async () => {
+    let root = '';
+    let stagingFree = 849;
+    const freeSpace = vi.fn(async (path: string) => (path === root ? stagingFree : 10_000));
+    const sameDisk = vi.fn(async () => false);
+    const t = await importing({ deps: { freeSpace, sameDisk, pathExists: async () => false } });
+    root = t.root;
+    try {
+      t.runtime.list.mockResolvedValue([
+        {
+          name: 'qwen2.5:0.5b',
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+        },
+      ]);
+      const inspect = t.runtime.inspect.getMockImplementation();
+      t.runtime.inspect.mockImplementation(async (name, options) => ({
+        ...(await inspect!(name, options)),
+        contents: { template: null, license: null, modelBlob: SHA, storeDir: '/root/.ollama/models' },
+      }));
+      // 550 bytes in all, 300 in the largest part: one disk needs 850 on the staging disk.
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({
+        ok: false,
+        error: { kind: 'cannot-pull', message: expect.stringContaining('on the disk Desktop downloads to') },
+      });
+      expect(t.hub.download).not.toHaveBeenCalled();
+      stagingFree = 850;
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('counts parts already staged as progress when checking the room for a retry', async () => {
+    const free = vi.fn(async () => 549);
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => true, freeSpace: free },
+    });
+    try {
+      await writeFile(join(t.root, `${'1'.repeat(64)}.gguf.partial`), Buffer.alloc(300));
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+      free.mockResolvedValue(550);
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('keeps the staged part when the app quits mid-part, and a cancel still removes it', async () => {
+    const t = await importing();
+    try {
+      const stall = async (_file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+        await writeFile(`${destination}.partial`, 'half');
+        return new Promise<never>((_resolve, reject) =>
+          opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        );
+      };
+      t.hub.download.mockImplementationOnce(stall);
+      const quit = t.service.pull(splitRequest);
+      await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
+      t.service.dispose();
+      await expect(quit).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      expect(await t.left()).toEqual([`${'1'.repeat(64)}.gguf.partial`]);
     } finally {
       await t.cleanup();
     }

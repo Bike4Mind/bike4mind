@@ -44,10 +44,13 @@ function StoreLine({
   location,
   server,
   needed,
+  split,
 }: {
   location: ModelStoreLocation | null | 'failed';
   server: string | null;
   needed: number;
+  /** A split import stages a part beside the copies Ollama keeps, so `needed` is its own check's figure. */
+  split: boolean;
 }) {
   if (location === null)
     return (
@@ -87,7 +90,10 @@ function StoreLine({
       ) : (
         <>Saved to Ollama&apos;s model folder.</>
       )}
-      {free !== null && ` ${formatBytes(free)} free${short ? ', which is not enough for this download' : ''}.`}
+      {free !== null &&
+        ` ${formatBytes(free)} free${short ? `, which is not enough for this ${split ? 'import' : 'download'}` : ''}.`}
+      {split &&
+        ` Adding the parts needs ${formatBytes(needed)} free: every part, plus room for the largest while it is copied.`}
     </Typography>
   );
 }
@@ -119,6 +125,9 @@ export function PullDialog({
   // Desktop downloads a split build's parts with the Hugging Face token, so Ollama's key is not involved.
   const needsKey = model.needsAccess && build.importParts === null;
   const ready = (!restricted || acceptLicense) && (!needsKey || confirmAccess) && (!tooLarge || overrideFit);
+  const total = build.sizeBytes + (model.projectorBytes ?? 0);
+  const importNeeded =
+    build.importParts === null ? total : total + Math.max(build.importLargestBytes ?? 0, model.projectorBytes ?? 0);
   const names = model.licenseNames;
   const several = names.length > 1;
   const acceptLabel =
@@ -147,7 +156,7 @@ export function PullDialog({
                   ? ` ${server} downloads it straight from Hugging Face; you can remove it from Installed at any time.`
                   : ' Ollama downloads it; you can remove it from Installed at any time.'}
             </Typography>
-            <StoreLine location={location} server={server} needed={build.sizeBytes + (model.projectorBytes ?? 0)} />
+            <StoreLine location={location} server={server} needed={importNeeded} split={build.importParts !== null} />
             {server && (
               <Typography level="body-sm" data-testid="models-pull-dialog-server">
                 Desktop cannot see how much free space {server} has. Keep Bike4Mind open until the download finishes.

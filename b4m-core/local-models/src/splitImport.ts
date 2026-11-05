@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto';
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
-import type { DownloadOptions, DownloadResult } from './download';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { PARTIAL_RECORD_SUFFIX, PARTIAL_SUFFIX, type DownloadOptions, type DownloadResult } from './download';
 import {
   ollamaHubName,
   type HubGgufBuild,
@@ -47,16 +46,23 @@ export function createFileNameProblem(name: string): string | null {
   if (name === '' || name === '.' || name === '..') return `${JSON.stringify(name)} is not a file name`;
   if (/[\\:/]/.test(name) || [...name].some(char => char.charCodeAt(0) < 0x20))
     return `${name} has a character Ollama refuses in file names (backslash, colon or a control character)`;
+  if (process.platform === 'win32' && /[<>|?*"]/.test(name))
+    return `${name} has a character Windows refuses in file names (< > | ? * or a quote)`;
   return null;
 }
 
-/** The path of a staged part, which must stay inside `dir` even on Windows. */
-function stagedPath(dir: string, name: string): string {
+/** The path of a staged file, which must stay inside `dir` even on Windows. */
+export function stagedPath(dir: string, name: string): string {
   const path = resolve(dir, name);
   const from = relative(resolve(dir), path);
-  if (createFileNameProblem(name) || !from || from.startsWith('..') || isAbsolute(from))
+  if (createFileNameProblem(name) || !from || from === '..' || from.startsWith(`..${sep}`) || isAbsolute(from))
     throw new Error(`${name} cannot be staged inside the import folder`);
   return path;
+}
+
+/** Where a part is staged: named by its digest, so a retry finds it whatever revision or plan it was fetched under. */
+export function splitPartPath(dir: string, part: Pick<SplitImportPart, 'digest'>): string {
+  return stagedPath(dir, `${part.digest.replace(/^sha256:/, '')}.gguf`);
 }
 
 /** The name a split build is created under: the `hf.co` ref Ollama would pull it by if the registry served splits. */
@@ -227,23 +233,31 @@ export type ImportSpace =
 
 /**
  * Parts move one at a time (staged, copied into Ollama, then deleted), so staging needs room for the largest part
- * Ollama lacks and Ollama for all of them; on one disk that is both at once. `present` holds digests Ollama has.
+ * Ollama lacks and Ollama for all of them; on one disk that is both at once. `present` holds digests Ollama has;
+ * `staged` maps a digest to the bytes already staged, which are progress made, not space still needed.
  */
-export function splitImportSpace(plan: SplitImportPlan, present: ReadonlySet<string>, disks: ImportDisks): ImportSpace {
-  const missing = plan.parts.filter(part => !present.has(part.digest)).map(part => part.file.sizeBytes);
-  const largest = Math.max(0, ...missing);
-  const total = missing.reduce((sum, size) => sum + size, 0);
+export function splitImportSpace(
+  plan: SplitImportPlan,
+  present: ReadonlySet<string>,
+  disks: ImportDisks,
+  staged: ReadonlyMap<string, number> = new Map()
+): ImportSpace {
+  const parts = plan.parts.filter(part => !present.has(part.digest));
+  const sizes = parts.map(part => part.file.sizeBytes);
+  const have = parts.map(part => Math.min(staged.get(part.digest) ?? 0, part.file.sizeBytes));
+  const largest = Math.max(0, ...sizes);
+  const total = sizes.reduce((sum, size) => sum + size, 0);
   const { stagingFreeBytes: staging, storeFreeBytes: store } = disks;
   if (disks.sameDisk !== false) {
+    const needed = total - have.reduce((sum, bytes) => sum + bytes, 0) + largest;
     const known = [store, staging].filter((free): free is number => free !== null);
     const free = known.length ? Math.min(...known) : null;
     const where = store !== null && store === free ? 'store' : 'staging';
-    return free !== null && free < total + largest
-      ? { ok: false, where, neededBytes: total + largest, freeBytes: free }
-      : { ok: true };
+    return free !== null && free < needed ? { ok: false, where, neededBytes: needed, freeBytes: free } : { ok: true };
   }
-  if (staging !== null && staging < largest)
-    return { ok: false, where: 'staging', neededBytes: largest, freeBytes: staging };
+  const stagingNeeded = Math.max(0, ...sizes.map((size, i) => size - have[i]));
+  if (staging !== null && staging < stagingNeeded)
+    return { ok: false, where: 'staging', neededBytes: stagingNeeded, freeBytes: staging };
   if (store !== null && store < total) return { ok: false, where: 'store', neededBytes: total, freeBytes: store };
   return { ok: true };
 }
@@ -258,7 +272,7 @@ export interface SplitImportProgress {
 export interface SplitImportDeps {
   hub: { download(file: HubGgufFile, destination: string, options?: DownloadOptions): Promise<DownloadResult> };
   runtime: ModelImportRuntime;
-  /** Staging folder for this build (see `splitImportStageDir`); removed after a successful create, kept otherwise. */
+  /** Staging root; each part lives in it under its digest (see `splitPartPath`). Parts are removed after a successful create, kept otherwise. */
   dir: string;
   signal?: AbortSignal;
   onProgress?: (progress: SplitImportProgress) => void;
@@ -280,7 +294,7 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
     signal?.throwIfAborted();
     const size = part.file.sizeBytes;
     if (!(await runtime.hasBlob(part.digest, { signal }))) {
-      const path = stagedPath(dir, part.name);
+      const path = splitPartPath(dir, part);
       await hub.download(part.file, path, {
         signal,
         onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
@@ -298,20 +312,38 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
   report(done, 'creating');
   await runtime.create(splitImportCreateRequest(plan), { signal });
   // A Windows handle can outlive the run; sweepSplitImports removes what is left.
-  await removeSplitStaging(dir);
+  await removeSplitStaging(dir, plan);
 }
 
-/** Staging folder for one build: the same repo, revision and file set always map to the same folder. */
-export function splitImportStageDir(root: string, plan: SplitImportPlan): string {
-  const key = JSON.stringify([
-    plan.model,
-    plan.parts.map(part => [part.file.url, part.digest, part.file.sizeBytes, part.name]),
-  ]);
-  return join(root, `build-${createHash('sha256').update(key).digest('hex').slice(0, 32)}`);
+/** Removes exactly this build's staged parts, their partials and locks; other builds' files in `dir` stay. */
+export async function removeSplitStaging(dir: string, plan: SplitImportPlan): Promise<void> {
+  await Promise.all(
+    plan.parts.map(async part => {
+      const path = splitPartPath(dir, part);
+      const partial = `${path}${PARTIAL_SUFFIX}`;
+      for (const target of [path, `${partial}${PARTIAL_RECORD_SUFFIX}`, partial, `${path}.lock`])
+        await removeStaged(target);
+    })
+  );
 }
 
-export async function removeSplitStaging(dir: string): Promise<void> {
-  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+const removeStaged = (path: string) =>
+  rm(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => undefined);
+
+/** Bytes of each part not in `present` already on disk in `dir`, by digest, for a retry's space check. */
+export async function stagedPartBytes(
+  dir: string,
+  plan: SplitImportPlan,
+  present: ReadonlySet<string>
+): Promise<Map<string, number>> {
+  const staged = new Map<string, number>();
+  for (const part of plan.parts) {
+    if (present.has(part.digest)) continue;
+    const path = splitPartPath(dir, part);
+    const info = (await stat(path).catch(() => null)) ?? (await stat(`${path}${PARTIAL_SUFFIX}`).catch(() => null));
+    if (info?.isFile()) staged.set(part.digest, Math.min(info.size, part.file.sizeBytes));
+  }
+  return staged;
 }
 
 export const SPLIT_STAGING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -326,7 +358,7 @@ async function lastTouched(path: string): Promise<number> {
   return newest;
 }
 
-/** Removes staging folders nothing has written to for `maxAgeMs`; a recent one may be a retry's resume point. */
+/** Removes staged files (and pre-digest build folders) nothing has written to for `maxAgeMs`; a recent one may be a retry's resume point. */
 export async function sweepSplitImports(
   root: string,
   maxAgeMs: number = SPLIT_STAGING_MAX_AGE_MS,
@@ -337,7 +369,7 @@ export async function sweepSplitImports(
     names.map(async name => {
       const path = join(root, name);
       const touched = await lastTouched(path).catch(() => null);
-      if (touched !== null && now - touched > maxAgeMs) await removeSplitStaging(path);
+      if (touched !== null && now - touched > maxAgeMs) await removeStaged(path);
     })
   );
 }
