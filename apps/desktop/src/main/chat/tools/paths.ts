@@ -310,15 +310,32 @@ export async function hostPhysicalTarget(target: string): Promise<string> {
  * nearest existing parent's real path. Sync, and runs per decision, so keep callers off hot loops.
  */
 export function withRealPath(path: string): string[] {
-  const real = realpathSyncNearest(path) ?? path;
-  const own = ownLocation(path);
-  return [...new Set([path, real, ...(own === null ? [] : [own])])];
+  return spellingsOf(path).known;
 }
 
-/** Where `path` itself sits: its parent's real path plus its name, without following a final link. Null if the parent cannot be resolved. */
+/**
+ * `withRealPath` for a location that must stay protected. When its real path or its own location
+ * cannot be resolved, where it lands is unknown, so its whole volume is protected.
+ */
+export function protectedSpellings(path: string): string[] {
+  const { known, resolved } = spellingsOf(path);
+  return resolved ? known : [...new Set([...known, parse(resolve(path)).root])];
+}
+
+function spellingsOf(path: string): { known: string[]; resolved: boolean } {
+  const real = realpathSyncNearest(path);
+  const own = ownLocation(path);
+  const known = [path, ...(real === null ? [] : [real]), ...(own === null ? [] : [own])];
+  return { known: [...new Set(known)], resolved: real !== null && own !== null };
+}
+
+/**
+ * Where `path` itself sits: its parent's real path plus its name, without following a final link.
+ * A relative path or a root is returned as given; null only when the parent cannot be resolved.
+ */
 export function ownLocation(path: string): string | null {
   const parent = dirname(path);
-  if (!isAbsolute(path) || parent === path) return null;
+  if (!isAbsolute(path) || parent === path) return path;
   const real = realpathSyncNearest(parent);
   return real === null ? null : join(real, basename(path));
 }

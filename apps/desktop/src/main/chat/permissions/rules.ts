@@ -502,11 +502,11 @@ export class PermissionRuleSet {
 
 /**
  * The lexical and real spellings of `path`, plus any WSL drive spelling, case folded where volumes ignore case.
- * Null when its symlinks cannot be resolved; the callers then treat it as protected.
+ * Also its own location, a final link unfollowed. Null when either cannot be resolved; the callers then treat it as protected.
  */
 function spellings(path: string): string[] | null {
   const real = isAbsolute(path) ? realpathSyncNearest(path) : path;
-  if (real === null) return null;
-  const own = isAbsolute(path) ? ownLocation(path) : null;
-  return withDriveSpellings([path, real, ...(own === null ? [] : [own])]).map(spelling => caseFolded(spelling));
+  const own = ownLocation(path);
+  if (real === null || own === null) return null;
+  return withDriveSpellings([path, real, own]).map(spelling => caseFolded(spelling));
 }

@@ -1,10 +1,11 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PathAccessDenied, withRealPath } from './paths';
 import type { ToolContext } from './types';
-import { fileEdit, fileWrite } from './writeTools';
+import { fileEdit, fileWrite, resolveWritablePath } from './writeTools';
 
 describe('write tools', () => {
   let root: string;
@@ -101,6 +102,36 @@ describe('write tools', () => {
 
       await expect(fileWrite.run(input, guarded)).rejects.toThrow(/protected location/);
       await expect(readFile(input.path, 'utf8')).rejects.toThrow();
+    });
+
+    it('refuses a link inside a protected folder reached through an alias, though its target is granted', async () => {
+      await mkdir(join(outside, 'prot'));
+      await writeFile(join(root, 'payload'), 'kept\n', 'utf8');
+      await symlink(outside, join(root, 'alias'));
+      await symlink(join(root, 'payload'), join(outside, 'prot', 'lnk'));
+      const guarded = { ...context, protectedPaths: [join(outside, 'prot')] };
+
+      await expect(resolveWritablePath(join(root, 'alias', 'prot', 'lnk'), guarded)).rejects.toThrow(
+        /protected location/
+      );
+      await expect(resolveWritablePath(join(root, 'payload'), guarded)).resolves.toBe(join(root, 'payload'));
+    });
+
+    it('refuses a path whose parent cannot be resolved', async () => {
+      await mkdir(join(root, 'locked'));
+      await writeFile(join(root, 'locked', 'file.txt'), 'x', 'utf8');
+      const native = realpathSync.native;
+      const spy = vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path) === join(root, 'locked')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return native(path, options);
+      });
+      try {
+        await expect(resolveWritablePath(join(root, 'locked', 'file.txt'), context)).rejects.toThrow(
+          /cannot be written to/
+        );
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     // The containment check runs again in `run`, against the resolved real path: the prompt the

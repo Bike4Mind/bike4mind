@@ -388,6 +388,25 @@ describe('PermissionRuleSet', () => {
     }
   });
 
+  it('does not allow an edit of a path whose parent cannot be resolved, though the path itself can', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    const native = realpathSync.native;
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path) === join(base, 'dir')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return native(path, options);
+    });
+    try {
+      await mkdir(join(base, 'dir'));
+      await writeFile(join(base, 'dir', 'file'), 'x');
+      const rules = set({ allow: ['Edit'] }, [join(base, 'prot')]);
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'dir', 'file')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'other')] })).toBe('allow');
+    } finally {
+      vi.restoreAllMocks();
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   describe('when a path cannot be resolved', () => {
     let base: string;
     let rules: PermissionRuleSet;

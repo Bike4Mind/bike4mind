@@ -3,7 +3,14 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
-import { PathAccessDenied, physicalTarget, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
+import {
+  ownLocation,
+  PathAccessDenied,
+  physicalTarget,
+  realpathNearest,
+  resolveWithinRoots,
+  withinGuarded,
+} from './paths';
 import { recordRecentFile } from './recentFiles';
 import { protectionFor } from './sandbox';
 import { recordSessionWrite } from './sessionScripts';
@@ -32,15 +39,21 @@ export const MAX_WRITE_BYTES = 1_000_000;
 export async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
   const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
   const real = await physicalTarget(target);
+  // A delete or move acts on a final link itself, wherever its parent really is.
+  const own = ownLocation(target);
+  if (own === null) {
+    throw new PathAccessDenied(requested, `Refused: ${requested} cannot be written to. Choose a different path.`);
+  }
+  const candidates = [target, real, own];
 
-  if (withinGuarded(context.protectedPaths ?? [], [target, real])) {
+  if (withinGuarded(context.protectedPaths ?? [], candidates)) {
     throw new PathAccessDenied(
       requested,
       `Refused: ${requested} is a protected location and cannot be written to, ` +
         'whatever folders are shared. Choose a different path.'
     );
   }
-  const reason = protectionFor([target, real], 'write');
+  const reason = protectionFor(candidates, 'write');
   if (reason) {
     throw new PathAccessDenied(
       requested,

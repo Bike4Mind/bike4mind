@@ -5,6 +5,7 @@ import { realpath } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  ownLocation,
   PathAccessDenied,
   resolveWithinRoots,
   resolveWithinRootsPhysically,
@@ -246,6 +247,19 @@ describe('withRealPath', () => {
       join(base, 'cfg-link', 'new', 'file'),
       join(base, 'config', 'new', 'file'),
     ]);
+  });
+});
+
+describe('ownLocation', () => {
+  it('returns a relative path or a root as given, and null only when the parent cannot be resolved', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await mkdir(join(base, 'dir'));
+    await symlink(join(base, 'loop'), join(base, 'loop'));
+
+    expect(ownLocation('relative/name')).toBe('relative/name');
+    expect(ownLocation('/')).toBe('/');
+    expect(ownLocation(join(base, 'dir', 'name'))).toBe(join(base, 'dir', 'name'));
+    expect(ownLocation(join(base, 'loop', 'name'))).toBeNull();
   });
 });
 
