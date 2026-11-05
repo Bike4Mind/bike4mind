@@ -728,6 +728,7 @@ function CliApp() {
         apiClient,
         tokenGetter,
         startupLog,
+        detectOllama: true,
         getSessionId: () => useCliStore.getState().session?.id,
         onModelsAdded: next => {
           liveModels.current = next;
