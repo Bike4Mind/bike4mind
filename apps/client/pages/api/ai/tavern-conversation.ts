@@ -6,6 +6,9 @@ import { OperationsModelService } from '@bike4mind/server-utils/services/operati
 import { agentRepository } from '@bike4mind/database';
 import { agentMemoryService } from '@bike4mind/services';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { HTTPError } from '@bike4mind/common';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 /**
  * /api/ai/tavern-conversation - Two-mode endpoint for live NPC conversations.
@@ -116,7 +119,7 @@ Return ONLY valid JSON (no markdown fences):
 }
 
 // Handler
-// SPA-only and not credit-metered, so it stays off the API-key surface.
+// SPA-only, so it stays off the API-key surface.
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
@@ -132,7 +135,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
     // agentIds: optional Record<string, string> mapping character id to agent database id
 
     try {
-      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId } = operations;
+      const meter = createRequestCompletionMeter(req, 'tavern conversation', { systemModel: true });
+      const llm = meterCompletionBackend(operations.llm, meter, operations.modelInfo);
 
       // Mode 1: Generate Cast (no characters provided)
       if (!characters) {
@@ -232,7 +238,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
       // Fire-and-forget: extract memories for agent characters
       if (agentIds && typeof agentIds === 'object' && Object.keys(agentIds).length > 0) {
         (async () => {
-          const { modelId: memModelId, llm: memLlm } = await OperationsModelService.getOperationsModel();
+          const memOps = await OperationsModelService.getOperationsModel();
+          const memModelId = memOps.modelId;
+          const memLlm = meterCompletionBackend(memOps.llm, meter, memOps.modelInfo);
 
           const llmComplete: agentMemoryService.LlmCompleteFn = async (msgs, opts) => {
             let result = '';
@@ -271,6 +279,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       return;
     } catch (error) {
+      // Credit and admission refusals keep their status (422) instead of the canned fallback.
+      if (error instanceof HTTPError) throw error;
       req.logger?.error?.('Tavern conversation error:', error);
 
       // Fallback for cast generation

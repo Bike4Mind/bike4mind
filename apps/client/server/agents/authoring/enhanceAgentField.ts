@@ -4,7 +4,7 @@ import { IAgent, IMessage } from '@bike4mind/common';
 import { BadRequestError, getSettingsByNames } from '@bike4mind/utils';
 import { AuthoringResultError } from '@server/agents/authoring/authoringErrors';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
-import { apiKeyService } from '@bike4mind/services';
+import { apiKeyService, meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
 
 // Field metadata for better prompting
 const FIELD_DESCRIPTIONS: Record<string, { label: string; description: string; style: string }> = {
@@ -116,7 +116,8 @@ export async function enhanceAgentField(
   agent: IAgent,
   userId: string,
   input: { fieldName: string; currentValue: string; agentName?: string },
-  logger: Logger
+  logger: Logger,
+  meter: CompletionMeter
 ): Promise<string> {
   const { fieldName, currentValue, agentName } = input;
   // Get API keys and available models
@@ -138,8 +139,8 @@ export async function enhanceAgentField(
     throw new BadRequestError('No available LLM model found for field enhancement');
   }
 
-  const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: logger, endUserId: userId });
-  if (!llm) {
+  const rawLlm = getLlmByModel(apiKeyTable, { modelInfo, logger: logger, endUserId: userId });
+  if (!rawLlm) {
     throw new BadRequestError('Failed to initialize LLM backend for field enhancement');
   }
 
@@ -191,6 +192,7 @@ Please enhance this personality field, keeping the user's core idea as the found
   // Generate the enhanced field
   logger.info(`Enhancing ${fieldName} for agent ${agent.name} using model ${modelInfo.id}`);
 
+  const llm = meterCompletionBackend(rawLlm, meter, modelInfo);
   await llm.complete(
     modelInfo.id,
     messages,

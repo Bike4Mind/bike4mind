@@ -76,6 +76,20 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   },
 }));
 
+// Billing is covered in revise.metering.test.ts; here the meter always reserves, then the raw backend runs.
+vi.mock('@bike4mind/services', () => ({
+  meterCompletionBackend: (
+    llm: { complete: (...args: unknown[]) => unknown },
+    meter: (...args: unknown[]) => Promise<unknown>
+  ) => ({
+    complete: async (...args: unknown[]) => {
+      await meter();
+      return llm.complete(...args);
+    },
+  }),
+}));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => async () => ({}) }));
+
 import reviseHandler from '../revise';
 import restoreHandler from '../restore';
 
