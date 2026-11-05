@@ -593,6 +593,15 @@ describe('AnalyticsTab', () => {
       );
     });
 
+    it('says the usage covers today alone when no complete day has a rollup yet', async () => {
+      const base = overview();
+      mocks.overview.mockResolvedValue({ data: overview({ usage: { ...base.usage, summaryDays: 0 } }) });
+      await renderPage('/admin?tab=analytics');
+      expect(await screen.findByTestId('analytics-usage-features-caption')).toHaveTextContent(
+        'over today so far (no complete day has a rollup yet); Chat leads.'
+      );
+    });
+
     it('does not open a row whose account no longer exists', async () => {
       const router = await renderPage('/admin?tab=analytics');
       fireEvent.click(await screen.findByTestId('analytics-top-users-row-bbbbbbbbbbbbbbbbbbbbbbbb'));

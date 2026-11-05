@@ -142,8 +142,8 @@ const addInto = (totals: Map<string, number>, counts: Record<string, number> | u
 };
 
 /**
- * Usage section (spec 4.7). Rankings and totals use the complete days (or today alone when the range
- * has none), so they equal a sum over analytics_daily; the per-day series also carry today's live slice.
+ * Usage section (spec 4.7). Rankings and totals use the complete days (or today alone when none of them
+ * has a rollup), so they equal a sum over analytics_daily; the per-day series also carry today's live slice.
  */
 function buildUsage(
   rangeDays: readonly string[],
@@ -159,7 +159,7 @@ function buildUsage(
   for (const day of summaryDays) {
     const values = valuesFor(day);
     if (!values) continue;
-    coveredDays++;
+    if (day !== partialDay) coveredDays++;
     addInto(featureTotals, values.requestsByFeature);
     addInto(modelTotals, values.requestsByModel);
     requests += sum(Object.values(values.requestsByFeature ?? {}));
@@ -377,7 +377,12 @@ export function buildOverview({
       },
     },
     activeUsers: { days, bySource, sources },
-    usage: buildUsage(rangeDays, completeDays.length ? completeDays : rangeDays, window.partialDay, valuesFor),
+    usage: buildUsage(
+      rangeDays,
+      completeDays.some(day => byDay.has(day)) ? completeDays : rangeDays,
+      window.partialDay,
+      valuesFor
+    ),
     signups: {
       buckets,
       totals: {

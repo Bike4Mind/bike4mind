@@ -52,6 +52,7 @@ const tooltipCount = (value: unknown, name: unknown) =>
 const dayLabel = (day: UsageDay) => `${day.day}${day.partial ? ' (partial)' : ''}`;
 const summaryPeriod = ({ window, usage }: AnalyticsOverview) => {
   if (window.completeDays === 0) return 'today so far';
+  if (usage.summaryDays === 0) return 'today so far (no complete day has a rollup yet)';
   const days = (count: number) => `${count} complete UTC ${count === 1 ? 'day' : 'days'}`;
   // A complete day can still be waiting for its nightly rollup; it is not in the totals until then.
   return usage.summaryDays === window.completeDays

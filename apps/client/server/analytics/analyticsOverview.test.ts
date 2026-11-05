@@ -420,6 +420,14 @@ describe('buildOverview usage', () => {
     expect(usage.summaryDays).toBe(5);
   });
 
+  it('ranks today alone when no complete day has a rollup, as on a fresh environment', () => {
+    const usage = build([]);
+    expect(usage.summaryDays).toBe(0);
+    expect(usage.features).toEqual(['chat']);
+    expect(usage.models).toEqual([{ model: 'gpt-4.1', requests: 2, share: 100 }]);
+    expect(usage.totals).toEqual({ requests: 2, credits: 7 });
+  });
+
   it('ranks the top ten models with their share of every request', () => {
     const models = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`m${String(i).padStart(2, '0')}`, 12 - i]));
     const usage = build([row('2026-06-14', { requestsByModel: models, requestsByFeature: { chat: 78 } })], null);

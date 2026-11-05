@@ -131,7 +131,7 @@ export type AnalyticsOverview = {
     /** Requests on models outside the top ANALYTICS_TOP_MODELS. */
     otherModelRequests: number;
     totals: { requests: number; credits: number };
-    /** Days the rankings and totals cover: complete days with a rollup, or today alone when there are none. */
+    /** Complete days with a rollup that the rankings and totals cover; 0 when they cover today alone. */
     summaryDays: number;
   };
   signups: {
