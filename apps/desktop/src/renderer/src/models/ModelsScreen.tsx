@@ -21,6 +21,7 @@ import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/l
 import { missingFromCatalog } from './catalogSync';
 import { CuratedTab } from './CuratedTab';
 import { ExploreTab, rememberExploreRepo } from './ExploreTab';
+import { GpuMemoryCapWarning } from './GpuMemoryCapWarning';
 import { serverIdentity } from './installedCache';
 import { InstalledTab, type ModelsInUse } from './InstalledTab';
 import { manageNote, type ChatWith, type ModelTarget, type ModelWith } from './modelTarget';
@@ -477,6 +478,10 @@ export function ModelsScreen({
               {chatError}
             </Alert>
           )}
+          <GpuMemoryCapWarning
+            serverId={serverId}
+            cap={status && hub.installed?.ok ? (hub.installed.gpuMemoryCap ?? null) : undefined}
+          />
           {hub.pulls.length > 0 && (
             <Stack spacing={1} data-testid="models-pull-list">
               {hub.pulls.map(pull => (
