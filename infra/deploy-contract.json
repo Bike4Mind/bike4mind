@@ -9,7 +9,8 @@
     {
       "name": "searxng",
       "dockerfile": "infra/searxng/Dockerfile",
-      "env": "SEARXNG_IMAGE"
+      "env": "SEARXNG_IMAGE",
+      "hashInputs": ["selfhost/searxng/settings.yml"]
     }
   ],
   "externalImages": [
