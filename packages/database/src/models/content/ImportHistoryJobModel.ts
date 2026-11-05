@@ -75,7 +75,8 @@ const ImportHistoryJobSchema = new mongoose.Schema(
 
     // Error handling
     errorMessage: { type: String },
-    errorStack: { type: String },
+    // Server-only diagnostics: excluded from find results unless a query selects +errorStack.
+    errorStack: { type: String, select: false },
     failedAt: { type: Date },
 
     // Timing
