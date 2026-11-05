@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   findBySlug: vi.fn(),
   findByDatalakeTag: vi.fn(),
   getSettingsValue: vi.fn(),
+  claimOnce: vi.fn(),
+  releaseClaim: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   createHelpEmbedder: vi.fn(),
   ingestHelpDatalake: vi.fn(),
@@ -15,7 +17,11 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: h.connectDB,
-  adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
+  adminSettingsRepository: {
+    getSettingsValue: h.getSettingsValue,
+    claimOnce: h.claimOnce,
+    releaseClaim: h.releaseClaim,
+  },
   apiKeyRepository: {},
   dataLakeRepository: { findBySlug: h.findBySlug, findByDatalakeTag: h.findByDatalakeTag },
   fabFileChunkRepository: {},
@@ -41,7 +47,7 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://%STAGE%/db' } }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'dev' } } }));
 
-import { handler, runHelpDatalakeIngest } from './helpDatalakeIngest';
+import { HELP_LAKE_BOOTSTRAP_MARKER, handler, runHelpDatalakeIngest } from './helpDatalakeIngest';
 
 const CLEAN_RESULT = {
   publicEntries: 51,
@@ -154,6 +160,7 @@ describe('runHelpDatalakeIngest with a bootstrap owner (self-host)', () => {
     h.getEffectiveLLMApiKeys.mockResolvedValue({});
     h.createHelpEmbedder.mockReturnValue({ embed: vi.fn(), model: 'text-embedding-3-small' });
     h.ingestHelpDatalake.mockResolvedValue(CLEAN_RESULT);
+    h.claimOnce.mockResolvedValue(true);
     bootstrapOwnerId.mockResolvedValue('admin-1');
   });
 
@@ -194,5 +201,64 @@ describe('runHelpDatalakeIngest with a bootstrap owner (self-host)', () => {
       expect.anything(),
       expect.objectContaining({ userId: 'system-user' })
     );
+  });
+
+  it('does not re-bootstrap a purged lake: the marker outlives the hard-deleted row', async () => {
+    h.claimOnce.mockResolvedValue(false);
+
+    expect(await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).toEqual({
+      skipped: 'lake-missing',
+    });
+    expect(h.ingestHelpDatalake).not.toHaveBeenCalled();
+  });
+
+  it('records the marker for a lake it did not create, live or deleted, so a later purge stays purged', async () => {
+    h.findBySlug.mockResolvedValue({ id: 'lake-1', createdByUserId: 'system-user' });
+    await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId });
+    h.findBySlug.mockResolvedValue(null);
+    h.findByDatalakeTag.mockResolvedValue({ id: 'lake-1', status: 'deleted' });
+    await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId });
+
+    expect(h.claimOnce).toHaveBeenCalledTimes(2);
+    expect(h.claimOnce).toHaveBeenCalledWith(HELP_LAKE_BOOTSTRAP_MARKER, expect.any(String));
+  });
+
+  it('does not spend the bootstrap when the embedding model is unusable', async () => {
+    h.getSettingsValue.mockResolvedValue(undefined);
+
+    expect(await runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).toEqual({
+      skipped: 'embedding-model',
+    });
+    expect(h.claimOnce).not.toHaveBeenCalled();
+  });
+
+  it('releases the bootstrap when it fails before the lake row exists', async () => {
+    h.ingestHelpDatalake.mockRejectedValue(new Error('embed failed'));
+
+    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow('embed failed');
+    const claimId = h.claimOnce.mock.calls[0][1];
+    expect(h.releaseClaim).toHaveBeenCalledWith(HELP_LAKE_BOOTSTRAP_MARKER, claimId);
+  });
+
+  it('keeps the bootstrap once the lake row exists, even if the run then fails', async () => {
+    h.ingestHelpDatalake.mockImplementation(async () => {
+      h.findByDatalakeTag.mockResolvedValue({ id: 'lake-1', status: 'active' });
+      throw new Error('embed failed');
+    });
+
+    await expect(runHelpDatalakeIngest({ corpusRoot: '/corpus', bootstrapOwnerId })).rejects.toThrow('embed failed');
+    expect(h.releaseClaim).not.toHaveBeenCalled();
+  });
+});
+
+describe('hosted handler and the bootstrap marker', () => {
+  it('never writes the self-host marker', async () => {
+    vi.clearAllMocks();
+    h.findBySlug.mockResolvedValue({ id: 'lake-1', createdByUserId: 'system-user' });
+    h.ingestHelpDatalake.mockResolvedValue(CLEAN_RESULT);
+
+    await handler();
+
+    expect(h.claimOnce).not.toHaveBeenCalled();
   });
 });

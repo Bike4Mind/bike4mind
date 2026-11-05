@@ -114,4 +114,27 @@ describe('self-host helpDatalakeIngest', () => {
     expect(await selfHostRun()).toEqual({ skipped: 'lake-missing' });
     expect((await DataLakeModel.findOne({ slug: 'system-help' }).lean())?.status).toBe('deleted');
   });
+
+  it('does not re-bootstrap a help lake an admin purged', async () => {
+    await User.collection.insertOne({ _id: ADMIN, username: 'admin', email: 'admin@example.com', isAdmin: true });
+    expect(await selfHostRun()).toMatchObject({ created: 2 });
+    // What cleanupDeletedDataLake ends with: the lake row is hard-deleted.
+    await DataLakeModel.collection.deleteMany({ slug: 'system-help' });
+    const embedsBefore = embed.mock.calls.length;
+
+    expect(await selfHostRun()).toEqual({ skipped: 'lake-missing' });
+    expect(await DataLakeModel.countDocuments({})).toBe(0);
+    expect(embed.mock.calls.length).toBe(embedsBefore);
+  });
+
+  it('does not re-bootstrap a purged lake that the worker did not create', async () => {
+    await User.collection.insertOne({ _id: ADMIN, username: 'admin', email: 'admin@example.com', isAdmin: true });
+    // Bootstrapped by hand (help:ingest-datalake) before this worker ever ran.
+    await selfHostRun();
+    await mongoose.model('AdminSettings').collection.deleteMany({});
+    await selfHostRun();
+    await DataLakeModel.collection.deleteMany({ slug: 'system-help' });
+
+    expect(await selfHostRun()).toEqual({ skipped: 'lake-missing' });
+  });
 });

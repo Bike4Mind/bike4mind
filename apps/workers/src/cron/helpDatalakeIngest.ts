@@ -36,7 +36,7 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { isSupportedEmbeddingModel } from '@bike4mind/common';
+import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import {
   HELP_DATALAKE_SLUG,
@@ -47,6 +47,7 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { Resource } from 'sst';
 
@@ -65,8 +66,9 @@ export interface HelpDatalakeIngestRunOptions {
   corpusRoot: string;
   /**
    * Self-host only: names the owner when no help lake has EVER existed, so a fresh install
-   * bootstraps itself. Hosted omits it and keeps the no-bootstrap rule above. A lake that exists
-   * but is deleted or purging is never revived either way. Returns null to skip this run.
+   * bootstraps itself. Hosted omits it and keeps the no-bootstrap rule above. A lake that was
+   * deleted, is purging or was purged is never revived either way (see HELP_LAKE_BOOTSTRAP_MARKER).
+   * Returns null to skip this run.
    */
   bootstrapOwnerId?: () => Promise<string | null>;
 }
@@ -74,40 +76,33 @@ export interface HelpDatalakeIngestRunOptions {
 export type HelpDatalakeIngestRunResult =
   { skipped: 'lake-missing' | 'no-owner' | 'embedding-model' } | Awaited<ReturnType<typeof ingestHelpDatalake>>;
 
-/** One re-sync pass. The caller connects the DB. */
-export async function runHelpDatalakeIngest(opts: HelpDatalakeIngestRunOptions): Promise<HelpDatalakeIngestRunResult> {
-  // By slug, unlike the script's tag lookup: an unattended run must not revive a lake an admin deleted.
-  const lake = await dataLakeRepository.findBySlug(HELP_DATALAKE_SLUG);
-  let ownerId: string;
-  if (lake) {
-    // Owner comes from the lake, never from this function - see the no-bootstrap note above.
-    ownerId = lake.createdByUserId;
-  } else {
-    // The tag lookup also sees deleted and purging lakes, so only a never-created lake bootstraps.
-    const everCreated = opts.bootstrapOwnerId ? await dataLakeRepository.findByDatalakeTag(HELP_DATALAKE_TAG) : null;
-    if (!opts.bootstrapOwnerId || everCreated) {
-      logger.warn(
-        '[helpDatalakeIngest] no live system-help lake (missing, deleted or purging); run help:ingest-datalake to bootstrap or reactivate it'
-      );
-      return { skipped: 'lake-missing' };
-    }
-    const bootstrapOwner = await opts.bootstrapOwnerId();
-    if (!bootstrapOwner) {
-      logger.info('[helpDatalakeIngest] no help lake yet and no admin to own it; retrying next run');
-      return { skipped: 'no-owner' };
-    }
-    ownerId = bootstrapOwner;
-    logger.info('[helpDatalakeIngest] bootstrapping the system-help lake', { ownerId });
-  }
+/**
+ * Insert-once admin-settings marker: set the first time self-host sees a help lake (live, deleted,
+ * or one it bootstraps). A purge hard-deletes the lake row, so without this a purged lake would
+ * read as a fresh install and be bootstrapped again on the next run.
+ */
+export const HELP_LAKE_BOOTSTRAP_MARKER = 'helpDatalakeBootstrapped';
 
+const markHelpLakeSeen = () => adminSettingsRepository.claimOnce(HELP_LAKE_BOOTSTRAP_MARKER, randomUUID());
+
+const readEmbeddingModel = async (): Promise<SupportedEmbeddingModel | null> => {
   const embeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-  if (!embeddingModel || !isSupportedEmbeddingModel(embeddingModel)) {
-    logger.error('[helpDatalakeIngest] defaultEmbeddingModel is unset or unsupported', {
-      embeddingModel: String(embeddingModel),
-    });
-    return { skipped: 'embedding-model' };
-  }
+  if (embeddingModel && isSupportedEmbeddingModel(embeddingModel)) return embeddingModel;
+  logger.error('[helpDatalakeIngest] defaultEmbeddingModel is unset or unsupported', {
+    embeddingModel: String(embeddingModel),
+  });
+  return null;
+};
 
+const lakeMissing = (): { skipped: 'lake-missing' } => {
+  logger.warn(
+    '[helpDatalakeIngest] no live system-help lake (missing, deleted, purging or purged); run help:ingest-datalake to bootstrap or reactivate it'
+  );
+  return { skipped: 'lake-missing' };
+};
+
+/** Embeds with the owner's effective keys and mirrors the corpus into the lake. */
+async function ingestForOwner(ownerId: string, embeddingModel: SupportedEmbeddingModel, corpusRoot: string) {
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(ownerId, {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
@@ -117,8 +112,7 @@ export async function runHelpDatalakeIngest(opts: HelpDatalakeIngestRunOptions):
   // is stamped with what it was actually embedded with (see createHelpEmbedder).
   const { embed, model: resolvedEmbeddingModel } = createHelpEmbedder(embeddingModel, apiKeyTable);
 
-  const root = opts.corpusRoot;
-  const result = await ingestHelpDatalake(
+  return ingestHelpDatalake(
     {
       db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository, dataLakes: dataLakeRepository },
       embed,
@@ -130,10 +124,60 @@ export async function runHelpDatalakeIngest(opts: HelpDatalakeIngestRunOptions):
     },
     {
       userId: ownerId,
-      helpIndexPath: path.join(root, 'help-index.json'),
-      helpContentRoot: path.join(root, 'docs'),
+      helpIndexPath: path.join(corpusRoot, 'help-index.json'),
+      helpContentRoot: path.join(corpusRoot, 'docs'),
     }
   );
+}
+
+/** One re-sync pass. The caller connects the DB. */
+export async function runHelpDatalakeIngest(opts: HelpDatalakeIngestRunOptions): Promise<HelpDatalakeIngestRunResult> {
+  // By slug, unlike the script's tag lookup: an unattended run must not revive a lake an admin deleted.
+  const lake = await dataLakeRepository.findBySlug(HELP_DATALAKE_SLUG);
+  let ownerId: string;
+  let embeddingModel: SupportedEmbeddingModel | null = null;
+  let bootstrapClaimId: string | undefined;
+  if (lake) {
+    // Owner comes from the lake, never from this function - see the no-bootstrap note above.
+    ownerId = lake.createdByUserId;
+    // Also covers a lake the script or an older worker created before the marker existed.
+    if (opts.bootstrapOwnerId) await markHelpLakeSeen();
+  } else {
+    if (!opts.bootstrapOwnerId) return lakeMissing();
+    // The tag lookup also sees deleted and purging lakes; the marker remembers purged ones.
+    if (await dataLakeRepository.findByDatalakeTag(HELP_DATALAKE_TAG)) {
+      await markHelpLakeSeen();
+      return lakeMissing();
+    }
+    const bootstrapOwner = await opts.bootstrapOwnerId();
+    if (!bootstrapOwner) {
+      logger.info('[helpDatalakeIngest] no help lake yet and no admin to own it; retrying next run');
+      return { skipped: 'no-owner' };
+    }
+    // Checked before claiming, so a misconfigured install does not burn its one bootstrap.
+    embeddingModel = await readEmbeddingModel();
+    if (!embeddingModel) return { skipped: 'embedding-model' };
+    bootstrapClaimId = randomUUID();
+    if (!(await adminSettingsRepository.claimOnce(HELP_LAKE_BOOTSTRAP_MARKER, bootstrapClaimId))) {
+      return lakeMissing();
+    }
+    ownerId = bootstrapOwner;
+    logger.info('[helpDatalakeIngest] bootstrapping the system-help lake', { ownerId });
+  }
+
+  embeddingModel ??= await readEmbeddingModel();
+  if (!embeddingModel) return { skipped: 'embedding-model' };
+
+  let result: Awaited<ReturnType<typeof ingestHelpDatalake>>;
+  try {
+    result = await ingestForOwner(ownerId, embeddingModel, opts.corpusRoot);
+  } catch (err) {
+    // A bootstrap that failed before the lake row existed must not use up the install's one bootstrap.
+    if (bootstrapClaimId && !(await dataLakeRepository.findByDatalakeTag(HELP_DATALAKE_TAG))) {
+      await adminSettingsRepository.releaseClaim(HELP_LAKE_BOOTSTRAP_MARKER, bootstrapClaimId);
+    }
+    throw err;
+  }
 
   // Drift that the mirror could not close by itself: an indexed article whose markdown is absent
   // from the bundle is the one case a re-run cannot fix, so it is surfaced rather than counted.

@@ -665,7 +665,7 @@ Separately from the Help panel, the public help articles are mirrored into a dat
 - **First run.** On an install where the lake has never existed, the worker creates it, owned by the oldest admin account. Until an admin exists, each run logs that it is waiting and does nothing. The lake owner's keys (or your instance-wide keys) pay for the embeddings.
 - **Steady state.** Re-runs are differential: an unchanged corpus writes nothing and embeds nothing. Rebuilding the image after a docs change re-embeds only the articles that changed.
 - **Missing embedding key.** If the Default Embedding Model's provider has no API key, the run fails and the worker logs `scheduled task "helpDatalakeIngest" failed` on startup and every 6 hours. Add the key or pick a local embedder under **Settings -> AI -> Default Embedding Model**.
-- **Turning it off.** Delete the `system-help` lake. The worker never recreates a lake that was deleted.
+- **Turning it off.** Delete the `system-help` lake, and purge it if you want its files gone too. The worker records the first help lake it sees, so it never recreates one that was deleted or purged. To turn it back on, run `help:ingest-datalake`.
 
 ## Background worker
 
