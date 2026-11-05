@@ -72,6 +72,15 @@ describe('extractFileFromZip', () => {
     await expect(extractFileFromZip(zip, 'conversations.json')).resolves.toBe(json);
   });
 
+  it('decodes a multi-byte character split across read-stream chunks', async () => {
+    // 3-byte characters never align with power-of-two chunk sizes, so some chunk boundary
+    // falls inside one whatever the stream's high-water mark is.
+    const json = JSON.stringify(['☃'.repeat(100_000)]);
+    const zip = writeTmp('large.zip', buildStoredZip({ 'conversations.json': json }));
+
+    await expect(extractFileFromZip(zip, 'conversations.json')).resolves.toBe(json);
+  });
+
   it('rejects when the archive ends without the entry', async () => {
     const zip = writeTmp('without.zip', buildStoredZip({ 'user.json': '{}', 'chat.html': '<html/>' }));
 
