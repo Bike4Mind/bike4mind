@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions } from './download';
-import { ModelFileBusyError } from './errors';
+import { ModelFileBusyError, ModelFileConflictError } from './errors';
 import type { HubGgufBuild, HubGgufFile, HubGgufProjector } from './huggingface';
 import {
   createFileNameProblem,
@@ -500,6 +500,19 @@ describe('runSplitImport', () => {
     await expect(runSplitImport(plan(), { hub, runtime, dir })).rejects.toThrow('upload refused');
     expect(runtime.create).not.toHaveBeenCalled();
     expect(await readdir(dir)).toEqual([`${hex('2')}.gguf`]);
+  });
+
+  it('removes a staged part whose bytes do not match, so a retry downloads it again', async () => {
+    const { hub, runtime } = fakes();
+    const dir = join(root, 'run');
+    const corrupt = join(dir, `${hex('1')}.gguf`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(corrupt, 'bad bytes');
+    hub.download.mockImplementationOnce(async (_file: HubGgufFile, destination: string) => {
+      throw new ModelFileConflictError('ollama', basename(destination), 'sha256');
+    });
+    await expect(runSplitImport(plan(), { hub, runtime, dir })).rejects.toBeInstanceOf(ModelFileConflictError);
+    await expect(stat(corrupt)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('keeps the staged parts when Ollama refuses the create', async () => {

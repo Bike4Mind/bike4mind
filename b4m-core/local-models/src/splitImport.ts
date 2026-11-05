@@ -1,7 +1,7 @@
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { PARTIAL_RECORD_SUFFIX, PARTIAL_SUFFIX, type DownloadOptions, type DownloadResult } from './download';
-import { ModelFileBusyError } from './errors';
+import { ModelFileBusyError, ModelFileConflictError } from './errors';
 import {
   ollamaHubName,
   type HubGgufBuild,
@@ -310,6 +310,8 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
           downloaded = true;
           break;
         } catch (error) {
+          // A staged copy with the wrong bytes would fail every retry the same way, so the retry downloads it again.
+          if (error instanceof ModelFileConflictError) await removeStaged(path);
           if (!(error instanceof ModelFileBusyError)) throw error;
           // Another import is downloading this part; it may hand the part to Ollama, so look again once it lets go.
           await abortableDelay(wait, signal);
