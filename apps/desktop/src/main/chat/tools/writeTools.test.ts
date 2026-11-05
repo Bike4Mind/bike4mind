@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { PathAccessDenied, withRealPath } from './paths';
+import { PathAccessDenied, physicalTarget, resolveWithinRoots, withRealPath } from './paths';
 import type { ToolContext } from './types';
 import { fileEdit, fileWrite, resolveWritablePath } from './writeTools';
 
@@ -133,6 +133,57 @@ describe('write tools', () => {
         spy.mockRestore();
       }
     });
+
+    it('refuses a path that cannot be resolved itself, though its parent can', async () => {
+      const target = join(root, 'notes.md');
+      const native = realpathSync.native;
+      const spy = vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path) === target) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return native(path, options);
+      });
+      try {
+        await expect(resolveWritablePath(target, context)).rejects.toThrow(/cannot be written to/);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('refuses every write while a protected folder cannot be resolved', async () => {
+      const pending = { ...context, unresolvedProtectedPaths: [join(outside, 'App')] };
+      const input = { path: join(root, 'notes.md'), content: 'changed\n' };
+
+      await expect(fileWrite.run(input, pending)).rejects.toThrow(
+        `while Desktop cannot resolve the protected folder ${join(outside, 'App')}`
+      );
+      await expect(readFile(input.path, 'utf8')).resolves.toBe('alpha\nbeta\ngamma\n');
+      await expect(resolveWritablePath(input.path, context)).resolves.toBe(input.path);
+    });
+
+    // Past PATH_MAX readlink fails with ENAMETOOLONG, which must not read as "not a link".
+    it.skipIf(process.platform !== 'linux')(
+      'refuses a link reached through a short alias whose physical path exceeds PATH_MAX',
+      async () => {
+        let deep = join(root, 'deep');
+        for (let left = 4093 - Buffer.byteLength(deep); left > 0; left = 4093 - Buffer.byteLength(deep)) {
+          deep = join(deep, 'd'.repeat(left > 256 ? 200 : left - 1));
+        }
+        await mkdir(deep, { recursive: true });
+        await symlink(deep, join(root, 's'));
+        await writeFile(join(outside, 'x'), 'protected\n', 'utf8');
+        await symlink(join(outside, 'x'), join(root, 's', 'lnk'));
+        const guarded = { ...context, protectedPaths: [outside] };
+        const input = { path: join(root, 's', 'lnk'), content: 'overwritten\n' };
+        try {
+          await expect(physicalTarget(input.path)).rejects.toThrow(PathAccessDenied);
+          await expect(resolveWithinRoots(input.path, [root])).rejects.toThrow(PathAccessDenied);
+          await expect(resolveWritablePath(input.path, guarded)).rejects.toThrow(PathAccessDenied);
+          await expect(fileWrite.run(input, guarded)).rejects.toThrow();
+          await expect(readFile(join(outside, 'x'), 'utf8')).resolves.toBe('protected\n');
+        } finally {
+          await rm(input.path, { force: true });
+        }
+      }
+    );
 
     // The containment check runs again in `run`, against the resolved real path: the prompt the
     // user answered was about a plain file, and a symlink swapped in behind it must not be followed.

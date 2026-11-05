@@ -295,6 +295,9 @@ function wslMountSpelling(guardRoot: string): string | null {
   return match ? `/mnt/${match[1]}/${match[2] ?? ''}` : null;
 }
 
+/** The protected roots, or a provider that is read on each decision. */
+export type ProtectedRoots = readonly string[] | (() => readonly string[]);
+
 /** A protected root in each spelling the checks compare against. */
 interface GuardRoot {
   folded: string;
@@ -341,13 +344,14 @@ export class PermissionRuleSet {
   private readonly byTool = new Map<string, CompiledRule[]>();
   private readonly mcp: CompiledRule[] = [];
   private readonly folderAllows: CompiledRule[] = [];
-  private readonly guardRoots: readonly GuardRoot[];
+  private readonly protectedRoots: () => readonly string[];
+  private guards: { roots: readonly string[]; compiled: readonly GuardRoot[] } | null = null;
 
   constructor(
     readonly rules: readonly CompiledRule[],
-    protectedRoots: readonly string[] = []
+    protectedRoots: ProtectedRoots = []
   ) {
-    this.guardRoots = protectedRoots.map(guardRoot);
+    this.protectedRoots = typeof protectedRoots === 'function' ? protectedRoots : () => protectedRoots;
     for (const rule of rules) {
       if (rule.matcher.kind === 'mcp') this.mcp.push(rule);
       for (const tool of rule.tools) {
@@ -367,6 +371,13 @@ export class PermissionRuleSet {
 
   get size(): number {
     return this.rules.length;
+  }
+
+  /** Read per decision: a protected root that could not be resolved yet is retried by its provider. */
+  private get guardRoots(): readonly GuardRoot[] {
+    const roots = this.protectedRoots();
+    if (this.guards?.roots !== roots) this.guards = { roots, compiled: roots.map(guardRoot) };
+    return this.guards.compiled;
   }
 
   evaluate(subject: PermissionSubject): PermissionVerdict {
@@ -478,11 +489,12 @@ export class PermissionRuleSet {
 
   private isProtectedPath(path: string): boolean {
     const all = spellings(path);
+    const roots = this.guardRoots;
     return (
       all === null ||
       all.some(spelling => {
         const form = guardForm(spelling);
-        return isSettingsFile(spelling) || this.guardRoots.some(root => guardFormWithin(root.form, form));
+        return isSettingsFile(spelling) || roots.some(root => guardFormWithin(root.form, form));
       })
     );
   }
@@ -490,11 +502,12 @@ export class PermissionRuleSet {
   /** Inside a protected folder, or above one: `cd ~ && cp x .claude/settings.json` reaches it from home. */
   private isProtectedFolder(directory: string): boolean {
     const all = spellings(directory);
+    const roots = this.guardRoots;
     return (
       all === null ||
       all.some(spelling => {
         const form = guardForm(spelling);
-        return this.guardRoots.some(root => guardFormWithin(root.form, form) || guardFormWithin(form, root.form));
+        return roots.some(root => guardFormWithin(root.form, form) || guardFormWithin(form, root.form));
       })
     );
   }

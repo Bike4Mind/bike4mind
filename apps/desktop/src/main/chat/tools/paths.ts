@@ -313,16 +313,8 @@ export function withRealPath(path: string): string[] {
   return spellingsOf(path).known;
 }
 
-/**
- * `withRealPath` for a location that must stay protected. When its real path or its own location
- * cannot be resolved, where it lands is unknown, so its whole volume is protected.
- */
-export function protectedSpellings(path: string): string[] {
-  const { known, resolved } = spellingsOf(path);
-  return resolved ? known : [...new Set([...known, parse(resolve(path)).root])];
-}
-
-function spellingsOf(path: string): { known: string[]; resolved: boolean } {
+/** `withRealPath`, and whether both its real path and its own location resolved. */
+export function spellingsOf(path: string): { known: string[]; resolved: boolean } {
   const real = realpathSyncNearest(path);
   const own = ownLocation(path);
   const known = [path, ...(real === null ? [] : [real]), ...(own === null ? [] : [own])];
@@ -453,10 +445,16 @@ export async function physicalTarget(target: string): Promise<string> {
         continue;
       }
       const candidate = join(current, part);
-      const link = await readlink(candidate).catch(() => null);
+      const link = await linkAt(candidate, target);
+      if (link === undefined) {
+        current = candidate;
+        continue;
+      }
       if (link === null) {
         // Existing components also supply their canonical casing on case-insensitive volumes.
-        current = await realpath(candidate).catch(() => candidate);
+        current = await realpath(candidate).catch(() => {
+          throw new PathAccessDenied(target);
+        });
         continue;
       }
       if (++hops > MAX_LINK_HOPS) throw new PathAccessDenied(target);
@@ -465,5 +463,21 @@ export async function physicalTarget(target: string): Promise<string> {
       pending = [...link.slice(root.length).split(sep), ...pending];
     }
     return current;
+  }
+}
+
+/**
+ * The link text at `candidate`: null when it is no link, undefined when it does not exist; any other
+ * failure refuses, worded like a path outside the roots so the refusal does not tell the two apart.
+ */
+async function linkAt(candidate: string, target: string): Promise<string | null | undefined> {
+  try {
+    return await readlink(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') return null;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    // ENAMETOOLONG, EACCES, ...: the name could still be a link.
+    throw new PathAccessDenied(target);
   }
 }

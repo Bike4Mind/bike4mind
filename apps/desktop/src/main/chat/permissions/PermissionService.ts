@@ -10,7 +10,14 @@ import {
 } from '@shared/permissions';
 import type { ClaudeCodeFile, ClaudeCodeSettings } from './ClaudeCodeSettings';
 import type { PermissionRuleStore } from './PermissionRuleStore';
-import { type CompiledRule, PermissionRuleSet, type RuleSource, compileRule, parseRule } from './rules';
+import {
+  type CompiledRule,
+  PermissionRuleSet,
+  type ProtectedRoots,
+  type RuleSource,
+  compileRule,
+  parseRule,
+} from './rules';
 
 export interface PermissionScopeKey {
   /** The folder the user picked for the session's project; desktop project rules are keyed on it. */
@@ -26,7 +33,7 @@ export interface PermissionServiceOptions {
   isTrusted(directory: string): Promise<boolean>;
   home: string;
   /** Folders whose contents no allow rule may cover: the app's own data and Claude Code's settings. */
-  protectedRoots: readonly string[];
+  protectedRoots: ProtectedRoots;
   logger: { warn(message: string): void };
 }
 

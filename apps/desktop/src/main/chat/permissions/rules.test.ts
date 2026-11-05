@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { permissionProtectedRoots } from '../protectedLocations';
+import { permissionProtectedLocations } from '../protectedLocations';
 import { scanShell } from '../tools/shellScan';
 import { permissionSubject } from './subject';
 import {
@@ -349,7 +349,11 @@ describe('PermissionRuleSet', () => {
       const scan = await scanShell(script, join(base, 'proj'), [base]);
       if (!scan) throw new Error('Expected the command to parse');
       const subject: PermissionSubject = { tool: 'bash_execute', shell: { script, ...scan } };
-      const roots = permissionProtectedRoots(join(base, 'cfg-link', 'App'), join(base, 'home'), join(base, 'managed'));
+      const roots = [
+        ...permissionProtectedLocations(join(base, 'cfg-link', 'App'), join(base, 'home'), join(base, 'managed'), {
+          warn: () => {},
+        }).paths(),
+      ];
       expect(decide(set({ allow: ['Bash(cp:*)'] }, roots), subject)).toBeNull();
       expect(decide(set({ allow: ['Bash(cp:*)'] }, [join(base, 'cfg-link', 'App')]), subject)).toBe('allow');
     } finally {
@@ -405,6 +409,18 @@ describe('PermissionRuleSet', () => {
       vi.restoreAllMocks();
       await rm(base, { recursive: true, force: true });
     }
+  });
+
+  it('reads the protected roots from their provider on each decision', () => {
+    let roots: readonly string[] = [];
+    const compiled = compileRule(parsed('Edit', true), 'allow', SOURCE, { home: HOME, root: PROJECT, cwd: PROJECT });
+    if (!compiled) throw new Error('Expected the rule to compile');
+    const rules = new PermissionRuleSet([compiled], () => roots);
+    const subject: PermissionSubject = { tool: 'file_edit', paths: [join(PROJECT, 'prot', 'file')] };
+    expect(decide(rules, subject)).toBe('allow');
+    roots = [join(PROJECT, 'prot')];
+    expect(decide(rules, subject)).toBeNull();
+    expect(rules.coversFolder(join(PROJECT, 'prot'))).toBe(false);
   });
 
   describe('when a path cannot be resolved', () => {
