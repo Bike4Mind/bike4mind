@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -609,6 +609,27 @@ describe('WorkItemRepository', () => {
       await create('Detached', { status: 'blocked', blockedOn: 'dependencies' });
       const ready = await ticket('Ready', { status: 'blocked', blockedOn: 'dependencies' });
       expect((await workItemRepository.reopenSatisfiedBlocks(2)).map(t => t.id)).toEqual([ready.id]);
+    });
+
+    it('reopenSatisfiedBlocks keeps a ticket parked when an open dependency is added after its read', async () => {
+      const openDep = await ticket('Open dep');
+      const parked = await ticket('Parked', { status: 'blocked', blockedOn: 'dependencies' });
+      const real = WorkItem.findOneAndUpdate.bind(WorkItem);
+      const spy = vi
+        .spyOn(WorkItem, 'findOneAndUpdate')
+        .mockImplementationOnce(((...args: Parameters<typeof real>) =>
+          WorkItem.updateOne({ _id: parked.id }, { $push: { dependencies: openDep.id } }).then(() =>
+            real(...args)
+          )) as unknown as typeof real);
+      try {
+        expect(await workItemRepository.reopenSatisfiedBlocks(10)).toEqual([]);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await workItemRepository.findByIdForUser(parked.id, USER)).toMatchObject({
+        status: 'blocked',
+        blockedOn: 'dependencies',
+      });
     });
 
     it('claimForRun counts a run; releaseClaim and an uncounted fold take it back', async () => {
