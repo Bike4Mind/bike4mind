@@ -1,7 +1,8 @@
 import Box from '@mui/joy/Box';
 import Chip from '@mui/joy/Chip';
 import Typography from '@mui/joy/Typography';
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useElementWidth } from '../sessionPanelState';
 import { agentNowText } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import { prefersReducedMotion } from './motion';
@@ -18,9 +19,31 @@ const COLUMNS: ReadonlyArray<{ id: ColumnId; label: string; states: readonly Age
 ];
 
 const FLIP_MS = 250;
-// Columns with cards share the board's width and shrink to this before it scrolls sideways; an empty
-// column folds to its header, so the usual board (most agents in one or two states) never scrolls.
-const COLUMN_MIN_WIDTH = 150;
+// Columns with cards share their row's width and shrink to this before the board wraps them into
+// another row; an empty column folds to its header, about EMPTY_COLUMN_WIDTH wide.
+export const COLUMN_MIN_WIDTH = 150;
+export const EMPTY_COLUMN_WIDTH = 96;
+/** Between columns and between rows (px); the sx below uses the same value in spacing units. */
+export const COLUMN_GAP = 10;
+
+/**
+ * Splits the columns, in order, into the fewest rows of near-equal count whose minimum widths fit
+ * `available` (the board's content width). Balanced rather than greedy, so four columns that do not
+ * fit become two and two rather than three and one. `null` is "not measured" and keeps one row.
+ */
+export function packBoardRows<T extends { empty: boolean }>(columns: readonly T[], available: number | null): T[][] {
+  if (available === null || columns.length === 0) return [[...columns]];
+  const widthOf = (row: readonly T[]) =>
+    row.reduce((sum, column) => sum + (column.empty ? EMPTY_COLUMN_WIDTH : COLUMN_MIN_WIDTH), 0) +
+    (row.length - 1) * COLUMN_GAP;
+  for (let rowCount = 1; rowCount < columns.length; rowCount += 1) {
+    const perRow = Math.ceil(columns.length / rowCount);
+    const rows: T[][] = [];
+    for (let start = 0; start < columns.length; start += perRow) rows.push(columns.slice(start, start + perRow));
+    if (rows.every(row => widthOf(row) <= available)) return rows;
+  }
+  return columns.map(column => [column]);
+}
 
 const lineClamp = (lines: number) =>
   ({
@@ -205,69 +228,98 @@ function columnCards(agents: readonly AgentView[], states: readonly AgentState[]
 }
 
 export function BoardView({ agents, onSelect, selectedId }: OrchestratorViewProps) {
-  const layoutSignature = useMemo(
-    () =>
-      COLUMNS.map(
-        column =>
-          `${column.id}:${columnCards(agents, column.states)
-            .map(agent => agent.id)
-            .join(',')}`
-      ).join('|'),
-    [agents]
+  const [measureRef, boardWidth] = useElementWidth<HTMLDivElement>();
+  const rows = packBoardRows(
+    COLUMNS.map(column => {
+      const cards = columnCards(agents, column.states);
+      return { ...column, cards, empty: cards.length === 0 };
+    }),
+    boardWidth
   );
+  // Row breaks are part of the layout: a card that moves rows on a resize is snapshotted afresh.
+  const layoutSignature = rows
+    .map(row => row.map(column => `${column.id}:${column.cards.map(agent => agent.id).join(',')}`).join('|'))
+    .join('/');
   const { boardRef, refFor } = useFlip(layoutSignature);
+  const setBoardRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      boardRef.current = node;
+      measureRef(node);
+    },
+    [boardRef, measureRef]
+  );
 
   return (
     <Box
-      ref={boardRef}
+      ref={setBoardRef}
       data-testid="orchestrator-board"
-      sx={{ display: 'flex', gap: 1.25, flex: 1, minHeight: 0, overflowX: 'auto', overflowY: 'hidden', p: 1.5 }}
+      data-rows={rows.length}
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: `${COLUMN_GAP}px`,
+        flex: 1,
+        minHeight: 0,
+        overflowX: 'auto',
+        overflowY: 'hidden',
+        p: 1.5,
+      }}
     >
-      {COLUMNS.map(column => {
-        const cards = columnCards(agents, column.states);
-        const empty = cards.length === 0;
-        return (
-          <Box
-            key={column.id}
-            data-testid={`orchestrator-board-column-${column.id}`}
-            data-empty={empty || undefined}
-            sx={{
-              flex: empty ? '0 0 auto' : '1 1 0',
-              minWidth: empty ? 0 : COLUMN_MIN_WIDTH,
-              minHeight: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1,
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-              <Typography level="title-sm" textColor={empty ? 'text.tertiary' : undefined} noWrap>
-                {column.label}
-              </Typography>
-              <Typography
-                level="body-sm"
-                textColor="text.tertiary"
-                sx={{ ml: 0.5 }}
-                data-testid={`orchestrator-board-count-${column.id}`}
-              >
-                {cards.length}
-              </Typography>
+      {rows.map(row => (
+        <Box
+          key={row.map(column => column.id).join('+')}
+          data-testid="orchestrator-board-row"
+          sx={{
+            display: 'flex',
+            gap: `${COLUMN_GAP}px`,
+            // A row of empty columns is only headers, so the rows with cards take the height.
+            flex: row.every(column => column.empty) ? '0 0 auto' : '1 1 0',
+            minHeight: 0,
+          }}
+        >
+          {row.map(({ id, label, cards, empty }) => (
+            <Box
+              key={id}
+              data-testid={`orchestrator-board-column-${id}`}
+              data-empty={empty || undefined}
+              sx={{
+                flex: empty ? '0 1 auto' : '1 1 0',
+                minWidth: empty ? 0 : COLUMN_MIN_WIDTH,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+              }}
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+                <Typography level="title-sm" textColor={empty ? 'text.tertiary' : undefined} noWrap>
+                  {label}
+                </Typography>
+                <Typography
+                  level="body-sm"
+                  textColor="text.tertiary"
+                  sx={{ ml: 0.5 }}
+                  data-testid={`orchestrator-board-count-${id}`}
+                >
+                  {cards.length}
+                </Typography>
+              </Box>
+              <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {cards.map(agent => (
+                  <BoardCard
+                    key={agent.id}
+                    agent={agent}
+                    via={spawnerName(agent, agents)}
+                    selected={agent.id === selectedId}
+                    onSelect={onSelect}
+                    cardRef={refFor(agent.id)}
+                  />
+                ))}
+              </Box>
             </Box>
-            <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {cards.map(agent => (
-                <BoardCard
-                  key={agent.id}
-                  agent={agent}
-                  via={spawnerName(agent, agents)}
-                  selected={agent.id === selectedId}
-                  onSelect={onSelect}
-                  cardRef={refFor(agent.id)}
-                />
-              ))}
-            </Box>
-          </Box>
-        );
-      })}
+          ))}
+        </Box>
+      ))}
     </Box>
   );
 }
