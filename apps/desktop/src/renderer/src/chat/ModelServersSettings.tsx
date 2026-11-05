@@ -34,7 +34,9 @@ import {
   launchLockedMessage,
   launchSettingsProblem,
   QUANTIZED_KV_CACHE_TYPES,
+  sizesWithSavedLaunch,
   specsProblem,
+  WINDOWS_ORPHAN_HINT,
 } from '@shared/modelServers';
 import { formatMemory, type MachineView } from '@shared/models';
 
@@ -454,8 +456,13 @@ function LaunchSection({
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<LaunchDraft>(() => launchDraft(launch));
   const [problem, setProblem] = useState<string | null>(null);
-  const locked = launchLockedMessage(launch);
-  const disabled = busy || !!launch.busy || locked !== null;
+  const sizingOnly = sizesWithSavedLaunch(launch);
+  const locked = sizingOnly
+    ? `This ${launch.noun} was not started by Bike4Mind Desktop. Fit badges use the KV cache type and flash attention saved here, and Desktop applies all of these settings when it starts the server.${
+        launch.windowsHost ? ` ${WINDOWS_ORPHAN_HINT}` : ''
+      }`
+    : launchLockedMessage(launch);
+  const disabled = busy || !!launch.busy || (locked !== null && !sizingOnly);
   const ollama = launch.runtime === 'ollama';
 
   useEffect(() => {

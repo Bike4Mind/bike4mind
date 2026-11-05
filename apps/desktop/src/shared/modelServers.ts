@@ -119,6 +119,15 @@ export interface ModelServerLaunchView {
 export const WINDOWS_ORPHAN_HINT =
   'If Desktop was running it before it closed unexpectedly, end ollama.exe or llama-server.exe in Task Manager, then start it here.';
 
+/**
+ * A local Ollama Desktop did not start and whose launch variables it cannot read (only Linux reads them), such as an
+ * Ollama.app given OLLAMA_KV_CACHE_TYPE by launchctl: fit sizes it with the saved launch settings, so they stay editable
+ * while it runs. They apply to the server itself only when Desktop starts it.
+ */
+export function sizesWithSavedLaunch(launch: Pick<ModelServerLaunchView, 'owner' | 'runtime' | 'observed'>): boolean {
+  return launch.owner === 'other' && launch.runtime === 'ollama' && launch.observed === null;
+}
+
 /** Why Desktop leaves this server's launch settings alone; null when it applies them. */
 export function launchLockedMessage(
   launch: Pick<ModelServerLaunchView, 'owner' | 'noun'> & { windowsHost?: boolean }

@@ -707,6 +707,19 @@ describe('ModelServersSettings launch settings', () => {
     );
   });
 
+  it('keeps the launch settings of an unmanaged Ollama it cannot read editable, since fit sizes with them', async () => {
+    await show({ ...LOCAL, launch: launch({ owner: 'other', canStart: false, observed: null }) });
+    expect(byTestId('model-servers-launch-locked')?.textContent).toBe(
+      'This Ollama server was not started by Bike4Mind Desktop. Fit badges use the KV cache type and flash attention saved here, and Desktop applies all of these settings when it starts the server.'
+    );
+    expect(byTestId('model-servers-launch-start-btn')).toBeNull();
+    expect(byTestId('model-servers-launch-stop-btn')).toBeNull();
+    await clickId('model-servers-launch-settings-btn');
+    expect(byTestId('model-servers-launch-kv-select')?.hasAttribute('disabled')).toBe(false);
+    await clickId('model-servers-launch-save-btn');
+    expect(update).toHaveBeenLastCalledWith('local', { launch: {} });
+  });
+
   it('shows only a line for a server on another machine', async () => {
     await show({ ...saved('ollama', 'chat'), launch: launch({ owner: 'remote', canStart: false }) });
     expect(byTestId('model-servers-launch')).toBeNull();

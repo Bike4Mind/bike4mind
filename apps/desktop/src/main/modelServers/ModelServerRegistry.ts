@@ -46,6 +46,7 @@ import {
   sameLaunch,
   serverIdOfRuntime,
   serverManagement,
+  sizesWithSavedLaunch,
   serverRuntimeId,
   WINDOWS_ORPHAN_HINT,
   type FlashAttention,
@@ -984,12 +985,17 @@ export class ModelServerRegistry {
     };
   }
 
-  /** Refuses launch settings Desktop would not apply: for a server it did not start, or that the server cannot take. */
+  /**
+   * Refuses launch settings Desktop would not apply or size with: for a server it did not start (unless fit sizes it with
+   * them, see sizesWithSavedLaunch), or that the server cannot take.
+   */
   private assertLaunchable(id: string, settings: ModelServerLaunchSettings, kind?: ModelServerView['kind']): void {
     const target = this.launchTarget(id);
     if (!target) throw new Error('That model server is no longer saved.');
     const owner = this.ownerOf(id);
-    if (owner === 'remote' || owner === 'other') {
+    const observed = owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null;
+    const sizingOnly = sizesWithSavedLaunch({ owner, runtime: target.runtime, observed });
+    if (owner === 'remote' || (owner === 'other' && !sizingOnly)) {
       throw new Error(launchRefusal(owner, nounOf(target), this.platform === 'win32'));
     }
     const runtime = kind ? (kind === 'ollama' ? 'ollama' : 'llama-server') : target.runtime;

@@ -190,7 +190,6 @@ describe('ModelServerRegistry launching servers', () => {
     expect(locked).toBe(
       "This Ollama server was not started by Bike4Mind Desktop, so Desktop can't apply these settings. To use them, stop that server and start it from Desktop."
     );
-    await expect(registry.update('local', { launch: { kvCacheType: 'q8_0' } })).rejects.toThrow(locked);
     await expect(registry.startServer('local')).rejects.toThrow('Something already answers at 127.0.0.1:11434');
     await expect(registry.stopServer('local')).rejects.toThrow(locked);
     expect(launchers.start).not.toHaveBeenCalled();
@@ -211,6 +210,25 @@ describe('ModelServerRegistry launching servers', () => {
     });
     expect(registry.localKvCacheType()).toBe('q8_0');
     expect(localSpecsChanged).toHaveBeenCalledTimes(1);
+    await expect(registry.update('local', { launch: { kvCacheType: 'q4_0' } })).rejects.toThrow(
+      'was not started by Bike4Mind Desktop'
+    );
+  });
+
+  it('saves launch settings for an unmanaged Ollama it cannot read and sizes with them', async () => {
+    const { registry, up, launchers } = setup();
+    up.add(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    expect((await local(registry)).launch).toMatchObject({ owner: 'other', observed: null, sizingKvCacheType: 'f16' });
+    await registry.update('local', { launch: { kvCacheType: 'q8_0' } });
+    expect((await local(registry)).launch).toMatchObject({
+      owner: 'other',
+      settings: { kvCacheType: 'q8_0' },
+      sizingKvCacheType: 'q8_0',
+      sizingFlashAttention: 'on',
+    });
+    expect(registry.localKvCacheType()).toBe('q8_0');
+    expect(launchers.start).not.toHaveBeenCalled();
   });
 
   it('sizes an unmanaged Ollama with f16 when its flash attention is off or its settings cannot be read', async () => {
@@ -579,9 +597,6 @@ describe('ModelServerRegistry launching servers', () => {
       await registry.check('local');
       const view = (await local(registry)).launch!;
       expect(launchLockedMessage(view)!.includes(hint)).toBe(platform === 'win32');
-      await expect(registry.update('local', { launch: { kvCacheType: 'q8_0' } })).rejects.toThrow(
-        platform === 'win32' ? hint : 'start it from Desktop.'
-      );
       await expect(registry.startServer('local')).rejects.toThrow(
         platform === 'win32' ? hint : 'Something already answers at 127.0.0.1:11434. Stop it first.'
       );
