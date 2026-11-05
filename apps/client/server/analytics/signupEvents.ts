@@ -4,6 +4,7 @@ import type { AcquisitionTouches } from '@bike4mind/server-utils/lib/subscriptio
 import { minorUnitsPerMajor } from '../integrations/stripe/currency';
 import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from '@bike4mind/server-utils/analytics/emitActiveEvent';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
+import { laneMetadata, type LaneAccount } from '@bike4mind/server-utils/analytics/lane';
 
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing
 // the touch helpers (checkout, the subscription write path) does not pull in the emitter and its
@@ -72,7 +73,9 @@ function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, So
  * for why that matters before these counts are trusted.
  *
  * Called once, where an account is created with the new user's own request in hand (their cookies
- * carry the touches). The user's pseudonym makes the eventId, since an account signs up once, so a
+ * carry the touches). An internal account's credit carries `internal: true` (lane.ts), so the
+ * credited product can keep the team's own signups out of its counts; callers skip synthetic
+ * accounts before this. The user's pseudonym makes the eventId, since an account signs up once, so a
  * retry sends the same id and the receiver keeps one event. Awaited by the caller but never throws
  * (emitProductEvent fails open and times out on its own), and resolves at once when no touch names
  * a product, which is most signups.
@@ -86,6 +89,8 @@ export async function emitSignupForSourceProducts(opts: {
   touches: AcquisitionTouches | undefined;
   /** How the account was created (`otc`, `google`, `github`, ...), for splitting the stage. */
   method: string;
+  /** The new account's flags, as recorded at signup: the mark the credit carries. */
+  account?: LaneAccount;
 }): Promise<string[]> {
   const byProduct = sourceProducts(opts.touches);
   // The eventId is sent verbatim to the credited product, so it is keyed on the salted pseudonym
@@ -100,7 +105,7 @@ export async function emitSignupForSourceProducts(opts: {
         eventId: stableEventId('signup', productId, pseudonym),
         userId: opts.userId,
         utm,
-        metadata: { touch, attribution: ATTRIBUTION, method: opts.method },
+        metadata: { touch, attribution: ATTRIBUTION, method: opts.method, ...laneMetadata(opts.account) },
       }).catch(() => {})
     )
   );
@@ -116,10 +121,12 @@ export const PURCHASE_EVENT = 'purchase';
 
 export type PurchaseKind = 'subscription' | 'credits';
 
-/** The user as stored: the touches recorded at signup and the synthetic flag. */
+/** The user as stored: the touches recorded at signup and the flags its mark is read from. */
 export type PurchaseCreditUser = {
   id: string;
   isSynthetic?: boolean | null;
+  isInternal?: boolean | null;
+  isAdmin?: boolean | null;
   acquisition?: AcquisitionTouches | null;
 };
 
@@ -168,7 +175,11 @@ export type BillingEvent =
  * timestamp where one id recurs - and the eventId is keyed on it, the event name and the product,
  * so a redelivered webhook sends the same id and the receiver keeps one event. It is hashed but
  * sent verbatim, so it must never be a raw user id; use the pseudonym (see emitSignupForSourceProducts).
- * Synthetic users are skipped.
+ * Synthetic users are skipped. An internal account's copies carry `internal: true` (lane.ts), so a
+ * payment by the team's own account can be kept out of customer revenue and payer counts.
+ *
+ * `visitId` goes on the host's copy alone, as its session id, like a signup's visit on
+ * `signup_completed`: only the host's stream holds the `visit` event it joins.
  *
  * Awaited by its callers but never throws and never rejects: a webhook must not fail, or be
  * retried, over analytics. Resolves to the products it ATTEMPTED, like the signup emit.
@@ -178,18 +189,34 @@ export async function emitBillingEvent(opts: {
   event: BillingEvent;
   occurrence: string;
   metadata: Record<string, string | number | boolean>;
+  visitId?: string;
 }): Promise<string[]> {
   try {
-    const { user, event, occurrence } = opts;
+    const { user, event, occurrence, visitId } = opts;
     if (!user?.id || user.isSynthetic || !occurrence) return [];
-    // The credit marks and userAction are this emitter's to set. Dropped from the caller's
-    // metadata, not just overridden: the host copy adds no credit marks, so a caller's
-    // `attribution` or `touch` would otherwise reach it and dress an observed event as credited.
-    const { attribution: _attribution, touch: _touch, userAction: _userAction, ...callerMetadata } = opts.metadata;
+    // The credit marks, userAction and the lane marks are this emitter's to set. Dropped from the
+    // caller's metadata, not just overridden: the host copy adds no credit marks, so a caller's
+    // `attribution` or `touch` would otherwise reach it and dress an observed event as credited,
+    // and a caller's `internal` would mark a customer's payment as the team's.
+    const {
+      attribution: _attribution,
+      touch: _touch,
+      userAction: _userAction,
+      internal: _internal,
+      lane: _lane,
+      ...callerMetadata
+    } = opts.metadata;
     const acquisition = user.acquisition ?? undefined;
     const hostUtm = acquisition?.firstTouch;
-    const copies: Array<{ productId: string; utm?: OverwatchUtm; credit?: { touch: string; attribution: string } }> = [
-      ...(ingestKeyFor(HOST_PRODUCT_ID) ? [{ productId: HOST_PRODUCT_ID, ...(hostUtm && { utm: hostUtm }) }] : []),
+    const copies: Array<{
+      productId: string;
+      utm?: OverwatchUtm;
+      sessionId?: string;
+      credit?: { touch: string; attribution: string };
+    }> = [
+      ...(ingestKeyFor(HOST_PRODUCT_ID)
+        ? [{ productId: HOST_PRODUCT_ID, ...(hostUtm && { utm: hostUtm }), ...(visitId && { sessionId: visitId }) }]
+        : []),
       ...[...sourceProducts(acquisition).entries()].map(([productId, { touch, utm }]) => ({
         productId,
         utm,
@@ -197,15 +224,16 @@ export async function emitBillingEvent(opts: {
       })),
     ];
     await Promise.all(
-      copies.map(({ productId, utm, credit }) =>
+      copies.map(({ productId, utm, sessionId, credit }) =>
         emitProductEvent({
           productId,
           event,
           eventId: stableEventId(event, productId, occurrence),
           reportFailure: true,
           userId: user.id,
+          ...(sessionId && { sessionId }),
           ...(utm && { utm }),
-          metadata: { ...callerMetadata, ...credit, userAction: false },
+          metadata: { ...callerMetadata, ...credit, userAction: false, ...laneMetadata(user) },
         }).catch(() => {
           console.warn('[b4m-analytics] billing event emit failed', { productId, event });
         })
@@ -232,6 +260,13 @@ export async function emitBillingEvent(opts: {
  * `value` is in the currency's major unit (29.99, not 2999), the GA4 convention the client pixel
  * also follows. The divisor follows the currency (minorUnitsPerMajor): a yen amount is already
  * whole yen, so dividing every currency by 100 would under-report it 100x.
+ *
+ * `visitId` (see billingEventDetails.ts) is sent only for a credit pack or the invoice that opened
+ * a subscription; a renewal or seat change happened in no visit, so it names none.
+ *
+ * `periodEnd` is the end of the period a subscription payment paid for, sent as `metadata.periodEnd`
+ * in ISO 8601 UTC. Sent for a subscription only (a credit pack buys no period), and left out when
+ * the caller has none or passes an invalid date.
  */
 export async function emitPurchaseEvents(opts: {
   user: PurchaseCreditUser | null | undefined;
@@ -243,10 +278,20 @@ export async function emitPurchaseEvents(opts: {
   currency: string | null | undefined;
   /** Stripe's billing_reason for an invoice: `subscription_create`, `subscription_cycle`, ... */
   billingReason?: string | null;
+  /** The visit the payment was started in, when one was recorded. */
+  visitId?: string;
+  /** When the period this subscription payment bought ends. Ignored for a credit pack. */
+  periodEnd?: Date | null;
 }): Promise<string[]> {
-  const { user, paymentId, kind, amountMinor, currency, billingReason } = opts;
+  const { user, paymentId, kind, amountMinor, currency, billingReason, periodEnd } = opts;
   if (!paymentId || !currency) return [];
   if (typeof amountMinor !== 'number' || !Number.isFinite(amountMinor) || amountMinor <= 0) return [];
+  const startedInVisit = kind === 'credits' || billingReason === 'subscription_create';
+  // An invalid Date would make toISOString throw, and this must never throw.
+  const coveredUntil =
+    kind === 'subscription' && periodEnd instanceof Date && Number.isFinite(periodEnd.getTime())
+      ? periodEnd.toISOString()
+      : undefined;
   return emitBillingEvent({
     user,
     event: PURCHASE_EVENT,
@@ -256,6 +301,8 @@ export async function emitPurchaseEvents(opts: {
       value: amountMinor / minorUnitsPerMajor(currency),
       currency: currency.toUpperCase(),
       ...(billingReason && { billingReason }),
+      ...(coveredUntil && { periodEnd: coveredUntil }),
     },
+    ...(startedInVisit && opts.visitId && { visitId: opts.visitId }),
   });
 }

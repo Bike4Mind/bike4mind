@@ -11,6 +11,7 @@
 
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
 import type { ChatImportOrigin } from './claudeImport';
+import type { CatalogSampling, GenerationSettings, ModelControls } from './generation';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -177,6 +178,8 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /** Set with `approvalId` when main will honour only an allow-once, so the card offers no "always". */
+  approvalOnceOnly?: boolean;
   /**
    * Set with `approvalId` when what is being allowed is unusually broad - a request for the whole
    * home folder or a system directory. Drawn on the card as a warning; it never blocks the answer.
@@ -268,7 +271,8 @@ export interface ChatToolCall {
 }
 
 /** Why a call settled without anyone deciding it: the card was closed out from under it. */
-export type ChatApprovalSystemReason = 'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on' | 'error';
+export type ChatApprovalSystemReason =
+  'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on' | 'unattended' | 'error';
 
 /**
  * Who decided a gated call. Only `user` means a person clicked the card for THIS call; every
@@ -397,7 +401,7 @@ export interface ChatApprovalAnswer {
 
 /**
  * What the user attached to a turn: an image the model looks at, or a text file inlined into
- * the prompt.
+ * the prompt. A PDF is stored whole but reaches the model as its extracted text.
  *
  * Deliberately NOT the same thing as the file tools. The tools are the model going and looking
  * for something; an attachment is the user handing something over - "here is the screenshot of
@@ -407,7 +411,7 @@ export interface ChatApprovalAnswer {
  * because this descriptor is what gets persisted into the session JSON, and that file is read
  * in full every time the sidebar lists conversations.
  */
-export type ChatAttachmentKind = 'image' | 'text';
+export type ChatAttachmentKind = 'image' | 'text' | 'pdf';
 
 export interface ChatAttachment {
   id: string;
@@ -421,6 +425,8 @@ export interface ChatAttachment {
   sourceBytes: number;
   /** Set when the file was too big to send whole; the model is told so in the attachment itself. */
   truncated?: boolean;
+  /** Page count, for a PDF. */
+  pages?: number;
 }
 
 /**
@@ -618,7 +624,36 @@ export interface ChatRelayOrigin {
   /** The sending conversation's title as it was at send time, for the row that names it. */
   fromTitle: string;
   hops: number;
+  /** The sender's project folder name, set only when it is not the receiver's project. */
+  fromProject?: string;
+  /** The sender asked to be told when the turn this message runs in ends. */
+  notify?: boolean;
+  /**
+   * 'done' is the app's own notice back to a sender that asked for `notify`: the receiver's
+   * turn ended. Its text is app-written, never the receiver's words. Absent on a message.
+   */
+  kind?: 'done';
 }
+
+/**
+ * A relay waiting for the receiving conversation's user to let it in.
+ *
+ * Held rather than queued when delivering it could let the sender reach something its own user
+ * never allowed: a receiver in a different project works in other folders, and a receiver in a
+ * looser approval mode would run tools the sender would have had to ask for. See relayHoldReason.
+ * In memory only, like the queue: a hold outliving a restart would surface hours later.
+ */
+export interface ChatHeldRelay {
+  id: string;
+  /** The receiving conversation. */
+  sessionId: string;
+  text: string;
+  relay: ChatRelayOrigin;
+  heldAt: string;
+  reason: ChatRelayHoldReason;
+}
+
+export type ChatRelayHoldReason = 'other-project' | 'looser-mode';
 
 /**
  * A turn the APP started rather than anyone typing it. Carried on the queue entry and on the
@@ -627,6 +662,7 @@ export interface ChatRelayOrigin {
  * 'auto-fix' runs on the user's standing instruction for a pull request (see main/pr/autoFix.ts),
  * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
  * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
+ * 'loop-runner' works one ticket of a loop stage that runs on this machine (see main/loops).
  */
 export type ChatAutomaticOrigin =
   | {
@@ -640,6 +676,15 @@ export type ChatAutomaticOrigin =
       kind: 'background-exit';
       processIds: string[];
       /** One line for the thread's collapsed row, e.g. "[a1b2c3d4] exited 0". */
+      summary: string;
+    }
+  | {
+      kind: 'loop-runner';
+      loopId: string;
+      ticketId: string;
+      /** The server's run id; tagged on this session's completion requests for credit attribution. */
+      runId: string;
+      /** One line for the thread's collapsed row: the ticket's title. */
       summary: string;
     };
 
@@ -702,6 +747,12 @@ export interface ChatMessage {
   relay?: ChatRelayOrigin;
   /** Set with `system` when the app started this turn on its own; see ChatAutomaticOrigin. */
   automatic?: ChatAutomaticOrigin;
+  /**
+   * Set on a spawned session's first prompt, which the parent conversation's model wrote. The
+   * thread still draws it as the prompt, but nothing that trusts what the user typed counts it:
+   * a session mention in it must not open another project to session_read (ChatService.knownTo).
+   */
+  seed?: true;
   /**
    * What the THREAD shows in place of `content`, on messages the app wrote rather than either
    * speaker.
@@ -895,13 +946,17 @@ export function findModelOption<T extends { id: string; aliasIds?: readonly stri
   return models.find(model => model.id === id) ?? models.find(model => model.aliasIds?.includes(id));
 }
 
-/** The device-local model a conversation moves to: the remembered pick if listed, else the first. */
+/**
+ * The device-local model a conversation moves to: the remembered pick if listed, else the first ready one. A
+ * remembered pick on a server still listing is kept; the fallback never lands on such a model unasked.
+ */
 export function pickLocalModel(
-  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string }[],
+  models: readonly { id: string; aliasIds?: readonly string[]; unavailable?: string; pending?: boolean }[],
   remembered?: string | null
 ): string | null {
   const usable = models.filter(model => !model.unavailable);
-  if (remembered && findModelOption(usable, remembered)) return remembered;
+  const remembers = models.filter(model => !model.unavailable || model.pending);
+  if (remembered && findModelOption(remembers, remembered)) return remembered;
   return usable[0]?.id ?? null;
 }
 
@@ -941,13 +996,18 @@ export interface ChatModelOption {
   /** A direct-Anthropic model the server will cache for an hour on request (supportsOneHourPromptCache). */
   supportsOneHourCache?: boolean;
   /**
-   * A local Ollama model that can think. Its server takes no effort, only thinking on or off,
-   * so the effort picker becomes that switch, stored as `default` (on) and
-   * THINKING_OFF_SETTING (off).
+   * A local model that can think. Its server takes no effort, only thinking on or off, so the
+   * effort picker becomes that switch, stored as `default` (on) and THINKING_OFF_SETTING (off);
+   * see thinkingSwitchedOff.
    */
   thinkingToggle?: boolean;
-  /** A `thinkingToggle` model whose template always thinks, so the switch shows Off as unavailable. */
+  /** A model whose template always thinks, so Off is unavailable; set with or without `thinkingToggle`. */
   thinkingAlwaysOn?: boolean;
+  /**
+   * A `thinkingToggle` model a stored `minimal` leaves thinking: a saved OpenAI-compatible server's,
+   * where that was an effort the server ignored before the switch existed.
+   */
+  minimalThinks?: true;
   /** Local models can remain useful without tool-call support. */
   supportsTools?: boolean;
   /** A saved model server's model, grouped under it in the picker. Absent for hosted models and this computer's. */
@@ -960,12 +1020,41 @@ export interface ChatModelOption {
   aliasIds?: string[];
   /** Why it cannot be picked now (its server is down or wants credentials); listed disabled. */
   unavailable?: string;
+  /** Set with `unavailable` while its server is still listing models: not picked yet, but not down either. */
+  pending?: boolean;
+  /** Set with `unavailable` when its server wants credentials: `rejected` when it turned down the ones Desktop sent. */
+  wantsCredentials?: 'missing' | 'rejected';
+  /** Listed by the server but refused at call time (ModelInfo.disabled); the picker prefers an enabled route of it. */
+  disabled?: boolean;
   /** USD per token by context tier, as the server's catalog publishes it. Absent when unpriced. */
   pricing?: Record<number, { input: number; output: number; cache_read?: number; cache_write?: number }>;
+  /** The generation settings this model takes, built in main; see shared/generation.ts. */
+  controls?: ModelControls;
+  /** An Ollama model's weights blob sha256, from /api/show; ties a copy under another name to its curated build. */
+  modelBlob?: string;
+  /** An Ollama model with an ADAPTER layer; it matches no curated build. */
+  hasAdapter?: boolean;
+  /** An Ollama model's Modelfile PARAMETER lines, from /api/show; a model that sets its own sampling keeps it. */
+  modelParameters?: string;
+  /** A local model that matches a curated build, on any local server: its family's recommended sampling. */
+  catalogSampling?: CatalogSampling;
 }
 
-/** The setting a `thinkingToggle` model's "Off" is stored as; any other setting thinks. */
-export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
+/** The setting a `thinkingToggle` model's "Off" is stored as. */
+export const THINKING_OFF_SETTING = 'none' satisfies ReasoningEffortSetting;
+
+/**
+ * Whether a stored setting switches a `thinkingToggle` model's thinking off, which a model listing
+ * effort levels has no switch for. `minimal` does too unless `minimalThinks`, since Off was stored
+ * that way before `none` existed. Every other setting thinks.
+ */
+export function thinkingSwitchedOff(
+  setting: ReasoningEffortSetting | undefined,
+  option: Pick<ChatModelOption, 'thinkingToggle' | 'minimalThinks' | 'controls'> | undefined
+): boolean {
+  if (!option?.thinkingToggle || option.controls?.effort) return false;
+  return setting === THINKING_OFF_SETTING || (setting === 'minimal' && !option.minimalThinks);
+}
 
 /**
  * How hard a model that reasons thinks before answering.
@@ -974,15 +1063,17 @@ export const THINKING_OFF_SETTING = 'minimal' satisfies ReasoningEffortSetting;
  * conversation did before the setting existed. It is a real choice in the picker rather than
  * an empty state, because "let the provider decide" is a different instruction from "low".
  */
-export type ReasoningEffortSetting = 'default' | 'minimal' | 'low' | 'medium' | 'high';
+export type ReasoningEffortSetting = 'default' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 /** Ascending, which is the order the picker lists them in. */
 export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
   'default',
+  'none',
   'minimal',
   'low',
   'medium',
   'high',
+  'xhigh',
 ];
 
 /**
@@ -1186,9 +1277,9 @@ interface ChatSessionMeta {
    * careful one is a thing to do WITHIN one app, and reopening a thread should resume the
    * effort it was held at rather than whatever the last conversation was set to.
    *
-   * Only a model in the catalog's reasoning set is actually sent one - see
-   * `ChatModelOption.supportsReasoningEffort`. For a model with `thinkingToggle`, `minimal`
-   * instead turns thinking off and every other setting turns it on. Otherwise this is inert.
+   * Only a level the model's `controls.effort` lists is actually sent. For a model with
+   * `thinkingToggle`, it turns thinking off or on instead; see thinkingSwitchedOff. Otherwise
+   * this is inert.
    */
   reasoningEffort: ReasoningEffortSetting;
   /**
@@ -1197,6 +1288,12 @@ interface ChatSessionMeta {
    * takes the 1-hour TTL; see `ChatModelOption.supportsOneHourCache`.
    */
   promptCacheTtl?: PromptCacheTtl;
+  /**
+   * Overrides of the model's sampling and output defaults, absent until one is set. Kept across
+   * a model switch; each turn sends only what the current model's `controls` list. Titles,
+   * suggestions and compaction never carry them.
+   */
+  generation?: GenerationSettings;
   /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a
@@ -1267,6 +1364,12 @@ export interface ChatSession extends ChatSessionMeta {
   replyInFlight?: { messageId: string; startedAt: number };
   /** The worktree being cut right now, added the same way; see the 'workspace' stream event. */
   preparingWorkspace?: WorkspacePreparation;
+}
+
+/** What exporting a conversation did; `saved` is false when the user dismissed the save dialog. */
+export interface ChatSessionExportResult {
+  saved: boolean;
+  path?: string;
 }
 
 /** A worktree being cut ahead of a session's first turn. `since` is epoch ms. */
@@ -1397,7 +1500,9 @@ export type ChatStreamEvent =
    */
   | { type: 'spawn-failed'; sessionId: string; title: string; message: string }
   /** The conversation's spawn suggestions changed; carries the whole list. No reply in flight. */
-  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] };
+  | { type: 'spawn-suggestions'; sessionId: string; suggestions: ChatSpawnSuggestion[] }
+  /** Messages from other conversations waiting for this one's user; carries the whole list. */
+  | { type: 'held-relays'; sessionId: string; held: ChatHeldRelay[] };
 
 /**
  * What a session is doing, as the sidebar draws it.
@@ -1789,7 +1894,8 @@ export type SpawnSuggestionResult = { ok: true; suggestion: ChatSpawnSuggestion 
  * and are told apart because only one of them is worth waiting out: a turn that has run out of
  * hops will never get more, and saying so stops the model retrying.
  */
-export type RelayRefusal = 'hops' | 'fan-out' | 'no-target' | 'archived' | 'self' | 'empty-message' | 'unavailable';
+export type RelayRefusal =
+  'hops' | 'fan-out' | 'no-target' | 'ambiguous' | 'archived' | 'self' | 'empty-message' | 'held-full' | 'unavailable';
 
 /**
  * The server-side prompt cache a reply left behind. `cachedAt` is the last request's first

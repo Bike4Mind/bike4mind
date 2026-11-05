@@ -1,3 +1,4 @@
+import { isSignupGrantBlocked } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   creditLotRepository,
@@ -43,6 +44,8 @@ export async function releaseRiskReviewedSignupGrant(
   // A domain or burst hold can withhold even an admin payout; approving then would drop the account
   // from the queue with the tranche still held, so fail it and leave it pending for a retry.
   const after = await userRepository.findById(userId);
+  if (after && isSignupGrantBlocked(after))
+    throw new Error('Signup grants are blocked for this account; unblock them before approving');
   if (after && userService.isSignupGrantHeldForReview(after))
     throw new Error('Signup grant is still withheld; release its signup hold before approving');
   return 0;

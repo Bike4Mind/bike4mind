@@ -19,6 +19,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import { toast } from 'sonner';
 import { useSubmitUserInvitation, useSubmitReferral } from '@client/app/hooks/data/regInvites';
+import { useGetReferralSummary } from '@client/app/hooks/data/referralSummary';
 import type { IReferralResult } from '@client/app/utils/regInviteAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { create } from 'zustand';
@@ -67,6 +68,9 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
   const currentUser = useUser(s => s.currentUser);
   const userId = currentUser?.id;
   const userName = currentUser?.name;
+
+  // Disabled by the server while the reward amounts are 0, so the section stays out of sight until launch.
+  const { data: referralSummary } = useGetReferralSummary({ enabled: isOpen && !!userId });
 
   const [friendEmail, setFriendEmail] = useState<string>('');
   const [numReferralsAvailable, setNumReferralsAvailable] = useState<number>(0);
@@ -234,6 +238,33 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({
             <br />
             Invited person gets <strong>{referralCreditsAmount?.settingValue} credits</strong>.
           </Typography>
+
+          {referralSummary?.enabled && (
+            <Box
+              data-testid="referral-summary"
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: 1,
+                mb: 3,
+                textAlign: 'center',
+              }}
+            >
+              {[
+                { testId: 'invited', label: 'Invited', value: referralSummary.invited },
+                { testId: 'active', label: 'Active', value: referralSummary.active },
+                { testId: 'subscribed', label: 'Subscribed', value: referralSummary.subscribed },
+                { testId: 'credits', label: 'Credits earned', value: referralSummary.creditsEarned },
+              ].map(({ testId, label, value }) => (
+                <Box key={testId}>
+                  <Typography level="title-lg" data-testid={`referral-summary-${testId}`}>
+                    {value.toLocaleString('en-US')}
+                  </Typography>
+                  <Typography level="body-xs">{label}</Typography>
+                </Box>
+              ))}
+            </Box>
+          )}
 
           <Stack spacing={2.5} sx={{ mb: 3 }}>
             <FormControl>

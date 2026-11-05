@@ -50,7 +50,8 @@ export const USERS_BULK_ACTION_COPY: Record<AdminUsersBulkActionType, BulkAction
   suspend: {
     label: 'Suspend',
     confirmLabel: count => `Suspend ${count}`,
-    description: 'Blocks sign-in, ends live sessions and disables their API keys.',
+    description:
+      'Blocks sign-in and API access, closes open connections, revokes their API keys and cancels Stripe subscriptions of theirs and of organizations they own. Credits are kept.',
     done: 'Suspended',
     tone: 'danger',
     reasonPresets: ADMIN_REASON_PRESETS.bulkUserAction,
@@ -58,7 +59,8 @@ export const USERS_BULK_ACTION_COPY: Record<AdminUsersBulkActionType, BulkAction
   restrict: {
     label: 'Restrict',
     confirmLabel: count => `Restrict ${count}`,
-    description: 'Turns off AI features. They can still sign in and reach their data.',
+    description:
+      'Turns off AI features and outbound actions such as email, invites and publishing. They can still sign in and reach their data.',
     done: 'Restricted',
     tone: 'neutral',
     reasonPresets: ADMIN_REASON_PRESETS.bulkUserAction,
@@ -66,7 +68,8 @@ export const USERS_BULK_ACTION_COPY: Record<AdminUsersBulkActionType, BulkAction
   adjustCredits: {
     label: 'Adjust credits',
     confirmLabel: count => `Adjust credits for ${count}`,
-    description: 'Every change is written to the credit ledger.',
+    description:
+      'Adds, removes or sets their credit balance. Removing stops at 0. Every change is written to the credit ledger.',
     done: 'Adjusted credits for',
     tone: 'neutral',
     reasonPresets: ADMIN_REASON_PRESETS.creditAdjustment,
@@ -74,7 +77,8 @@ export const USERS_BULK_ACTION_COPY: Record<AdminUsersBulkActionType, BulkAction
   revokeApiKeys: {
     label: 'Revoke API keys',
     confirmLabel: count => `Revoke keys for ${count}`,
-    description: 'Disables every active API key they own. Keys made later are not affected.',
+    description:
+      'Disables every active API key they own and closes open connections. Keys made later are not affected.',
     done: 'Revoked API keys for',
     tone: 'danger',
     reasonPresets: ADMIN_REASON_PRESETS.bulkUserAction,
@@ -90,7 +94,8 @@ export const USERS_BULK_ACTION_COPY: Record<AdminUsersBulkActionType, BulkAction
   contain: {
     label: 'Contain',
     confirmLabel: count => `Contain ${count}`,
-    description: 'Suspends them, sets their credits to 0 and revokes their API keys, together for each user.',
+    description:
+      'Suspends them, cancels their Stripe subscriptions, removes any positive credit balance and revokes their API keys, together for each user. A negative balance (credits owed) is kept as it is.',
     done: 'Contained',
     tone: 'danger',
     reasonPresets: ADMIN_REASON_PRESETS.bulkAbuseResponse,
@@ -258,9 +263,16 @@ export function UsersBulkActionDialog({
         toast.info('No users were changed.');
         return;
       }
+      if (result.subscriptionCancelFailures.length > 0)
+        toast.warning(
+          `Could not cancel the Stripe subscriptions of ${plural(result.subscriptionCancelFailures.length)}. Cancel them in Stripe.`
+        );
       const message =
         `${copy.done} ${plural(result.applied)}` +
-        (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : '');
+        (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : '') +
+        (result.canceledSubscriptions > 0
+          ? `; canceled ${result.canceledSubscriptions.toLocaleString()} Stripe subscription(s)`
+          : '');
       // The server sets undoExpiresAt to no later than now when it could not store an undo record.
       if (Date.parse(result.undoExpiresAt) <= Date.now()) {
         toast.success(message);
@@ -278,6 +290,10 @@ export function UsersBulkActionDialog({
           if (restored.partial)
             toast.warning(
               `${plural(restored.remaining)} not restored before the time limit. Check them on their profiles.`
+            );
+          if (restored.subscriptionsNotRestored.length > 0)
+            toast.warning(
+              `${restored.subscriptionsNotRestored.length.toLocaleString()} canceled Stripe subscription(s) stay canceled; the users must subscribe again.`
             );
           if (restored.failed.length > 0)
             toast.warning(`${restored.failed.length.toLocaleString()} users could not be restored.`);
@@ -358,7 +374,9 @@ export function UsersBulkActionDialog({
         {(type === 'contain' || type === 'suspend') && (
           <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
             You can undo this for 30 seconds afterwards
-            {blockDomains ? ', which also unblocks the domains it added' : ''}. Sessions that were ended stay ended.
+            {blockDomains ? ', which also unblocks the domains it added' : ''}. Sessions that were ended stay ended, and
+            live Stripe subscriptions, including those of organizations they own, are canceled with no refund and stay
+            canceled.
           </Typography>
         )}
       </Stack>

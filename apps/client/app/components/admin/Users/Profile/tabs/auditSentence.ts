@@ -18,7 +18,10 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.email.verification_resent': 'Resent the verification email',
   'user.subscription.granted': 'Granted a subscription',
   'user.subscription.removed': 'Removed the subscription',
+  'user.subscriptions.canceled': 'Canceled the Stripe subscriptions',
   'billing.comp.changed': 'Changed a comp',
+  'billing.subscription.cancel_scheduled': 'Scheduled cancellation at period end',
+  'billing.subscription.resumed': 'Resumed the subscription',
   'user.api_key.generated': 'Generated an API key',
   'user.api_key.rate_limit_updated': 'Changed API key rate limits',
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',
@@ -26,10 +29,14 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.api_key_trust.revoked': 'Revoked API key trust',
   'user.new_account_spend_cap.lifted': 'Lifted the new-account spend cap',
   'user.new_account_spend_cap.restored': 'Restored the new-account spend cap',
+  'user.internal.marked': 'Marked as an internal account',
+  'user.internal.unmarked': 'Stopped marking as an internal account',
   'user.role.admin_granted': 'Granted the Super Admin role',
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',
   'user.created': 'Created the account',
+  'user.credits.grant_blocked': 'Blocked signup credit grants and rewards',
+  'user.credits.grant_unblocked': 'Resumed signup credit grants and rewards',
 };
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
@@ -39,6 +46,7 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   emailVerified: 'Email verified',
   currentCredits: 'Credits',
   isAdmin: 'Super Admin',
+  isInternal: 'Internal account',
   moderationStatus: 'Moderation status',
   name: 'Name',
   email: 'Email',

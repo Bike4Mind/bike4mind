@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -11,15 +11,20 @@ import TabList from '@mui/joy/TabList';
 import TabPanel from '@mui/joy/TabPanel';
 import Tabs from '@mui/joy/Tabs';
 import Typography from '@mui/joy/Typography';
+import type { ChatModelOption } from '@shared/chat';
 import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, serverManagement, type ModelServerView } from '@shared/modelServers';
 import { OLLAMA_DOWNLOAD_URL, type ModelPull, type ModelRuntimeStatus } from '@shared/models';
-import { CloseIcon } from '../chat/icons';
+import { CloseIcon, ReloadIcon } from '../chat/icons';
 import { isWindows } from '../chat/platform';
+import { FOCUS_RELOAD_MIN_MS } from '../chat/useChat';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from '../chat/layout';
+import { missingFromCatalog } from './catalogSync';
 import { CuratedTab } from './CuratedTab';
 import { ExploreTab, rememberExploreRepo } from './ExploreTab';
+import { GpuMemoryCapWarning } from './GpuMemoryCapWarning';
+import { serverIdentity } from './installedCache';
 import { InstalledTab, type ModelsInUse } from './InstalledTab';
-import { manageNote, type ChatWith, type ModelTarget } from './modelTarget';
+import { manageNote, type ChatWith, type ModelTarget, type ModelWith } from './modelTarget';
 import { pullLabel, pullPercent } from './pullDisplay';
 import { ServerSwitcher } from './ServerSwitcher';
 import { useModelHub, useModelServers } from './useModelHub';
@@ -273,6 +278,8 @@ export function ModelsScreen({
   inUse,
   onOpenModelServers,
   chatWith,
+  modelWith,
+  catalog,
   chatError,
   onDismissChatError,
 }: {
@@ -281,6 +288,10 @@ export function ModelsScreen({
   /** Settings, Model servers: where a server on another machine is added. */
   onOpenModelServers?: () => void;
   chatWith?: ChatWith;
+  /** Chat's entry for an installed model, for its Settings dialog. */
+  modelWith?: ModelWith;
+  /** The chat model catalog Use in chat resolves against; reloaded when the installed list outgrows it. */
+  catalog?: { models: ChatModelOption[]; loading: boolean; reload: () => Promise<void> };
   /** Why the last Use in chat did not open a conversation. */
   chatError?: string | null;
   onDismissChatError?: () => void;
@@ -289,7 +300,8 @@ export function ModelsScreen({
   const [chosenServer, setChosenServer] = useState(rememberedServer);
   // A server removed in Settings falls back to this computer.
   const serverId = servers && !servers.some(server => server.id === chosenServer) ? LOCAL_SERVER_ID : chosenServer;
-  const hub = useModelHub(serverId);
+  const shownServer = servers?.find(server => server.id === serverId);
+  const hub = useModelHub(serverId, shownServer ? serverIdentity(shownServer) : null);
   const [tab, setTab] = useState<ModelsTab>(rememberedTab);
   const choose = (next: ModelsTab) => {
     rememberedTab = next;
@@ -307,9 +319,61 @@ export function ModelsScreen({
     // Settings changed the server's access or kind: what main reports about it changes too.
     if (statusManagement && statusManagement !== target.management) void refresh();
   }, [statusManagement, target.management, refresh]);
-  const installedCount = status && hub.installed?.ok ? hub.installed.models.length : null;
+  const installedCount =
+    status && hub.installed?.ok ? hub.installed.models.length : (hub.lastInstalled?.models.length ?? null);
   const note = manageNote(target);
   const chatOn = (name: string) => chatWith?.(serverId, name) ?? null;
+
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshAll = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([hub.refresh(), catalog?.reload()]);
+    } catch {
+      // The next refresh retries; a rejected status read must not escape the click handler.
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const catalogModels = catalog?.models;
+  const catalogLoading = catalog?.loading ?? true;
+  const reloadCatalog = catalog?.reload;
+  const installedModels = status && hub.installed?.ok ? hub.installed.models : null;
+  const serverKind = servers?.find(server => server.id === serverId)?.kind ?? 'ollama';
+  const mismatchKey =
+    installedModels && catalogModels && !catalogLoading
+      ? missingFromCatalog(installedModels, serverId, catalogModels, serverKind).join('\n')
+      : null;
+  const reloadedFor = useRef(new Set<string>());
+  useEffect(() => {
+    // One reload per distinct mismatch per server: a model the server never lists must not loop.
+    if (mismatchKey === null) return;
+    const prefix = `${serverId}\n`;
+    if (mismatchKey === '') {
+      for (const key of reloadedFor.current) if (key.startsWith(prefix)) reloadedFor.current.delete(key);
+      return;
+    }
+    const key = prefix + mismatchKey;
+    if (reloadedFor.current.has(key)) return;
+    reloadedFor.current.add(key);
+    void reloadCatalog?.();
+  }, [serverId, mismatchKey, reloadCatalog]);
+
+  const lastFocusRefresh = useRef(Date.now());
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.hidden || Date.now() - lastFocusRefresh.current < FOCUS_RELOAD_MIN_MS) return;
+      lastFocusRefresh.current = Date.now();
+      refresh().catch(() => undefined);
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [refresh]);
 
   return (
     <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }} data-testid="models-screen">
@@ -328,6 +392,18 @@ export function ModelsScreen({
           {servers && servers.length > 1 && (
             <ServerSwitcher servers={servers} value={serverId} onChange={chooseServer} />
           )}
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label="Refresh models"
+            title="Refresh models"
+            loading={refreshing}
+            onClick={() => void refreshAll()}
+            data-testid="models-refresh-btn"
+          >
+            <ReloadIcon />
+          </IconButton>
           <IconButton
             size="sm"
             variant="plain"
@@ -402,6 +478,10 @@ export function ModelsScreen({
               {chatError}
             </Alert>
           )}
+          <GpuMemoryCapWarning
+            serverId={serverId}
+            cap={status && hub.installed?.ok ? (hub.installed.gpuMemoryCap ?? null) : undefined}
+          />
           {hub.pulls.length > 0 && (
             <Stack spacing={1} data-testid="models-pull-list">
               {hub.pulls.map(pull => (
@@ -434,8 +514,10 @@ export function ModelsScreen({
               status={status}
               target={target}
               installed={status ? hub.installed : null}
+              lastInstalled={hub.lastInstalled}
               inUse={inUse}
               chatOn={chatOn}
+              modelOn={name => modelWith?.(serverId, name) ?? null}
               onRetry={() => void hub.refresh()}
               onExplore={() => choose('explore')}
             />

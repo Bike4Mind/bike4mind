@@ -9,9 +9,11 @@ export const QUESTION_CANCELLED = 'cancelled';
 /**
  * What settled a card. A card never expires: it waits for a click, and only these close it
  * without one. 'covered' is a rule or standing answer given on another card (settleCovered),
- * 'moved-on' a question card closed because a new message was sent (cancelQuestions).
+ * 'moved-on' a question card closed because a new message was sent (cancelQuestions), and
+ * 'unattended' a card in a loop runner session, where nobody is there to click (setUnattended).
  */
-export type ApprovalSettledBy = 'user' | 'covered' | 'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on';
+export type ApprovalSettledBy =
+  'user' | 'covered' | 'stopped' | 'conversation-deleted' | 'app-quit' | 'moved-on' | 'unattended';
 
 /**
  * The answer a card settled with, and who gave it. `asked` is false only when the request was
@@ -144,6 +146,8 @@ export interface ApprovalRequestOptions {
 export interface ApprovalGateListener {
   requested(sessionId: string): void;
   settled(sessionId: string): void;
+  /** A card was closed at once because its session is unattended; see setUnattended. */
+  unattended?(sessionId: string): void;
 }
 
 /**
@@ -164,7 +168,20 @@ export class ApprovalGate {
   /** sessionId -> exact approval key -> the shell patterns and directories it allowed. */
   private readonly standingShell = new Map<string, Map<string, StandingShell>>();
 
+  /** Loop runner sessions: a card here would never be answered, so it is denied as it opens. */
+  private readonly unattended = new Set<string>();
+
   constructor(private readonly listener?: ApprovalGateListener) {}
+
+  /**
+   * Mark a session as having nobody to answer its cards. Each card is still announced (so its
+   * call reaches the stream observers with the reason it stopped), then denied at once and the
+   * listener told, so a runner session never sits on one forever.
+   */
+  setUnattended(sessionId: string, on: boolean): void {
+    if (on) this.unattended.add(sessionId);
+    else this.unattended.delete(sessionId);
+  }
 
   /**
    * The standing approval covering this call, or null when there is none.
@@ -251,6 +268,7 @@ export class ApprovalGate {
         // not list as rememberable - see ApprovalRequestOptions.rememberable.
         const keep =
           remember &&
+          !options.always?.ungranted?.length &&
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
         if (keep) {
@@ -284,6 +302,10 @@ export class ApprovalGate {
       announced = true;
       this.listener?.requested(sessionId);
       announce(approvalId);
+      if (this.unattended.has(sessionId)) {
+        settle({ decision: 'deny' }, 'unattended');
+        this.listener?.unattended?.(sessionId);
+      }
     });
   }
 
@@ -323,6 +345,7 @@ export class ApprovalGate {
 
   /** Deleting a conversation drops both its in-flight asks and anything it had standing. */
   forgetSession(sessionId: string): void {
+    this.unattended.delete(sessionId);
     this.standing.delete(sessionId);
     this.standingShell.delete(sessionId);
     for (const [approvalId, entry] of this.pending) {

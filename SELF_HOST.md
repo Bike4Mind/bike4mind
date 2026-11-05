@@ -1110,6 +1110,14 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
+To verify the executor end to end, mint an API key (`b4m_live_...`) in the app with the `ai:generate` scope, or `ai:chat` plus `notebooks:write`, and run the check against your deployment. It starts an agent run, polls `GET /api/v1/agent-executions/{id}` for that execution ID, and passes only when the run reaches `completed` and its answer echoes a per-run token. A `failed` or `aborted` run fails the check and prints the run's `error`, even though a failed run also saves an error reply into the session:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-agent-run
+```
+
+It needs a working model provider credential (or local model) in `.env.selfhost`. Optional: `MODEL`, `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). `RUN_TIMEOUT_MS` bounds the whole check, including each request, and a failure after the run started prints its execution ID. Exit code 0 is pass, 1 is fail, 2 is bad configuration.
+
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
 
 ### Daily credit-lot expiry
@@ -1280,6 +1288,12 @@ Startup verifies that the source queue redrives to the configured DLQ after thre
 Plain export artifacts use the requesting user, plan and export job ID as their stable identity. A replay rechecks plan access and reuses an existing ZIP even after midnight or a goal edit. A metadata lookup failure emits the existing failed progress status even when the queue will retry; a later successful attempt can still deliver the download. Only a definitive missing-object response allows generation; metadata permission/network failures and failed download notification remain retryable. The hosted dispatcher shares this new key scheme. Already-created legacy date/goal-named artifacts are not migrated: replay after an upgrade may generate a new scoped artifact and leave the legacy object. There is no durable plain-export receipt or concurrent exactly-once guarantee: a failure before artifact upload, or competing workers, can repeat model work. Organization summaries retain their existing persisted completion, active-window release and completed-replay behavior.
 
 Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
+
+### Account data exports
+
+`ACCOUNT_DATA_EXPORT_QUEUE` and `ACCOUNT_DATA_EXPORT_QUEUE_DLQ` enable the self-service "download your data" export offered in Settings. The worker writes a zip under the FabFile bucket's `exports/` prefix, so the same one-day MinIO lifecycle rule that expires notebook exports removes it, and emails the user a link to `APP_URL/account-data-export/<id>`. That page asks the API for a five-minute download link and refuses exports older than 24 hours. Without the queue variables the request endpoint answers 500 and nothing is queued; outgoing email must be configured for the link to arrive.
+
+The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker reads the generated-images bucket as well as the FabFile bucket, copying images generated in notebooks under `images/`. It stops building notebooks once two thirds of the time before the last five minutes is used, and file bytes, generated images and artifacts five minutes before it ends, listing what is left in `notebooks/index.json`, `files/index.json` and `artifacts/index.json` as omitted, so a very large account can receive a partial export. A redelivery after the upload only re-sends the email.
 
 ## Kubernetes evaluation package
 

@@ -5,7 +5,7 @@ import {
   FeedbackStatus,
   type FeedbackSubject,
 } from '@bike4mind/common';
-import { oneOf, parsePage, parseStringList, toNumber } from '../adminSearchValues';
+import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
 import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
 
 /**
@@ -54,6 +54,7 @@ export type FeedbackSearch = {
   [FEEDBACK_ORDER_PARAM]?: FeedbackOrder;
   [FEEDBACK_PAGE_PARAM]?: number;
   [FEEDBACK_LIMIT_PARAM]?: number;
+  [FEEDBACK_ID_PARAM]?: string;
 };
 
 export type FeedbackView = {
@@ -123,6 +124,7 @@ export const FEEDBACK_SEARCH_PARSERS: {
   [FEEDBACK_ORDER_PARAM]: parseOrder,
   [FEEDBACK_PAGE_PARAM]: parsePage,
   [FEEDBACK_LIMIT_PARAM]: parseLimit,
+  [FEEDBACK_ID_PARAM]: parseObjectId,
 };
 
 /** The list view a URL describes; a missing or invalid param means its default. */
@@ -143,7 +145,7 @@ export function feedbackViewFromSearch(search: Record<string, unknown>): Feedbac
  * it is removed from the URL: a bare `?tab=feedback` is the default view.
  */
 export function feedbackViewToSearch(view: FeedbackView): {
-  [K in keyof Required<FeedbackSearch>]: Required<FeedbackSearch>[K] | undefined;
+  [K in Exclude<keyof FeedbackSearch, typeof FEEDBACK_ID_PARAM>]-?: Required<FeedbackSearch>[K] | undefined;
 } {
   const statuses = encodeStatuses(checkedStatuses(view.statusFilters));
   const defaultStatuses = encodeStatuses(checkedStatuses(DEFAULT_FEEDBACK_VIEW.statusFilters));

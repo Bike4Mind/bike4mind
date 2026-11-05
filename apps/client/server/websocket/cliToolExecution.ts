@@ -6,6 +6,7 @@ import { validateToolRequest, executeToolWithLogging } from '@bike4mind/server-u
 import { withWebSocketContext, sendToConnection } from '@bike4mind/server-utils/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { buildWebToolExecutors } from '@server/cli/webToolExecutors';
 
 /**
  * WebSocket handler for CLI tool execution (request-response)
@@ -41,13 +42,16 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Authenticate (try API key first, then JWT)
   let userId: string;
   let userEmail: string | undefined;
+  // Set only when an API key authenticated the request, so the billed web tools charge the key's owner.
+  let apiKeyInfo: Awaited<ReturnType<typeof verifyApiKey>> | undefined;
 
   try {
-    const apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${accessToken}` });
-    userId = apiKeyInfo.userId;
+    const verifiedKey = await verifyApiKey({ authorization: `Bearer ${accessToken}` });
+    apiKeyInfo = verifiedKey;
+    userId = verifiedKey.userId;
 
-    await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
-      userId: apiKeyInfo.userId,
+    await checkApiKeyRateLimitOrThrow(verifiedKey, {
+      userId: verifiedKey.userId,
       endpoint: 'ws/cli_tool_request',
       method: 'WS',
     });
@@ -64,6 +68,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
     try {
       const user = await verifyJwtToken(accessToken, { requireApiAccess: true });
+      apiKeyInfo = undefined;
       userId = user.id;
       userEmail = user.email ?? undefined;
       await checkRateLimit(userId, undefined, { bucket: 'ws' });
@@ -98,6 +103,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       userId,
       userEmail,
       logger,
+      executors: buildWebToolExecutors(logger, apiKeyInfo),
     });
 
     await sendToConnection(connectionId, endpoint, {
@@ -106,6 +112,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       success: result.success,
       content: result.success ? result.content : undefined,
       error: result.error,
+      errorCode: result.errorCode,
     });
   } catch (error) {
     logger.error('[CLI_WS_TOOL] Tool execution error:', error);

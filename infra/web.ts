@@ -29,6 +29,7 @@ import {
 } from './emailIngestion';
 import { eventBus } from './eventBus';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import {
   fabFileChunkQueue,
@@ -42,6 +43,7 @@ import {
   slackExportQueue,
   githubWebhookQueue,
   questExportQueue,
+  accountDataExportQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueue,
@@ -85,6 +87,7 @@ import {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueue,
   tavernHeartbeatQueueDLQ,
@@ -116,7 +119,7 @@ import { allSecrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
-import { wafQueryWebAclArn, wafReadPermissions, wafStageWebAcl, wafWebAclArn } from './waf';
+import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 
 // SQS queue URLs bundled as Linkable resources. Stored in resource.enc at deploy
 // time — no IAM statements generated, no env var size concerns. The wildcard SQS
@@ -140,6 +143,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'github-webhook': githubWebhookQueueDLQ.url,
     'webhook-delivery': webhookDeliveryQueueDLQ.url,
     'quest-export': questExportQueueDLQ.url,
+    'account-data-export': accountDataExportQueueDLQ.url,
     'liveops-triage': liveOpsTriageQueueDLQ.url,
     'email-ingestion': emailIngestionQueueDLQ.url,
     'email-analysis': emailAnalysisQueueDLQ.url,
@@ -202,6 +206,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     slackExportQueue: slackExportQueue.url,
     githubWebhookQueue: githubWebhookQueue.url,
     questExportQueue: questExportQueue.url,
+    accountDataExportQueue: accountDataExportQueue.url,
     whatsNewHighlightsQueue: whatsNewHighlightsQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
     liveOpsTriageQueue: liveOpsTriageQueue.url,
@@ -265,6 +270,7 @@ export const web = new sst.aws.Nextjs(
       chatCompletion,
       imageProcessor,
       mcpHandler,
+      remoteMcpHandler,
       fabFileBucket,
       generatedImagesBucket,
       appFilesBucket,
@@ -451,8 +457,8 @@ export const web = new sst.aws.Nextjs(
       ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
         ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
         : {}),
-      // Only the stage-owned ACL carries the label-forward rules; an externally managed ACL does not.
-      ...(wafStageWebAcl ? { WAF_LABEL_FORWARDING: 'true' } : {}),
+      // Set only when the attached ACL inserts the label headers (see resolveWafLabelForwarding).
+      ...(wafLabelForwarding ? { WAF_LABEL_FORWARDING: 'true' } : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.

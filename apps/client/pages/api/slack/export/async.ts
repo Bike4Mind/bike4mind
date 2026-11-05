@@ -1,4 +1,5 @@
 import { adminApi } from '@server/middlewares/adminApi';
+import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { ForbiddenError, BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -128,6 +129,13 @@ const handler = adminApi({ adminPermissions: { POST: 'settings:manage', GET: 'se
 
       throw new BadRequestError('Failed to start export. Please try again.');
     }
+
+    await recordAdminActionFromRequest(req, {
+      action: 'integration.slack_channel.exported',
+      target: { kind: 'settings', id: channelId, displayName: `Slack channel ${channelId}` },
+      summary: `queued an export of Slack channel ${channelId}`,
+      details: { workspaceId, channelId, format, mode: 'queued', jobId: job.id },
+    });
 
     return res.json({
       success: true,

@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { wslSpawnEnv } from '../../wsl/wslPath';
 import { system32 } from './gitBash';
 import type { SandboxedCommand } from './sandbox';
 
@@ -37,17 +38,65 @@ done
 exit 0
 `;
 
-/** Children this side stopped; taskkill ends them with exit code 1, which says nothing of the kill. */
-const killed = new WeakSet<ChildProcess>();
+interface Invocation {
+  file: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+}
 
-export function windowsArgs(trees: readonly CommandTree[]): string[] {
-  const tags = trees.map(tree => tree.launch.processTag).filter((tag): tag is string => Boolean(tag));
-  return ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', system32('taskkill.exe'), 'KILL', ...tags];
+function tagsOf(trees: readonly CommandTree[]): string[] {
+  return trees.map(tree => tree.launch.processTag).filter((tag): tag is string => Boolean(tag));
 }
 
 /**
- * The spawned launcher goes by its handle, never by pid: a pid passed to taskkill could belong to
- * another process by the time it runs. The tag sweep covers everything the launcher started.
+ * What to run to signal `trees` on Windows: one forced Git Bash sweep, plus one per WSL distro,
+ * where Linux processes take the signal as sent.
+ */
+export function windowsSignalCommands(trees: readonly CommandTree[], signal: NodeJS.Signals): Invocation[] {
+  const name = signal === 'SIGKILL' ? 'KILL' : 'TERM';
+  const native = trees.filter(tree => !tree.launch.wslDistro);
+  const commands: Invocation[] = [];
+  const first = native[0];
+  if (first) {
+    commands.push({
+      file: first.launch.executable,
+      args: ['-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', system32('taskkill.exe'), 'KILL', ...tagsOf(native)],
+    });
+  }
+  const distros = new Set(trees.map(tree => tree.launch.wslDistro).filter((distro): distro is string => !!distro));
+  for (const distro of distros) {
+    const inDistro = trees.filter(tree => tree.launch.wslDistro === distro);
+    commands.push({
+      file: system32('wsl.exe'),
+      args: ['-d', distro, '--exec', 'bash', '-c', WINDOWS_TREE_SCRIPT, 'b4m-signal', '', name, ...tagsOf(inDistro)],
+      env: wslSpawnEnv(),
+    });
+  }
+  return commands;
+}
+
+/** Children this side stopped; taskkill ends them with exit code 1, which says nothing of the kill. */
+const killed = new WeakSet<ChildProcess>();
+
+/** Git Bash launchers go on every stop, which is always forced there; wsl.exe goes on KILL. */
+function launchersToEnd(trees: readonly CommandTree[], signal: NodeJS.Signals): CommandTree[] {
+  return trees.filter(tree => !tree.launch.wslDistro || signal === 'SIGKILL');
+}
+
+/**
+ * Signals sent to a WSL command. wsl.exe reports death by signal N as exit code N, or 128 + N when
+ * a shell in between reported it (Linux numbering).
+ */
+const sentToDistro = new WeakMap<ChildProcess, NodeJS.Signals>();
+const LINUX_SIGNAL_NUMBERS: Partial<Record<NodeJS.Signals, number>> = { SIGKILL: 9, SIGTERM: 15 };
+
+function noteSent(trees: readonly CommandTree[], signal: NodeJS.Signals): void {
+  for (const tree of trees) if (tree.launch.wslDistro) sentToDistro.set(tree.child, signal);
+}
+
+/**
+ * The spawned launcher (Git Bash's or wsl.exe) goes by its handle, never by pid: a pid passed to
+ * taskkill could belong to another process by the time it runs. The tag sweep covers the rest.
  */
 function killLaunchers(trees: readonly CommandTree[]): void {
   for (const tree of trees) {
@@ -98,8 +147,9 @@ const MSYS_SIGNALS: Readonly<Record<number, NodeJS.Signals>> = {
 };
 
 /**
- * On Windows, reads Git Bash's `signal << 8` exit code (0x80 set for a core dump) back as the
- * signal, and reports SIGKILL for a child this side stopped.
+ * On Windows, reads Git Bash's `signal << 8` exit code (0x80 set for a core dump), or wsl.exe's N
+ * or 128 + N after this side sent signal N, back as the signal, and reports SIGKILL for a child
+ * this side force-stopped.
  */
 export function commandExit(
   code: number | null,
@@ -109,6 +159,11 @@ export function commandExit(
 ): { code: number | null; signal: NodeJS.Signals | null } {
   if (platform !== 'win32') return { code, signal };
   if (child && killed.has(child)) return { code: null, signal: 'SIGKILL' };
+  const sent = child && sentToDistro.get(child);
+  if (sent) {
+    const number = LINUX_SIGNAL_NUMBERS[sent];
+    return number && (code === number || code === 128 + number) ? { code: null, signal: sent } : { code, signal };
+  }
   if (code === null || code < 0x100 || code >= 0x10000 || (code & 0xff) !== 0) return { code, signal };
   const name = MSYS_SIGNALS[(code >> 8) & 0x7f];
   return name ? { code: null, signal: name } : { code, signal };
@@ -123,28 +178,35 @@ export function signalCommandTree(tree: CommandTree, signal: NodeJS.Signals): vo
     posixSignal(tree.pid, signal);
     return;
   }
-  killed.add(tree.child);
-  const sweep = spawn(tree.launch.executable, windowsArgs([tree]), {
-    stdio: 'ignore',
-    windowsHide: true,
-    timeout: WINDOWS_SIGNAL_TIMEOUT_MS,
-  });
-  sweep.on('error', () => killLaunchers([tree]));
-  sweep.on('exit', () => killLaunchers([tree]));
+  noteSent([tree], signal);
+  const launchers = launchersToEnd([tree], signal);
+  for (const launcher of launchers) killed.add(launcher.child);
+  for (const command of windowsSignalCommands([tree], signal)) {
+    const sweep = spawn(command.file, command.args, {
+      env: command.env,
+      stdio: 'ignore',
+      windowsHide: true,
+      timeout: WINDOWS_SIGNAL_TIMEOUT_MS,
+    });
+    sweep.on('error', () => killLaunchers(launchers));
+    sweep.on('exit', () => killLaunchers(launchers));
+  }
 }
 
-/** For handlers that cannot await. On Windows this blocks for one Git Bash run, however many trees. */
+/** For handlers that cannot await. On Windows this blocks for one sweep per shell, however many trees. */
 export function signalCommandTreesSync(trees: readonly CommandTree[], signal: NodeJS.Signals): void {
   if (process.platform !== 'win32') {
     for (const tree of trees) posixSignal(tree.pid, signal);
     return;
   }
-  const first = trees[0];
-  if (!first) return;
-  spawnSync(first.launch.executable, windowsArgs(trees), {
-    stdio: 'ignore',
-    windowsHide: true,
-    timeout: WINDOWS_SIGNAL_TIMEOUT_MS,
-  });
-  killLaunchers(trees);
+  noteSent(trees, signal);
+  for (const command of windowsSignalCommands(trees, signal)) {
+    spawnSync(command.file, command.args, {
+      env: command.env,
+      stdio: 'ignore',
+      windowsHide: true,
+      timeout: WINDOWS_SIGNAL_TIMEOUT_MS,
+    });
+  }
+  killLaunchers(launchersToEnd(trees, signal));
 }

@@ -1,5 +1,6 @@
 import { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
+import { INSUFFICIENT_CREDITS_CODE, outOfCreditsToolResult } from './outOfCreditsToolResult';
 
 /**
  * Tool execution result from server
@@ -61,9 +62,15 @@ export class ServerToolExecutor {
       return result.content || '';
     } catch (error: unknown) {
       // Handle network or API errors
-      const err = error as { response?: { data?: { error?: string }; status?: number }; message?: string };
+      const err = error as {
+        response?: { data?: { error?: string; errorCode?: string }; status?: number };
+        message?: string;
+      };
       const errorMessage = err?.response?.data?.error || err?.message || 'Unknown error';
       const status = err?.response?.status || 'unknown';
+      if (err?.response?.data?.errorCode === INSUFFICIENT_CREDITS_CODE) {
+        return outOfCreditsToolResult(toolName, err.response.data.error);
+      }
       logger.error(`[ServerToolExecutor] Request failed for ${toolName}: ${errorMessage} (status: ${status})`);
       logger.debug(`[ServerToolExecutor] Full error: ${JSON.stringify(err, null, 2)}`);
 

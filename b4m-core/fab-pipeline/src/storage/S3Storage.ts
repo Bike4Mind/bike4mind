@@ -7,6 +7,8 @@ import {
   GetObjectCommandOutput,
   HeadObjectCommand,
   ListObjectsV2Command,
+  ListObjectVersionsCommand,
+  DeleteObjectsCommand,
   PutObjectCommandInput,
   ObjectCannedACL,
 } from '@aws-sdk/client-s3';
@@ -124,7 +126,12 @@ export class S3Storage extends BaseStorage {
     options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body'>,
     abortSignal?: AbortSignal
   ): Promise<string> {
-    return this.put(fs.createReadStream(localPath), destination, mime.lookup(destination), options, abortSignal);
+    const content = fs.createReadStream(localPath);
+    try {
+      return await this.put(content, destination, mime.lookup(destination), options, abortSignal);
+    } finally {
+      content.destroy();
+    }
   }
 
   private async put(
@@ -198,6 +205,48 @@ export class S3Storage extends BaseStorage {
     );
   }
 
+  /** Remove the object, all retained storage versions, and delete markers. */
+  async deletePermanently(path: string): Promise<void> {
+    if (!path) throw new Error('Permanent deletion requires an object key');
+    await this.deleteStoredVersions(path, true);
+  }
+
+  /** Permanently erase one entity folder, including versions hidden by delete markers. */
+  async deletePrefixPermanently(prefix: string): Promise<number> {
+    if (!prefix.endsWith('/') || prefix.split('/').filter(Boolean).length < 2) {
+      throw new Error(`Permanent deletion refuses the unscoped prefix "${prefix}"`);
+    }
+    return this.deleteStoredVersions(prefix, false);
+  }
+
+  private async deleteStoredVersions(prefix: string, exactKey: boolean): Promise<number> {
+    let deleted = 0;
+    let previousBatch: string | undefined;
+    for (;;) {
+      // Drain the first page repeatedly: deleting a pagination marker before using it can
+      // invalidate pagination. The purge has already fenced new account writes.
+      const page = await this.s3.send(
+        new ListObjectVersionsCommand({ Bucket: this.bucketName, Prefix: prefix, MaxKeys: 1000 })
+      );
+      const objects = [...(page.Versions ?? []), ...(page.DeleteMarkers ?? [])].flatMap(entry => {
+        if (!entry.Key || (exactKey ? entry.Key !== prefix : !entry.Key.startsWith(prefix))) return [];
+        if (entry.VersionId === undefined) throw new Error('Storage returned an object without its version ID');
+        return [{ Key: entry.Key, VersionId: entry.VersionId }];
+      });
+      if (objects.length === 0) return deleted;
+      const batch = JSON.stringify(objects);
+      if (batch === previousBatch) throw new Error('Storage did not remove the requested object versions');
+      previousBatch = batch;
+      const result = await this.s3.send(
+        new DeleteObjectsCommand({ Bucket: this.bucketName, Delete: { Objects: objects, Quiet: true } })
+      );
+      if (result.Errors?.length) {
+        throw new Error(`Failed to permanently delete ${result.Errors.length} stored object version(s)`);
+      }
+      deleted += objects.length;
+    }
+  }
+
   /**
    * Delete every object whose key starts with `prefix` and return how many there were. Meant for
    * small per-entity prefixes: lists page by page and deletes one key at a time. The prefix must
@@ -238,6 +287,7 @@ export class S3Storage extends BaseStorage {
       ContentLength,
       ResponseContentType,
       ResponseContentDisposition,
+      ResponseCacheControl,
       signingDate,
     }: {
       expiresIn?: number;
@@ -255,6 +305,8 @@ export class S3Storage extends BaseStorage {
        */
       ResponseContentType?: string;
       ResponseContentDisposition?: string;
+      /** GET only: the Cache-Control S3 answers with, e.g. 'no-store' to keep the bytes off disk. */
+      ResponseCacheControl?: string;
       /**
        * Sign as of this instant instead of now; the link is valid from it for `expiresIn` seconds.
        * Repeated calls with the same value (and credentials) return the identical URL, so a browser
@@ -280,6 +332,7 @@ export class S3Storage extends BaseStorage {
             Key: path,
             ResponseContentType,
             ResponseContentDisposition,
+            ResponseCacheControl,
           }),
       {
         expiresIn: await this.clampToCredentialLifetime(client, expiresIn, signingDate),

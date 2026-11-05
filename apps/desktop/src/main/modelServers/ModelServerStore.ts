@@ -27,6 +27,15 @@ interface StoreDocument extends Record<string, unknown> {
   servers: StoredServer[];
   /** This computer's entered hardware, which overrides its probe. */
   localSpecs?: ModelServerSpecs;
+  /** By server id, the models that replied with reasoning, which earns them a thinking switch. */
+  thinkers?: Record<string, LearnedThinker[]>;
+}
+
+/** A model that replied with reasoning, and the identity of the weights served under its name then. */
+export interface LearnedThinker {
+  model: string;
+  /** From the server's listing (see modelIdentity in OpenAICompatibleChat); absent when it gives none. */
+  identity?: string;
 }
 
 export const MAX_MODEL_SERVERS = 20;
@@ -157,11 +166,11 @@ export class ModelServerStore {
         this.sealSecret(stored, secret);
         applied = () => this.cacheSecret(id, secret);
       }
-      return {
-        document: { ...document, servers: document.servers.map(server => (server.id === id ? stored : server)) },
-        applied,
-        result: hydrate(stored) as ModelServerRecord,
-      };
+      const servers = document.servers.map(server => (server.id === id ? stored : server));
+      // Another kind of server answers at that address now, so what it served before says nothing.
+      const next =
+        stored.kind === current.kind ? { ...document, servers } : withoutThinkers({ ...document, servers }, id);
+      return { document: next, applied, result: hydrate(stored) as ModelServerRecord };
     });
   }
 
@@ -188,12 +197,49 @@ export class ModelServerStore {
     });
   }
 
+  async thinkers(id: string): Promise<LearnedThinker[]> {
+    return storedThinkers((await this.load()).thinkers)[id] ?? [];
+  }
+
+  /** Remembers that `model` on this server thinks; the server's OpenAI-compatible API never says so. */
+  addThinker(id: string, model: string, identity?: string): Promise<void> {
+    return this.commit(document => {
+      const all = storedThinkers(document.thinkers);
+      const entries = all[id] ?? [];
+      const known = entries.find(entry => entry.model === model);
+      if (this.readOnly || !document.servers.some(server => server.id === id) || (known && known.identity === identity))
+        return { document, result: undefined };
+      const entry: LearnedThinker = identity === undefined ? { model } : { model, identity };
+      const kept = entries.filter(other => other.model !== model);
+      const thinkers = { ...all, [id]: [...kept, entry].slice(-MAX_LISTED_MODELS) };
+      return { document: { ...document, thinkers }, result: undefined };
+    });
+  }
+
+  /** Forgets `model` on this server, as when other weights are served under its name. */
+  forgetThinker(id: string, model: string): Promise<void> {
+    return this.commit(document => {
+      const entries = storedThinkers(document.thinkers)[id] ?? [];
+      if (this.readOnly || !entries.some(entry => entry.model === model)) return { document, result: undefined };
+      const kept = entries.filter(entry => entry.model !== model);
+      const rest = withoutThinkers(document, id);
+      return {
+        document: kept.length > 0 ? { ...rest, thinkers: { ...rest.thinkers, [id]: kept } } : rest,
+        result: undefined,
+      };
+    });
+  }
+
   remove(id: string): Promise<void> {
     return this.commit(document => {
       this.assertWritable();
       const servers = document.servers.filter(server => server.id !== id);
       if (servers.length === document.servers.length) return { document, result: undefined };
-      return { document: { ...document, servers }, applied: () => this.secrets.delete(id), result: undefined };
+      return {
+        document: withoutThinkers({ ...document, servers }, id),
+        applied: () => this.secrets.delete(id),
+        result: undefined,
+      };
     });
   }
 
@@ -312,6 +358,29 @@ export class ModelServerStore {
 
 function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((name, index) => name === b[index]);
+}
+
+function storedThinker(raw: unknown): LearnedThinker[] {
+  if (typeof raw === 'string') return [{ model: raw }];
+  if (!raw || typeof raw !== 'object') return [];
+  const { model, identity } = raw as { model?: unknown; identity?: unknown };
+  if (typeof model !== 'string') return [];
+  return [typeof identity === 'string' ? { model, identity } : { model }];
+}
+
+function storedThinkers(raw: unknown): Record<string, LearnedThinker[]> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw).flatMap(([id, entries]) =>
+      Array.isArray(entries) ? [[id, entries.flatMap(storedThinker)]] : []
+    )
+  );
+}
+
+function withoutThinkers(document: StoreDocument, id: string): StoreDocument {
+  const { [id]: _removed, ...thinkers } = storedThinkers(document.thinkers);
+  const { thinkers: _previous, ...rest } = document;
+  return Object.keys(thinkers).length > 0 ? { ...rest, thinkers } : rest;
 }
 
 function hasId(value: unknown): value is StoredServer {

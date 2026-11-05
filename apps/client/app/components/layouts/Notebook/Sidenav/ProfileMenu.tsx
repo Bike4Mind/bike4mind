@@ -4,6 +4,7 @@ import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { UiNavigationEvents } from '@bike4mind/common';
+import { canEnterAdminConsole } from '@client/app/components/admin/adminTabPermissions';
 import CreditIcon from '@client/app/components/svgs/icons/CreditIcon';
 import { useReferralModal } from '@client/app/components/referrals/ReferralModal';
 import { useBillingView } from '@client/app/components/subscription/BillingDeepLinkModals';
@@ -259,7 +260,9 @@ const ProfileMenu = () => {
   const modeToggleEnabled = theme.branding.modeToggleEnabled;
 
   const currentUser = useUser(s => s.currentUser);
-  const isAdmin = useUser(s => s.isAdmin);
+  const avatarVersion = useUser(s => s.avatarVersion);
+  // Delegated admins too: the console admits anyone it has a tab to show.
+  const canOpenAdmin = canEnterAdminConsole(currentUser);
   const { accounts, selectedAccount, setSelectedAccount, showAccountType } = useAccounts();
 
   const { isFeatureEnabled } = useFeatureEnabled();
@@ -439,7 +442,7 @@ const ProfileMenu = () => {
 
           <Divider sx={{ my: 1 }} />
 
-          {isAdmin && (
+          {canOpenAdmin && (
             <MenuRow
               testId="profile-menu-admin"
               icon={<AdminPanelSettingsIcon sx={{ fontSize: '18px' }} />}
@@ -855,6 +858,9 @@ const ProfileMenu = () => {
         <Avatar
           size="md"
           data-testid="profile-menu-avatar"
+          // The new key can reach the store before the S3 upload lands, so the first image
+          // load 403s and Avatar sticks on the initial; remounting after the upload retries it.
+          key={avatarVersion}
           // photoUrl is a storage key, not a URL: used as-is it resolves against the current route.
           src={currentUser?.photoUrl ? getAppFileUrl({ key: currentUser.photoUrl }) : undefined}
           sx={{ '--Avatar-size': '36px', width: '36px', height: '36px', borderRadius: '8px' }}

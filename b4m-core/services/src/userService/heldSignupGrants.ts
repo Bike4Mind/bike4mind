@@ -6,7 +6,7 @@ import {
 } from '@bike4mind/common';
 import type { FreeCreditAdapters } from './freeCredits';
 import { releasePendingFreeCredits } from './freeCredits';
-import { accountBlockReasons, isAiAccessRevoked } from './accountState';
+import { classifySignupGrantAction } from './signupGrantActionClassifier';
 
 export const MAX_BULK_RELEASE = 100;
 
@@ -45,7 +45,7 @@ async function releaseHeldGrant(
   try {
     const user = await users.findById(userId);
     if (!user || !user.tags?.includes(PENDING_FREE_CREDITS_TAG) || !user.signupGrantHeldReason) return none('not_held');
-    if (!user.emailVerified || accountBlockReasons(user).length || isAiAccessRevoked(user)) return none('withheld');
+    if (!classifySignupGrantAction(user, 'release_held').eligible) return none('withheld');
     const result = await releasePendingFreeCredits(
       { id: userId, tags: [...user.tags], pendingCreditGrant: user.pendingCreditGrant ?? null },
       { ...adapters.grant, bypassBudget }
@@ -67,6 +67,11 @@ async function releaseHeldGrant(
     adapters.grant.logger.error(`Held signup grant release failed for user ${userId}`, error);
     return none('failed');
   }
+}
+
+/** Pays one held grant now under its original transaction id, outside the daily budget. */
+export async function releaseHeldGrantNow(userId: string, adapters: HeldGrantAdapters): Promise<HeldReleaseEntry> {
+  return (await releaseHeldGrant(userId, adapters, true)).entry;
 }
 
 /** Admin release: pays each held grant under its original transaction id, outside the daily budget. */

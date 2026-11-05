@@ -3,7 +3,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { Readable } from 'stream';
 import { describe, it, expect, vi } from 'vitest';
-import { DeleteObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+  ListObjectVersionsCommand,
+  DeleteObjectsCommand,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import { S3Storage } from './S3Storage';
 
 /**
@@ -128,13 +134,19 @@ describe('S3Storage upload input handling', () => {
     const dir = mkdtempSync(join(tmpdir(), 's3storage-'));
     const existing = join(dir, 'data.json');
     writeFileSync(existing, '{"a":1}');
+    let body = '';
+    send.mockImplementation(async command => {
+      if (!(command instanceof PutObjectCommand) || !(command.input.Body instanceof Readable)) {
+        throw new Error('Expected a streamed upload');
+      }
+      for await (const chunk of command.input.Body) body += chunk;
+      return {};
+    });
     try {
       await expect(storage.uploadFile(existing, 'imports/data.json')).resolves.toBe('imports/data.json');
       const command = send.mock.calls[0][0] as PutObjectCommand;
       expect(command.input.Body).toBeInstanceOf(Readable);
       expect(command.input.ContentType).toBe('application/json');
-      let body = '';
-      for await (const chunk of command.input.Body as Readable) body += chunk;
       expect(body).toBe('{"a":1}');
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -183,5 +195,110 @@ describe('S3Storage.deletePrefix', () => {
     const { storage, send } = setup();
     await expect(storage.deletePrefix(prefix)).rejects.toThrow('unscoped prefix');
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('S3Storage permanent deletion', () => {
+  const setup = () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    return { storage, send: vi.spyOn(client, 'send') };
+  };
+
+  it('erases current, previous, null versions and delete markers without deleting sibling keys', async () => {
+    const { storage, send } = setup();
+    let listed = false;
+    send.mockImplementation(async command => {
+      if (command instanceof ListObjectVersionsCommand) {
+        if (listed) return {};
+        listed = true;
+        return {
+          Versions: [
+            { Key: 'files/a', VersionId: 'v2' },
+            { Key: 'files/a', VersionId: 'v1' },
+            { Key: 'files/a', VersionId: 'null' },
+            { Key: 'files/a-other', VersionId: 'keep' },
+          ],
+          DeleteMarkers: [{ Key: 'files/a', VersionId: 'marker' }],
+        };
+      }
+      return {};
+    });
+    await storage.deletePermanently('files/a');
+    const deletes = send.mock.calls
+      .map(([command]) => command)
+      .filter(command => command instanceof DeleteObjectsCommand);
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0].input.Delete?.Objects).toEqual([
+      { Key: 'files/a', VersionId: 'v2' },
+      { Key: 'files/a', VersionId: 'v1' },
+      { Key: 'files/a', VersionId: 'null' },
+      { Key: 'files/a', VersionId: 'marker' },
+    ]);
+    expect(send.mock.calls.some(([command]) => command instanceof DeleteObjectCommand)).toBe(false);
+  });
+
+  it('drains successive version pages under the entity prefix', async () => {
+    const { storage, send } = setup();
+    const pages = [
+      { Versions: [{ Key: 'exports/u/a', VersionId: 'v1' }], IsTruncated: true },
+      { DeleteMarkers: [{ Key: 'exports/u/b', VersionId: 'v2' }] },
+      {},
+    ];
+    send.mockImplementation(async command => (command instanceof ListObjectVersionsCommand ? pages.shift() : {}));
+    await expect(storage.deletePrefixPermanently('exports/u/')).resolves.toBe(2);
+    expect(send.mock.calls.filter(([command]) => command instanceof ListObjectVersionsCommand)).toHaveLength(3);
+  });
+
+  it('propagates a per-object deletion failure so the account purge can retry', async () => {
+    const { storage, send } = setup();
+    send.mockImplementation(async command =>
+      command instanceof ListObjectVersionsCommand
+        ? { Versions: [{ Key: 'files/a', VersionId: 'v1' }] }
+        : { Errors: [{ Key: 'files/a', Code: 'AccessDenied' }] }
+    );
+    await expect(storage.deletePermanently('files/a')).rejects.toThrow('Failed to permanently delete');
+  });
+
+  it('rejects an unchanged successful batch rather than looping forever', async () => {
+    const { storage, send } = setup();
+    send.mockImplementation(async command =>
+      command instanceof ListObjectVersionsCommand ? { Versions: [{ Key: 'files/a', VersionId: 'v1' }] } : {}
+    );
+    await expect(storage.deletePermanently('files/a')).rejects.toThrow('Storage did not remove');
+  });
+
+  it.each(['', '/', 'files/', 'files', 'files/u', '//u/'])('refuses unscoped prefix %j', async prefix => {
+    const { storage, send } = setup();
+    await expect(storage.deletePrefixPermanently(prefix)).rejects.toThrow('unscoped prefix');
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe('S3Storage failed file upload cleanup', () => {
+  it('closes its file stream when the storage request rejects', async () => {
+    const storage = new S3Storage('test-bucket', 'us-east-2');
+    const client = (storage as unknown as { s3: { send: (...args: unknown[]) => Promise<unknown> } }).s3;
+    const dir = mkdtempSync(join(tmpdir(), 's3storage-'));
+    const localPath = join(dir, 'file.txt');
+    writeFileSync(localPath, 'data');
+    let source: Readable | undefined;
+    vi.spyOn(client, 'send').mockImplementation(async command => {
+      if (!(command instanceof PutObjectCommand) || !(command.input.Body instanceof Readable)) {
+        throw new Error('Expected a streamed upload');
+      }
+      source = command.input.Body;
+      await new Promise<void>((resolve, reject) => {
+        source?.once('open', () => resolve());
+        source?.once('error', reject);
+      });
+      throw new Error('upload interrupted');
+    });
+    try {
+      await expect(storage.uploadFile(localPath, 'files/a.txt')).rejects.toThrow('upload interrupted');
+      expect(source?.destroyed).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

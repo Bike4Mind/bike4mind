@@ -45,6 +45,7 @@ import { descendantsOf, groupSessions, orderedSessions, type CustomGroup, type P
 import { ImportedBadge } from './ImportedBadge';
 import { useImportedInline } from './importedInline';
 import { keepMenuOpen } from './keepMenuOpen';
+import { MessageSessionDialog } from './MessageSessionDialog';
 import {
   ArrowLeftIcon,
   ArtifactIcon,
@@ -308,6 +309,9 @@ interface RowActions {
   togglePin: (session: ChatSessionSummary) => void;
   toggleArchived: (session: ChatSessionSummary) => void;
   rename: (session: ChatSessionSummary, title: string) => void;
+  download: (session: ChatSessionSummary) => void;
+  /** Opens the dialog that sends a message into this session without opening it. */
+  message: (session: ChatSessionSummary) => void;
   /** Null takes the session out of its section. */
   moveToSection: (sessionId: string, sectionId: string | null) => void;
   /** Opens the name dialog for a section the session will be moved into. */
@@ -580,6 +584,13 @@ const SessionRow = memo(function SessionRow({
                     >
                       Rename
                     </MenuItem>
+                    <MenuItem
+                      disabled={!!session.archived}
+                      onClick={() => actions.message(session)}
+                      data-testid="session-row-message-action"
+                    >
+                      Message session...
+                    </MenuItem>
                     {!session.pinned && !session.archived && (
                       <MenuItem
                         onClick={event => {
@@ -592,6 +603,9 @@ const SessionRow = memo(function SessionRow({
                         <ChevronIcon open={false} />
                       </MenuItem>
                     )}
+                    <MenuItem onClick={() => actions.download(session)} data-testid="chat-download-session-btn">
+                      Download
+                    </MenuItem>
                     <MenuItem onClick={() => actions.toggleArchived(session)} data-testid="chat-archive-session-btn">
                       {session.archived ? 'Unarchive' : 'Archive'}
                     </MenuItem>
@@ -961,8 +975,11 @@ export function SessionList({
   onTogglePin,
   onToggleArchived,
   onRename,
+  onDownload,
   renameError,
   onDismissRenameError,
+  downloadError,
+  onDismissDownloadError,
   sectionError,
   onDismissSectionError,
   userSections,
@@ -992,9 +1009,13 @@ export function SessionList({
   onTogglePin: (session: ChatSessionSummary) => void;
   onToggleArchived: (session: ChatSessionSummary) => void;
   onRename: (session: ChatSessionSummary, title: string) => void;
+  onDownload: (session: ChatSessionSummary) => void;
   /** Set when a rename was refused and rolled back; cleared by clicking it. */
   renameError?: string | null;
   onDismissRenameError?: () => void;
+  /** Set when saving a conversation to a file failed; cleared by clicking it. */
+  downloadError?: string | null;
+  onDismissDownloadError?: () => void;
   sectionError?: string | null;
   onDismissSectionError?: () => void;
   /** The user's own sections and which sessions sit in them; see useSidebarSections. */
@@ -1032,6 +1053,7 @@ export function SessionList({
   const [revealId, setRevealId] = useState<string | null>(null);
   const dragFrame = useRef(0);
   const [nameRequest, setNameRequest] = useState<SectionNameRequest | null>(null);
+  const [messageTarget, setMessageTarget] = useState<ChatSessionSummary | null>(null);
   const requestRename = (section: SidebarSection) =>
     setNameRequest({ kind: 'rename', sectionId: section.id, currentName: section.name });
 
@@ -1100,6 +1122,7 @@ export function SessionList({
     onTogglePin,
     onToggleArchived,
     onRename,
+    onDownload,
     sectionActions,
   });
   target.current = {
@@ -1110,6 +1133,7 @@ export function SessionList({
     onTogglePin,
     onToggleArchived,
     onRename,
+    onDownload,
     sectionActions,
   };
 
@@ -1129,6 +1153,8 @@ export function SessionList({
       togglePin: session => target.current.onTogglePin(session),
       toggleArchived: session => target.current.onToggleArchived(session),
       rename: (session, title) => target.current.onRename(session, title),
+      download: session => target.current.onDownload(session),
+      message: session => setMessageTarget(session),
       moveToSection: (sessionId, sectionId) => moveSession(sessionId, sectionId),
       requestNewSection: sessionId => setNameRequest({ kind: 'create', sessionId }),
       drag: sessionId => {
@@ -1472,6 +1498,18 @@ export function SessionList({
             {renameError}
           </Alert>
         )}
+        {downloadError && (
+          <Alert
+            size="sm"
+            color="danger"
+            variant="soft"
+            sx={{ cursor: 'pointer', mx: 0.5 }}
+            onClick={onDismissDownloadError}
+            data-testid="chat-download-error"
+          >
+            {downloadError}
+          </Alert>
+        )}
         {sectionError && (
           <Alert
             size="sm"
@@ -1667,6 +1705,8 @@ export function SessionList({
       {nameRequest && (
         <SectionNameDialog request={nameRequest} onSubmit={submitSectionName} onClose={() => setNameRequest(null)} />
       )}
+
+      {messageTarget && <MessageSessionDialog session={messageTarget} onClose={() => setMessageTarget(null)} />}
 
       {footer}
     </Stack>

@@ -107,6 +107,22 @@ describe('/api/auth/saml/callback - OAuth client source tag', () => {
     expect(response._getRedirectUrl()).toContain('firstSignupSession=1');
   });
 
+  it("carries a new account's verified hop, when its cookies reach the callback, to the signup funnel", async () => {
+    // Usually they do not: the IdP's cross-site POST carries no Lax cookie. The write is the
+    // shared one either way, so what it decides reaches signup_completed.
+    const verifiedTouch = { srcProductId: 'source-product', hopId: 'c'.repeat(32), redeemedAt: new Date() };
+    const acquisition = { verifiedTouch, signupMethod: 'saml', capturedAt: new Date() };
+    mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });
+    mockSamlUser.mockReturnValue({ id: 'u-new', isBanned: false, isNewUser: true, emailVerified: true });
+
+    await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: '/' }).toString());
+
+    expect(mockRecordSignupAcquisition).toHaveBeenCalledWith(expect.objectContaining({ req: expect.anything() }));
+    expect(mockEmitSignupFunnelEvents).toHaveBeenCalledWith(
+      expect.objectContaining({ user: expect.objectContaining({ id: 'u-new', acquisition }) })
+    );
+  });
+
   it('never stamps a returning user, even when redirectTo names a client', async () => {
     mockSamlUser.mockReturnValue({ id: 'u-old', isBanned: false });
     await runCallback(new URLSearchParams({ idp: 'idp-1', redirectTo: AUTHORIZE_REDIRECT }).toString());

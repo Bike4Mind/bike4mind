@@ -78,6 +78,7 @@ function Harness({ activeId, mode }: { activeId: string | null; mode: ChatSessio
       onTogglePin={session => void togglePin(session)}
       onToggleArchived={session => void toggleArchived(session)}
       onRename={(session, title) => void rename(session, title)}
+      onDownload={() => {}}
       renameError={renameError}
       onDismissRenameError={clearRenameError}
       userSections={EMPTY_SIDEBAR_SECTIONS}
@@ -541,5 +542,37 @@ describe('sub-sessions an agent spawned', () => {
     await mount(sessions());
     expect(titles()).toEqual(['Root', 'Kid A', 'Kid B', 'Grandkid']);
     expect(query('chat-session-fold-btn')).toBeNull();
+  });
+});
+
+describe('messaging a session from the sidebar', () => {
+  const openMenu = (title: string) =>
+    act(() => rowOf(title).closest('li')?.querySelector<HTMLElement>('[data-testid="chat-session-menu-btn"]')?.click());
+
+  it('opens a dialog and sends to that row without selecting it', async () => {
+    const sendMessage = vi.fn(async () => ({ ok: true as const, messageId: 'm1' }));
+    await mount([summary('a', 'Alpha'), summary('b', 'Beta')], 'chat', {}, 'a');
+    (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat.sendMessage = sendMessage;
+
+    openMenu('Beta');
+    act(() => el('session-row-message-action').click());
+    const input = el('message-session-dialog').querySelector('textarea') as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    act(() => {
+      setter?.call(input, 'hello');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => el('message-session-send-btn').click());
+
+    expect(sendMessage).toHaveBeenCalledWith({ sessionId: 'b', text: 'hello' });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(query('message-session-dialog')).toBeNull();
+  });
+
+  it('is disabled for an archived session', async () => {
+    await mount([summary('a', 'Alpha'), summary('z', 'Old one', { archived: true })]);
+    act(() => el('sidebar-archived-btn').click());
+    openMenu('Old one');
+    expect(el('session-row-message-action').getAttribute('aria-disabled')).toBe('true');
   });
 });

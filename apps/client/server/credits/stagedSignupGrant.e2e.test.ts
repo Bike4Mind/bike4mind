@@ -15,8 +15,6 @@ import {
   AdminSettings,
 } from '@bike4mind/database';
 import { unlockSignupGrantFromActivity } from './activityUnlock';
-import { unlockSignupGrantFromOrgInvite } from './orgInviteUnlock';
-import { checkSignupGrantEligibility } from './signupGrantEligibility';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -72,6 +70,11 @@ beforeEach(async () => {
   await Invite.collection.deleteMany({});
   await Organization.collection.deleteMany({});
   await AdminSettings.collection.deleteMany({});
+  // A missing pool setting pauses grants, so every test starts with both pools effectively uncapped.
+  await AdminSettings.insertMany([
+    { settingName: 'signupGrantSignupPoolDaily', settingValue: '1000000000' },
+    { settingName: 'signupGrantTricklePoolDaily', settingValue: '1000000000' },
+  ]);
 });
 
 async function createUser(enrolled = true) {
@@ -340,47 +343,6 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
 
-  it('recovers a failed organization acceptance release through persisted evidence and never mints twice', async () => {
-    const user = await createUser();
-    const email = 'NAME+TAG@example.test';
-    await User.updateOne({ _id: user.id }, { email });
-    await userService.releaseSignupTranche(user.id, adapters);
-    const organization = await Organization.create({
-      name: 'Synthetic organization',
-      userId: 'owner',
-      users: [{ userId: user.id, permissions: ['read'] }],
-    });
-    // A regexp-like address must not earn credits for someone else's acceptance.
-    await Invite.create({
-      type: 'Organization',
-      documentId: organization.id,
-      recipients: { pending: [], accepted: ['nameeeetag@exampleXtest'], refused: [] },
-      remaining: 0,
-    });
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    const acceptedInvite = await Invite.create({
-      type: 'Organization',
-      documentId: organization.id,
-      recipients: { pending: [], accepted: [email.toLowerCase()], refused: [] },
-      remaining: 0,
-    });
-    // Existing accepted invites cannot pay until an operator explicitly enables this source.
-    expect((await unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).creditsGranted).toBe(0);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.currentCredits).toBe(12);
-    await AdminSettings.create({ settingName: 'signupGrantOrgInviteEnabled', settingValue: 'true' });
-    const update = vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('temporary grant write failure'));
-    await expect(unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).rejects.toThrow(
-      'temporary grant write failure'
-    );
-    update.mockRestore();
-    expect((await User.findById(user.id))?.currentCredits).toBe(12);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(28);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.currentCredits).toBe(40);
-    expect(await CreditTransaction.countDocuments({ transactionId: `unlock-grant:${user.id}` })).toBe(1);
-  });
-
   it.each(['malformed policy', 'invalid policy', 'invalid enabled policy'])(
     'holds and diagnoses %s without minting credits or exposing private inputs',
     async failure => {
@@ -463,21 +425,24 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${user.id}` })).toBe(1);
   });
 
-  const activitySettings = (overrides: Record<string, string | undefined> = {}) =>
-    vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
-      async name =>
-        ({
-          settingValue: (
-            {
-              signupGrantActivityEnabled: 'true',
-              signupGrantActivityMinActiveSeconds: '600',
-              signupGrantActivityDailyCredits: '10',
-              signupGrantActivityMaxCredits: '28',
-              ...overrides,
-            } as Record<string, string | undefined>
-          )[name],
-        }) as never
+  const activitySettings = (overrides: Record<string, string | undefined> = {}) => {
+    const values: Record<string, string | undefined> = {
+      stagedSignupGrantEnabled: 'true',
+      signupGrantActivityEnabled: 'true',
+      signupGrantActivityMinActiveSeconds: '600',
+      signupGrantActivityDailyCredits: '10',
+      signupGrantActivityMaxCredits: '28',
+      verifiedUnlockCredits: config.verifiedUnlockCredits,
+      signupGrantTricklePoolDaily: '1000000000',
+      ...overrides,
+    };
+    vi.spyOn(adminSettingsRepository, 'findBySettingNames').mockImplementation(
+      async names => names.map(name => ({ settingName: name, settingValue: values[name] })) as never
     );
+    return vi
+      .spyOn(adminSettingsRepository, 'findBySettingName')
+      .mockImplementation(async name => ({ settingValue: values[name] }) as never);
+  };
   const accrue = (userId: string, day: string, ms: number) =>
     User.collection.updateOne(
       { _id: new mongoose.Types.ObjectId(userId) },
@@ -799,12 +764,12 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(12);
   });
 
-  it.each([['false'], [undefined]])('does not unlock from activity when the flag is %s', async flag => {
+  it.each([['0'], [undefined]])('does not unlock from activity when the daily amount is %s', async daily => {
     const user = await createUser();
     const at = new Date('2030-03-01T10:00:00Z');
     await User.collection.updateOne({ _id: user._id }, { $set: { createdAt: new Date('2030-02-01T00:00:00Z') } });
     await userService.releaseSignupTranche(user.id, adapters);
-    activitySettings({ signupGrantActivityEnabled: flag });
+    activitySettings({ signupGrantActivityDailyCredits: daily });
     await accrue(user.id, '2030-03-01', 600_000);
     expect((await unlockSignupGrantFromActivity(user.id, at)).creditsGranted).toBe(0);
     expect((await User.findById(user.id))?.currentCredits).toBe(12);

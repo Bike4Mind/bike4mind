@@ -1,14 +1,46 @@
 import { useMemo, useState } from 'react';
-import { Box, Chip, IconButton, Stack, Typography } from '@mui/joy';
-import { SectionCard } from '../shared';
+import { Box, Button, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
+import { BulkActionBar, EmptyState, SectionCard, SegmentedControl, useUndoToast } from '../shared';
+import type { AdminSelection, DataColumn } from '../shared';
+import CheckIcon from '@mui/icons-material/Check';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
-import type { AuditAlertStatus, AuditEntry, AuditLogFilters, AuditSummaryWindow } from '@bike4mind/common';
-import { useAuditLog, useAuditSummary } from '@client/app/hooks/data/adminAuditLog';
+import {
+  AUDIT_REVIEW_BATCH_MAX,
+  auditReviewConflict,
+  isFullAdmin,
+  type AuditAlertStatus,
+  type AuditEntry,
+  type AuditReviewQueueEntry,
+  type AuditSummaryWindow,
+  type MarkAuditReviewedResult,
+  type MarkAuditReviewedSkipReason,
+} from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
+import {
+  useAuditReviewQueue,
+  useAuditSummary,
+  useMarkAuditReviewed,
+  useUnmarkAuditReviewed,
+} from '@client/app/hooks/data/adminAuditLog';
+import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { AuditEventTable } from './shared';
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 50;
 const LIST_ERROR_MESSAGE = 'Could not load entries that need review.';
+const TO_REVIEW_HINT =
+  'Critical actions by other admins, waiting for a second pair of eyes. Your own actions go to another admin.';
+const NOT_FULL_ADMIN_HINT = 'Only full admins can sign off on critical entries.';
+const IMPERSONATING_HINT = 'Stop impersonating to review audit entries.';
+
+type ReviewView = 'to-review' | 'all';
+const VIEW_OPTIONS: { value: ReviewView; label: string }[] = [
+  { value: 'to-review', label: 'To review' },
+  { value: 'all', label: 'All critical' },
+];
+
+const noSelection: AdminSelection = { mode: 'explicit', ids: [] };
 
 const formatCredits = (credits: number) => credits.toLocaleString('en-US');
 
@@ -17,7 +49,13 @@ const describeCriticalRules = (alertStatus: AuditAlertStatus | undefined): strin
     ? `credit grants above ${formatCredits(alertStatus.singleGrantCredits)} credits or past ` +
       `${formatCredits(alertStatus.dailyGrantCredits)} credits per admin in 24 hours`
     : 'credit grants above the configured thresholds';
-  return `Critical entries: admin role changes, impersonation, deletions, denied self-actions, and ${grants}.`;
+  // Keep in sync with the critical actions in adminAuditCatalogue.ts.
+  return (
+    'Critical entries: admin role and throttle tier changes, impersonation, suspensions and bans, ' +
+    'account creation and deletion, subscription removals, API key changes, emergency logins, ' +
+    'system secret, integration and SSO changes, blocked IP removals, curated model imports, email ' +
+    `sends, denied self-actions, and ${grants}.`
+  );
 };
 
 type AuditNeedsReviewPanelProps = {
@@ -26,25 +64,177 @@ type AuditNeedsReviewPanelProps = {
   onSelectEntry(entry: AuditEntry): void;
 };
 
-/** Critical entries in the summary window. Collapsed while there are none, until the admin opens it. */
+const pluralize = (count: number, singular: string, plural: string) => (count === 1 ? singular : plural);
+
+const describeSkips = (skipped: MarkAuditReviewedResult['skipped']): string => {
+  const counts = new Map<MarkAuditReviewedSkipReason, number>();
+  for (const { reason } of skipped) counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  const phrase = (reason: MarkAuditReviewedSkipReason, count: number): string => {
+    const verb = pluralize(count, 'was', 'were');
+    switch (reason) {
+      case 'already_reviewed':
+        return `${count} ${verb} already reviewed`;
+      case 'own_action':
+        return `${count} ${verb} your own ${pluralize(count, 'action', 'actions')}`;
+      case 'about_you':
+        return `${count} ${verb} about your own account`;
+      case 'not_critical':
+        return `${count} ${verb} not critical`;
+      case 'not_found':
+        return `${count} could not be found`;
+    }
+  };
+  return [...counts].map(([reason, count]) => phrase(reason, count)).join(', ');
+};
+
+const chunk = <T,>(items: T[], size: number): T[][] =>
+  Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size));
+
+const ReviewStatusCell: React.FC<{ entry: AuditReviewQueueEntry; currentUserId: string | undefined }> = ({
+  entry,
+  currentUserId,
+}) => {
+  const { review } = entry;
+  const testId = `audit-needs-review-status-${entry.id}`;
+  if (review?.baseline)
+    return (
+      <Chip size="sm" variant="outlined" data-testid={testId}>
+        Baselined
+      </Chip>
+    );
+  if (review)
+    return (
+      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap">
+        <Chip size="sm" variant="soft" color="success" data-testid={testId}>
+          Reviewed
+        </Chip>
+        <Typography level="body-xs">
+          by {review.reviewer.name}, {relativeTimeFormat(review.reviewedAt)}
+        </Typography>
+      </Stack>
+    );
+  const conflict = currentUserId ? auditReviewConflict(entry, currentUserId) : null;
+  if (conflict)
+    return (
+      <Chip size="sm" variant="outlined" data-testid={testId}>
+        {conflict === 'own_action' ? 'Your action' : 'About you'}
+      </Chip>
+    );
+  return (
+    <Chip size="sm" variant="soft" color="warning" data-testid={testId}>
+      Not reviewed
+    </Chip>
+  );
+};
+
+/**
+ * Review queue for critical entries. "To review" is every unreviewed critical entry another admin performed
+ * that is not about the viewer;
+ * "All critical" is the summary window with each entry's sign-off state.
+ */
 export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
   windowDays,
   alertStatus,
   onSelectEntry,
 }) => {
-  // The summary's `since` is stable while cached; a Date.now()-derived bound would re-key the list every render.
-  const { data: summary } = useAuditSummary(windowDays);
-  const filters: AuditLogFilters = { severity: 'critical', from: summary?.since };
-  const { data, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage, refetch } = useAuditLog(filters, {
-    enabled: summary !== undefined,
-    limit: PAGE_SIZE,
-  });
-  const entries = useMemo(() => data?.pages.flatMap(page => page.entries) ?? [], [data]);
+  const { currentUser } = useUser();
+  const showUndo = useUndoToast();
+  const mark = useMarkAuditReviewed();
+  const unmark = useUnmarkAuditReviewed();
+  const impersonating = useAccessToken(s => s.impersonating);
+  const canReview = isFullAdmin(currentUser) && !impersonating;
+  const [view, setView] = useState<ReviewView>('to-review');
+  const [selection, setSelection] = useState<AdminSelection>(noSelection);
   const [userExpanded, setUserExpanded] = useState<boolean | null>(null);
 
-  const isEmpty = !isLoading && !isError && entries.length === 0;
-  const expanded = userExpanded ?? !isEmpty;
-  const countLabel = `${entries.length}${hasNextPage ? '+' : ''}`;
+  // The summary's `since` is stable while cached; a Date.now()-derived bound would re-key the list every render.
+  const { data: summary, isError: summaryError } = useAuditSummary(windowDays);
+  const toReviewQuery = useAuditReviewQueue('unreviewed', { limit: PAGE_SIZE });
+  const allQuery = useAuditReviewQueue('all', {
+    from: summary?.since,
+    limit: PAGE_SIZE,
+    enabled: view === 'all' && summary !== undefined,
+  });
+  const active = view === 'to-review' ? toReviewQuery : allQuery;
+  const waitingForSummary = view === 'all' && summary === undefined && !summaryError;
+  const isLoading = active.isLoading || waitingForSummary;
+  const isError = active.isError || (view === 'all' && summaryError);
+
+  const entries = useMemo(() => active.data?.pages.flatMap(page => page.entries) ?? [], [active.data]);
+  const total = toReviewQuery.data?.pages.at(-1)?.total;
+  const hasToReview = total !== undefined && total > 0;
+
+  const selectionEnabled = canReview && view === 'to-review';
+  const selectedIds = useMemo(() => {
+    if (!selectionEnabled) return [];
+    const loadedIds = entries.map(entry => entry.id);
+    if (selection.mode === 'allMatching') return loadedIds;
+    return loadedIds.filter(id => selection.ids.includes(id));
+  }, [entries, selection, selectionEnabled]);
+
+  const expanded = userExpanded ?? (total === undefined || total > 0);
+  // `total` is the server's count of every unreviewed entry, not just the loaded pages.
+  const countLabel = `${(total ?? 0).toLocaleString('en-US')} to review`;
+  const toReviewEmpty = view === 'to-review' && !isLoading && !isError && entries.length === 0;
+
+  const switchView = (next: ReviewView) => {
+    setView(next);
+    setSelection(noSelection);
+  };
+
+  const markReviewed = async (ids: string[]) => {
+    const result: MarkAuditReviewedResult = { reviewed: [], skipped: [] };
+    let failed = false;
+    try {
+      for (const batch of chunk(ids, AUDIT_REVIEW_BATCH_MAX)) {
+        const batchResult = await mark.mutateAsync({ entryIds: batch });
+        result.reviewed.push(...batchResult.reviewed);
+        result.skipped.push(...batchResult.skipped);
+      }
+    } catch {
+      // The mutation's onError already told the admin what to do; keep the selection so they can retry.
+      failed = true;
+    }
+    const { reviewed, skipped } = result;
+    // Earlier batches are committed even when a later one fails, so they still get a toast with Undo.
+    if (failed && reviewed.length === 0) return;
+    if (!failed) setSelection(noSelection);
+    const skippedNote = skipped.length > 0 ? ` ${describeSkips(skipped)}.` : '';
+    if (reviewed.length === 0) {
+      showUndo({ message: `Nothing was marked as reviewed.${skippedNote}` });
+      return;
+    }
+    showUndo({
+      message: `Marked ${reviewed.length} as reviewed.${skippedNote}`,
+      onUndo: async () => {
+        for (const batch of chunk(reviewed, AUDIT_REVIEW_BATCH_MAX)) await unmark.mutateAsync({ entryIds: batch });
+      },
+    });
+  };
+
+  const rowActions = (entry: AuditReviewQueueEntry) => (
+    <Tooltip title="Mark as reviewed">
+      <IconButton
+        size="sm"
+        variant="plain"
+        aria-label="Mark as reviewed"
+        disabled={mark.isPending}
+        data-testid="audit-needs-review-row-mark-btn"
+        onClick={event => {
+          event.stopPropagation();
+          void markReviewed([entry.id]);
+        }}
+      >
+        <CheckIcon fontSize="small" />
+      </IconButton>
+    </Tooltip>
+  );
+
+  const reviewColumn: DataColumn<AuditReviewQueueEntry> = {
+    id: 'review',
+    label: 'Review',
+    render: entry => <ReviewStatusCell entry={entry} currentUserId={currentUser?.id} />,
+  };
 
   return (
     <Box data-testid="audit-needs-review-panel">
@@ -52,7 +242,24 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
         title="Needs review"
         body="custom"
         action={
-          <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <SegmentedControl
+              options={VIEW_OPTIONS}
+              value={view}
+              onChange={switchView}
+              aria-label="Needs review view"
+              data-testid="audit-needs-review-view"
+            />
+            {total !== undefined && !toReviewQuery.isError && (
+              <Chip
+                size="sm"
+                variant="soft"
+                color={hasToReview ? 'danger' : 'neutral'}
+                data-testid="audit-needs-review-count"
+              >
+                {hasToReview ? countLabel : 'Nothing to review'}
+              </Chip>
+            )}
             <IconButton
               size="sm"
               variant="plain"
@@ -63,37 +270,77 @@ export const AuditNeedsReviewPanel: React.FC<AuditNeedsReviewPanelProps> = ({
             >
               {expanded ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />}
             </IconButton>
-            {summary && !isError && (
-              <Chip
-                size="sm"
-                variant="soft"
-                color={isEmpty ? 'neutral' : 'danger'}
-                data-testid="audit-needs-review-count"
-              >
-                {isEmpty ? `Nothing critical in ${windowDays} days` : `${countLabel} critical in ${windowDays} days`}
-              </Chip>
-            )}
           </Stack>
         }
       >
         {expanded && (
           <Box sx={{ px: 2, py: 1.5 }}>
-            <Typography level="body-xs" sx={{ mb: 1 }}>
-              {describeCriticalRules(alertStatus)}
-            </Typography>
-            <AuditEventTable
-              testIdPrefix="audit-needs-review-table"
-              entries={entries}
-              pageResetKey={JSON.stringify(filters)}
-              isLoading={isLoading}
-              errorMessage={isError ? LIST_ERROR_MESSAGE : undefined}
-              emptyMessage={`No critical entries in the last ${windowDays} days`}
-              hasMore={Boolean(hasNextPage)}
-              isFetchingMore={isFetchingNextPage}
-              onLoadMore={() => void fetchNextPage()}
-              onRetry={() => void refetch()}
-              onSelectEntry={onSelectEntry}
-            />
+            <Stack spacing={0.5} sx={{ mb: 1 }}>
+              {view === 'to-review' && (
+                <Typography level="body-sm" data-testid="audit-needs-review-hint">
+                  {TO_REVIEW_HINT}
+                </Typography>
+              )}
+              <Typography level="body-xs">{describeCriticalRules(alertStatus)}</Typography>
+              {view === 'to-review' && !canReview && (
+                <Typography level="body-xs" data-testid="audit-needs-review-not-full-admin">
+                  {impersonating ? IMPERSONATING_HINT : NOT_FULL_ADMIN_HINT}
+                </Typography>
+              )}
+            </Stack>
+            {toReviewEmpty ? (
+              <Box data-testid="audit-needs-review-table-empty">
+                <EmptyState
+                  title="Nothing waiting for review"
+                  description="Critical actions by other admins show up here until one of you signs off."
+                  action={
+                    <Button
+                      variant="outlined"
+                      onClick={() => switchView('all')}
+                      data-testid="audit-needs-review-show-all-btn"
+                    >
+                      Show all critical
+                    </Button>
+                  }
+                />
+              </Box>
+            ) : (
+              <AuditEventTable<AuditReviewQueueEntry>
+                testIdPrefix="audit-needs-review-table"
+                entries={entries}
+                pageResetKey={view}
+                isLoading={isLoading}
+                errorMessage={isError ? LIST_ERROR_MESSAGE : undefined}
+                emptyMessage={`No critical entries in the last ${windowDays} days`}
+                hasMore={Boolean(active.hasNextPage)}
+                isFetchingMore={active.isFetchingNextPage}
+                onLoadMore={() => void active.fetchNextPage()}
+                onRetry={() => void active.refetch()}
+                onSelectEntry={onSelectEntry}
+                selection={selectionEnabled ? selection : undefined}
+                onSelectionChange={selectionEnabled ? setSelection : undefined}
+                rowActions={selectionEnabled ? rowActions : undefined}
+                extraColumns={view === 'all' ? [reviewColumn] : undefined}
+              />
+            )}
+            {selectionEnabled && (
+              <BulkActionBar
+                selection={selection}
+                totalMatching={entries.length}
+                onSelectAllMatching={() => setSelection({ mode: 'allMatching' })}
+                onClear={() => setSelection(noSelection)}
+              >
+                <Button
+                  variant="outlined"
+                  loading={mark.isPending}
+                  disabled={selectedIds.length === 0}
+                  onClick={() => void markReviewed(selectedIds)}
+                  data-testid="audit-needs-review-bulk-mark-btn"
+                >
+                  Mark {selectedIds.length} as reviewed
+                </Button>
+              </BulkActionBar>
+            )}
           </Box>
         )}
       </SectionCard>

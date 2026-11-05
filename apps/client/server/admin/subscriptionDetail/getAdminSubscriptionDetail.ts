@@ -1,10 +1,11 @@
 import { Organization, User, creditTransactionRepository, mongoose } from '@bike4mind/database';
 import { CreditHolderType } from '@bike4mind/common';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import type {
-  AdminSubscriptionCreditGrant,
-  AdminSubscriptionDetail,
-  AdminSubscriptionSeats,
+import {
+  stripeStateOf,
+  type AdminSubscriptionCreditGrant,
+  type AdminSubscriptionDetail,
+  type AdminSubscriptionSeats,
 } from '@client/app/utils/adminSubscriptionDetail';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
@@ -15,7 +16,11 @@ const RECENT_GRANT_LIMIT = 6;
 const OTHER_SUBSCRIPTIONS_LIMIT = 10;
 const READ_MAX_TIME_MS = 10_000;
 
-type DetailDoc = SubscriptionDoc & { grantedBy?: string | null; grantedReason?: string | null };
+type DetailDoc = SubscriptionDoc & {
+  grantedBy?: string | null;
+  grantedReason?: string | null;
+  lastSyncedAt?: Date | null;
+};
 
 type OwnerRecord = {
   userId?: string | null;
@@ -101,5 +106,6 @@ export async function getAdminSubscriptionDetail(id: string): Promise<AdminSubsc
     otherSubscriptions,
     seats: isUserOwned ? null : await seatsOf(doc, owner),
     actingUserId: isUserOwned ? (owner ? doc.ownerId : null) : (owner?.userId ?? null),
+    stripe: subscription.source === 'stripe' ? stripeStateOf(doc) : null,
   };
 }

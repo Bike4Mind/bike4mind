@@ -6,14 +6,17 @@ import {
   MCP_TOOL_APPROVAL_MODES,
   MCP_TOOL_STATES,
   McpConnectionSlugSchema,
+  isMcpPresetId,
+  type McpPresetId,
   mcpApiKeyHeaderNameProblem,
   mcpApiKeyValueProblem,
 } from '@bike4mind/common';
 import { z } from 'zod';
 
 // Bodies of the custom MCP connection routes (pages/api/mcp-connections/**). `.strict()` everywhere:
-// owner, status, preset and URL-derived fields are server-set, so a body naming one is refused
-// rather than silently ignored.
+// owner, status and URL-derived fields are server-set, so a body naming one is refused rather than
+// silently ignored. The one exception is `presetId` on create: the caller names the catalog preset it
+// is connecting, and the server resolves that preset's host from the catalog, never from the body.
 
 const headerNameSchema = z.string().superRefine((name, ctx) => {
   const problem = mcpApiKeyHeaderNameProblem(name);
@@ -36,15 +39,22 @@ const apiKeyAuthSchema = z
 
 const noAuthSchema = z.object({ kind: z.literal('none') }).strict();
 
+/** Sign-in happens through the OAuth start route afterwards; nothing secret travels with the create. */
+const oauthAuthSchema = z.object({ kind: z.literal('oauth') }).strict();
+
 const displayNameSchema = z.string().trim().min(1).max(MCP_CONNECTION_LIMITS.displayNameLength);
+
+const presetIdSchema = z.custom<McpPresetId>(value => isMcpPresetId(value), 'Unknown connector preset');
 
 export const mcpConnectionCreateBodySchema = z
   .object({
+    /** A catalog preset (Linear, Airtable, GitLab): `presets_only` admits exactly that preset's host. */
+    presetId: presetIdSchema.optional(),
     url: z.string().trim().min(1).max(2048),
     displayName: displayNameSchema,
     slug: McpConnectionSlugSchema.optional(),
     transport: z.enum(MCP_CONNECTION_TRANSPORTS).default('auto'),
-    auth: z.discriminatedUnion('kind', [noAuthSchema, apiKeyAuthSchema]),
+    auth: z.discriminatedUnion('kind', [noAuthSchema, apiKeyAuthSchema, oauthAuthSchema]),
   })
   .strict();
 

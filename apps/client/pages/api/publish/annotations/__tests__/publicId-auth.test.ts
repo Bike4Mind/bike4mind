@@ -114,4 +114,13 @@ describe('POST /api/publish/annotations/[publicId] - OAuth tokens cannot write',
     expect(res._getStatusCode()).toBe(401);
     expect(mockCreate).not.toHaveBeenCalled();
   });
+
+  it('401s a deletion-pending session and creates nothing', async () => {
+    queueAuthResult({ id: 'u1', deletion: { scheduledFor: new Date() } });
+    const { res, promise } = post(undefined);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
 });

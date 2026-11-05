@@ -37,7 +37,7 @@ export const AdminUsersBulkActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('revokeApiKeys') }),
   z.object({ type: z.literal('addTag'), tag: z.string().trim().min(1).max(64) }),
   /**
-   * Suspend + set credits to 0 + revoke API keys, as one transaction per user. `blockEmailDomains`
+   * Suspend + remove a positive credit balance + revoke API keys, as one transaction per user. `blockEmailDomains`
    * also adds the users' owned email domains to blockedEmailDomains first, so no new account can sign up on them.
    */
   z.object({ type: z.literal('contain'), blockEmailDomains: z.boolean().optional() }),
@@ -113,6 +113,10 @@ export type AdminUsersBulkResult = {
   undoExpiresAt: string;
   /** Domains this batch added to blockedEmailDomains; undo removes exactly these. */
   blockedDomains: string[];
+  /** Stripe subscriptions a suspend or contain canceled; undo cannot reinstate them. */
+  canceledSubscriptions: number;
+  /** Suspended users whose subscriptions Stripe would not cancel; they still need canceling by hand. */
+  subscriptionCancelFailures: { userId: string; error: string }[];
 };
 
 export const AdminUsersBulkUndoRequestSchema = z.object({ batchId: z.string().uuid() });
@@ -126,4 +130,6 @@ export type AdminUsersBulkUndoResult = {
   /** True when the undo stopped at its time budget; `remaining` users were not attempted. */
   partial: boolean;
   remaining: number;
+  /** Stripe subscription ids the batch canceled. Undo lifts the ban but cannot reinstate these. */
+  subscriptionsNotRestored: string[];
 };

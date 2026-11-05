@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   chargesRetrieve: vi.fn(),
   postMessageToSlack: vi.fn(),
   lockIfPaidWithBlockedCard: vi.fn(),
+  recordShadowDetection: vi.fn(),
+  claimStep: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -23,6 +25,8 @@ vi.mock('@bike4mind/database', () => ({
     countAccountsForCard: mocks.countAccountsForCard,
     countRecentCards: mocks.countRecentCards,
   },
+  shadowDetectionRepository: { record: mocks.recordShadowDetection },
+  paymentRiskActionRepository: { claimStep: mocks.claimStep },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
@@ -42,6 +46,7 @@ vi.mock('@server/billing/linkedAccounts', () => ({ lockIfPaidWithBlockedCard: mo
 import {
   alertStripeRiskEvent,
   evaluatePaymentRiskSignals,
+  formatAmount,
   formatPaymentRiskAlert,
   paymentNetworkOf,
   readPaymentRiskThresholds,
@@ -81,6 +86,7 @@ const charge = (overrides: Partial<Stripe.Charge> = {}): Stripe.Charge =>
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.settings = {};
+  mocks.claimStep.mockResolvedValue(true);
 });
 
 describe('readPaymentRiskThresholds', () => {
@@ -164,6 +170,23 @@ describe('paymentNetworkOf', () => {
 });
 
 describe('recordPaymentStart', () => {
+  it('records the visit the payment started in, or null without one', async () => {
+    mocks.recordStart.mockResolvedValue(undefined);
+    const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
+    const visitId = 'a'.repeat(32);
+
+    await recordPaymentStart(
+      { paymentIntentId: 'pi_1', userId: 'u1', amount: 100, currency: 'usd', network, visitId },
+      logger
+    );
+    await recordPaymentStart({ paymentIntentId: 'pi_2', userId: 'u1', amount: 100, currency: 'usd', network }, logger);
+
+    expect(mocks.recordStart.mock.calls.map(([c]) => [c.paymentIntentId, c.visitId])).toEqual([
+      ['pi_1', visitId],
+      ['pi_2', null],
+    ]);
+  });
+
   it('logs instead of throwing when the write fails', async () => {
     mocks.recordStart.mockRejectedValue(new Error('db down'));
     const network = { ip: '203.0.113.7', isDatacenter: true } as Parameters<typeof recordPaymentStart>[0]['network'];
@@ -187,6 +210,7 @@ describe('screenPaymentOutcome', () => {
     currency: 'usd',
     outcome: 'succeeded' as const,
     chargeRef: 'ch_1',
+    livemode: true,
   };
   const recorded = {
     ...input,
@@ -221,6 +245,94 @@ describe('screenPaymentOutcome', () => {
     expect(message).not.toContain('fp_1');
   });
 
+  it('records the alerted payment as a paymentRisk shadow detection with its Stripe ids', async () => {
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(1);
+    const [detection] = mocks.recordShadowDetection.mock.calls[0];
+    expect(detection).toMatchObject({
+      detector: 'paymentRisk',
+      policyVersion: 1,
+      wouldAction: 'contain',
+      userIds: ['u1'],
+      network: { ip: null, hosting: false },
+      windowMinutes: null,
+      group: null,
+      payment: {
+        paymentIntentId: 'pi_1',
+        chargeId: 'ch_1',
+        kind: 'credits',
+        outcome: 'succeeded',
+        amount: 10000,
+        currency: 'usd',
+        riskLevel: 'normal',
+        livemode: true,
+      },
+      detectedAt: now,
+    });
+    expect(detection.summary).toBe(
+      'credits payment succeeded (100.00 USD): account is 1 min old; card used on 2 accounts'
+    );
+    expect(detection.signals).toEqual([
+      { key: 'youngAccount', label: 'Account age at payment (minutes)', observed: 1, threshold: 60 },
+      { key: 'sharedCard', label: 'Accounts that used this card', observed: 2, threshold: 1 },
+    ]);
+    expect(JSON.stringify(detection)).not.toContain('fp_1');
+  });
+
+  it('gives the detection the card window only when a card-count signal fired', async () => {
+    mocks.countRecentCards.mockResolvedValue({ userCards: 9, networkCards: 1 });
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordShadowDetection.mock.calls[0][0].windowMinutes).toBe(60);
+  });
+
+  it('carries Stripe test mode through to the detection', async () => {
+    await screenPaymentOutcome({ ...input, livemode: false }, logger, now);
+
+    expect(mocks.recordShadowDetection.mock.calls[0][0].payment.livemode).toBe(false);
+  });
+
+  it('claims each payment, outcome and card once, and skips a detection already recorded', async () => {
+    mocks.claimStep.mockResolvedValue(false);
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.claimStep).toHaveBeenCalledWith('payment-risk-detection:pi_1:succeeded:fp_1', 'detection', 'u1');
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the network out when the hosting flag is unknown', async () => {
+    mocks.recordOutcome.mockResolvedValue({ attempt: { ...recorded, hostingNetwork: null }, changed: true });
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.recordShadowDetection.mock.calls[0][0].network).toBeNull();
+  });
+
+  it('still alerts when the shadow detection write fails', async () => {
+    mocks.recordShadowDetection.mockRejectedValueOnce(new Error('mongo down'));
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      '[PaymentRisk] shadow detection was not recorded',
+      expect.objectContaining({ paymentIntentId: 'pi_1', error: 'mongo down' })
+    );
+  });
+
+  it('alerts without recording when shadow detection recording is switched off', async () => {
+    mocks.settings = { shadowDetectionRecordingEnabled: 'false' };
+
+    await screenPaymentOutcome(input, logger, now);
+
+    expect(mocks.postMessageToSlack).toHaveBeenCalledTimes(1);
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+  });
+
   it('records but does not alert when nothing fires', async () => {
     mocks.findById.mockResolvedValue({ id: 'u1', createdAt: minutesAgo(24 * 60) });
     mocks.countAccountsForCard.mockResolvedValue(1);
@@ -229,6 +341,7 @@ describe('screenPaymentOutcome', () => {
 
     expect(mocks.recordOutcome).toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
   it('does not alert again on a Stripe redelivery', async () => {
@@ -239,6 +352,7 @@ describe('screenPaymentOutcome', () => {
     expect(mocks.countAccountsForCard).not.toHaveBeenCalled();
     expect(mocks.countRecentCards).not.toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
   it('uses the failing payment method when the attempt has no charge', async () => {
@@ -259,6 +373,8 @@ describe('screenPaymentOutcome', () => {
 
     expect(mocks.recordOutcome).toHaveBeenCalled();
     expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+    expect(mocks.claimStep).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
   });
 
   it('marks a Radar-blocked attempt so the checkout gate can count it', async () => {
@@ -288,6 +404,14 @@ describe('screenPaymentOutcome', () => {
 
     await expect(screenPaymentOutcome(input, logger, now)).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalled();
+  });
+});
+
+describe('formatAmount', () => {
+  it('scales by the currency minor unit', () => {
+    expect(formatAmount(10000, 'usd')).toBe('100.00 USD');
+    expect(formatAmount(1500, 'jpy')).toBe('1500 JPY');
+    expect(formatAmount(null, 'usd')).toBe('unknown');
   });
 });
 

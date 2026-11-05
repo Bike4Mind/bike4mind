@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ForbiddenError } from '@bike4mind/common';
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+
+const guardAccount = vi.fn(async (_id: string, write: () => Promise<unknown>) => write());
+vi.mock('./withAccountNotPurging', () => ({
+  withAccountNotPurging: (...args: Parameters<typeof guardAccount>) => guardAccount(...args),
+}));
 
 const updateOne = vi.fn();
 const record = vi.fn();
@@ -192,6 +198,14 @@ describe('recordLoginEvent', () => {
     record.mockRejectedValueOnce(new Error('db down'));
     await expect(recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledWith('[auth] login event not recorded', 'db down');
+  });
+
+  it('does not enqueue new risk work after the purge claim', async () => {
+    vi.mocked(requestRiskEvidenceRefresh).mockClear();
+    guardAccount.mockRejectedValueOnce(new ForbiddenError('Account deletion is in progress'));
+    await recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' });
+    expect(record).not.toHaveBeenCalled();
+    expect(requestRiskEvidenceRefresh).not.toHaveBeenCalled();
   });
 
   it('still resolves when the risk evidence refresh rejects', async () => {

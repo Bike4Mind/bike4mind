@@ -1,15 +1,26 @@
 import { StringDecoder } from 'node:string_decoder';
+import { LOOP_RUN_HEADER } from '@bike4mind/common';
 import type { Readable } from 'node:stream';
 import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
 import { isToolChangeMessage, type PromptCacheTtl, type ReasoningEffort } from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
+import type { GenerationSettings } from '@shared/generation';
 import { devLog } from '../devlog/DevLogSink';
 import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 
 /** Same-origin default; a self-host stack overrides it with `sseCompletionsUrl` from serverConfig. */
 export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
+
+/**
+ * How long the completion POST waits for response headers (ms), overriding the shared client's
+ * 30 s. The server holds its headers until auth, model resolution and the credit hold are done,
+ * so a cold start or a queued request can take well past 30 s before any byte arrives. It does
+ * not cap total reply length, but axios also keeps it as a socket idle limit after headers, so a
+ * silent gap this long mid-reply still aborts the stream.
+ */
+export const COMPLETION_HEADER_TIMEOUT_MS = 120_000;
 
 /**
  * `content` is a string for an ordinary turn, or an array of provider-shaped blocks
@@ -103,6 +114,12 @@ export interface CompletionRequest {
   thinking?: boolean;
   /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * The conversation's overrides that the model's controls list (see requestGeneration); the output
+   * ceiling travels as `maxTokens`. Each transport sends what its backend takes. A conversation's
+   * turns only: titles, suggestions and compaction never set it.
+   */
+  generation?: Omit<GenerationSettings, 'maxOutputTokens'>;
   /** Prompt-cache lifetime the server's breakpoints take. Absent sends nothing, which is '5m'. */
   cacheTtl?: PromptCacheTtl;
   /**
@@ -113,7 +130,15 @@ export interface CompletionRequest {
   sessionId?: string;
   /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
   toolPromptTokens?: number;
+  /**
+   * The loop run this request works for, sent as LOOP_RUN_HEADER so the server counts its credits
+   * against the loop's daily budget. Set only in a loop runner session.
+   */
+  loopRunId?: string;
 }
+
+/** The contract's header; the server adds the call's credits to that loop run. */
+export { LOOP_RUN_HEADER };
 
 /**
  * Stream one completion, calling `onEvent` for each decoded SSE event.
@@ -148,12 +173,27 @@ export async function streamCompletion(
         options: {
           stream: true,
           tools: request.tools ?? [],
-          ...(request.thinking ? { thinking: { enabled: true } } : {}),
+          ...(request.generation?.temperature !== undefined ? { temperature: request.generation.temperature } : {}),
+          ...(request.thinking
+            ? {
+                thinking: {
+                  enabled: true,
+                  ...(request.generation?.thinkingBudgetTokens !== undefined
+                    ? { budget_tokens: request.generation.thinkingBudgetTokens }
+                    : {}),
+                },
+              }
+            : {}),
           ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
           ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
-      { responseType: 'stream', signal }
+      {
+        responseType: 'stream',
+        signal,
+        timeout: COMPLETION_HEADER_TIMEOUT_MS,
+        ...(request.loopRunId ? { headers: { [LOOP_RUN_HEADER]: request.loopRunId } } : {}),
+      }
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
@@ -303,6 +343,13 @@ function toRequestError(error: unknown, body?: string): Error {
     }
     if (error.code === 'ECONNREFUSED') {
       return new Error('Cannot reach the Bike4Mind server. Check the environment and your connection.');
+    }
+    // Not retried here: the server does not cancel on disconnect, so the abandoned request may
+    // still run and bill, and a silent resend could charge the turn twice.
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      return new Error(
+        'The Bike4Mind server took too long to start replying, so this turn stopped. Send your message again to continue.'
+      );
     }
   }
   return error instanceof Error ? error : new Error(String(error));

@@ -83,4 +83,14 @@ describe('GearCard', () => {
     });
     expect(screen.getByTestId('gear-pending-note-projects')).toHaveTextContent('artifact link');
   });
+
+  it('shows the unavailable message for a gear the account is refused', () => {
+    const pending = { ...gear, claimable: undefined, rewardPending: true, pendingReason: 'unavailable' } as GearStatus;
+    render(<GearCard gear={pending} ctaLabel="Learn more" onActivate={onActivate} onClaim={onClaim} />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('gear-pending-note-projects')).toHaveTextContent(
+      "This reward isn't available for your account."
+    );
+  });
 });

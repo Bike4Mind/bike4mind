@@ -3,7 +3,7 @@ import { type MigrationFile } from './index';
 
 /**
  * Ensure the sparse `signupGrant_unlockedOrgId` index exists on users. It serves the
- * per-organization org_invite unlock cap (apps/client/server/credits/orgInviteUnlock.ts).
+ * per-organization org_invite unlock lookup.
  *
  * Migration rather than autoIndex for the same reason as 20260921235966_ensure-quest-signup-activity-index
  * (DocumentDB foreground index builds). Idempotent: createIndexes is a no-op for indexes that already

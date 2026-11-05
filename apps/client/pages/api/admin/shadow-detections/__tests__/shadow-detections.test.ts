@@ -70,6 +70,8 @@ const item = (overrides: Partial<ShadowDetectionItem> = {}): ShadowDetectionItem
   network: { ip: '203.0.113.7', asn: 64500, asnOrg: null, country: 'US', hosting: true },
   signals: [{ key: 'ipSignups', label: 'Self-serve signups from this IP', observed: 3, threshold: 1 }],
   windowMinutes: 180,
+  group: null,
+  payment: null,
   detectedAt: new Date('2026-10-01T00:00:00Z'),
   verdict: null,
   verdicts: [],

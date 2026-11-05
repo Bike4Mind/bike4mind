@@ -1,7 +1,7 @@
 /** The Models screen's IPC types and the pure rules main and the renderer share. */
 
 import type { LicenseKind } from '@bike4mind/local-models/licenses';
-import { LOCAL_SERVER_ID, type ModelServerManagement } from './modelServers';
+import { LOCAL_SERVER_ID, type ModelServerKind, type ModelServerManagement } from './modelServers';
 
 export type { ModelServerManagement };
 
@@ -58,6 +58,14 @@ export interface LocalModelCapabilities {
   completion: boolean;
 }
 
+/**
+ * Whether the chat catalog offers a model of this server kind. Ollama reports `completion` itself
+ * (OllamaLocal.ts checks the same flag from /api/show); OpenAI-compatible servers only mark embedders.
+ */
+export function isChatCapable(capabilities: LocalModelCapabilities, kind: ModelServerKind): boolean {
+  return kind === 'ollama' ? capabilities.completion : !capabilities.embeddings || capabilities.completion;
+}
+
 export type FitLevel = 'fits' | 'tight' | 'too-large';
 
 /** Whether a model fits this computer's memory; `detail` is the badge's tooltip. */
@@ -98,7 +106,30 @@ export interface LocalModelEntry {
   baseModel?: string;
 }
 
-export type InstalledModelsResult = { ok: true; models: LocalModelEntry[] } | { ok: false; error: ModelHubError };
+/**
+ * A model within this computer's GPU memory that Ollama in WSL loaded partly on the CPU, because it holds an
+ * integrated GPU to the WSL VM's memory. Kept until a model larger than `gpuBytes` loads fully on the GPU.
+ */
+export interface GpuMemoryCap {
+  model: string;
+  sizeBytes: number;
+  /** The part Ollama put on the GPU. */
+  gpuBytes: number;
+}
+
+export type InstalledModelsResult =
+  { ok: true; models: LocalModelEntry[]; gpuMemoryCap?: GpuMemoryCap } | { ok: false; error: ModelHubError };
+
+/**
+ * Whether a local chat model is in its Ollama server's memory, read from `/api/ps`. Loaded is only a
+ * proxy for a warm prompt cache. `unsupported` is a runtime with no such report (OpenAI-compatible).
+ */
+export type LoadedModelState =
+  | { kind: 'unsupported' }
+  | { kind: 'unknown' }
+  | { kind: 'unloaded' }
+  /** `expiresAt` is epoch ms when keep-alive unloads it; null when the server gave none. */
+  | { kind: 'loaded'; expiresAt: number | null };
 
 export type HubGatedMode = false | 'auto' | 'manual';
 

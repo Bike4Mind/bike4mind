@@ -1,11 +1,12 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { userService } from '@bike4mind/services';
-import { newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
+import { creditService, userService } from '@bike4mind/services';
+import { CreditHolderType, newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
 import type { SignupGrantBudgetAlert, SignupProtection } from '@bike4mind/common';
 import {
   mongoose,
   User,
   userRepository,
+  organizationRepository,
   creditTransactionRepository,
   CreditTransaction,
   Quest,
@@ -15,6 +16,7 @@ import {
   Organization,
   AdminSettings,
 } from '@bike4mind/database';
+import { grantCreditPurchase } from '../billing/grantCreditPurchase';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -24,18 +26,21 @@ import {
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
+const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
   stagedSignupGrantEnabled: 'true',
   signupGrantCredits: '12',
   verifiedUnlockCredits: '28',
-  signupGrantDailyBudget: '0',
+  signupGrantSignupPoolDaily: UNCAPPED,
+  signupGrantTricklePoolDaily: UNCAPPED,
   // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
   signupUnlockPaymentHoldHours: '0',
 };
 const adminSettings = {
   findBySettingName: async (key: string) => (key in config ? { settingValue: config[key] } : null),
-  findBySettingNames: async () => [],
-} as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: () => Promise<[]> };
+  findBySettingNames: async (keys: string[]) =>
+    keys.filter(key => key in config).map(key => ({ settingName: key, settingValue: config[key] })),
+} as unknown as Parameters<typeof newSignupGrant>[0] & { findBySettingNames: (keys: string[]) => Promise<unknown[]> };
 let clock = new Date();
 const notify = vi.fn<(alert: SignupGrantBudgetAlert) => Promise<void>>().mockResolvedValue();
 const signupProtection: SignupProtection = {
@@ -85,7 +90,7 @@ beforeEach(async () => {
   await Organization.collection.deleteMany({});
   await AdminSettings.collection.deleteMany({});
   await SignupGrantBudgetDayModel.deleteMany({});
-  config.signupGrantDailyBudget = '0';
+  config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = UNCAPPED;
   notify.mockClear();
   clock = new Date();
 });
@@ -101,12 +106,12 @@ async function createUser(enrolled = true, n = 0) {
 }
 
 const today = () => clock.toISOString().slice(0, 10);
-const spentToday = async () => (await SignupGrantBudgetDayModel.findById(today()).lean())?.spent ?? 0;
+const spentToday = async () => (await SignupGrantBudgetDayModel.findById(`signup:${today()}`).lean())?.spent ?? 0;
 const creditsOf = async (id: string) => (await User.findById(id))?.currentCredits ?? 0;
 
 describe('signup grant daily budget', () => {
   it('pays exactly floor(budget / grant) of concurrent signups and holds the rest', async () => {
-    config.signupGrantDailyBudget = '30';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
     const users = await Promise.all([0, 1, 2, 3, 4, 5].map(n => createUser(true, n)));
     const results = await Promise.all(users.map(u => userService.releaseSignupTranche(u.id, adapters)));
     expect(results.filter(r => r.creditsGranted === 12)).toHaveLength(2);
@@ -120,16 +125,16 @@ describe('signup grant daily budget', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(2);
   });
 
-  it('leaves the path unchanged when the budget is 0', async () => {
+  it('pays every signup under an uncapped pool and still counts each draw', async () => {
     const users = await Promise.all([0, 1, 2].map(n => createUser(true, n)));
     const results = await Promise.all(users.map(u => userService.releaseSignupTranche(u.id, adapters)));
     expect(results.map(r => r.creditsGranted)).toEqual([12, 12, 12]);
-    expect(await SignupGrantBudgetDayModel.countDocuments({})).toBe(0);
+    expect(await spentToday()).toBe(36);
     expect(await User.countDocuments({ signupGrantHeldReason: 'budget_exhausted' })).toBe(0);
   });
 
   it('pays a held tranche once the next UTC day opens, and never twice', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     clock = new Date('2030-01-01T10:00:00Z');
     const [first, second] = await Promise.all([createUser(true, 0), createUser(true, 1)]);
     await userService.releaseSignupTranche(first.id, adapters);
@@ -143,11 +148,11 @@ describe('signup grant daily budget', () => {
     expect(persisted?.signupGrantHeldReason).toBeNull();
     expect(persisted?.signupGrant?.stage).toBe('signup');
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${second.id}` })).toBe(1);
-    expect(await SignupGrantBudgetDayModel.findById('2030-01-02').lean()).toMatchObject({ spent: 12 });
+    expect(await SignupGrantBudgetDayModel.findById('signup:2030-01-02').lean()).toMatchObject({ spent: 12 });
   });
 
   it('lets a card unlock pay the held tranche plus remainder without drawing the budget', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     const [first, second] = await Promise.all([createUser(true, 0), createUser(true, 1)]);
     await userService.releaseSignupTranche(first.id, adapters);
     await userService.releaseSignupTranche(second.id, adapters);
@@ -167,7 +172,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('refunds the draw when a transient retry re-reserves and the final attempt fails', async () => {
-    config.signupGrantDailyBudget = '30';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
     const user = await createUser(true, 0);
     const transient = Object.assign(new Error('transient'), {
       errorLabels: ['TransientTransactionError'],
@@ -181,7 +186,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('refunds a draw made inside a scope that later fails', async () => {
-    config.signupGrantDailyBudget = '30';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
     const user = await createUser(true, 0);
     await expect(
       userService.refundBudgetOnFailure(async () => {
@@ -194,7 +199,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('refuses activity and org invite unlocks while the tranche is unpaid', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     const [first, second] = await Promise.all([createUser(true, 0), createUser(true, 1)]);
     await userService.releaseSignupTranche(first.id, adapters);
     await userService.releaseSignupTranche(second.id, adapters);
@@ -208,7 +213,7 @@ describe('signup grant daily budget', () => {
   it.each(['card_verified', 'subscription'] as const)(
     'keeps a budget-held tranche unpaid when the %s validator refuses',
     async reason => {
-      config.signupGrantDailyBudget = '12';
+      config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
       const first = await createUser(true, 0);
       const held = await createUser(true, 1);
       await userService.releaseSignupTranche(first.id, adapters);
@@ -232,7 +237,7 @@ describe('signup grant daily budget', () => {
   );
 
   it('holds an unlock that exceeds the remaining budget without touching the paid tranche', async () => {
-    config.signupGrantDailyBudget = '20';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '20';
     const user = await createUser(true, 0);
     await userService.releaseSignupTranche(user.id, adapters);
     expect(await userService.unlockSignupGrant(user.id, 'activity', adapters)).toMatchObject({
@@ -245,7 +250,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('leaves one ledger row and one draw when the same payout is released twice', async () => {
-    config.signupGrantDailyBudget = '30';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
     const user = await createUser(true, 0);
     await Promise.all([
       userService.releaseSignupTranche(user.id, adapters),
@@ -256,7 +261,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('alerts once at 50% and once at 100%', async () => {
-    config.signupGrantDailyBudget = '24';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '24';
     const users = await Promise.all([0, 1, 2, 3].map(n => createUser(true, n)));
     for (const u of users) await userService.releaseSignupTranche(u.id, adapters);
     expect(notify.mock.calls.map(([alert]) => [alert.threshold, alert.spent])).toEqual([
@@ -266,7 +271,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('holds an unstaged account instead of paying past the budget, and pays it later', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     config.defaultFreeCredits = '12';
     clock = new Date('2030-03-01T10:00:00Z');
     const [first, second] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
@@ -281,6 +286,99 @@ describe('signup grant daily budget', () => {
     expect((await User.findById(second.id))?.signupGrantHeldReason).toBeNull();
   });
 
+  it('queues a new signup behind an unstaged grant held on an earlier day', async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-01T10:00:00Z');
+    const [first, held] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
+    await userService.grantFreeCredits(first, adapters);
+    expect(await userService.grantFreeCredits(held, adapters)).toMatchObject({ withheld: true });
+
+    clock = new Date('2030-03-02T10:00:00Z');
+    const newcomer = await createUser(false, 2);
+    expect(await userService.grantFreeCredits(newcomer, adapters)).toMatchObject({ withheld: true, creditsGranted: 0 });
+    expect(await creditsOf(newcomer.id)).toBe(0);
+    expect(await spentToday()).toBe(0);
+  });
+
+  it('does not queue new signups behind a hold the release cron would never pay', async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '100';
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-02T10:00:00Z');
+    const orphan = await createUser(false, 0);
+    await User.updateOne(
+      { _id: orphan.id },
+      { $set: { signupGrantHeldReason: 'budget_exhausted', signupGrantHeldAt: new Date('2030-03-01T10:00:00Z') } }
+    );
+    const newcomer = await createUser(false, 1);
+    expect(await userService.grantFreeCredits(newcomer, adapters)).toMatchObject({ creditsGranted: 12 });
+  });
+
+  it('drops the budget hold of a grant withheld for domain review, so it stops counting as backlog', async () => {
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-02T10:00:00Z');
+    const user = await createUser(false, 0);
+    await User.updateOne(
+      { _id: user.id },
+      {
+        $set: {
+          tags: [PENDING_FREE_CREDITS_TAG],
+          signupGrantHeldReason: 'budget_exhausted',
+          signupGrantHeldAt: new Date('2030-03-01T10:00:00Z'),
+        },
+      }
+    );
+    expect(await userService.hasSignupBacklog(userRepository, today())).toBe(true);
+
+    const reviewed = {
+      ...adapters,
+      db: {
+        ...adapters.db,
+        signupProtection: {
+          ...signupProtection,
+          repository: {
+            ...signupProtection.repository,
+            findReview: async () => ({ status: 'held_pending_review' }),
+          },
+        },
+      },
+    } as unknown as typeof adapters;
+    expect(await userService.grantFreeCredits(user, reviewed)).toMatchObject({ withheld: true, creditsGranted: 0 });
+
+    const after = await User.findById(user.id);
+    expect(after?.tags).toContain(PENDING_FREE_CREDITS_TAG);
+    expect(after?.signupGrantHeldReason).toBeNull();
+    expect(await userService.hasSignupBacklog(userRepository, today())).toBe(false);
+  });
+
+  it('holds a risk-review account behind an older budget backlog as a budget hold', async () => {
+    config.defaultFreeCredits = '12';
+    clock = new Date('2030-03-02T10:00:00Z');
+    const older = await createUser(false, 0);
+    await User.updateOne(
+      { _id: older.id },
+      {
+        $set: {
+          tags: [PENDING_FREE_CREDITS_TAG],
+          signupGrantHeldReason: 'budget_exhausted',
+          signupGrantHeldAt: new Date('2030-03-01T10:00:00Z'),
+        },
+      }
+    );
+    const flagged = await createUser(false, 1);
+    await User.updateOne({ _id: flagged.id }, { $set: { signupGrantHeldReason: 'risk_review' } });
+
+    expect(await userService.grantFreeCredits(flagged, adapters)).toMatchObject({
+      withheld: true,
+      budgetExhausted: true,
+    });
+
+    const after = await User.findById(flagged.id);
+    expect(after?.signupGrantHeldReason).toBe('budget_exhausted');
+    expect(after?.signupGrantHeldAt?.toISOString()).toBe(clock.toISOString());
+    expect(await creditsOf(flagged.id)).toBe(0);
+  });
+
   const createInbox = async (email: string, enrolled: boolean) =>
     User.create({
       username: email.replace(/\W/g, '-'),
@@ -291,28 +389,8 @@ describe('signup grant daily budget', () => {
     });
   const logger = { error: vi.fn() };
   const tagsOf = async (id: string) => (await User.findById(id))?.tags ?? [];
-  const githubUnlock = (id: string) =>
-    userService.grantNoCardUnlock(id, 'github_verified', {
-      db: { users: userRepository, creditTransactions: creditTransactionRepository, creditLots: {}, adminSettings },
-      validators: {
-        github_verified: async () => ({ ok: false, refusal: 'github_not_linked' }),
-        work_email: async () => ({ ok: false, refusal: 'disabled' }),
-      },
-      withTransaction: fn => fn(),
-      settings: {
-        enabled: true,
-        githubCredits: 10,
-        workEmailCredits: 10,
-        maxCredits: 20,
-        githubMinAgeDays: 0,
-        githubMinRepos: 0,
-        workEmailDomainDailyCap: 1,
-        probeInconclusiveAllows: false,
-      },
-    } as unknown as Parameters<typeof userService.grantNoCardUnlock>[2]);
-
   it('clears the hold on an alias tranche the inbox claim refuses once the next day opens', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     config.defaultFreeCredits = '12';
     clock = new Date('2030-04-01T10:00:00Z');
     const paid = await createInbox('x.y@gmail.com', true);
@@ -320,7 +398,6 @@ describe('signup grant daily budget', () => {
     expect(await userService.releaseSignupTranche(paid.id, adapters)).toMatchObject({ creditsGranted: 12 });
     expect(await userService.grantFreeCredits(alias, adapters)).toMatchObject({ withheld: true });
     expect((await User.findById(alias.id))?.signupGrantHeldReason).toBe('budget_exhausted');
-    expect(await githubUnlock(alias.id)).toEqual({ granted: false, refusal: 'signup_grant_pending' });
 
     clock = new Date('2030-04-02T00:00:01Z');
     const released = await userService.releasePendingFreeCredits(
@@ -331,11 +408,10 @@ describe('signup grant daily budget', () => {
     expect((await User.findById(alias.id))?.signupGrantHeldReason).toBeNull();
     expect(await creditsOf(alias.id)).toBe(0);
     expect(await spentToday()).toBe(0);
-    expect(await githubUnlock(alias.id)).not.toMatchObject({ refusal: 'signup_grant_pending' });
   });
 
   it('clears the hold when a held tranche is refused by the inbox claim on release', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     clock = new Date('2030-04-05T10:00:00Z');
     const paid = await createInbox('a.b@gmail.com', true);
     const alias = await createInbox('ab+2@gmail.com', true);
@@ -352,7 +428,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('clears a stale hold on an unstaged alias the inbox claim refuses', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     config.defaultFreeCredits = '12';
     const paid = await createInbox('c.d@gmail.com', false);
     const alias = await createInbox('cd+3@gmail.com', false);
@@ -369,11 +445,10 @@ describe('signup grant daily budget', () => {
     );
     expect(released).toMatchObject({ released: true, creditsGranted: 0 });
     expect((await User.findById(alias.id))?.signupGrantHeldReason).toBeNull();
-    expect(await githubUnlock(alias.id)).not.toMatchObject({ refusal: 'signup_grant_pending' });
   });
 
   it('leaves an already-paid account with a stale pending tag untouched on an exhausted day', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     config.defaultFreeCredits = '12';
     const [paid, staleHold, other] = await Promise.all([0, 1, 2].map(n => createUser(false, n)));
     for (const user of [paid, staleHold]) {
@@ -404,7 +479,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('keeps the hold on an account the budget still cannot pay', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     config.defaultFreeCredits = '12';
     const [first, second] = await Promise.all([createUser(false, 0), createUser(false, 1)]);
     await userService.grantFreeCredits(first, adapters);
@@ -416,11 +491,10 @@ describe('signup grant daily budget', () => {
     expect(released).toMatchObject({ released: false, creditsGranted: 0 });
     expect((await User.findById(second.id))?.signupGrantHeldReason).toBe('budget_exhausted');
     expect(await tagsOf(second.id)).toContain(PENDING_FREE_CREDITS_TAG);
-    expect(await githubUnlock(second.id)).toEqual({ granted: false, refusal: 'signup_grant_pending' });
   });
 
   it('meters a staging-off referral invitee but not an admin-code grant', async () => {
-    config.signupGrantDailyBudget = '12';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     clock = new Date('2030-03-01T10:00:00Z');
     const referrer = await createUser(false, 0);
     const invitee = await User.create({
@@ -472,7 +546,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('keeps the draw when a concurrent release already paid the same grant', async () => {
-    config.signupGrantDailyBudget = '30';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
     const user = await createUser(true, 0);
     const results = await Promise.all([
       userService.releaseSignupTranche(user.id, adapters),
@@ -484,7 +558,7 @@ describe('signup grant daily budget', () => {
   });
 
   it('keeps the draw when the follow-up write fails after the grant was paid', async () => {
-    config.signupGrantDailyBudget = '30';
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
     config.defaultFreeCredits = '12';
     const held = await createUser(false, 0);
     await User.updateOne({ _id: held.id }, { $set: { signupGrantHeldReason: 'budget_exhausted' } });
@@ -505,5 +579,49 @@ describe('signup grant daily budget', () => {
     await expect(userService.grantFreeCredits(held, failing)).rejects.toThrow('write failed');
     expect(await CreditTransaction.countDocuments({ transactionId: `verify-grant:${held.id}` })).toBe(1);
     expect(await spentToday()).toBe(12);
+  });
+});
+
+describe('paid credits and the signup grant pools', () => {
+  it('pays a purchase, plan credits and a seat grant with both pools at 0 and leaves both counters untouched', async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '0';
+    const buyer = await createUser(false, 0);
+    const org = await Organization.create({ name: 'Example Org', userId: buyer.id, currentCredits: 0 });
+
+    expect(
+      await grantCreditPurchase({ userId: buyer.id, paymentIntentId: 'pi_pool_e2e', credits: 500, amount: 999 })
+    ).toBe('granted');
+    await creditService.addCredits(
+      {
+        type: 'subscription',
+        ownerId: buyer.id,
+        ownerType: CreditHolderType.User,
+        credits: 300,
+        stripePaymentIntentId: 'in_plan_e2e',
+        metadata: { type: 'subscription_renewal' },
+      },
+      { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+    );
+    await creditService.addCredits(
+      {
+        type: 'subscription',
+        ownerId: org.id,
+        ownerType: CreditHolderType.Organization,
+        credits: 200,
+        stripePaymentIntentId: 'in_seat_e2e',
+        metadata: { type: 'subscription_initial_seats' },
+      },
+      { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: organizationRepository }
+    );
+
+    expect(await creditsOf(buyer.id)).toBe(800);
+    expect((await Organization.findById(org.id))?.currentCredits).toBe(200);
+    expect(await SignupGrantBudgetDayModel.countDocuments()).toBe(0);
+    // The same pools still refuse a free grant, so the paid writes above really ran against 0.
+    for (const pool of ['signup', 'trickle'] as const) {
+      const free = await userService.reserveSignupGrantBudget(adapters.db, `free-${pool}`, 12, { pool });
+      expect(free.outcome).toBe('exhausted');
+    }
+    expect(await SignupGrantBudgetDayModel.countDocuments()).toBe(0);
   });
 });

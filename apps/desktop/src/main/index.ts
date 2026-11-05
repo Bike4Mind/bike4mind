@@ -13,6 +13,7 @@ import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerFleet } from './fleet';
+import { registerLoopRunner } from './loops';
 import { registerModels } from './models';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
@@ -134,19 +135,29 @@ void app.whenReady().then(async () => {
     background,
     mcp,
     browser,
+    simulatorView,
     pullRequests,
     claudeImport,
     spareWorktrees,
     modelServers,
+    stopModelServers,
     localContext,
     capabilityLedger,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
-    observeStream: event => fleet.observe(event),
+    observeStream: event => {
+      fleet.observe(event);
+      loops.runner.observe(event);
+    },
+    loopUnattended: sessionId => loops.runner.unattended(sessionId),
+    loopMerge: (sessionId, prUrl) => loops.runner.merge(sessionId, prUrl),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
+    catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
+      models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
+  const loops = registerLoopRunner(auth, chat, background);
   const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
@@ -180,6 +191,7 @@ void app.whenReady().then(async () => {
     prepareQuit: async () => {
       quitting = true;
       await Promise.all([
+        loops.runner.releaseAll(),
         background.shutdown(),
         mcp.shutdown(),
         terminals.shutdown(),
@@ -213,6 +225,7 @@ void app.whenReady().then(async () => {
     // The imported cookies go too. They have no expiry and so were never written to disk, but
     // this is the pass that can await, and the guarantee is worth holding in two places.
     void Promise.all([
+      loops.runner.releaseAll(),
       background.shutdown(),
       mcp.shutdown(),
       terminals.shutdown(),
@@ -226,8 +239,10 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     fleet.dispose();
+    loops.runner.dispose();
     models.dispose();
     chat.dispose();
+    stopModelServers();
     claudeImport.dispose();
     pullRequests.dispose();
     updates.dispose();
@@ -237,11 +252,11 @@ void app.whenReady().then(async () => {
     mcp.shutdownSync();
     terminals.shutdownSync();
     browser.closeAll();
+    simulatorView.dispose();
   });
 
-  // Ctrl-C in a dev terminal, or a `kill` of the app. Our children are detached into their own
-  // process groups precisely so one signal can reach a whole command tree - which also means a
-  // terminal interrupt never reaches them on its own.
+  // Ctrl-C in a dev terminal, or a `kill` of the app. Children other than WSL commands lead their own
+  // process groups, so a terminal interrupt does not reach them on its own (see `spawnsDetached`).
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(signal, () => {
       background.shutdownSync();
@@ -254,6 +269,7 @@ void app.whenReady().then(async () => {
   createWindow();
   claudeImport.start();
   onAuthStateChanged(closeBrowsersOnScopeChange(auth.getState(), () => browser.closeAll()));
+  onAuthStateChanged(() => void loops.sync());
   let importScope = sessionScopeKeyOf(auth.getState());
   onAuthStateChanged(state => {
     const next = sessionScopeKeyOf(state);

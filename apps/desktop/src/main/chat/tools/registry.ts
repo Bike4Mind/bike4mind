@@ -26,9 +26,11 @@ import {
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { setSessionPullRequest } from './pullRequestTool';
+import { loopMergePr } from './loopMergeTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';
 import { bashExecute } from './shellTools';
+import { SIMULATOR_TOOLS } from './simulatorTools';
 import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
 import { WEB_TOOLS } from './webTools';
@@ -144,11 +146,13 @@ const BY_NAME = new Map(
     ...SUGGESTION_TOOLS,
     ...BROWSER_TOOLS,
     screenCapture,
+    ...SIMULATOR_TOOLS,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
     askUser,
     requestDirectory,
     setSessionPullRequest,
+    loopMergePr,
     ...MCP_TOOLS,
     ...WEB_TOOLS,
   ].map(tool => [tool.schema.name, tool])
@@ -212,6 +216,11 @@ export function toolsForRequest(options: {
    * the user's screen, which is gated per capture rather than by a grant.
    */
   screen?: boolean;
+  /**
+   * The iOS Simulator, on macOS only. Needs no folder or project to drive a device; building one
+   * resolves its project inside the granted roots and refuses without one.
+   */
+  simulator?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
@@ -248,6 +257,8 @@ export function toolsForRequest(options: {
    * follows. Offers set_session_pull_request.
    */
   pullRequest?: boolean;
+  /** A loop runner session, which merges only through loop_merge_pr. */
+  loopMerge?: boolean;
 }): { toolSchema: ToolSchema }[] {
   const available = [
     ...(options.roots.length > 0 ? localTools(usesApplyPatch(options.modelId)) : []),
@@ -257,12 +268,14 @@ export function toolsForRequest(options: {
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
+    ...(options.simulator ? SIMULATOR_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
     ...(options.web ? WEB_TOOLS : []),
     // Offered with no folder granted too: asking for one is exactly what that conversation needs.
     ...(options.ask ? [askUser, requestDirectory] : []),
     ...(options.pullRequest && options.ask ? [setSessionPullRequest] : []),
+    ...(options.loopMerge ? [loopMergePr] : []),
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];
   return [

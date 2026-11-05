@@ -311,10 +311,11 @@ function sliceObjectLiteral(source: string, openBraceIndex: number): string {
 /**
  * Independent count of handler declarations: a line-anchored regex over comment-stripped
  * source, sharing no machinery with the brace scan above. It is the oracle for the test that
- * catches the scan silently under-counting.
+ * catches the scan silently under-counting. Block comments are stripped only where they open a
+ * line, so a `/*` inside a string (an S3 object ARN like `${bucket.arn}/*`) is not read as one.
  */
 function countDeclaredHandlerLines(source: string): number {
-  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const withoutComments = source.replace(/^\s*\/\*[\s\S]*?\*\//gm, '').replace(/^\s*\/\/.*$/gm, '');
   return (withoutComments.match(/^\s*handler:\s*'/gm) || []).length;
 }
 

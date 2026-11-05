@@ -1,13 +1,27 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockFindById, mockFindByStripeCustomerId, mockPlan } = vi.hoisted(() => ({
+const {
+  mockFindById,
+  mockFindByStripeCustomerId,
+  mockPlan,
+  mockFindVisitId,
+  mockRecordCheckoutStart,
+  mockListSessions,
+} = vi.hoisted(() => ({
   mockFindById: vi.fn(),
   mockFindByStripeCustomerId: vi.fn(),
   mockPlan: vi.fn(),
+  mockFindVisitId: vi.fn(),
+  mockRecordCheckoutStart: vi.fn(),
+  mockListSessions: vi.fn(),
 }));
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mockFindById, findByStripeCustomerId: mockFindByStripeCustomerId },
+  paymentAttemptRepository: { findVisitId: mockFindVisitId, recordCheckoutStart: mockRecordCheckoutStart },
+}));
+vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
+  stripe: { checkout: { sessions: { list: mockListSessions } } },
 }));
 vi.mock('@client/lib/userSubscriptions/utils', () => ({ getEntitlingPlanByPriceId: mockPlan }));
 
@@ -16,7 +30,11 @@ import {
   creditBuyerForEvents,
   planChangeDirection,
   planDetails,
+  purchaseVisitId,
+  recordCheckoutVisit,
+  subscriptionCheckoutVisitId,
   subscriptionEventUser,
+  subscriptionPeriodEnd,
   wholeDaysBetween,
 } from './billingEventDetails';
 
@@ -55,6 +73,48 @@ describe('planChangeDirection', () => {
   it('says unknown rather than inventing a direction off the plan ladder', () => {
     expect(planChangeDirection('price_basic', 'price_side')).toBe('unknown');
     expect(planChangeDirection('price_gone', 'price_pro')).toBe('unknown');
+  });
+});
+
+describe('subscriptionPeriodEnd', () => {
+  const invoiceWith = (lines: unknown) => ({ lines }) as unknown as Parameters<typeof subscriptionPeriodEnd>[0];
+  const line = (end: number, type = 'subscription_item_details') => ({ parent: { type }, period: { start: 0, end } });
+
+  it('is the latest subscription line end, in unix seconds, whatever order the lines come in', () => {
+    const latest = Date.parse('2027-11-03T10:00:00Z') / 1000;
+    for (const data of [
+      [line(latest - 86400), line(latest), line(latest - 3600)],
+      [line(latest), line(latest - 86400)],
+      [line(latest - 86400), line(latest)],
+    ]) {
+      expect(subscriptionPeriodEnd(invoiceWith({ data }))?.toISOString()).toBe('2027-11-03T10:00:00.000Z');
+    }
+  });
+
+  it('prefers a full-period line over a proration that ends later, and uses prorations when there is no other', () => {
+    const proration = (end: number) => ({
+      parent: { type: 'subscription_item_details', subscription_item_details: { proration: true } },
+      period: { start: 0, end },
+    });
+    const newPeriodEnd = Date.parse('2026-12-03T10:00:00Z') / 1000;
+    const oldPeriodEnd = Date.parse('2027-03-01T00:00:00Z') / 1000;
+    expect(
+      subscriptionPeriodEnd(invoiceWith({ data: [proration(oldPeriodEnd), line(newPeriodEnd)] }))?.toISOString()
+    ).toBe('2026-12-03T10:00:00.000Z');
+    expect(
+      subscriptionPeriodEnd(
+        invoiceWith({ data: [proration(oldPeriodEnd), { ...line(newPeriodEnd), period: null }] })
+      )?.toISOString()
+    ).toBe('2027-03-01T00:00:00.000Z');
+  });
+
+  it('has none without a subscription line that has a period', () => {
+    expect(subscriptionPeriodEnd(invoiceWith(undefined))).toBeUndefined();
+    expect(subscriptionPeriodEnd(invoiceWith({ data: [] }))).toBeUndefined();
+    expect(subscriptionPeriodEnd(invoiceWith({ data: [line(1_800_000_000, 'invoice_item_details')] }))).toBeUndefined();
+    expect(
+      subscriptionPeriodEnd(invoiceWith({ data: [{ parent: { type: 'subscription_item_details' }, period: null }] }))
+    ).toBeUndefined();
   });
 });
 
@@ -113,5 +173,58 @@ describe('creditBuyerForEvents', () => {
     mockFindByStripeCustomerId.mockRejectedValue(new Error('db down'));
     await expect(creditBuyerForEvents('cus_1', 'u1')).resolves.toBeNull();
     warn.mockRestore();
+  });
+});
+
+describe('the visit a purchase was made in', () => {
+  const visitId = 'a'.repeat(32);
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => warn.mockRestore());
+
+  it("reads a credit pack's visit from its payment intent's attempt, and none when there is none", async () => {
+    mockFindVisitId.mockResolvedValueOnce(visitId).mockResolvedValueOnce(null);
+    await expect(purchaseVisitId('pi_1')).resolves.toBe(visitId);
+    await expect(purchaseVisitId('pi_2')).resolves.toBeUndefined();
+    expect(mockFindVisitId.mock.calls).toEqual([['pi_1'], ['pi_2']]);
+
+    mockFindVisitId.mockRejectedValueOnce(new Error('db down'));
+    await expect(purchaseVisitId('pi_3')).resolves.toBeUndefined();
+  });
+
+  it("finds a subscription's Checkout session from the subscription, then reads that session's visit", async () => {
+    mockListSessions.mockResolvedValue({ data: [{ id: 'cs_1' }] });
+    mockFindVisitId.mockResolvedValue(visitId);
+
+    await expect(subscriptionCheckoutVisitId('sub_1')).resolves.toBe(visitId);
+    expect(mockListSessions).toHaveBeenCalledExactlyOnceWith({ subscription: 'sub_1', limit: 1 });
+    expect(mockFindVisitId).toHaveBeenCalledExactlyOnceWith('cs_1');
+  });
+
+  it('names no visit for a subscription no Checkout opened, or when Stripe cannot be read', async () => {
+    mockListSessions.mockResolvedValueOnce({ data: [] });
+    await expect(subscriptionCheckoutVisitId('sub_1')).resolves.toBeUndefined();
+    expect(mockFindVisitId).not.toHaveBeenCalled();
+
+    mockListSessions.mockRejectedValueOnce(new Error('stripe down'));
+    await expect(subscriptionCheckoutVisitId('sub_1')).resolves.toBeUndefined();
+  });
+
+  it('keeps a Checkout visit under its session, writes nothing without a visit, and never throws', async () => {
+    await recordCheckoutVisit({ checkoutSessionId: 'cs_1', userId: 'u1', visitId });
+    expect(mockRecordCheckoutStart).toHaveBeenCalledExactlyOnceWith({
+      checkoutSessionId: 'cs_1',
+      userId: 'u1',
+      visitId,
+    });
+
+    mockRecordCheckoutStart.mockClear();
+    await recordCheckoutVisit({ checkoutSessionId: 'cs_2', userId: 'u1', visitId: undefined });
+    expect(mockRecordCheckoutStart).not.toHaveBeenCalled();
+
+    mockRecordCheckoutStart.mockRejectedValueOnce(new Error('db down'));
+    await expect(recordCheckoutVisit({ checkoutSessionId: 'cs_3', userId: 'u1', visitId })).resolves.toBeUndefined();
   });
 });

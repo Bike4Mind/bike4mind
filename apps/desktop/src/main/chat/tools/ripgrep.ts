@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
+import { wslCommand, wslCommandEnv, wslLocation } from '../../wsl/wslPath';
 import { hostProgram, resolveUserPath } from './userPath';
 
 export interface RipgrepLine {
@@ -27,14 +28,17 @@ export interface RipgrepSearch {
   signal: AbortSignal;
   /** Called once per matching file, in path order. Returning false stops the search. */
   onFile(file: RipgrepFile): boolean;
+  /** The host platform; defaults to this process's. */
+  platform?: NodeJS.Platform;
 }
 
 /**
  * `unavailable` and `unsupported` mean nothing was searched and the caller should use its own
  * engine: there is no `rg` on the user's PATH, or the pattern is JavaScript syntax the Rust
- * regex engine rejects (lookaround, backreferences).
+ * regex engine rejects (lookaround, backreferences). `cut-short` means rg died partway (a signal
+ * or the WSL wrapper) after reporting files: keep them, and say the list is partial.
  */
-export type RipgrepOutcome = 'done' | 'stopped' | 'timed-out' | 'unavailable' | 'unsupported';
+export type RipgrepOutcome = 'done' | 'stopped' | 'timed-out' | 'cut-short' | 'unavailable' | 'unsupported';
 
 const SEARCH_TIMEOUT_MS = 30_000;
 /** A missing rg is re-checked now and then, so installing one does not need an app restart. */
@@ -52,7 +56,8 @@ interface RipgrepRecord {
   data?: { path?: RipgrepText; lines?: RipgrepText; line_number?: number };
 }
 
-let unavailableUntil = 0;
+/** Keyed by WSL distro, '' for this host's own rg. */
+const unavailableUntil = new Map<string, number>();
 
 /** git lists dotfiles and rg skips them by default, so --hidden is only right inside a work tree. */
 function insideGitWorkTree(directory: string): boolean {
@@ -68,7 +73,11 @@ function decode(field: RipgrepText | undefined): string {
 }
 
 export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutcome> {
-  if (process.env.B4M_DISABLE_RIPGREP === '1' || Date.now() < unavailableUntil) return 'unavailable';
+  const wsl = wslLocation(search.cwd, search.platform);
+  const engine = wsl?.distro.toLowerCase() ?? '';
+  if (process.env.B4M_DISABLE_RIPGREP === '1' || Date.now() < (unavailableUntil.get(engine) ?? 0)) {
+    return 'unavailable';
+  }
 
   const args = [
     '--json',
@@ -90,15 +99,21 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
   // An explicit "." rather than none: with no path rg may read stdin instead of searching cwd.
   args.push('--', '.');
 
-  const env = { ...process.env, PATH: await resolveUserPath() };
-  const rg = await hostProgram('rg', env.PATH);
+  const env = wsl ? await wslCommandEnv(process.env, wsl.distro) : { ...process.env, PATH: await resolveUserPath() };
+  const rg = wsl ? 'rg' : await hostProgram('rg', env.PATH);
   if (!rg) {
-    unavailableUntil = Date.now() + UNAVAILABLE_RETRY_MS;
+    unavailableUntil.set(engine, Date.now() + UNAVAILABLE_RETRY_MS);
     return 'unavailable';
   }
+  const command = wsl ? wslCommand(wsl, 'rg', args) : { file: rg, args };
 
   return new Promise<RipgrepOutcome>(resolve => {
-    const child = spawn(rg, args, { cwd: search.cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command.file, command.args, {
+      cwd: wsl ? undefined : search.cwd,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
     let settled = false;
     let stopped = false;
     let stderr = '';
@@ -125,7 +140,7 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
     else search.signal.addEventListener('abort', onAbort, { once: true });
 
     child.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'ENOENT') unavailableUntil = Date.now() + UNAVAILABLE_RETRY_MS;
+      if (err.code === 'ENOENT') unavailableUntil.set(engine, Date.now() + UNAVAILABLE_RETRY_MS);
       finish('unavailable');
     });
     child.stderr.on('data', (chunk: Buffer) => {
@@ -167,10 +182,22 @@ export async function ripgrepSearch(search: RipgrepSearch): Promise<RipgrepOutco
     child.on('close', code => {
       if (stopped) return finish('stopped');
       if (timedOut) return finish('timed-out');
+      // The folder's distro has no rg; the shell wrapping it exits 127.
+      if (wsl && code === 127) {
+        unavailableUntil.set(engine, Date.now() + UNAVAILABLE_RETRY_MS);
+        return finish('unavailable');
+      }
       // Exit 2 is "an error occurred". With nothing found it cannot be told from "no match", so
       // the caller searches again itself rather than report a clean miss: a size-limited or
       // otherwise rejected pattern would look exactly like that.
       if (code === 2 && (reported === 0 || REGEX_REJECTED.test(stderr))) return finish('unsupported');
+      // rg exits 0, 1 or 2. In WSL anything else is the wrapper (cd 125, wsl.exe -1) or rg killed by a
+      // signal (wsl.exe exits with its number); after files were reported a rescan would list them twice.
+      const abnormal = wsl ? code !== 0 && code !== 1 && code !== 2 : code === null;
+      if (abnormal) {
+        if (wsl) console.warn(`[ripgrep] WSL search in ${wsl.distro} exited ${code}: ${stderr.trim().slice(0, 200)}`);
+        return finish(reported === 0 ? 'unsupported' : 'cut-short');
+      }
       finish('done');
     });
   });

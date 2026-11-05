@@ -26,14 +26,17 @@ export interface ResolvedTtsProvider {
   voice: string | undefined;
 }
 
-export async function hasTtsProviderKey(provider: VoiceGenerationVendor, userId: string): Promise<boolean> {
-  return Boolean(
-    await apiKeyService.getEffectiveApiKey(
-      userId,
-      { type: AUDIO_VENDOR_API_KEY_TYPE[provider], nullIfMissing: true },
-      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
-    )
+/** The key synthesis would use for this provider (the user's own, else the admin one), or null. */
+export async function getTtsProviderKey(provider: VoiceGenerationVendor, userId: string) {
+  return apiKeyService.getEffectiveApiKey(
+    userId,
+    { type: AUDIO_VENDOR_API_KEY_TYPE[provider], nullIfMissing: true },
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
+}
+
+export async function hasTtsProviderKey(provider: VoiceGenerationVendor, userId: string): Promise<boolean> {
+  return Boolean(await getTtsProviderKey(provider, userId));
 }
 
 // Resolves the per-provider API key and effective voice, centralizing the key

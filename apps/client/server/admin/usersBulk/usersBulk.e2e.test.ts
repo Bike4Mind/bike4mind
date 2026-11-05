@@ -19,10 +19,21 @@ import {
 } from '@client/app/utils/adminUsersBulk';
 import { usersBulkExecuteDeps, usersBulkUndoDeps } from './adapters';
 import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
+import { SUBSCRIPTION_CANCEL_GRACE_MS } from './ports';
 import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from './undo';
 import { cohortHashOf, type BulkUser } from './resolve';
 
 const invalidateSettingsCache = vi.fn();
+const cancelAccountSubscriptions = vi.hoisted(() =>
+  vi.fn(async (_input: { userId: string; reason: string }, _logger: unknown) => ({
+    canceled: [] as string[],
+    failed: [] as { customerId: string; subscriptionId: string | null; reason: string }[],
+  }))
+);
+vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+  cancelAccountSubscriptions,
+}));
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   invalidateSettingsCache: (...args: unknown[]) => invalidateSettingsCache(...args),
@@ -47,6 +58,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   invalidateSettingsCache.mockClear();
+  cancelAccountSubscriptions.mockReset();
   await mongoose.connection.dropDatabase();
 });
 
@@ -164,6 +176,7 @@ describe('users bulk actions on a real replica set', () => {
       remaining: 0,
       unblockedDomains: [],
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await userState(first)).toMatchObject({ isBanned: false, currentCredits: 100 });
     expect(await userState(second)).toMatchObject({ isBanned: false, currentCredits: 30 });
@@ -213,6 +226,89 @@ describe('users bulk actions on a real replica set', () => {
     await undo(adminId, tag.batchId);
     expect((await userState(target))?.tags).toEqual([]);
     expect((await userState(tagged))?.tags).toEqual(['vip']);
+  });
+
+  it('cancels Stripe subscriptions after a suspend commits, audits it, and undo says they stay canceled', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const paying = await seedUser();
+    const refused = await seedUser();
+    cancelAccountSubscriptions.mockImplementation(async ({ userId }) =>
+      userId === paying
+        ? { canceled: ['sub_paying'], failed: [] }
+        : {
+            canceled: [],
+            failed: [{ customerId: 'cus_refused', subscriptionId: 'sub_refused', reason: 'stripe down' }],
+          }
+    );
+
+    const result = await run(adminId, request([paying, refused], { type: 'suspend' }, [paying, refused]));
+
+    expect(result).toMatchObject({
+      applied: 2,
+      canceledSubscriptions: 1,
+      subscriptionCancelFailures: [{ userId: refused, error: 'stripe down' }],
+    });
+    expect(cancelAccountSubscriptions).toHaveBeenCalledWith(
+      { userId: paying, reason: 'suspended', deadline: expect.any(Number) },
+      expect.anything()
+    );
+    // The ban stands even where Stripe refused the cancel.
+    expect(await userState(refused)).toMatchObject({ isBanned: true });
+    const entries = await AdminAuditLogModel.find({ action: 'user.subscriptions.canceled' }).lean();
+    expect(entries.map(entry => entry.target.id).sort()).toEqual([paying, refused].sort());
+    expect(entries.find(entry => entry.target.id === paying)?.details).toMatchObject({
+      canceledSubscriptions: ['sub_paying'],
+      batchId: result.batchId,
+    });
+
+    const undone = await undo(adminId, result.batchId);
+    expect(undone).toMatchObject({ restored: 2, subscriptionsNotRestored: ['sub_paying'] });
+    expect(await userState(paying)).toMatchObject({ isBanned: false });
+    const undoEntry = await AdminAuditLogModel.findOne({ action: 'user.bulk.undone', 'target.id': paying }).lean();
+    expect(undoEntry?.details).toMatchObject({ subscriptionsNotRestored: ['sub_paying'] });
+  });
+
+  it('cancels subscriptions on contain even for an already-suspended user, and never on other actions', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const banned = await seedUser({ isBanned: true, currentCredits: 10 });
+    const other = await seedUser();
+
+    await run(adminId, request([banned], { type: 'contain' }, [banned]));
+    expect(cancelAccountSubscriptions).toHaveBeenCalledWith(
+      { userId: banned, reason: 'contained', deadline: expect.any(Number) },
+      expect.anything()
+    );
+
+    cancelAccountSubscriptions.mockClear();
+    await run(adminId, request([other], { type: 'restrict' }, [other]));
+    expect(cancelAccountSubscriptions).not.toHaveBeenCalled();
+  });
+
+  it('gives each cancel a deadline of the chunk budget plus the grace', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const target = await seedUser();
+    cancelAccountSubscriptions.mockResolvedValue({ canceled: [], failed: [] });
+
+    const before = Date.now();
+    await run(adminId, request([target], { type: 'suspend' }, [target]), { budgetMs: 5_000 });
+    const after = Date.now();
+
+    const { deadline } = cancelAccountSubscriptions.mock.calls[0][0] as { deadline: number };
+    expect(deadline).toBeGreaterThanOrEqual(before + 5_000 + SUBSCRIPTION_CANCEL_GRACE_MS);
+    expect(deadline).toBeLessThanOrEqual(after + 5_000 + SUBSCRIPTION_CANCEL_GRACE_MS);
+  });
+
+  it('cancels for an already-suspended user with nothing else to change, reported though skipped', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const banned = await seedUser({ isBanned: true, currentCredits: 0 });
+    cancelAccountSubscriptions.mockResolvedValue({ canceled: ['sub_old'], failed: [] });
+
+    for (const type of ['suspend', 'contain'] as const) {
+      cancelAccountSubscriptions.mockClear();
+      const result = await run(adminId, request([banned], { type }, [banned]));
+      expect(result).toMatchObject({ applied: 0, skipped: 1, canceledSubscriptions: 1 });
+      expect(cancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+    }
   });
 
   it('rolls back only the user whose audit write fails', async () => {
@@ -305,9 +401,31 @@ describe('users bulk actions on a real replica set', () => {
       partial: false,
       remaining: 0,
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await userState(target)).toMatchObject({ isModerated: false });
     expect(ADMIN_USERS_BULK_UNDO_WINDOW_MS).toBe(30_000);
+  });
+
+  it('reports as not restored only the subscriptions of users the undo actually reverted', async () => {
+    const adminId = await seedUser({ isAdmin: true });
+    const reverted = await seedUser();
+    const superseded = await seedUser();
+    cancelAccountSubscriptions.mockImplementation(async ({ userId }) => ({
+      canceled: [userId === reverted ? 'sub_reverted' : 'sub_superseded'],
+      failed: [],
+    }));
+
+    const suspend = await run(adminId, request([reverted, superseded], { type: 'suspend' }, [reverted, superseded]));
+    await seedKey(superseded);
+    await run(adminId, request([superseded], { type: 'revokeApiKeys' }, [superseded]));
+
+    const undone = await undo(adminId, suspend.batchId);
+    expect(undone).toMatchObject({
+      restored: 1,
+      failed: [{ userId: superseded, error: SUPERSEDED_MESSAGE }],
+      subscriptionsNotRestored: ['sub_reverted'],
+    });
   });
 
   it('never lets undo of an older batch revert a user a newer batch changed, and retries it later', async () => {
@@ -327,6 +445,7 @@ describe('users bulk actions on a real replica set', () => {
       partial: false,
       remaining: 0,
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await userState(target)).toMatchObject({ isBanned: true });
     expect(await UserApiKey.findById(firstKey).lean()).toMatchObject({ status: ApiKeyStatus.DISABLED });
@@ -339,6 +458,7 @@ describe('users bulk actions on a real replica set', () => {
       partial: false,
       remaining: 0,
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await UserApiKey.findById(laterKey).lean()).toMatchObject({ status: ApiKeyStatus.DISABLED });
     const kept = await AdminAuditLogModel.findOne({
@@ -355,6 +475,7 @@ describe('users bulk actions on a real replica set', () => {
       partial: false,
       remaining: 0,
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await userState(target)).toMatchObject({ isBanned: false });
     expect(await UserApiKey.findById(firstKey).lean()).toMatchObject({ status: ApiKeyStatus.ACTIVE });
@@ -381,6 +502,7 @@ describe('users bulk actions on a real replica set', () => {
       partial: false,
       remaining: 0,
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await User.countDocuments({ _id: { $in: ids }, isModerated: true })).toBe(0);
   });
@@ -404,6 +526,7 @@ describe('users bulk actions on a real replica set', () => {
       remaining: 2,
       unblockedDomains: [],
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await User.countDocuments({ _id: { $in: ids.slice(0, 8) }, isBanned: true })).toBe(0);
     expect(await User.countDocuments({ _id: { $in: ids.slice(8) }, isBanned: true })).toBe(2);
@@ -415,6 +538,7 @@ describe('users bulk actions on a real replica set', () => {
       remaining: 0,
       unblockedDomains: [],
       stillBlockedDomains: [],
+      subscriptionsNotRestored: [],
     });
     expect(await User.countDocuments({ _id: { $in: ids }, isBanned: true })).toBe(0);
   });
@@ -505,6 +629,7 @@ describe('users bulk actions on a real replica set', () => {
         partial: false,
         remaining: 0,
         stillBlockedDomains: [],
+        subscriptionsNotRestored: [],
       });
       expect(await blockedList()).toEqual(['listed-parent.com', 'keep.com']);
       expect(await auditCount('settings.admin_settings.updated')).toBe(2);
@@ -551,6 +676,7 @@ describe('users bulk actions on a real replica set', () => {
         partial: false,
         remaining: 0,
         stillBlockedDomains: [],
+        subscriptionsNotRestored: [],
       });
       expect(await blockedList()).toEqual([]);
     });
@@ -573,6 +699,7 @@ describe('users bulk actions on a real replica set', () => {
         partial: false,
         remaining: 0,
         stillBlockedDomains: ['fresh-campaign.com'],
+        subscriptionsNotRestored: [],
       });
       expect(await blockedList()).toEqual(['fresh-campaign.com']);
 

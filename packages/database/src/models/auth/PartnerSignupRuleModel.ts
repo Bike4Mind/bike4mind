@@ -51,6 +51,24 @@ export class PartnerSignupRuleRepository
       },
     };
   }
+
+  async countByGrantPackage(ids: string[]) {
+    const counts = new Map<string, { domains: number; enabledDomains: number }>();
+    if (ids.length === 0) return counts;
+
+    const rows = await this.model.aggregate<{ _id: string; domains: number; enabledDomains: number }>([
+      { $match: { grantPackageId: { $in: ids } } },
+      {
+        $group: {
+          _id: '$grantPackageId',
+          domains: { $sum: 1 },
+          enabledDomains: { $sum: { $cond: [{ $eq: ['$enabled', true] }, 1, 0] } },
+        },
+      },
+    ]);
+    for (const row of rows) counts.set(row._id, { domains: row.domains, enabledDomains: row.enabledDomains });
+    return counts;
+  }
 }
 
 export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IPartnerSignupRuleModel>(
@@ -61,6 +79,7 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
     domain: { type: String, required: true, unique: true, set: normalizeSignupRuleDomain },
     entitlements: { type: [String], default: [] },
     signupCredits: { type: Number, default: 0 },
+    grantPackageId: { type: String, default: null },
     // Stored as a plain string id (like createdBy) so toJSON yields a string matching
     // IPartnerSignupRule.organizationId; existence is validated in the admin route, not here.
     organizationId: { type: String, default: null },
@@ -92,6 +111,7 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
 PartnerSignupRuleSchema.index({ enabled: 1 });
 // Backs the org-delete cleanup sweep (updateMany by organizationId) and backfill lookups.
 PartnerSignupRuleSchema.index({ organizationId: 1 });
+PartnerSignupRuleSchema.index({ grantPackageId: 1 });
 
 export const PartnerSignupRule =
   (mongoose.models.PartnerSignupRule as unknown as IPartnerSignupRuleModel) ??

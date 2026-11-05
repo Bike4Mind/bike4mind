@@ -26,6 +26,19 @@ describe('AuditEntryDrawer', () => {
     expect(screen.getByText('{"seats":5}')).toBeTruthy();
   });
 
+  it('lays Reason and Request context out at full card width, not in a definition-list grid', () => {
+    const entry = makeAuditEntry({
+      reason: 'Customer requested a refund after a duplicate charge',
+      context: { ip: '10.0.0.1', userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', requestId: 'req-123' },
+    });
+    render(<AuditEntryDrawer entry={entry} onClose={vi.fn()} />, { wrapper: TestWrapper });
+    for (const text of ['Customer requested a refund after a duplicate charge', /Mozilla\/5\.0/, /req-123/]) {
+      const el = screen.getByText(text);
+      expect(el.closest('dl')).toBeNull();
+      expect(el.closest('[data-testid="audit-drawer-section-body"]')).not.toBeNull();
+    }
+  });
+
   it('renders nothing visible when entry is null', () => {
     render(<AuditEntryDrawer entry={null} onClose={vi.fn()} />, { wrapper: TestWrapper });
     expect(screen.queryByTestId('audit-drawer')).toBeNull();
@@ -110,5 +123,16 @@ describe('AuditEntryDrawer', () => {
     const row = screen.getByTestId('audit-drawer-related-row-rel-1');
     expect(row.getAttribute('role')).toBeNull();
     expect(row.getAttribute('tabindex')).toBeNull();
+  });
+
+  it('renders the review section only when given one', () => {
+    const { rerender } = render(<AuditEntryDrawer entry={makeAuditEntry()} onClose={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.queryByTestId('review-slot')).toBeNull();
+    rerender(
+      <AuditEntryDrawer entry={makeAuditEntry()} onClose={vi.fn()} reviewSection={<div data-testid="review-slot" />} />
+    );
+    expect(screen.getByTestId('review-slot')).toBeTruthy();
   });
 });

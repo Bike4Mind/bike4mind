@@ -251,7 +251,7 @@ export function useUserRevokeSharing(
  * (components, query subscriptions, WebSocket) survives. The server-side revoke differs per path
  * and is done by the caller BEFORE this runs.
  */
-async function tearDownClientSession(opts: {
+export async function tearDownClientSession(opts: {
   setCurrentUser: (user: IUserDocument | null) => void;
   resetTokens: () => void;
   queryClient: QueryClient;
@@ -298,10 +298,41 @@ export function useUserLogout() {
   });
 }
 
-const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
+/** Queues an export of the caller's account data; the download link arrives by email. Step-up gated, 1 per hour. */
+export function useRequestAccountDataExport() {
+  return useMutation({
+    mutationFn: async () => {
+      const res = await api.post<{ exportJobId: string }>('/api/users/me/data-export');
+      return res.data;
+    },
+  });
+}
+
+export interface AccountDataExportDownload {
+  url: string;
+  filename: string;
+  expiresAt: string;
+}
+
+/** A fresh short-lived download link for an export the caller requested. Never retried: 404/410 are answers. */
+export function useAccountDataExportDownload(jobId: string) {
+  return useQuery({
+    queryKey: ['users', 'me', 'data-export', jobId],
+    queryFn: async () => {
+      const res = await api.get<AccountDataExportDownload>(`/api/users/me/data-export/${encodeURIComponent(jobId)}`);
+      return res.data;
+    },
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export const ACTIVE_SESSIONS_KEY = ['users', 'me', 'sessions'] as const;
 
 /** The caller's own active auth sessions (devices), newest-active first. Powers the
- *  Active Sessions list in Settings -> Security. */
+ *  Active Sessions list in the profile Security tab. */
 export function useGetActiveSessions() {
   return useQuery({
     queryKey: ACTIVE_SESSIONS_KEY,

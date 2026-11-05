@@ -5,6 +5,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Composer } from './Composer';
+import { ContextRing } from './ContextRing';
 import type { ComposerUsage } from './statusLine';
 import type { AttachmentDraft } from './useAttachments';
 
@@ -138,24 +139,39 @@ afterEach(() => {
   host = null;
 });
 
+function tree(props: Partial<Parameters<typeof Composer>[0]> = {}) {
+  return (
+    <CssVarsProvider>
+      <Composer
+        sessionId="s1"
+        disabled={false}
+        streaming={false}
+        attachments={draft}
+        onSend={() => {}}
+        onStop={() => {}}
+        {...props}
+      />
+    </CssVarsProvider>
+  );
+}
+
 function mount(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() => {
-    root?.render(
-      <CssVarsProvider>
-        <Composer
-          sessionId="s1"
-          disabled={false}
-          streaming={false}
-          attachments={draft}
-          onSend={() => {}}
-          onStop={() => {}}
-          {...props}
-        />
-      </CssVarsProvider>
-    );
+    root?.render(tree(props));
+  });
+}
+
+/**
+ * Render again into the same root, which is what switching conversations does: the shell keys
+ * the thread beside this on the session id, but hands this one a new `sessionId` prop and
+ * leaves it mounted.
+ */
+function rerender(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
+  act(() => {
+    root?.render(tree(props));
   });
 }
 
@@ -327,6 +343,50 @@ describe('skills mid-sentence', () => {
     mount({ skills, onRunCommand: () => {} });
     type('/clear');
     expect(marks()).toEqual(['clear']);
+  });
+});
+
+describe('the draft and the conversation it belongs to', () => {
+  it('does not carry what was typed into the conversation switched to', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('');
+  });
+
+  it('gives each draft back on returning to the conversation it was typed in', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    type('something else entirely');
+
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('something else entirely');
+  });
+
+  // Sending is what ends a draft, so coming back must not resurrect the message just sent.
+  it('keeps nothing for a conversation whose draft was sent', () => {
+    const send = vi.fn();
+    mount({ sessionId: 's1', onSend: send });
+    type('ship it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('ship it');
+
+    rerender({ sessionId: 's2' });
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('');
+  });
+
+  it('leaves no command menu open from the conversation left behind', () => {
+    mount({ sessionId: 's1', onRunCommand: () => {} });
+    type('/comp');
+    expect(rows()).toHaveLength(1);
+
+    rerender({ sessionId: 's2', onRunCommand: () => {} });
+    expect(rows()).toHaveLength(0);
   });
 });
 
@@ -510,5 +570,177 @@ describe('the attach shortcut', () => {
     mount();
     const button = host?.querySelector('[data-testid="composer-attach-btn"]');
     expect(button?.getAttribute('aria-keyshortcuts')).toBe('Control+U');
+  });
+});
+
+describe('the context ring slot', () => {
+  const contextStatus = (
+    <ContextRing
+      tokens={34_000}
+      limit={262_000}
+      modelId="claude-opus-5-5"
+      promptCache={undefined}
+      streaming={false}
+      hasReply
+    />
+  );
+
+  it('draws the context ring left of the credits ring', () => {
+    const markup = statusMarkup({ contextStatus });
+    const context = markup.indexOf('data-testid="composer-context-ring"');
+    expect(context).toBeGreaterThan(-1);
+    expect(context).toBeLessThan(markup.indexOf('data-testid="composer-status"'));
+  });
+
+  it('hides it with the credits ring while disabled or not ready', () => {
+    expect(statusMarkup({ contextStatus, disabled: true })).not.toContain('composer-context-ring');
+    expect(statusMarkup({ contextStatus, notReady: 'No folder' })).not.toContain('composer-context-ring');
+  });
+});
+
+describe('session mentions', () => {
+  const ID_DOCS = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ID_API = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const session = (id: string, title: string, extra: Record<string, unknown> = {}) =>
+    ({ id, title, mode: 'chat', messageCount: 1, updatedAt: '2026-10-01T00:00:00.000Z', ...extra }) as never;
+  const mentionSessions = [
+    session(ID_DOCS, 'Docs pass', { project: { directory: '/w/docs-site', name: 'docs-site', branch: 'main' } }),
+    session(ID_API, 'API rework'),
+    session('s1', 'Current'),
+    session('gone', 'Archived one', { archived: true }),
+  ];
+  const options = () => Array.from(host?.querySelectorAll('[data-testid="composer-mention-option"]') ?? []);
+
+  it('opens on an at sign, without the open or archived sessions, naming the project folder', () => {
+    mount({ mentionSessions });
+    type('hello @');
+    expect(options().map(option => option.textContent)).toEqual(['Docs passdocs-site', 'API reworkNo project']);
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).not.toBeNull();
+  });
+
+  it('filters by the text after the at sign and stays closed when nothing matches', () => {
+    mount({ mentionSessions });
+    type('@api');
+    expect(options()).toHaveLength(1);
+    type('@zzz');
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).toBeNull();
+  });
+
+  it('is off for a host that passes no sessions', () => {
+    mount();
+    type('@');
+    expect(options()).toHaveLength(0);
+  });
+
+  it('walks with the arrows, inserts the title on Enter, and sends the markup', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('ask @');
+    press('ArrowDown');
+    press('Enter');
+    expect(input().value).toBe('ask @API rework ');
+
+    type('ask @API rework about it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith(`ask @[API rework](session:${ID_API}) about it`);
+  });
+
+  it('drops a chosen mention whose label was deleted before sending', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('@');
+    press('Enter');
+    expect(input().value).toBe('@Docs pass ');
+
+    type('plain text');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('plain text');
+  });
+
+  it('closes on Escape and highlights a chosen title', () => {
+    mount({ mentionSessions });
+    type('@do');
+    press('Escape');
+    expect(options()).toHaveLength(0);
+
+    type('@');
+    press('Enter');
+    expect(Array.from(host?.querySelectorAll('[data-skill-token]') ?? []).map(mark => mark.textContent)).toEqual([
+      '@Docs pass',
+    ]);
+  });
+});
+
+describe('the "+" menu', () => {
+  const plus = () => host?.querySelector<HTMLButtonElement>('[data-testid="composer-plus-btn"]') ?? null;
+  const item = (testid: string) => document.body.querySelector<HTMLElement>(`[data-testid="${testid}"]`);
+  const isDisabled = (element: HTMLElement | null) => element?.getAttribute('aria-disabled') === 'true';
+
+  function open(): void {
+    act(() => plus()?.click());
+  }
+
+  it('stays the plain attach button where no folder can be added', () => {
+    mount({ addFolder: null });
+    expect(plus()).toBeNull();
+    expect(host?.querySelector('[data-testid="composer-attach-btn"]')).not.toBeNull();
+  });
+
+  it('offers Attach a file and Add folder, each running its own action', () => {
+    const pick = vi.fn(async () => {});
+    const onClick = vi.fn();
+    mount({ attachments: { ...draft, pick }, addFolder: { onClick } });
+    expect(host?.querySelector('[data-testid="composer-attach-btn"]')).toBeNull();
+
+    open();
+    expect(item('composer-attach-item')?.textContent).toContain('Attach a file');
+    expect(item('composer-attach-item')?.getAttribute('aria-keyshortcuts')).toBe('Control+U');
+    expect(item('composer-add-folder-item')?.textContent).toBe('Add folder...');
+    act(() => item('composer-add-folder-item')?.click());
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(pick).not.toHaveBeenCalled();
+
+    open();
+    act(() => item('composer-attach-item')?.click());
+    expect(pick).toHaveBeenCalledOnce();
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('still offers Add folder with no conversation to attach to', () => {
+    const onClick = vi.fn();
+    mount({ sessionId: null, disabled: true, addFolder: { onClick } });
+    expect(plus()?.disabled).toBe(false);
+
+    open();
+    expect(isDisabled(item('composer-attach-item'))).toBe(true);
+    expect(isDisabled(item('composer-add-folder-item'))).toBe(false);
+    act(() => item('composer-add-folder-item')?.click());
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('is disabled when neither entry can act', () => {
+    mount({ disabled: true, addFolder: { onClick: () => {}, disabled: true } });
+    expect(plus()?.disabled).toBe(true);
+  });
+
+  it('keeps "+" and Attach a file available while Add folder is disabled', () => {
+    const pick = vi.fn(async () => {});
+    mount({ attachments: { ...draft, pick }, addFolder: { onClick: () => {}, disabled: true } });
+    expect(plus()?.disabled).toBe(false);
+
+    open();
+    expect(isDisabled(item('composer-attach-item'))).toBe(false);
+    act(() => item('composer-attach-item')?.click());
+    expect(pick).toHaveBeenCalledOnce();
+  });
+
+  it('does not run Add folder while it is disabled', () => {
+    const onClick = vi.fn();
+    mount({ addFolder: { onClick, disabled: true } });
+
+    open();
+    expect(isDisabled(item('composer-add-folder-item'))).toBe(true);
+    act(() => item('composer-add-folder-item')?.click());
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

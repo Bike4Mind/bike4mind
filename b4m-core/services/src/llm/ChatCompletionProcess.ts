@@ -15,6 +15,7 @@ import {
   QueryComplexityType,
   getTextModelCost,
   getTurnsCost,
+  PAID_PLAN_ENTITLEMENT_KEY,
   buildUsagePriceStamp,
   DEFAULT_PROMPT_CACHE_TTL,
   type PromptCacheTtl,
@@ -192,6 +193,17 @@ import {
   loadModelConfigurations,
   type ModelAdmission,
 } from './modelAdmission';
+import {
+  TurnCreditLimiter,
+  accumulatedRoundsUsd,
+  adoptAccumulatedUsage,
+  cappedSettlementDelta,
+  completionOverdraftAllowance,
+  conservativeRoundInputUsd,
+  estimateAddedInputTokens,
+  outOfCreditsNotice,
+} from './chatCreditCap';
+import { capRoundOutput, gateEveryRound } from '../completionCreditBudget';
 import {
   executedModelFields,
   recordShadowTokenUsage,
@@ -994,8 +1006,9 @@ export function computeSettlementDelta(
 }
 
 /**
- * The settlement a holder gets. Only a personal account is charged into debt; any other holder keeps
- * computeSettlementDelta's zero floor (an organization's balance is a hard stop by design, #1238).
+ * The settlement a holder gets, on `totalCreditsUsed` (text and tool credits together). Only a
+ * personal account is charged into debt; any other holder keeps computeSettlementDelta's zero floor
+ * on the whole total, tools included (an organization's balance is a hard stop by design, #1238).
  * A personal account is charged the shortfall in full,
  * with one atomic $inc that may take the balance below zero: nothing is written off, turns settling
  * concurrently each debit the live balance so the debt is exact however many were in flight, and
@@ -1033,9 +1046,9 @@ export function warnOnSettlementDebt(
 
 /** One model's share of a turn's usage, priced against the turn's credit reservation. */
 export interface ReservationUsage {
-  /** The model that ran, which prices the usage. */
+  /** The model that ran, which prices the usage's cost. */
   modelInfo: ModelInfo;
-  /** The requested model its ledger row names, when known per usage (Research mode); else ledgerModel() maps it. */
+  /** The requested model its ledger row names and its credits are priced on, when known per usage (Research mode); else ledgerModel() maps it. */
   ledgerModelInfo?: ModelInfo;
   /** Uncached input; cache reads and writes are counted separately, as the provider reports them. */
   inputTokens: number;
@@ -1273,6 +1286,9 @@ export class ChatCompletionProcess {
   private reservedCreditsOwnerId: string = '';
   private reservedCreditsOwnerType: CreditHolderType = CreditHolderType.User;
   private reservedCreditHolder: ICreditHolder | null = null;
+  // Caps what the turn may spend at its hold plus the balance plus the overdraft allowance; null
+  // while credits are not enforced and on Research mode turns (see chatCreditCap.ts).
+  private turnCreditLimiter: TurnCreditLimiter | null = null;
   // The UserApiKey that authenticated the current turn (parsedBody.apiKeyId), stamped on its ledger rows.
   private turnApiKeyId: string | undefined;
   // What the reservation was priced on: a turn that ends on a thrown abort settles the tokens it
@@ -2017,6 +2033,52 @@ export class ChatCompletionProcess {
   public systemPromptText: SystemPromptTextDisclosure | undefined;
 
   /**
+   * computeHolderSettlement, except that on a credit-capped turn the text charge may not leave a
+   * personal balance below -allowance (TurnCreditLimiter.settlementFloorCredits); what would go
+   * further is written off. Tool credits are charged in full, as computeHolderSettlement does, so a
+   * write-off is only ever text. An organization keeps its zero floor on the whole total.
+   * `flooredCredits` is the part the floor applied to. The floor and the turn's limit come from the
+   * hold-time balance snapshot, not the live one, so concurrent turns of one payer can each spend to
+   * it and together end below -allowance.
+   */
+  private holderSettlement(
+    ownerType: CreditHolderType,
+    reservedCredits: number,
+    textCredits: number,
+    toolCredits: number,
+    balanceAfterHold: number
+  ): { delta: number; writtenOffCredits: number; flooredCredits: number } {
+    const limiter = this.turnCreditLimiter;
+    const totalCredits = textCredits + toolCredits;
+    if (!limiter) {
+      return {
+        ...computeHolderSettlement(ownerType, reservedCredits, totalCredits, balanceAfterHold),
+        flooredCredits: totalCredits,
+      };
+    }
+    const floor = limiter.settlementFloorCredits();
+    if (ownerType !== CreditHolderType.User) {
+      return {
+        ...cappedSettlementDelta(reservedCredits, totalCredits, balanceAfterHold, floor),
+        flooredCredits: totalCredits,
+      };
+    }
+    return {
+      ...cappedSettlementDelta(reservedCredits, textCredits, balanceAfterHold, floor, toolCredits),
+      flooredCredits: textCredits,
+    };
+  }
+
+  /** Credits this attempt's tool calls have charged so far (the charges settlement bills). */
+  private chargedToolCredits(): number {
+    let total = 0;
+    for (const charges of this.toolCreditsMap.values()) {
+      for (const credits of charges) total += credits;
+    }
+    return total;
+  }
+
+  /**
    * Refunds the credit reservation this run still holds, if any. The amount is claimed
    * synchronously before the await, so a caller giving up on a stuck run and the run's own
    * error rollback cannot both refund it. A run that later reconciles bills the full actual.
@@ -2733,8 +2795,9 @@ export class ChatCompletionProcess {
         logger,
       });
       const modelInfo = shadowModelInfo ?? requestedModelInfo;
-      // The model id handed to features and tools that call the backend themselves.
-      const runModel = shadowModelInfo ? shadowModelInfo.id : model;
+      // The model id handed to features and tools that call the backend themselves: the
+      // post-resolution id, never a retired pin the provider would reject.
+      const runModel = shadowModelInfo ? shadowModelInfo.id : resolvedModelId;
       // Reuse trusted federation provenance across primary and fallback chat backends.
       // Direct-SDK consumers below keep the original static key table.
       const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
@@ -3729,6 +3792,7 @@ export class ChatCompletionProcess {
               substituteId: this.shadowSubstitution.actual.id,
               identityId: this.shadowSubstitution.requested.id,
               displayName: this.shadowSubstitution.requested.name,
+              chargedModel: this.shadowSubstitution.requested,
             }
           : undefined,
         agentOnlyMcpServers,
@@ -4759,6 +4823,9 @@ export class ChatCompletionProcess {
         );
       }
 
+      // Credits are priced on the requested model; token sizing stays on the one that runs.
+      const chargedModelInfo = this.ledgerModel(modelInfo);
+
       // Restricted-tier daily token cap; refused like an empty balance.
       if (
         shadowSettings &&
@@ -4767,13 +4834,14 @@ export class ChatCompletionProcess {
         throw new InsufficientCreditsError(
           buildInsufficientCreditsMessage({
             available: 0,
-            required: usdToCredits(getTextModelCost(modelInfo, inputTokens, safeMaxTokens)) || 1,
+            required: usdToCredits(getTextModelCost(chargedModelInfo, inputTokens, safeMaxTokens)) || 1,
             organizationName: organization?.name,
           }),
           'insufficient_credits'
         );
       }
 
+      this.turnCreditLimiter = null;
       if (adminSettingsEnforceCredits) {
         const creditValidationStartTime = Date.now();
 
@@ -4816,7 +4884,7 @@ export class ChatCompletionProcess {
         const usdCost = researchCosts
           ? researchCosts.reduce((sum, cost) => sum + cost.hold, 0)
           : primaryTurnReservationUsd(
-              modelInfo,
+              chargedModelInfo,
               inputTokens,
               reservationOutputTokens(
                 sentMaxTokens,
@@ -4849,7 +4917,7 @@ export class ChatCompletionProcess {
           const capCheckCredits = usdToCredits(
             researchCosts
               ? researchCosts.reduce((sum, cost) => sum + cost.ceiling, 0)
-              : getTextModelCost(modelInfo, inputTokens, sentMaxTokens)
+              : getTextModelCost(chargedModelInfo, inputTokens, sentMaxTokens)
           );
           if (isMemberCreditCapExceeded(organization, this.user.id, capCheckCredits)) {
             throw new InsufficientCreditsError(
@@ -4936,6 +5004,53 @@ export class ChatCompletionProcess {
         this.reservedCreditsOwnerType = reservationOwnerType;
         this.reservedCreditHolder = holderAfterReservation;
         this.reservationBasis = { modelInfo, inputTokens, organization };
+
+        // The hold is a realistic estimate, not a bound: cap the turn at what this payer can pay
+        // (chatCreditCap.ts), and refuse it now if that cannot buy even a short answer. Research
+        // mode runs several configurations in parallel off one hold and is left to the hold alone.
+        // The limit is priced off this hold-time snapshot, so it bounds one turn, not concurrent ones.
+        if (!isResearchMode) {
+          const hasPaidPlan =
+            !organization &&
+            (await this.resolveEntitlementKeys().then(
+              ({ keys, resolved }) => resolved && keys.includes(PAID_PLAN_ENTITLEMENT_KEY),
+              () => false
+            ));
+          const allowanceCredits = completionOverdraftAllowance({
+            billedToOrganization: !!organization,
+            hasPaidPlan,
+            allowanceCredits: Number(getSettingsValue('paidCompletionOverdraftCredits', defaultAdminSettings)),
+          });
+          const balanceBeforeHold = holderAfterReservation.currentCredits + requiredCredits;
+          const limiter = new TurnCreditLimiter(balanceBeforeHold + allowanceCredits, allowanceCredits);
+          const firstRound = limiter.beginRound({
+            modelInfo: chargedModelInfo,
+            inputTokens,
+            inputUsd: conservativeRoundInputUsd(chargedModelInfo, inputTokens, sessionCacheTtlFor(modelInfo)),
+            spentUsd: 0,
+            maxOutputTokens: sentMaxTokens,
+          });
+          if (!firstRound.affordable) {
+            await this.releaseReservedCredits(questId, logger);
+            throw new InsufficientCreditsError(
+              buildInsufficientCreditsMessage({
+                available: balanceBeforeHold,
+                required: firstRound.minimumCredits,
+                organizationName: organization?.name,
+              }),
+              'insufficient_credits'
+            );
+          }
+          if (firstRound.outputTokens < sentMaxTokens) {
+            logger.info('[CREDIT_CAP] Output budget lowered to what the balance can pay for', {
+              model: modelInfo.id,
+              maxTokens: sentMaxTokens,
+              affordableOutputTokens: firstRound.outputTokens,
+              allowanceCredits,
+            });
+          }
+          this.turnCreditLimiter = limiter;
+        }
 
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Credit pre-reservation completed in ${
@@ -5146,7 +5261,9 @@ export class ChatCompletionProcess {
       // A user Stop has already persisted 'stopped' (sessionOperations.ts), and an aborted
       // backend resolves rather than throws, so the success path must not overwrite it.
       const successStatus = (): 'done' | 'stopped' =>
-        stopSignalSent || abortController.signal.aborted ? 'stopped' : 'done';
+        stopSignalSent || (abortController.signal.aborted && !this.turnCreditLimiter?.stoppedForCredits)
+          ? 'stopped'
+          : 'done';
 
       // Set up a dedicated cancellation watcher that checks more frequently
       // than the regular status updates
@@ -5619,7 +5736,39 @@ export class ChatCompletionProcess {
                 ? { messages: outboundMessages, tools: hopTools }
                 : undoDeferredTools(outboundMessages, hopTools, deferredState);
 
-            await currentLlm.complete(
+            // Every provider round of this hop, tool-loop rounds included, gets an output budget the
+            // payer can afford, priced on this hop's model (a fallback can be dearer).
+            const creditLimiter = this.turnCreditLimiter;
+            const hopMessageCount = hopRequest.messages.length;
+            const hopLlm = creditLimiter
+              ? gateEveryRound(currentLlm, async (roundMessages, roundOptions, round) => {
+                  const roundInputTokens =
+                    inputTokens + (round === 0 ? 0 : estimateAddedInputTokens(roundMessages.slice(hopMessageCount)));
+                  // Earlier hops' spend is not carried into round 0; the settlement floor bounds the charge.
+                  // Their tool charges are dropped with toolCreditsMap at the hop start and never billed.
+                  const budget = creditLimiter.beginRound({
+                    modelInfo: attemptLedgerModel,
+                    inputTokens: roundInputTokens,
+                    inputUsd: conservativeRoundInputUsd(attemptLedgerModel, roundInputTokens, roundCacheTtl),
+                    spentUsd: round === 0 ? 0 : accumulatedRoundsUsd(attemptLedgerModel, roundOptions._internal),
+                    toolCredits: this.chargedToolCredits(),
+                    maxOutputTokens: roundOptions.maxTokens ?? safeMaxTokens,
+                  });
+                  if (budget.affordable) return capRoundOutput(roundOptions, budget.outputTokens);
+                  // The adapter reports earlier rounds' usage only on its terminal round, which a
+                  // stopped loop never reaches, so settlement takes it from here.
+                  adoptAccumulatedUsage(actualTokenUsage, roundOptions._internal, cacheTtlForSettlement);
+                  logger.info('[CREDIT_CAP] Turn stopped: the balance cannot pay for another round', {
+                    questId,
+                    model: currentModel.id,
+                    round,
+                    requiredCredits: budget.minimumCredits,
+                    limitCredits: creditLimiter.limitCredits,
+                  });
+                  return null;
+                })
+              : currentLlm;
+            await hopLlm.complete(
               currentModel.id,
               hopRequest.messages,
               {
@@ -5752,6 +5901,16 @@ export class ChatCompletionProcess {
                   visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
                 }
 
+                const streamedChars = streamedTexts.reduce((sum, text) => sum + (text?.length ?? 0), 0);
+                if (!abortController.signal.aborted && creditLimiter?.recordStreamed(streamedChars)) {
+                  logger.info('[CREDIT_CAP] Stream stopped: the answer reached what the balance can pay for', {
+                    questId,
+                    model: currentModel.id,
+                    limitCredits: creditLimiter.limitCredits,
+                  });
+                  abortController.abort();
+                }
+
                 streamedTexts.forEach((streamedText, index) => {
                   if (!streamedText) return;
                   const text = reasoningWithholder
@@ -5833,6 +5992,11 @@ export class ChatCompletionProcess {
               } (attempt ${fallbackAttempt})`
             );
           } catch (attemptError) {
+            // Our own credit stop: keep what streamed and settle it, instead of retrying or falling back.
+            if (this.turnCreditLimiter?.stoppedForCredits && isAbortError(attemptError)) {
+              completionSuccess = true;
+              break;
+            }
             lastError = attemptError as Error;
             // Aborts (user cancel, client disconnect, or request/idle timeout) are
             // benign, and output-budget exhaustion is deterministic and settled as terminal
@@ -6243,6 +6407,8 @@ export class ChatCompletionProcess {
         // Widen explicitly: the terminal flip happens inside setTerminalQuestStatus, so control
         // flow analysis still believes status is 'running' at this point.
         const statusAtEnd = quest.status as IChatHistoryItemDocument['status'];
+        const lastToolUse = echoToolsUsed.at(-1);
+        const lastToolFailed = lastToolUse?.success === false;
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
           stopped: statusAtEnd === 'stopped',
           toolCallCount: toolCallsSeen,
@@ -6255,19 +6421,28 @@ export class ChatCompletionProcess {
           // reason after a mixed round ending in a flagged tool also skips the notice.
           endedOnAnswerTool:
             actualTokenUsage.stopReason === 'tool_use' &&
-            echoToolsUsed.length > 0 &&
-            isTurnEndingTool(echoToolsUsed[echoToolsUsed.length - 1].name, allTools),
+            lastToolUse !== undefined &&
+            isTurnEndingTool(lastToolUse.name, allTools),
+          lastToolError: lastToolFailed
+            ? { name: lastToolUse.name, message: lastToolUse.returnValue ?? '' }
+            : undefined,
         });
         // When the reply ended on a stripped call, say why in place of the generic notice. An answer
         // written after the call gets no notice: "try again" next to it would read as "you got nothing".
         const narratedCallLeftNoAnswer = narratedStrip.endsOnCall && statusAtEnd !== 'stopped';
-        const turnNotice = narratedCallLeftNoAnswer ? NARRATED_TOOL_CALL_NOTICE : incompleteAnswerNotice;
+        const turnNotice = this.turnCreditLimiter?.stoppedForCredits
+          ? outOfCreditsNotice(organization?.name)
+          : narratedCallLeftNoAnswer
+            ? NARRATED_TOOL_CALL_NOTICE
+            : incompleteAnswerNotice;
         if (incompleteAnswerNotice && !narratedCallLeftNoAnswer) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
             questId,
             model: currentModel.id,
             stopReason: actualTokenUsage.stopReason,
             toolCallCount: toolCallsSeen,
+            lastToolName: lastToolUse?.name,
+            lastToolFailed,
           });
         }
         // Same shape as setErrorReply in the catch below: the notice is its own slot and
@@ -6670,31 +6845,34 @@ export class ChatCompletionProcess {
                 actualTokenUsage.cacheWrite1hInputTokens,
                 cacheTtlForSettlement
               );
-        const estimatedCost = hasProviderUsage
-          ? actualTokenUsage.turnUsage?.length
-            ? getTurnsCost(currentModel, actualTokenUsage.turnUsage)
+        const turnCostOn = (pricedModel: ModelInfo): number =>
+          hasProviderUsage
+            ? actualTokenUsage.turnUsage?.length
+              ? getTurnsCost(pricedModel, actualTokenUsage.turnUsage)
+              : getTextModelCost(
+                  pricedModel,
+                  settledInputTokens,
+                  settledOutputTokens,
+                  cacheReadInputTokens,
+                  cacheCreationInputTokens,
+                  settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens,
+                  cacheWrite1hInputTokens
+                )
             : getTextModelCost(
-                currentModel,
-                settledInputTokens,
-                settledOutputTokens,
+                pricedModel,
+                localInputTokens - cacheReadInputTokens,
+                outputTokens,
                 cacheReadInputTokens,
-                cacheCreationInputTokens,
-                settledInputTokens + cacheReadInputTokens + cacheCreationInputTokens,
-                cacheWrite1hInputTokens
-              )
-          : getTextModelCost(
-              currentModel,
-              localInputTokens - cacheReadInputTokens,
-              outputTokens,
-              cacheReadInputTokens,
-              0,
-              // The local estimate is one whole prompt; the cache discount above must not lower its tier.
-              localInputTokens
-            );
+                0,
+                // The local estimate is one whole prompt; the cache discount above must not lower its tier.
+                localInputTokens
+              );
+        const estimatedCost = turnCostOn(currentModel);
+        const chargedCost = turnCostOn(this.ledgerModel(currentModel));
         // Single stochastic settlement draw, shared by the quest meta, the
         // usage event, and the ledger deduction below so they can never
         // disagree about what was charged.
-        const textCreditsUsed = usdToCreditsStochastic(estimatedCost);
+        const textCreditsUsed = usdToCreditsStochastic(chargedCost);
         unrecordedShadowUsage = undefined;
         await recordShadowTokenUsage(
           this.user,
@@ -6875,21 +7053,28 @@ export class ChatCompletionProcess {
           const reservedAtSettlement = this.reservedCredits;
           this.reservedCredits = 0;
           this.reservationBasis = null;
-          const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
-            ? computeHolderSettlement(
+          const {
+            delta: settlementDelta,
+            writtenOffCredits,
+            flooredCredits,
+          } = this.reservedCreditsOwnerId
+            ? this.holderSettlement(
                 this.reservedCreditsOwnerType,
                 reservedAtSettlement,
-                totalCreditsUsed,
+                textCreditsUsed,
+                toolCreditsUsed,
                 this.reservedCreditHolder?.currentCredits ?? 0
               )
-            : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0 };
+            : { delta: reservedAtSettlement - totalCreditsUsed, writtenOffCredits: 0, flooredCredits: 0 };
           if (writtenOffCredits > 0) {
-            logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
+            const floorCredits = this.turnCreditLimiter?.settlementFloorCredits() ?? 0;
+            logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at the settlement floor', {
               questId: quest.id,
               ownerId: this.reservedCreditsOwnerId,
               ownerType: this.reservedCreditsOwnerType,
-              shortfall: totalCreditsUsed - reservedAtSettlement,
-              available: Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0),
+              shortfall: flooredCredits - reservedAtSettlement,
+              floor: floorCredits,
+              available: Math.max(0, (this.reservedCreditHolder?.currentCredits ?? 0) - floorCredits),
               writtenOff: writtenOffCredits,
             });
           }
@@ -6935,8 +7120,8 @@ export class ChatCompletionProcess {
               costUsd: estimatedCost,
               creditsCharged: textCreditsUsed,
               ...priceStamp,
-              // Quest-level write-off (uncollected part of the whole settlement,
-              // tools included), recorded on the chat settlement event so
+              // Quest-level write-off (uncollected part of the settlement; text only on a
+              // credit-capped personal turn), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
               // Not always 'ok': a turn we aborted as degenerate is priced like any other
@@ -7755,22 +7940,28 @@ export class ChatCompletionProcess {
     const ownerType = this.reservedCreditsOwnerType;
     const organization = basis?.organization ?? null;
     const priced = usages.map(usage => {
-      const costUsd = getTextModelCost(
-        usage.modelInfo,
-        usage.inputTokens,
-        usage.outputTokens,
-        usage.cacheReadInputTokens ?? 0,
-        usage.cacheCreationInputTokens ?? 0,
-        undefined,
-        usage.cacheWrite1hInputTokens ?? 0
-      );
-      return { ...usage, costUsd, credits: usdToCreditsStochastic(costUsd) };
+      const costOn = (pricedModel: ModelInfo): number =>
+        getTextModelCost(
+          pricedModel,
+          usage.inputTokens,
+          usage.outputTokens,
+          usage.cacheReadInputTokens ?? 0,
+          usage.cacheCreationInputTokens ?? 0,
+          undefined,
+          usage.cacheWrite1hInputTokens ?? 0
+        );
+      const costUsd = costOn(usage.modelInfo);
+      const ledgerModelInfo = usage.ledgerModelInfo ?? this.ledgerModel(usage.modelInfo);
+      const chargedUsd = costOn(ledgerModelInfo);
+      return { ...usage, ledgerModelInfo, costUsd, credits: usdToCreditsStochastic(chargedUsd) };
     });
-    const totalCredits = priced.reduce((sum, usage) => sum + usage.credits, 0) + toolCredits;
-    const { delta, writtenOffCredits } = computeHolderSettlement(
+    const textCredits = priced.reduce((sum, usage) => sum + usage.credits, 0);
+    const totalCredits = textCredits + toolCredits;
+    const { delta, writtenOffCredits } = this.holderSettlement(
       ownerType,
       reserved,
-      totalCredits,
+      textCredits,
+      toolCredits,
       this.reservedCreditHolder?.currentCredits ?? 0
     );
     const holderMethods = ownerType === CreditHolderType.Organization ? this.db.organizations : this.db.users;
@@ -7802,7 +7993,7 @@ export class ChatCompletionProcess {
         userId: this.user.id,
         accountCreatedAt: this.user.createdAt,
       });
-      const usageLedgerModel = usage.ledgerModelInfo ?? this.ledgerModel(usage.modelInfo);
+      const usageLedgerModel = usage.ledgerModelInfo;
       this.db.usageEvents
         ?.record({
           requestId: quest.id,
@@ -7914,10 +8105,7 @@ export class ChatCompletionProcess {
       reported.outputTokens ?? 0,
       streamedChars > 0 ? estimateStreamedOutputTokens(streamedChars, basis.modelInfo.id) : 0
     );
-    let toolCredits = 0;
-    for (const charges of this.toolCreditsMap.values()) {
-      toolCredits += charges.reduce((sum, credits) => sum + credits, 0);
-    }
+    const toolCredits = this.chargedToolCredits();
     if (outputTokens === 0 && toolCredits === 0) return;
     const usage: ReservationUsage =
       reportedInput > basis.inputTokens

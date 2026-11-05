@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { accountCampaignGroupSchema } from './accountCampaign';
 
 /**
  * Shadow detections: what an abuse detector WOULD have done to an actor, recorded next to its alert
@@ -8,7 +9,7 @@ import { z } from 'zod';
  * detectors write it, the admin Detections page reads and grades it.
  */
 
-export const SHADOW_DETECTORS = ['signupNetworkBurst'] as const;
+export const SHADOW_DETECTORS = ['signupNetworkBurst', 'accountCampaign', 'youngAccountSpend', 'paymentRisk'] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**
@@ -50,6 +51,26 @@ export const shadowDetectionNetworkSchema = z.object({
 });
 export type ShadowDetectionNetwork = z.infer<typeof shadowDetectionNetworkSchema>;
 
+export const SHADOW_DETECTION_PAYMENT_KINDS = ['credits', 'subscription'] as const;
+export const SHADOW_DETECTION_PAYMENT_OUTCOMES = ['succeeded', 'failed'] as const;
+
+/**
+ * The Stripe payment a paymentRisk detection screened. Ids only: no card details. `livemode` is
+ * Stripe's own flag, so it says which Stripe Dashboard (live or /test) the ids resolve in.
+ */
+export const shadowDetectionPaymentSchema = z.object({
+  paymentIntentId: z.string(),
+  chargeId: z.string().nullable(),
+  kind: z.enum(SHADOW_DETECTION_PAYMENT_KINDS),
+  outcome: z.enum(SHADOW_DETECTION_PAYMENT_OUTCOMES),
+  /** Minor currency units (cents). */
+  amount: z.number().nullable(),
+  currency: z.string().nullable(),
+  riskLevel: z.string().nullable(),
+  livemode: z.boolean(),
+});
+export type ShadowDetectionPayment = z.infer<typeof shadowDetectionPaymentSchema>;
+
 export const shadowDetectionVerdictEntrySchema = z.object({
   verdict: z.enum(SHADOW_DETECTION_VERDICTS),
   reason: z.string(),
@@ -70,6 +91,10 @@ export const shadowDetectionItemSchema = z.object({
   network: shadowDetectionNetworkSchema.nullable(),
   signals: z.array(shadowDetectionSignalSchema),
   windowMinutes: z.number().nullable(),
+  /** The linked-account evidence of an accountCampaign detection; null for single-actor detectors. */
+  group: accountCampaignGroupSchema.nullable(),
+  /** The screened payment of a paymentRisk detection; null for detectors that do not watch payments. */
+  payment: shadowDetectionPaymentSchema.nullable(),
   detectedAt: z.date(),
   /** The latest verdict; null until reviewed. Earlier verdicts stay in `verdicts`. */
   verdict: z.enum(SHADOW_DETECTION_VERDICTS).nullable(),

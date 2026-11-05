@@ -1,3 +1,4 @@
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { signupProtection } from '@server/auth/signupProtection';
 import {
   AuthEvents,
@@ -17,11 +18,11 @@ import {
   subscriberRepository,
   creditTransactionRepository,
   creditLotRepository,
+  grantPackageRepository,
   pendingOtcTokenRepository,
-  authSessionRepository,
   oauthClientRepository,
 } from '@bike4mind/database';
-import { userService, authSessionService } from '@bike4mind/services';
+import { userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { withTransaction } from '@bike4mind/db-core';
 import { applySignupDomainGrant } from '@server/entitlements/signupDomainGrant';
@@ -34,7 +35,7 @@ import {
   releaseBootstrapAdminClaim,
   resolveBootstrapAdmin,
 } from '@server/utils/auth/bootstrapAdmin';
-import { applyEmailVerifiedGrants } from '@server/auth/emailVerifiedGrants';
+import { applyEmailVerifiedGrants, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -46,11 +47,10 @@ import {
   reserveOtcEmailBudget,
   reserveOtcRegistrationDomainBudget,
 } from '@server/utils/otcLimits';
-import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logSignInSuccess, resolveSecondFactor } from '@server/auth/signInSecondFactor';
 import { setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
-import { recordLoginEvent, readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
+import { readNetworkMeta, recordSignupNetwork } from '@server/auth/networkMeta';
 import { assertSignupNetworkWithinLimits } from '@server/auth/signupNetworkLimits';
 import { createSignupGrantRiskCollector } from '@bike4mind/server-utils/auth/signupGrantRisk';
 import { Config } from '@bike4mind/server-utils/utils/config';
@@ -82,6 +82,18 @@ function parseSourceClientId(value: unknown): string | undefined {
   return isOAuthClientIdShape(value) ? value : undefined;
 }
 
+// Same address shape /api/otc/send accepts. Only strings get past this, so the email
+// that reaches the limiter keys and the Mongo lookups below can never be an operator object.
+const otcVerifyCredentialsSchema = z.object({
+  email: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .max(254)
+    .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/),
+  code: z.string().trim().min(1).max(32),
+});
+
 // Existing-user login spreads the self-view user at the top level next to the access token.
 const otcLoginResponseSchema = selfUserResponseSchema.extend({ accessToken: z.string() });
 const otcRegistrationResponseSchema = z.object({ user: selfUserResponseSchema, accessToken: z.string() });
@@ -105,18 +117,20 @@ const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(otcCounterLimit({ bucket: 'verify-ip', window: OTC_LIMITS.verify.perIp, subject: ipSubject }))
   .post(async (req, res) => {
-    const { email, code, username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
+    const credentials = otcVerifyCredentialsSchema.safeParse(req.body);
+    if (!credentials.success) {
+      req.logger.warn('OTC verify rejected a malformed request body', {
+        issues: credentials.error.issues.map(({ path, code }) => ({ path: path.join('.'), code })),
+      });
+      return res.status(400).json({ error: 'Invalid request' });
+    }
+    const { email: normalizedEmail, code } = credentials.data;
+    const { username, pendingToken, acceptedPolicyVersion, ageAttestation } = req.body;
     const parsedInviteCode = z.string().trim().optional().safeParse(req.body.inviteCode);
     if (!parsedInviteCode.success) {
       return res.status(400).json({ error: 'Invalid invite code' });
     }
     const inviteCode = parsedInviteCode.data;
-
-    if (!email || !code) {
-      return res.status(400).json({ error: 'Email and code are required' });
-    }
-
-    const normalizedEmail = (email as string).toLowerCase().trim();
 
     // --- UNIFORM CODE VERIFICATION (enumeration-resistant by construction) ---
     // Both login and registration verify the emailed code against the server-side
@@ -309,17 +323,12 @@ const handler = baseApi({ auth: false })
       }
 
       // --- DIRECT LOGIN ---
-      const { accessToken, refreshToken } = await authSessionService.issueSession(
-        existingUser.id,
-        { createdVia: 'otc', tokenVersion: existingUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
-        {
-          db: { authSessions: authSessionRepository },
-          signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
-          logger: req.logger,
-        }
-      );
+      const { accessToken, refreshToken } = await issueSessionForRequest(req, existingUser.id, {
+        createdVia: 'otc',
+        tokenVersion: existingUser.tokenVersion ?? 0,
+        device: buildSessionDevice(req),
+      });
       setRefreshCookie(res, refreshToken);
-      await recordLoginEvent({ req, userId: existingUser.id, method: 'otc' });
       const tokens = { accessToken };
       const ip = getClientIp(req);
 
@@ -477,8 +486,10 @@ const handler = baseApi({ auth: false })
               creditTransactions: creditTransactionRepository,
               oauthClients: oauthClientRepository,
               creditLots: creditLotRepository,
+              grantPackages: grantPackageRepository,
             },
             logger: req.logger,
+            deferFreeCreditRelease: Boolean(inviteCode),
             skipInviteCheck: bootstrapClaimId !== null || partnerDomainAllowed,
             signupMeta: {
               ...signupNetwork,
@@ -534,6 +545,21 @@ const handler = baseApi({ auth: false })
       // login branch and self-heals. Log the real cause; surface only a generic message.
       req.logger.error('OTC inline registration failed', err);
       throw new InternalServerError('Registration failed. Please try again.', { pendingToken: reissuedToken });
+    }
+
+    // With an invite code registerViaOTC ran inside a transaction, so it left the credits pending: the
+    // staged grant's own transaction cannot see an account that is not committed yet. Release now.
+    if (inviteCode) {
+      const release = await releaseVerifiedPendingFreeCredits(
+        { id: newUser.id, tags: newUser.tags, pendingCreditGrant: newUser.pendingCreditGrant },
+        'OTC registration (email verified)',
+        req.logger,
+        readNetworkMeta(req)
+      );
+      if (release.tags !== null || release.creditsGranted > 0) {
+        const refreshed = await userRepository.findById(newUser.id);
+        if (refreshed) newUser = refreshed;
+      }
     }
 
     const isBootstrapUser = bootstrapClaimId !== null;
@@ -631,6 +657,7 @@ const handler = baseApi({ auth: false })
         userId: newUser.id,
         touches: readConsentedAcquisitionTouches(req),
         method: 'otc',
+        account: signupFunnel,
       });
     }
     const funnelUser = { id: newUser.id, ...signupFunnel };
@@ -645,17 +672,12 @@ const handler = baseApi({ auth: false })
     });
     await emitFunnelEvent({ user: funnelUser, event: 'signup_completed', metadata: { method: 'otc' }, visitId });
 
-    const registrationSession = await authSessionService.issueSession(
-      newUser.id,
-      { createdVia: 'otc-registration', tokenVersion: newUser.tokenVersion ?? 0, device: buildSessionDevice(req) },
-      {
-        db: { authSessions: authSessionRepository },
-        signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
-        logger: req.logger,
-      }
-    );
+    const registrationSession = await issueSessionForRequest(req, newUser.id, {
+      createdVia: 'otc-registration',
+      tokenVersion: newUser.tokenVersion ?? 0,
+      device: buildSessionDevice(req),
+    });
     setRefreshCookie(res, registrationSession.refreshToken);
-    await recordLoginEvent({ req, userId: newUser.id, method: 'otc-registration' });
     return respond(res, otcRegistrationResponseSchema, {
       user: redactUserSecretsForSelf(newUser),
       accessToken: registrationSession.accessToken,

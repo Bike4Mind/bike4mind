@@ -567,6 +567,18 @@ describe('MultiStepLogin - OAuth sign-in start', () => {
     expect(mocks.startOAuthSignIn).toHaveBeenCalledWith(startUrl);
   });
 
+  it('hides the Apple button unless Apple sign-in is enabled', () => {
+    renderLogin();
+    expect(screen.queryByTestId('login-apple-btn')).toBeNull();
+  });
+
+  it('starts the Apple sign-in through the same hook when enabled', async () => {
+    const user = userEvent.setup();
+    renderLogin({ enableAppleAuth: true });
+    await user.click(screen.getByTestId('login-apple-btn'));
+    expect(mocks.startOAuthSignIn).toHaveBeenCalledWith('/api/auth/apple');
+  });
+
   it('routes an email-strategy redirect through the same hook', async () => {
     const user = userEvent.setup();
     vi.stubGlobal(

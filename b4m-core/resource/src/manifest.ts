@@ -16,6 +16,10 @@ export const DEFAULT_MANIFEST = {
   E2E_CLEANUP_SECRET: { kind: 'secret', optional: true },
   EMERGENCY_LOGIN_ENABLED: { kind: 'secret', optional: true },
   GEMINI_API_KEY: { kind: 'secret', optional: true },
+  APPLE_CLIENT_ID: { kind: 'secret', optional: true },
+  APPLE_KEY_ID: { kind: 'secret', optional: true },
+  APPLE_PRIVATE_KEY: { kind: 'secret', optional: true },
+  APPLE_TEAM_ID: { kind: 'secret', optional: true },
   GITHUB_CLIENT_ID: { kind: 'secret', optional: true },
   GITHUB_CLIENT_SECRET: { kind: 'secret', optional: true },
   GITHUB_LAKE_APP_CLIENT_ID: { kind: 'secret', optional: true },
@@ -146,6 +150,7 @@ export const DEFAULT_MANIFEST = {
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   questExportQueue: { kind: 'queue', optional: true },
+  accountDataExportQueue: { kind: 'queue', optional: true },
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a

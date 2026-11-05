@@ -28,6 +28,8 @@ import {
   BEDROCKNEWS_FIRST_SOLVE_REASON,
   BEDROCKNEWS_PUZZLE_REASON,
   grantPuzzleReward,
+  payableRungCredits,
+  rungCredits,
 } from './bedrocknewsPuzzleReward';
 
 const USER_ID = 'a1b2c3d4e5f6a1b2c3d4e5f6';
@@ -322,12 +324,22 @@ describe('grantPuzzleReward', () => {
       ['has a chargeback pending', { ...eligibleUser, disputePending: true }],
       ['is suspended', { ...eligibleUser, moderation: { status: 'suspended' } }],
       ['is pending suspension', { ...eligibleUser, moderation: { status: 'suspend_pending' } }],
+      ['has a blocked signup grant', { ...eligibleUser, signupGrant: { blocked: { at: new Date() } } }],
     ])('is 403 when the user %s', async (_label, user) => {
       givenUser(user);
 
       await expect(grantPuzzleReward(INPUT)).resolves.toEqual({ ok: false, status: 403, code: 'USER_NOT_ELIGIBLE' });
       expect(mockGetSettingsMap).not.toHaveBeenCalled();
       expect(mockAddCredits).not.toHaveBeenCalled();
+    });
+
+    it('loads signupGrant.blocked so the block can be seen on the lean read', async () => {
+      const select = vi.fn(() => ({ lean: () => Promise.resolve(eligibleUser) }));
+      mockFindById.mockReturnValue({ select });
+
+      await grantPuzzleReward(INPUT);
+
+      expect(select).toHaveBeenCalledWith(expect.stringContaining('signupGrant.blocked'));
     });
 
     it('still pays a throttled user', async () => {
@@ -344,5 +356,80 @@ describe('grantPuzzleReward', () => {
 
     expect(result).toEqual({ ok: true, granted: true, credits: 0, balance: 1000, firstSolveCredits: 0 });
     expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+});
+
+describe('rungCredits', () => {
+  it('prices a plain 5 and a hard 6 at default settings', async () => {
+    mockGetSettingsMap.mockResolvedValue({});
+    await expect(rungCredits([{ tier: 5, hard: false }])).resolves.toBe(40);
+    await expect(rungCredits([{ tier: 6, hard: true }])).resolves.toBe(90);
+    await expect(
+      rungCredits([
+        { tier: 5, hard: false },
+        { tier: 6, hard: true },
+      ])
+    ).resolves.toBe(130);
+  });
+});
+
+describe('payableRungCredits', () => {
+  const rung = (puzzleDate: string, tier: 5 | 6 | 7, hard = false) => ({ puzzleDate, tier, hard });
+  const givenPaidByDate = (paid: Record<string, number>) =>
+    mockAggregate.mockImplementation(([{ $match }]: [{ $match: Record<string, unknown> }]) => {
+      const total = paid[$match['metadata.puzzleDate'] as string] ?? 0;
+      return Promise.resolve(total ? [{ _id: null, total }] : []);
+    });
+
+  it('pays every rung while each puzzle day stays under the cap', async () => {
+    await expect(
+      payableRungCredits(USER_ID, [rung(DATE, 5), rung(DATE, 6, true), rung('2026-11-03', 7)])
+    ).resolves.toBe(230);
+    expect(capMatch()).toEqual({
+      ownerId: USER_ID,
+      ownerType: 'User',
+      type: 'generic_add',
+      reason: BEDROCKNEWS_PUZZLE_REASON,
+      'metadata.puzzleDate': DATE,
+      createdAt: { $gte: new Date(`${DATE}T00:00:00.000Z`) },
+    });
+  });
+
+  // Cap 300 with 200 already paid: the 5 (40) fits, the hard 7 (150) is refused whole, the 6 (60) still fits.
+  it('drops the rungs the grant would refuse for the cap, counting earlier rungs of the same day', async () => {
+    givenPaidByDate({ [DATE]: 200, '2026-11-03': 300 });
+
+    await expect(
+      payableRungCredits(USER_ID, [rung(DATE, 5), rung(DATE, 7, true), rung(DATE, 6), rung('2026-11-03', 5)])
+    ).resolves.toBe(100);
+  });
+
+  it('counts nothing for a rung already in the ledger, as the grant replays it', async () => {
+    givenRows({ [PUZZLE_KEY]: { _id: 'paid' } });
+
+    await expect(payableRungCredits(USER_ID, [rung(DATE, 5), rung(DATE, 6)])).resolves.toBe(60);
+  });
+
+  it('counts nothing for a rung outside the grant date window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z'));
+    try {
+      await expect(
+        payableRungCredits(USER_ID, [
+          rung('2026-09-01', 5),
+          rung('2026-11-06', 5),
+          rung('2026-13-45', 5),
+          rung(DATE, 5),
+        ])
+      ).resolves.toBe(40);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('follows a lowered cap setting', async () => {
+    givenSettings({ BedrockNewsPuzzleDailyCap: '30' });
+
+    await expect(payableRungCredits(USER_ID, [rung(DATE, 5)])).resolves.toBe(0);
   });
 });

@@ -19,6 +19,5 @@ apps/client/pages/api/agents/[id]/generate-avatar.ts  # not yet metered; follow-
 apps/client/pages/api/agents/[id]/generate-description.ts  # not yet metered; follow-up
 apps/client/pages/api/agents/[id]/generate-system-prompt.ts  # not yet metered; follow-up
 apps/client/pages/api/publish/[publicId]/revise.ts  # not yet metered; follow-up
-apps/client/pages/api/security/behavioral-summary.ts  # not yet metered; follow-up
 apps/client/pages/api/sessions/[id]/auto-rename.ts  # not yet metered; follow-up
 apps/client/pages/api/users/counterLogs.ts  # admin-only: ADMIN-scoped key

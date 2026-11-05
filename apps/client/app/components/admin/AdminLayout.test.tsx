@@ -11,11 +11,13 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { AdminLayoutRoute, isAdminSubscriptionDetailPath, isAdminUserProfilePath } from './AdminLayout';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
 
 const mockUseUser = vi.fn();
+const profileRendered = vi.fn();
 
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => mockUseUser() }));
 vi.mock('@client/app/utils/user', () => ({ userIsDeveloper: () => false }));
@@ -26,6 +28,8 @@ vi.mock('@client/app/contexts/ProviderBundle', () => ({
   ProviderBundle: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock('@client/app/hooks/data/admin', () => ({ useLiveOpsTriageEnv: () => ({ data: { showTab: false } }) }));
+const mockUnreviewedAuditCount = vi.hoisted(() => vi.fn((_opts: { enabled: boolean }) => ({ data: undefined })));
+vi.mock('@client/app/hooks/data/adminAuditLog', () => ({ useUnreviewedAuditCount: mockUnreviewedAuditCount }));
 vi.mock('@client/app/hooks/data/subscribers', () => ({ useGetWaitingSubscribersCount: () => ({ data: undefined }) }));
 vi.mock('./Subscriptions/subscriptionsLastSeen', () => ({ useNewSubscriptionsDot: () => false }));
 vi.mock('@client/app/hooks/useHelpKeyboardShortcut', () => ({ useHelpKeyboardShortcut: () => undefined }));
@@ -48,7 +52,10 @@ const renderAt = async (path: string) => {
   const profileRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/admin/users/$userId',
-    component: () => <div data-testid="profile-page">profile</div>,
+    component: () => {
+      profileRendered();
+      return <div data-testid="profile-page">profile</div>;
+    },
   });
   const newRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -79,6 +86,7 @@ describe('AdminLayoutRoute', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    useAccessToken.setState({ impersonating: false });
   });
 
   it.each(['/admin', '/admin/users/0123456789abcdef01234567'])(
@@ -95,6 +103,45 @@ describe('AdminLayoutRoute', () => {
     }
   );
 
+  describe('a delegated admin', () => {
+    const delegate = (adminPermissions: string[]) => ({
+      currentUser: { id: 'u1', name: 'Dee', isAdmin: false, adminPermissions, tags: [] },
+    });
+
+    it('with settings:manage enters the console and sees only the tabs they may open', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+
+      await renderAt('/admin');
+
+      const layout = await screen.findByTestId('admin-layout');
+      expect(within(layout).getByTestId('console-page')).toBeInTheDocument();
+      const sidebar = desktopSidebar();
+      expect(within(sidebar).getByTestId('admin-modals-tab-btn')).toBeInTheDocument();
+      expect(within(sidebar).queryByTestId('admin-users-tab-btn')).toBeNull();
+      expect(within(sidebar).queryByTestId('admin-dashboard-tab-btn')).toBeNull();
+      expect(within(sidebar).getByText('Delegated admin')).toBeInTheDocument();
+    });
+
+    it('whose permissions open no tab is sent to /new', async () => {
+      mockUseUser.mockReturnValue(delegate(['support:read']));
+
+      const router = await renderAt('/admin');
+
+      await waitFor(() => expect(router.state.location.pathname).toBe('/new'));
+      expect(screen.queryByTestId('admin-layout')).toBeNull();
+    });
+
+    it('cannot open a user profile, whose Users tab they may not open', async () => {
+      mockUseUser.mockReturnValue(delegate(['settings:manage']));
+
+      const router = await renderAt('/admin/users/0123456789abcdef01234567');
+
+      await waitFor(() => expect(router.state.location.pathname).toBe('/admin'));
+      // Never rendered, not just gone after the redirect: a mounted profile fires admin requests.
+      expect(profileRendered).not.toHaveBeenCalled();
+    });
+  });
+
   it('renders the console inside the shell for an admin', async () => {
     mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
 
@@ -104,6 +151,22 @@ describe('AdminLayoutRoute', () => {
     expect(layout).toHaveAttribute('data-admin-surface');
     expect(within(layout).getByTestId('console-page')).toBeInTheDocument();
     expect(within(desktopSidebar()).getByTestId('admin-dashboard-tab-btn')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('does not enable the audit review badge for a full admin who is impersonating', async () => {
+    useAccessToken.setState({ impersonating: true });
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+    await renderAt('/admin');
+    await screen.findByTestId('admin-layout');
+    expect(mockUnreviewedAuditCount).toHaveBeenCalled();
+    expect(mockUnreviewedAuditCount).not.toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it('enables the audit review badge for a full admin who is not impersonating', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+    await renderAt('/admin');
+    await screen.findByTestId('admin-layout');
+    expect(mockUnreviewedAuditCount).toHaveBeenLastCalledWith({ enabled: true });
   });
 
   it('keeps the sidebar on a user profile, with Users active', async () => {

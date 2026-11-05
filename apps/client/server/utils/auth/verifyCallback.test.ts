@@ -32,6 +32,7 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { findBySettingName: async () => null },
   creditTransactionRepository: {},
   creditLotRepository: {},
+  grantPackageRepository: {},
   organizationRepository: {},
   userRepository: {
     update: (...args: unknown[]) => mockUserRepositoryUpdate(...args),
@@ -39,6 +40,8 @@ vi.mock('@bike4mind/database', () => ({
     // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
     // are about the callback, so the inbox is always free here.
     claimFreeCreditGrant: (...args: unknown[]) => mockClaimFreeCreditGrant(...args),
+    // The domain grant also checks the account has not been blocked from grants; none is blocked here.
+    findById: async () => null,
   },
 }));
 
@@ -106,7 +109,7 @@ vi.mock('@bike4mind/server-utils/auth/signupGrantRisk', () => ({
 }));
 
 import { authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
-import { selfServeVerifyCallback, verifyCallback } from './verifyCallback';
+import { authenticateSelfServeProfile, selfServeVerifyCallback, verifyCallback } from './verifyCallback';
 import { recordTurnstileVerification } from '@server/auth/signupChallenge';
 
 const runStandard = (
@@ -1601,5 +1604,68 @@ describe('selfServeVerifyCallback - signup network limits', () => {
 
     expect(user).toBeTruthy();
     expect(mockIsSignupNetworkOverLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('authenticateSelfServeProfile - Sign in with Apple', () => {
+  const req = { headers: {} };
+  const runApple = (profile: Record<string, unknown>): Promise<{ err: unknown; user: unknown; info: unknown }> =>
+    new Promise(resolve => {
+      const done = (err: unknown, user?: unknown, info?: unknown) => resolve({ err, user, info });
+      void authenticateSelfServeProfile(AuthStrategy.Apple, req, 'access-tok', 'refresh-tok', profile, done, {
+        encrypted: true,
+        refreshToken: 'enc-refresh',
+        accessToken: 'enc-access',
+      });
+    });
+
+  it('links an existing user by verified email without creating a duplicate, storing sub and the encrypted refresh token', async () => {
+    stage2Hit({ _id: 'u1', email: 'user@example.com', emailVerified: true, authProviders: [] });
+
+    const { err, user } = await runApple({ id: 'apple-sub-1', email: 'user@example.com', email_verified: true });
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate).not.toHaveBeenCalled();
+    const linked = mockUpdateOne.mock.calls[0][1].$set.authProviders[0];
+    expect(linked).toMatchObject({
+      strategy: AuthStrategy.Apple,
+      id: 'apple-sub-1',
+      encrypted: true,
+      refreshToken: 'enc-refresh',
+    });
+  });
+
+  it('captures the first-authorization name on a brand-new account', async () => {
+    mockFindOne.mockResolvedValue(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', email: 'new@example.com' });
+
+    const { err } = await runApple({
+      id: 'apple-sub-new',
+      email: 'new@example.com',
+      email_verified: true,
+      displayName: 'Ada Lovelace',
+    });
+
+    expect(err).toBeNull();
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0]).toMatchObject({ name: 'Ada Lovelace', email: 'new@example.com' });
+  });
+
+  it('signs a repeat authorization in by sub alone (no email, no name) and refreshes the tokens', async () => {
+    mockFindOne.mockResolvedValueOnce({
+      _id: 'u1',
+      authProviders: [{ strategy: AuthStrategy.Apple, id: 'apple-sub-1' }],
+    });
+
+    const { err, user } = await runApple({ id: 'apple-sub-1' });
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockFindOne).toHaveBeenCalledTimes(1);
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.authProviders[0]).toMatchObject({ id: 'apple-sub-1', refreshToken: 'enc-refresh' });
+    expect(updateArg.$inc).toBeUndefined();
   });
 });

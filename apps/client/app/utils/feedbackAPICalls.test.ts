@@ -2,14 +2,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { FeedbackStatus } from '@bike4mind/common';
 
-const mocks = vi.hoisted(() => ({ get: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), delete: vi.fn() }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: mocks.get, post: vi.fn(), put: vi.fn(), delete: vi.fn() },
+  api: { get: mocks.get, post: vi.fn(), put: mocks.put, delete: mocks.delete },
 }));
 
 import { FEEDBACK_LIST_MAX_LIMIT } from '@bike4mind/common';
-import { getAllFeedbackForExport, FEEDBACK_EXPORT_MAX_ROWS } from './feedbackAPICalls';
+import {
+  deleteFeedbackFromServer,
+  getAllFeedbackForExport,
+  getFeedbackByIdFromServer,
+  updateFeedbackOnServer,
+  FEEDBACK_EXPORT_MAX_ROWS,
+} from './feedbackAPICalls';
 
 const rows = (count: number, offset = 0) =>
   Array.from({ length: count }, (_, i) => ({
@@ -97,5 +103,21 @@ describe('getAllFeedbackForExport', () => {
     expect(items).toEqual([]);
     expect(truncated).toBe(false);
     expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('feedback record paths', () => {
+  it('encodes the id as one path segment', async () => {
+    const id = '../admin/x?y=';
+    const segment = encodeURIComponent(id);
+    for (const mock of [mocks.get, mocks.put, mocks.delete]) mock.mockReset().mockResolvedValue({ data: null });
+
+    await getFeedbackByIdFromServer(id);
+    await updateFeedbackOnServer(id, {});
+    await deleteFeedbackFromServer(id);
+
+    expect(mocks.get).toHaveBeenCalledWith(`/api/feedback/${segment}/read`);
+    expect(mocks.put).toHaveBeenCalledWith(`/api/feedback/${segment}/update`, {});
+    expect(mocks.delete).toHaveBeenCalledWith(`/api/feedback/${segment}/delete`);
   });
 });

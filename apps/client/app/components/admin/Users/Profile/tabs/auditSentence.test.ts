@@ -38,6 +38,15 @@ describe('describeAuditEntry', () => {
     expect(describeAuditEntry(entry)).toBe('Credits +2,000 (5,410 to 7,410)');
   });
 
+  it('words the signup grant block and unblock actions', () => {
+    expect(describeAuditEntry(makeAuditEntry({ action: 'user.credits.grant_blocked' }))).toBe(
+      'Blocked signup credit grants and rewards'
+    );
+    expect(describeAuditEntry(makeAuditEntry({ action: 'user.credits.grant_unblocked' }))).toBe(
+      'Resumed signup credit grants and rewards'
+    );
+  });
+
   it('uses a fixed sentence for known actions and flags denied ones', () => {
     expect(describeAuditEntry(makeAuditEntry({ action: 'user.mfa.reset' }))).toBe('Reset two-factor authentication');
     expect(describeAuditEntry(makeAuditEntry({ action: 'user.credits.denied', summary: 'over the cap' }))).toBe(

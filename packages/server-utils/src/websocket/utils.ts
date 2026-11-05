@@ -14,11 +14,12 @@ import { Context } from 'aws-lambda';
 import { Config } from '../utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '../utils/logger';
-import { JsonWebTokenError } from 'jsonwebtoken';
-import { ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
+import jwt from 'jsonwebtoken';
+import { ACCOUNT_DELETION_PENDING_CODE, ForbiddenError, HTTPError, UnauthorizedError } from '@bike4mind/common';
 import { isConnectionLostError } from '@bike4mind/db-core';
 import { ServiceUnavailableError } from '../utils/errors';
 import { AUTH_UNAVAILABLE_RETRY_AFTER_SECONDS } from '../auth/apiKeyAuthFailure';
+import { ACCOUNT_DELETION_PENDING_MESSAGE } from '../auth/deletionPendingGate';
 
 // sendToClient may be called multiple times in a single request,
 // so we cache the ApiGatewayManagementApiClient
@@ -178,7 +179,7 @@ export function withWebSocketContext<T>(
       // suspended account) is a refusal too, not a handler failure: without it a subscribe from
       // such a session answers 200 "Internal server error" and logs at error severity.
       const isForbidden = error instanceof ForbiddenError;
-      const isAuthError = isForbidden || error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
+      const isAuthError = isForbidden || error instanceof UnauthorizedError || error instanceof jwt.JsonWebTokenError;
       // A 5xx HTTPError (e.g. the API-key check could not reach the database) keeps its status, and a
       // raw lost connection (connectDB, the web ticket consume, the Connection write) becomes a 503, so
       // $connect refuses the handshake as retryable instead of accepting a socket with no Connection row.
@@ -202,6 +203,14 @@ export function withWebSocketContext<T>(
         logger.info(`Auth rejected for WebSocket ${context.functionName}: ${(error as Error).message}`);
       } else {
         logger.error(`Error in WebSocket handler ${context.functionName}:`, error);
+      }
+
+      if (error instanceof ForbiddenError && error.additionalInfo?.code === ACCOUNT_DELETION_PENDING_CODE) {
+        const { code, scheduledFor } = error.additionalInfo;
+        return {
+          statusCode: 403,
+          body: JSON.stringify({ error: ACCOUNT_DELETION_PENDING_MESSAGE, code, scheduledFor }),
+        };
       }
 
       return {

@@ -105,18 +105,21 @@ describe('agent ops admin audit', () => {
     expect(JSON.stringify(input)).not.toContain('private meta prompt');
   });
 
-  it('POST of the first version activates it without a separate audit entry', async () => {
+  it('POST of the first version records both the addition and the automatic activation', async () => {
     h.repo.getSettings.mockResolvedValue({ versions: [] });
     h.repo.addMetaPromptVersion.mockResolvedValue({ versions: [{ versionNumber: 1 }], currentVersionNumber: 1 });
     h.repo.activateMetaPromptVersion.mockResolvedValue({});
     const res = await call(settingsHandler, 'POST', { metaPrompt: 'p', description: 'd' });
     expect(res._getStatusCode()).toBe(200);
     expect(h.repo.activateMetaPromptVersion).toHaveBeenCalledWith(1);
-    expect(h.audit).toHaveBeenCalledTimes(1);
-    expect(h.audit.mock.calls[0][1]).toMatchObject({
-      action: 'settings.agent_ops.version_added',
-      details: { version: 1 },
-    });
+    expect(h.audit).toHaveBeenCalledTimes(2);
+    expect(h.audit.mock.calls.map(call => call[1])).toEqual([
+      expect.objectContaining({ action: 'settings.agent_ops.version_added', details: { version: 1 } }),
+      expect.objectContaining({
+        action: 'settings.agent_ops.version_activated',
+        details: { version: 1, automatic: true },
+      }),
+    ]);
   });
 
   it('POST records the added version when a legacy version has no number', async () => {

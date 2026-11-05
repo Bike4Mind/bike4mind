@@ -4,9 +4,14 @@ import {
   DISCOVERY_PRIORITY,
   EMPTY_DISCOVERY_STATE,
   discoveryCandidates,
+  DISCOVERY_CAMPAIGN_HOLD_MS,
+  holdDiscoveryForCampaign,
+  isDiscoveryHeldForCampaign,
+  isDiscoverySkippedPath,
   pickDiscoveryGears,
   readDiscoveryState,
   shouldShowDiscovery,
+  resetCampaignHoldForTests,
   writeDiscoveryState,
 } from './discovery';
 
@@ -102,5 +107,56 @@ describe('discovery storage', () => {
     });
     expect(readDiscoveryState('u1')).toEqual(EMPTY_DISCOVERY_STATE);
     expect(() => writeDiscoveryState('u1', EMPTY_DISCOVERY_STATE)).not.toThrow();
+  });
+});
+
+describe('isDiscoverySkippedPath', () => {
+  it.each(['/admin', '/admin/users', '/gears', '/bob', '/bob/runs/r1', '/Bob', '/BOB/runs/r1'])('skips %s', path => {
+    expect(isDiscoverySkippedPath(path)).toBe(true);
+  });
+
+  it.each(['/', '/new', '/bobcat', '/administrator', '/notebooks/gears'])('allows %s', path => {
+    expect(isDiscoverySkippedPath(path)).toBe(false);
+  });
+});
+
+describe('campaign hold', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    resetCampaignHoldForTests();
+  });
+
+  it('is off until a campaign landing is recorded', () => {
+    expect(isDiscoveryHeldForCampaign(NOW)).toBe(false);
+  });
+
+  it('holds for the window, then lets go', () => {
+    holdDiscoveryForCampaign(NOW);
+    expect(isDiscoveryHeldForCampaign(NOW + DISCOVERY_CAMPAIGN_HOLD_MS - 1)).toBe(true);
+    expect(isDiscoveryHeldForCampaign(NOW + DISCOVERY_CAMPAIGN_HOLD_MS)).toBe(false);
+  });
+
+  it('survives a full reload in the same tab through sessionStorage', () => {
+    holdDiscoveryForCampaign(NOW);
+    vi.resetModules();
+    return import('./discovery').then(fresh => {
+      expect(fresh.isDiscoveryHeldForCampaign(NOW + 1000)).toBe(true);
+    });
+  });
+
+  it('falls back to this page load when reading sessionStorage throws', () => {
+    holdDiscoveryForCampaign(NOW);
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect(isDiscoveryHeldForCampaign(NOW + 1000)).toBe(true);
+  });
+
+  it('still holds this page load when sessionStorage throws', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    holdDiscoveryForCampaign(NOW);
+    expect(isDiscoveryHeldForCampaign(NOW + 1000)).toBe(true);
   });
 });

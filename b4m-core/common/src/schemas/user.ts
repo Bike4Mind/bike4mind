@@ -73,6 +73,7 @@ export enum AuthStrategy {
   Google = 'google',
   Facebook = 'facebook',
   Github = 'github',
+  Apple = 'apple',
   Okta = 'okta',
   SAML = 'saml',
 }
@@ -218,11 +219,13 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   lastCreditGrantAt: true,
   acquisition: true,
   isSynthetic: true,
+  isInternal: true,
   firstValueAt: true,
   currentCredits: true,
   lastCreditsPurchasedAt: true,
   apiKeyTrustApproved: true,
   newAccountSpendCapLifted: true,
+  deletion: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
 /** A redacted integration object: only the named non-secret subfields survive. */

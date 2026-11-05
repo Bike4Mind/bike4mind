@@ -17,6 +17,7 @@ import {
   normalizeTag,
 } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
+import { entitlementsForPaidSubscription } from '@server/entitlements/paidStanding';
 import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
 import type { EntitlementKey } from '@bike4mind/server-utils/lib/entitlements/types';
 
@@ -89,6 +90,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
     const knownKeys = allKnownEntitlementKeys();
     const reportedKeys = [...knownKeys, ...[...partnerKeys].filter(key => !knownKeys.includes(key))];
 
+    const paidSubscriptionKeys = new Set<string>(entitlementsForPaidSubscription(activeSubscriptions));
+
     const literalSources = new Map<EntitlementKey, EntitlementSource[]>();
     for (const key of reportedKeys) {
       const sources: EntitlementSource[] = [];
@@ -113,6 +116,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
           const planName = getEntitlingPlanByPriceId(subscription.priceId)?.name ?? subscription.priceId;
           sources.push({ type: 'subscription', detail: planName });
         }
+      }
+      if (paidSubscriptionKeys.has(key)) {
+        sources.push({ type: 'subscription', detail: 'Active paid subscription' });
       }
       literalSources.set(key, sources);
     }

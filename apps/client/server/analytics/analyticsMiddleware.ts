@@ -9,6 +9,7 @@ import {
 import { readUtmCookie } from '@bike4mind/server-utils/analytics/cookies';
 import { readVisitId } from './visitSession';
 import { pseudonymizeUserId } from '@bike4mind/server-utils/analytics/pseudonymize';
+import { isLaneMarked } from '@bike4mind/server-utils/analytics/lane';
 import { resolveUserType } from './resolveUserType';
 
 function utcDate(): string {
@@ -26,7 +27,15 @@ function utcDate(): string {
 // b4m scale (traffic spreads across short-lived instances); revisit with a size-thresholded
 // purge of stale-day entries only if a single warm instance is ever shown to accumulate a
 // pathologically wide user tail.
-const emitted = new Map<string, string>();
+//
+// A customer is sent once a day. A marked user (synthetic or internal, lane.ts) is sent once per
+// visit that day, so `sent` holds their visit ids, reset with the day. The visit beacon is
+// anonymous and carries no lane, so a visit is set aside downstream only when a marked event of
+// its user arrives under the same visit id; once a day, only the day's first visit would get one,
+// and the rest would count as customers' visits. A customer's emits are unchanged, and the extra
+// ones land on the same user-day, which the upsert keeps as one.
+const emitted = new Map<string, { day: string; sent: Set<string> }>();
+const CUSTOMER_SLOT = '';
 
 // Test-only: clear the shared throttle between cases. Not referenced in production code.
 export function __resetAnalyticsThrottle(): void {
@@ -35,8 +44,8 @@ export function __resetAnalyticsThrottle(): void {
 
 export function analyticsMiddleware() {
   return (req: Request, _res: Response, next: NextFunction): void => {
-    // Gate: human JWT session only - skip API-key callers and system accounts
-    if (!req.user || isApiKeyAuth(req) || req.user.isSystem === true) {
+    // Gate: human JWT session only - skip API-key callers, system accounts and accounts pending deletion
+    if (!req.user || isApiKeyAuth(req) || req.user.isSystem === true || req.user.deletion) {
       next();
       return;
     }
@@ -48,15 +57,8 @@ export function analyticsMiddleware() {
 
     const today = utcDate();
     const pseudoUserId = pseudonymizeUserId(req.user.id);
-
-    if (emitted.get(pseudoUserId) === today) {
-      next();
-      return;
-    }
-    emitted.set(pseudoUserId, today);
-
-    // The visit this request belongs to, as the visit cookie reports it - the same value
-    // the visit beacon sends, so an active event and the visit it happened during are one
+    // The visit this request belongs to, as the visit cookie reports it - the same value the
+    // visit beacon sends, so an active event and the visit it happened during are one
     // session downstream rather than two.
     //
     // This value IS grouped on: a consumer of OverwatchRawEvent counts distinct sessionIds
@@ -72,6 +74,15 @@ export function analyticsMiddleware() {
     // sentinel adds one bucket a consumer can exclude outright. The user is still counted
     // in DAU either way, which is what this emit is for.
     const sessionId = readVisitId(req.headers.cookie) ?? OVERWATCH_UNKNOWN_SESSION_ID;
+    const slot = isLaneMarked(req.user) ? sessionId : CUSTOMER_SLOT;
+
+    const seen = emitted.get(pseudoUserId);
+    if (seen?.day === today && seen.sent.has(slot)) {
+      next();
+      return;
+    }
+    if (seen?.day === today) seen.sent.add(slot);
+    else emitted.set(pseudoUserId, { day: today, sent: new Set([slot]) });
 
     const userType = resolveUserType({ level: req.user.level, subscribedUntil: req.user.subscribedUntil });
     const utm = readUtmCookie(req);
@@ -87,6 +98,8 @@ export function analyticsMiddleware() {
       sessionId,
       userType,
       isSynthetic: req.user.isSynthetic === true,
+      isInternal: req.user.isInternal === true,
+      isAdmin: req.user.isAdmin === true,
       referrer,
       utm,
     }).catch(() => {});

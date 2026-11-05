@@ -34,6 +34,15 @@ export function oauthClientDisplayName(clientId: string): string {
   return DISPLAY_NAMES[clientId as OAuthDeviceClientId] ?? clientId;
 }
 
+/**
+ * The first-party native app's client id. It uses the authorization-code + PKCE flow, not the
+ * device flow above, so it is deliberately not a member of OAUTH_DEVICE_CLIENT_IDS. The same
+ * sync rule applies: the native app lives outside this repo and has no build-time check, so this
+ * must stay equal to the id it actually sends. The row itself is seeded by
+ * packages/scripts/migrate/migrations/20260921236950_ensure-first-party-native-oauth-client.ts.
+ */
+export const NATIVE_OAUTH_CLIENT_ID = 'b4m-ios-app';
+
 const MAX_SOURCE_SLUG_LENGTH = 64;
 const OAUTH_CLIENT_ID_SHAPE = /^[A-Za-z0-9._:-]{1,128}$/;
 

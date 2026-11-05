@@ -145,8 +145,18 @@ describe('adminRevenue', () => {
     const revenue = await adminRevenue('30d', NOW);
     expect(revenue.from).toBe('2026-10-01');
     expect(revenue.trend.map(point => point.date)).toEqual(['2026-10-20', '2026-10-25']);
-    expect(revenue.startOfRange).toEqual({ date: '2026-10-20', mrr: 1900, payingCount: 1 });
+    expect(revenue.startOfRange).toMatchObject({ date: '2026-10-20', mrr: 1900, payingCount: 1 });
     expect(revenue.trendStartsOn).toBe('2026-09-01');
+    expect(revenue.trend[1]).toMatchObject({
+      payingUsers: 1,
+      payingOrgs: 0,
+      pastDueMrr: 0,
+      cancelingMrr: 0,
+      mrrByPlan: { price_e2e_solo: 1900 },
+    });
+    expect(revenue.trendPlans).toEqual([
+      { key: 'price_e2e_solo', plan: { priceId: 'price_e2e_solo', name: null, interval: null } },
+    ]);
   });
 
   it('lists past due and canceling rows largest first and shares MRR by plan', async () => {

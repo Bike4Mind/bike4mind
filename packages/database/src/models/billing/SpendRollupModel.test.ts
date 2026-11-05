@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -31,7 +31,7 @@ const deduct = (
   ownerType: CreditHolderType,
   ownerId: string,
   credits: number,
-  extra: { model?: string; apiKeyId?: string; createdAt?: Date; type?: string } = {}
+  extra: { model?: string; apiKeyId?: string; createdAt?: Date; type?: string; source?: string } = {}
 ) => ({
   ownerId,
   ownerType,
@@ -211,5 +211,50 @@ describe('SpendRollupRepository reads', () => {
     const series = await spendRollupRepository.windowSeries('User', ['a'], bucketStart, new Date(third.getTime() + 1));
 
     expect(series.get('a')?.map(doc => doc.bucketStart)).toEqual([bucketStart, second, third]);
+    expect(Object.keys(series.get('a')?.[0] ?? {}).sort()).toEqual(['bucketStart', 'costUsd', 'credits', 'scopeId']);
+  });
+});
+
+describe('SpendRollupRepository.sourceMix', () => {
+  const bucketEnd = new Date(bucketStart.getTime() + SPEND_BUCKET_MS);
+
+  beforeEach(async () => {
+    await CreditTransaction.insertMany([
+      deduct(CreditHolderType.User, 'user-a', -100, { source: 'desktop' }),
+      deduct(CreditHolderType.User, 'user-a', -40, { source: 'cli', apiKeyId: 'K1', type: 'completion_api_usage' }),
+      deduct(CreditHolderType.User, 'user-a', -10),
+      deduct(CreditHolderType.User, 'user-b', -7, { source: 'web' }),
+      deduct(CreditHolderType.Organization, 'org-o', -30, { source: 'web' }),
+      deduct(CreditHolderType.User, 'user-a', -999, { source: 'web', createdAt: bucketEnd }),
+    ]);
+  });
+
+  it('sums credits per source for each requested scope, inside the window only', async () => {
+    const totals = await spendRollupRepository.sourceMix(bucketStart, bucketEnd, [
+      { scopeType: 'User', scopeId: 'user-a' },
+      { scopeType: 'Organization', scopeId: 'org-o' },
+      { scopeType: 'apiKey', scopeId: 'K1' },
+      { scopeType: 'platform', scopeId: 'all' },
+    ]);
+
+    const of = (scopeType: string, scopeId: string) =>
+      Object.fromEntries(
+        totals.filter(t => t.scopeType === scopeType && t.scopeId === scopeId).map(t => [t.source, t.credits])
+      );
+    expect(of('User', 'user-a')).toEqual({ desktop: 100, cli: 40, unknown: 10 });
+    expect(of('Organization', 'org-o')).toEqual({ web: 30 });
+    expect(of('apiKey', 'K1')).toEqual({ cli: 40 });
+    expect(of('platform', 'all')).toEqual({ desktop: 100, cli: 40, unknown: 10, web: 37 });
+    // user-b was not asked for.
+    expect(of('User', 'user-b')).toEqual({});
+  });
+
+  it('runs no query when no supported scope is requested', async () => {
+    const aggregate = vi.spyOn(CreditTransaction, 'aggregate');
+    await expect(
+      spendRollupRepository.sourceMix(bucketStart, bucketEnd, [{ scopeType: 'model', scopeId: 'm1' }])
+    ).resolves.toEqual([]);
+    expect(aggregate).not.toHaveBeenCalled();
+    aggregate.mockRestore();
   });
 });

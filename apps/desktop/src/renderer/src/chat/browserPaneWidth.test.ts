@@ -16,8 +16,13 @@ afterEach(() => {
 });
 
 describe('browserPaneMaxWidth', () => {
-  it('is the window fraction when the conversation has room to spare', () => {
-    expect(browserPaneMaxWidth(2000, 1600)).toBe(840);
+  // A wide window used to stop at 42% of itself, which kept pages in their narrow layout.
+  it('is held only by the conversation minimum when both fit', () => {
+    expect(browserPaneMaxWidth(2000, 1600)).toBe(1600 - CONVERSATION_MIN_WIDTH);
+  });
+
+  it('is the window fraction before the layout has been measured', () => {
+    expect(browserPaneMaxWidth(2000, Number.POSITIVE_INFINITY)).toBe(840);
   });
 
   it('leaves the conversation its minimum when the fixed columns take the rest', () => {
@@ -28,9 +33,14 @@ describe('browserPaneMaxWidth', () => {
     expect(browserPaneMaxWidth(1200, 500)).toBe(BROWSER_PANE_MIN_WIDTH);
   });
 
-  // The pane yields first on a window too small for both; see BROWSER_PANE_MAX_FRACTION.
+  // The pane yields first on a window too small for both; see BROWSER_PANE_CRAMPED_FRACTION.
   it('lets the window fraction win below the minimum', () => {
     expect(browserPaneMaxWidth(600, 300)).toBe(252);
+  });
+
+  it('switches to the conversation cap exactly where both panes fit', () => {
+    expect(browserPaneMaxWidth(600, CONVERSATION_MIN_WIDTH + BROWSER_PANE_MIN_WIDTH)).toBe(BROWSER_PANE_MIN_WIDTH);
+    expect(browserPaneMaxWidth(600, CONVERSATION_MIN_WIDTH + BROWSER_PANE_MIN_WIDTH - 1)).toBe(252);
   });
 });
 

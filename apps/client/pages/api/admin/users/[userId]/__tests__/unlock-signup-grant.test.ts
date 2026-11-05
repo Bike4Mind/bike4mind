@@ -31,7 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
   creditTransactionRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ userService: { unlockSignupGrant: h.unlock } }));
+vi.mock('@bike4mind/services', () => ({ userService: { releaseRemainingSignupGrant: h.unlock } }));
 vi.mock('@server/utils/adminAudit', () => ({
   denySelfAdminAction: h.denySelf,
   isSelfOrImpersonator: h.selfOrImpersonator,
@@ -51,16 +51,24 @@ const request = () => ({
 describe('admin signup unlock', () => {
   it('passes the shared domain protection to the staged release', async () => {
     await h.handler!(request(), { json: vi.fn() });
-    expect(h.unlock.mock.calls[0][2].db.signupProtection).toBe(h.protection);
+    expect(h.unlock.mock.calls[0][1].db.signupProtection).toBe(h.protection);
+  });
+
+  it('answers with the explicit outcome, so a release with nothing to pay is a reasoned no-op', async () => {
+    h.unlock.mockResolvedValue({ outcome: 'noop', reason: 'no_grant' });
+    const res = { json: vi.fn() };
+    await h.handler!(request(), res);
+    expect(res.json).toHaveBeenCalledExactlyOnceWith({ outcome: 'noop', reason: 'no_grant' });
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    h.findById.mockReset().mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
     h.selfOrImpersonator.mockImplementation((user: { id: string; impersonatedBy?: string }, targetId: string) =>
       [user.id, user.impersonatedBy].some(id => id?.toLowerCase() === targetId.toLowerCase())
     );
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
-    h.unlock.mockResolvedValue({ creditsGranted: 0 });
+    h.unlock.mockResolvedValue({ outcome: 'noop', reason: 'nothing_remaining' });
   });
   it('is jwt-only and rejects non-admin callers before invoking the grant', async () => {
     expect(h.config).toEqual({ auth: 'jwtOnly' });
@@ -74,6 +82,14 @@ describe('admin signup unlock', () => {
     req.body.reason = '';
     await expect(h.handler!(req, { json: vi.fn() })).rejects.toThrow('reason required');
     expect(h.unlock).not.toHaveBeenCalled();
+  });
+  it('does not release or audit when reading the target fails', async () => {
+    h.findById.mockRejectedValueOnce(new Error('lookup unavailable'));
+
+    await expect(h.handler!(request(), { json: vi.fn() })).rejects.toThrow('lookup unavailable');
+
+    expect(h.unlock).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
   });
   it.each([
     { id: 'user-1', isAdmin: true },
@@ -92,9 +108,9 @@ describe('admin signup unlock', () => {
   });
   it('uses only the admin reason and rechecks persisted authorization', async () => {
     await h.handler!(request(), { json: vi.fn() });
-    const [id, reason, adapters] = h.unlock.mock.calls[0];
+    const [id, adapters] = h.unlock.mock.calls[0];
     expect(h.denySelf).not.toHaveBeenCalled();
-    expect([id, reason]).toEqual(['user-1', 'admin']);
+    expect(id).toBe('user-1');
     h.findById.mockResolvedValue({ isAdmin: false });
     expect(await adapters.validators.admin()).toBe(false);
     h.findById.mockResolvedValue({ isAdmin: true });
@@ -102,7 +118,11 @@ describe('admin signup unlock', () => {
     await adapters.audit({ credits: 28, creditTransactionId: 'tx-1' });
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ action: 'user.credits.adjusted', related: { creditTransactionId: 'tx-1' } })
+      expect.objectContaining({
+        action: 'user.credits.adjusted',
+        target: { kind: 'user', id: 'user-1', displayName: 'user@example.com' },
+        related: { creditTransactionId: 'tx-1' },
+      })
     );
   });
 });

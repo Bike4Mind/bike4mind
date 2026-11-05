@@ -264,6 +264,72 @@ export interface ScreenContext {
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
 }
 
+/** One simulator device, as `xcrun simctl list` reports it. */
+export interface SimulatorDevice {
+  udid: string;
+  name: string;
+  /** "iOS 27.0", from the runtime identifier. */
+  runtime: string;
+  /** simctl's own word: Booted, Shutdown, Booting, Shutting Down. */
+  state: string;
+}
+
+/** A screen size in points, the unit every input coordinate is given in. */
+export interface SimulatorScreen {
+  width: number;
+  height: number;
+  /** Pixels per point: a screenshot is `width * scale` pixels wide. */
+  scale: number;
+}
+
+export type SimulatorButton = 'home' | 'lock' | 'side-button' | 'siri' | 'apple-pay';
+export type SimulatorKey = 'return' | 'delete' | 'tab' | 'escape' | 'space' | 'up' | 'down' | 'left' | 'right';
+
+export interface SimulatorBuildRequest {
+  /** Absolute path to a .xcodeproj or .xcworkspace. */
+  container: string;
+  scheme: string;
+  udid: string;
+  configuration?: string;
+}
+
+/**
+ * The iOS Simulator on this Mac: simctl for lifecycle and screens, AXe for touch and keys. A
+ * fake in tests. Every failure the user has to fix (no Xcode, licence, missing AXe) throws a
+ * SimulatorSetupError naming the exact fix; see simulator/toolchain.ts.
+ */
+export interface SimulatorDriver {
+  devices(): Promise<{ devices: SimulatorDevice[]; runtimes: string[] }>;
+  boot(udid: string): Promise<void>;
+  /** Returns the built .app's path and the tail of the build log. */
+  build(request: SimulatorBuildRequest, signal: AbortSignal): Promise<{ appPath: string; log: string }>;
+  /** Installs the bundle and returns its bundle identifier. */
+  install(udid: string, appPath: string): Promise<string>;
+  launch(udid: string, bundleId: string): Promise<void>;
+  /** A PNG scaled to the screen's size in points, so pixel coordinates in it are tap coordinates. */
+  screenshot(udid: string): Promise<{ png: Buffer; screen: SimulatorScreen }>;
+  tap(udid: string, x: number, y: number, duration?: number): Promise<void>;
+  swipe(udid: string, from: { x: number; y: number }, to: { x: number; y: number }, duration?: number): Promise<void>;
+  type(udid: string, text: string): Promise<void>;
+  key(udid: string, key: SimulatorKey): Promise<void>;
+  button(udid: string, button: SimulatorButton, duration?: number): Promise<void>;
+  openUrl(udid: string, url: string): Promise<void>;
+  appearance(udid: string): Promise<string>;
+  setAppearance(udid: string, mode: 'light' | 'dark'): Promise<void>;
+  rotate(udid: string, direction: 'left' | 'right'): Promise<void>;
+}
+
+export interface SimulatorContext {
+  driver: SimulatorDriver;
+  /** Keep a screenshot for the transcript, as BrowserContext.keepScreenshot does. */
+  keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+  /** The device this session's live view shows, if any; input defaults to it. */
+  attached(): string | undefined;
+  /** Opens the user's live view on this device. */
+  attach(udid: string): Promise<void>;
+  detach(): void;
+}
+
 /**
  * Everything a tool may use. Narrow by default: no api client and no token, except for the
  * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
@@ -321,6 +387,8 @@ export interface ToolContext {
   browser?: BrowserContext;
   /** Absent in a build without desktopCapturer; screen_capture is then not declared at all. */
   screen?: ScreenContext;
+  /** Absent off macOS and in tests; the simulator tools are then not declared at all. */
+  simulator?: SimulatorContext;
   /** Absent outside the chat loop, where an image has nowhere to go; file_read then describes it in text. */
   images?: ImageContext;
   /**
@@ -337,6 +405,13 @@ export interface ToolContext {
   mcp?: McpToolContext;
   /** The calling session's PR binding. Absent in tests; set_session_pull_request then refuses. */
   pullRequests?: PullRequestContext;
+  /**
+   * Set in a loop runner session: every process a shell tool starts runs at below-normal
+   * priority, so unattended work yields to the user's own. See lowerPriority.
+   */
+  lowPriority?: boolean;
+  /** A loop runner session's merge, under its stage's policy. Absent elsewhere; loop_merge_pr refuses. */
+  loopMerge?: { merge(prUrl: string): Promise<string> };
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
   /**
@@ -394,6 +469,8 @@ export interface HostSessionView {
   spawnedBy?: string;
   /** Present-tense state, the same one the sidebar row draws. */
   status: 'processing' | 'needs-action' | 'done';
+  /** The project folder's name; absent for a conversation with no project. */
+  project?: string;
 }
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
@@ -428,6 +505,11 @@ export interface RelayAccepted {
   sessionId: string;
   title: string;
   queued: boolean;
+  /**
+   * Waiting for the receiver's user to let it in rather than delivered; see relayHoldReason.
+   * Nothing runs there until they do, and they may decline.
+   */
+  held: boolean;
 }
 
 export interface RelayRejected {
@@ -469,18 +551,31 @@ export interface HostContext {
    * is the base the child gets.
    */
   spawnBase(): Promise<string>;
-  /** Sessions in this one's project, newest first. Includes archived ones, flagged as such. */
-  listSessions(options: { includeArchived: boolean }): Promise<HostSessionView[]>;
-  /** One session's transcript as plain text, or null when it is gone or not in this project. */
-  readSession(sessionId: string): Promise<string | null>;
+  /**
+   * Sessions newest first, flagging archived ones. 'project' is this one's project; 'all' is every
+   * conversation of the signed-in account, which is as far as the session store reaches.
+   */
+  listSessions(options: { includeArchived: boolean; scope: 'project' | 'all' }): Promise<HostSessionView[]>;
+  /**
+   * One session's transcript as plain text. `ref` is an id, a unique id prefix or an exact title.
+   * Outside this project only for a session the user mentioned here or that messaged this one:
+   * listing shows every conversation exists, reading one has to trace back to something the user
+   * did. Throws with the reason when it cannot be read.
+   */
+  readSession(ref: string): Promise<string>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
-  /** How a session is described in an approval prompt, so the user reads a title not a uuid. */
-  describeSession(sessionId: string): Promise<string | null>;
   /**
-   * Deliver `message` to an existing session in this project and let it run as a turn there.
+   * How a session is described in an approval prompt, so the user reads a title not a uuid. Scope
+   * 'project' (default) matches what archive/delete can act on; 'all' matches what sendTo reaches.
+   */
+  describeSession(ref: string, options?: { scope: 'project' | 'all' }): Promise<string | null>;
+  /**
+   * Deliver `message` to an existing session - any of this account's, addressed as readSession
+   * is - and let it run as a turn there. A delivery that could widen what the sender reaches is
+   * held for the receiver's user instead; see RelayAccepted.held.
    *
    * Fire and forget, like `spawn`: it resolves once the message is accepted, never when the
    * target has answered. Waiting would deadlock the moment the target parks at the approval
@@ -489,7 +584,7 @@ export interface HostContext {
    * Bounded by the hop count on the relay and by the sends this turn has already made; see
    * ChatRelayOrigin. A refusal here is the bound working, not a transient failure.
    */
-  sendTo(sessionId: string, message: string): Promise<RelayOutcome>;
+  sendTo(ref: string, message: string, options: { notify: boolean }): Promise<RelayOutcome>;
   /**
    * Present only when a user is in this conversation to act on a suggestion. session_spawn then
    * proposes rather than starts, and the turn is never held on the answer. Absent in a spawned
@@ -546,6 +641,8 @@ export interface ApprovalPrompt {
    * project, a read of a `.env` file, or a command that can send data out.
    */
   askInAuto?: true;
+  /** An "always" on this card allows this call only and is never recorded. */
+  allowOnce?: true;
   /**
    * Proven by the shell scan to keep to this computer or only read from GitHub (see
    * shellScan's `containedCommand`), so untrusted content read earlier in the reply is no reason
@@ -585,6 +682,8 @@ export interface ApprovalAlways {
   directories: readonly string[];
   /** Physical paths named by a shell command, used to protect permission files even through aliases. */
   paths?: readonly string[];
+  /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
+  ungranted?: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

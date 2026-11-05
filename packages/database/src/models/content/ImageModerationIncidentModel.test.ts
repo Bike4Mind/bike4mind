@@ -53,6 +53,72 @@ describe('ImageModerationIncidentRepository', () => {
     });
   });
 
+  describe('review sweep queries', () => {
+    const NOW = new Date('2026-10-20T12:00:00.000Z');
+    const hoursAgo = (hours: number) => new Date(NOW.getTime() - hours * 3_600_000);
+    const seed = async (fields: Record<string, unknown>) => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      await ImageModerationIncident.collection.updateOne({ _id: inc._id }, { $set: fields });
+      return String(inc._id);
+    };
+
+    it('markReminded stamps lastReminderAt on every given incident and leaves the others absent', async () => {
+      const first = await imageModerationIncidentRepository.record(baseIncident());
+      const second = await imageModerationIncidentRepository.record(baseIncident());
+      const untouched = await imageModerationIncidentRepository.record(baseIncident());
+
+      await imageModerationIncidentRepository.markReminded([first.id, second.id], NOW);
+      await imageModerationIncidentRepository.markReminded([], NOW);
+
+      expect((await ImageModerationIncident.findById(first._id).lean())?.lastReminderAt).toEqual(NOW);
+      expect((await ImageModerationIncident.findById(second._id).lean())?.lastReminderAt).toEqual(NOW);
+      expect((await ImageModerationIncident.findById(untouched._id).lean())?.lastReminderAt).toBeUndefined();
+    });
+
+    it('countPendingReview counts absent and pending_review incidents only', async () => {
+      await seed({});
+      await seed({ reviewStatus: 'pending_review' });
+      await seed({ reviewStatus: 'reported' });
+      await seed({ reviewStatus: 'false_positive' });
+      await seed({ reviewStatus: 'no_action' });
+
+      expect(await imageModerationIncidentRepository.countPendingReview()).toBe(2);
+    });
+
+    it('findUnalerted returns old-enough unreviewed incidents with no alert, oldest first', async () => {
+      const newer = await seed({ createdAt: hoursAgo(2) });
+      const older = await seed({ createdAt: hoursAgo(3), reviewStatus: 'pending_review' });
+      await seed({ createdAt: hoursAgo(0.1) });
+      await seed({ createdAt: hoursAgo(5), alertedAt: hoursAgo(4) });
+      await seed({ createdAt: hoursAgo(6), reviewStatus: 'reported' });
+      await seed({ createdAt: hoursAgo(7), reviewStatus: 'false_positive' });
+      await seed({ createdAt: hoursAgo(8), reviewStatus: 'no_action' });
+
+      const found = await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([older, newer]);
+      expect(await imageModerationIncidentRepository.findUnalerted(hoursAgo(0.25), 1)).toHaveLength(1);
+    });
+
+    it('findDueForReminder returns alerted unreviewed incidents whose last notice is a day old', async () => {
+      const neverReminded = await seed({ createdAt: hoursAgo(50), alertedAt: hoursAgo(30) });
+      const remindedLongAgo = await seed({
+        createdAt: hoursAgo(80),
+        alertedAt: hoursAgo(70),
+        lastReminderAt: hoursAgo(25),
+      });
+      await seed({ createdAt: hoursAgo(40), alertedAt: hoursAgo(20) });
+      await seed({ createdAt: hoursAgo(90), alertedAt: hoursAgo(80), lastReminderAt: hoursAgo(2) });
+      await seed({ createdAt: hoursAgo(60) });
+      await seed({ createdAt: hoursAgo(60), alertedAt: hoursAgo(50), reviewStatus: 'reported' });
+      await seed({ createdAt: hoursAgo(60), alertedAt: hoursAgo(50), reviewStatus: 'no_action' });
+
+      const found = await imageModerationIncidentRepository.findDueForReminder(hoursAgo(24), 10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([remindedLongAgo, neverReminded]);
+    });
+  });
+
   describe('findPendingReview', () => {
     it('returns incidents with absent reviewStatus', async () => {
       await imageModerationIncidentRepository.record(baseIncident());
@@ -192,6 +258,19 @@ describe('ImageModerationIncidentRepository', () => {
       const reclaimed = await imageModerationIncidentRepository.claimForNcmecSubmission(String(inc._id));
       expect(reclaimed?.reviewStatus).toBe('confirmed_csam');
     });
+
+    it.each(['pending_review', 'reported'] as const)(
+      'returns null when writing %s over a no_action row',
+      async target => {
+        const inc = await imageModerationIncidentRepository.record(baseIncident());
+        await imageModerationIncidentRepository.markNoAction(String(inc._id), 'admin-1');
+        const result = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), target, 'rpt-x');
+        expect(result).toBeNull();
+        const reloaded = await ImageModerationIncident.findById(inc._id);
+        expect(reloaded?.reviewStatus).toBe('no_action');
+        expect(reloaded?.ncmecReportId).toBeUndefined();
+      }
+    );
   });
 
   describe('resolveConfirmedCsam', () => {
@@ -357,6 +436,18 @@ describe('ImageModerationIncidentRepository', () => {
       expect(out?.reportedBy).toBe('admin-1');
     });
 
+    it('overrides a no_action verdict and keeps who closed it, and when', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+      const closed = await imageModerationIncidentRepository.markNoAction(id, 'admin-na');
+      const out = await imageModerationIncidentRepository.recordManualReport(id, report);
+      expect(out?.reviewStatus).toBe('reported');
+      expect(out?.previousReviewStatus).toBe('no_action');
+      expect(out?.noActionBy).toBe('admin-na');
+      expect(out?.noActionAt).toEqual(closed?.noActionAt);
+      expect(out?.reportedBy).toBe('admin-1');
+    });
+
     it('cannot be flipped back to false_positive once recorded over it', async () => {
       const inc = await imageModerationIncidentRepository.record(baseIncident());
       const id = String(inc._id);
@@ -364,6 +455,85 @@ describe('ImageModerationIncidentRepository', () => {
       await imageModerationIncidentRepository.recordManualReport(id, report);
       expect(await imageModerationIncidentRepository.updateReviewStatus(id, 'false_positive')).toBeNull();
       expect((await ImageModerationIncident.findById(id))?.reviewStatus).toBe('reported');
+    });
+  });
+
+  describe('markNoAction', () => {
+    it('closes an absent or pending_review incident, attributed to the admin', async () => {
+      const absent = await imageModerationIncidentRepository.record(baseIncident());
+      const pending = await imageModerationIncidentRepository.record({
+        ...baseIncident(),
+        reviewStatus: 'pending_review',
+      });
+
+      for (const inc of [absent, pending]) {
+        const out = await imageModerationIncidentRepository.markNoAction(String(inc._id), 'admin-na');
+        expect(out?.reviewStatus).toBe('no_action');
+        expect(out?.noActionBy).toBe('admin-na');
+        expect(out?.noActionAt).toBeInstanceOf(Date);
+      }
+    });
+
+    it.each(['false_positive', 'no_action', 'reported', 'confirmed_csam'] as const)(
+      'refuses an incident already in %s and leaves it unchanged',
+      async reviewStatus => {
+        const inc = await imageModerationIncidentRepository.record({ ...baseIncident(), reviewStatus });
+        expect(await imageModerationIncidentRepository.markNoAction(String(inc._id), 'admin-na')).toBeNull();
+        const stored = await ImageModerationIncident.findById(inc._id).lean();
+        expect(stored?.reviewStatus).toBe(reviewStatus);
+        expect(stored?.noActionBy).toBeUndefined();
+      }
+    );
+
+    it('cannot be replaced by a later false_positive verdict', async () => {
+      const inc = await imageModerationIncidentRepository.record(baseIncident());
+      const id = String(inc._id);
+      await imageModerationIncidentRepository.markNoAction(id, 'admin-na');
+      expect(await imageModerationIncidentRepository.updateReviewStatus(id, 'false_positive')).toBeNull();
+      expect((await ImageModerationIncident.findById(id))?.reviewStatus).toBe('no_action');
+    });
+  });
+
+  describe('findClosed', () => {
+    it('returns incidents with a final verdict, newest first', async () => {
+      const seedAt = async (createdAt: Date, reviewStatus?: string) => {
+        const inc = await imageModerationIncidentRepository.record(baseIncident());
+        await ImageModerationIncident.collection.updateOne({ _id: inc._id }, { $set: { createdAt, reviewStatus } });
+        return String(inc._id);
+      };
+      const reported = await seedAt(new Date('2026-10-01T00:00:00Z'), 'reported');
+      const noAction = await seedAt(new Date('2026-10-03T00:00:00Z'), 'no_action');
+      const falsePositive = await seedAt(new Date('2026-10-02T00:00:00Z'), 'false_positive');
+      await seedAt(new Date('2026-10-04T00:00:00Z'), 'pending_review');
+      await seedAt(new Date('2026-10-05T00:00:00Z'), 'confirmed_csam');
+
+      const found = await imageModerationIncidentRepository.findClosed(10);
+
+      expect(found.map(incident => String(incident._id))).toEqual([noAction, falsePositive, reported]);
+      expect(await imageModerationIncidentRepository.findClosed(1)).toHaveLength(1);
+      const older = await imageModerationIncidentRepository.findClosed(10, new Date('2026-10-03T00:00:00Z'));
+      expect(older.map(incident => String(incident._id))).toEqual([falsePositive, reported]);
+    });
+
+    it('pages rows sharing one createdAt without skipping or repeating any', async () => {
+      const sameAt = new Date('2026-10-03T00:00:00Z');
+      const ids: string[] = [];
+      for (let n = 0; n < 3; n++) {
+        const inc = await imageModerationIncidentRepository.record(baseIncident());
+        await ImageModerationIncident.collection.updateOne(
+          { _id: inc._id },
+          { $set: { createdAt: sameAt, reviewStatus: 'no_action' } }
+        );
+        ids.push(String(inc._id));
+      }
+      const newestFirst = [...ids].sort().reverse();
+
+      const first = await imageModerationIncidentRepository.findClosed(2);
+      const last = first[first.length - 1];
+      const second = await imageModerationIncidentRepository.findClosed(2, last.createdAt, String(last._id));
+
+      expect(first.map(incident => String(incident._id))).toEqual(newestFirst.slice(0, 2));
+      expect(second.map(incident => String(incident._id))).toEqual(newestFirst.slice(2));
     });
   });
 

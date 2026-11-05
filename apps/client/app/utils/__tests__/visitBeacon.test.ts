@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
-const { mockResolveConsent } = vi.hoisted(() => ({ mockResolveConsent: vi.fn() }));
-vi.mock('../consentRegion', () => ({ resolveConsent: mockResolveConsent }));
+const { mockResolveConsent, mockPublishConsent } = vi.hoisted(() => ({
+  mockResolveConsent: vi.fn(),
+  mockPublishConsent: vi.fn(),
+}));
+vi.mock('../consentRegion', () => ({ resolveConsent: mockResolveConsent, publishResolvedConsent: mockPublishConsent }));
 
-import { beaconVisit, releaseVisitBeacon } from '../visitBeacon';
+import { beaconVisit, releaseVisitBeacon, visitBeaconLanding } from '../visitBeacon';
 
 const setReferrer = (value: string) => Object.defineProperty(document, 'referrer', { value, configurable: true });
 const setVisibility = (value: DocumentVisibilityState) =>
@@ -14,6 +17,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 204 }));
   releaseVisitBeacon();
   mockResolveConsent.mockReturnValue('granted');
+  mockPublishConsent.mockClear();
   setReferrer('');
   setVisibility('visible');
   window.history.replaceState(null, '', '/');
@@ -179,6 +183,113 @@ describe('beaconVisit', () => {
     });
   });
 
+  describe('a landing that carries a verified-hop token', () => {
+    const TOKEN = `${'a'.repeat(32)}.1793707200.${'M'.repeat(43)}`;
+
+    it('takes the token off the URL, keeping the rest of it, and sends it to be redeemed', () => {
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      window.history.replaceState({ kept: 1 }, '', `/pricing?utm_source=news&b4m_hop=${TOKEN}#plans`);
+
+      beaconVisit();
+
+      expect(window.location.pathname + window.location.search + window.location.hash).toBe(
+        '/pricing?utm_source=news#plans'
+      );
+      // replaceState, not a new history entry, and the router's state survives it.
+      expect(window.history.state).toEqual({ kept: 1 });
+      expect(sentBody(fetchMock)).toEqual({ landingPath: '/pricing', hop: TOKEN });
+    });
+
+    it("publishes this load's consent before the beacon, so the server reads the same answer", () => {
+      // Asserted after the call: send() swallows anything thrown inside fetch.
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      window.history.replaceState(null, '', `/?b4m_hop=${TOKEN}`);
+
+      beaconVisit();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(mockPublishConsent).toHaveBeenCalledWith('granted');
+      expect(mockPublishConsent.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[0]);
+    });
+
+    it('sends the token, and no source, when consent is declined', () => {
+      mockResolveConsent.mockReturnValue('denied');
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      window.history.replaceState(null, '', `/?b4m_hop=${TOKEN}`);
+
+      beaconVisit();
+
+      expect(sentBody(fetchMock)).toEqual({ hop: TOKEN });
+      expect(mockPublishConsent).toHaveBeenCalledWith('denied');
+    });
+
+    it('holds the token while consent is asked, and sends it with the release', () => {
+      mockResolveConsent.mockReturnValue('unset');
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      window.history.replaceState(null, '', `/?b4m_hop=${TOKEN}`);
+
+      beaconVisit();
+      expect(window.location.search).toBe('');
+      expect(sentBody(fetchMock)).toEqual({ awaitingConsent: true });
+
+      mockResolveConsent.mockReturnValue('granted');
+      releaseVisitBeacon();
+
+      expect(sentBody(fetchMock, 1)).toEqual({ landingPath: '/', hop: TOKEN });
+    });
+
+    it('sends the token once, not with a later beacon', () => {
+      mockResolveConsent.mockReturnValue('unset');
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      window.history.replaceState(null, '', `/?b4m_hop=${TOKEN}`);
+      beaconVisit();
+      releaseVisitBeacon();
+
+      mockResolveConsent.mockReturnValue('granted');
+      beaconVisit();
+
+      expect(sentBody(fetchMock, 1)).toEqual({ hop: TOKEN });
+      expect(sentBody(fetchMock, 2)).toEqual({ landingPath: '/' });
+    });
+
+    it('takes an over-long token off the URL without sending it', () => {
+      const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
+      vi.stubGlobal('fetch', fetchMock);
+      window.history.replaceState(null, '', `/?b4m_hop=${'x'.repeat(200)}`);
+
+      beaconVisit();
+
+      expect(window.location.search).toBe('');
+      expect(sentBody(fetchMock)).toEqual({ landingPath: '/' });
+    });
+
+    it('takes the token off the URL even where the beacon cannot be sent', () => {
+      vi.stubGlobal('fetch', undefined);
+      window.history.replaceState(null, '', `/?b4m_hop=${TOKEN}`);
+
+      beaconVisit();
+
+      expect(window.location.search).toBe('');
+    });
+
+    it('leaves a URL without a token untouched', () => {
+      const replace = vi.spyOn(window.history, 'replaceState');
+      window.history.replaceState(null, '', '/pricing?utm_source=news');
+      replace.mockClear();
+
+      beaconVisit();
+
+      expect(replace).not.toHaveBeenCalled();
+      expect(mockPublishConsent).not.toHaveBeenCalled();
+      replace.mockRestore();
+    });
+  });
+
   it('releases nothing when no beacon is waiting', () => {
     const fetchMock = vi.fn().mockResolvedValue({ status: 204 });
     vi.stubGlobal('fetch', fetchMock);
@@ -201,5 +312,59 @@ describe('beaconVisit', () => {
   it('does nothing where fetch does not exist', () => {
     vi.stubGlobal('fetch', undefined);
     expect(() => beaconVisit()).not.toThrow();
+  });
+});
+
+// The page beacon reads this to decide whether a grant on the landing must name it (pageBeacon.ts).
+describe('visitBeaconLanding', () => {
+  beforeEach(() => window.history.replaceState(null, '', '/pricing'));
+
+  it('is the landing a beacon sent with consent', () => {
+    beaconVisit();
+
+    expect(visitBeaconLanding()).toBe('/pricing');
+  });
+
+  it('is none when the beacon went out without consent', () => {
+    beaconVisit();
+    mockResolveConsent.mockReturnValue('denied');
+    beaconVisit();
+
+    expect(visitBeaconLanding()).toBeUndefined();
+  });
+
+  it('is none while a beacon waits for the answer, and the landing once a grant releases it', () => {
+    mockResolveConsent.mockReturnValue('unset');
+    beaconVisit();
+    expect(visitBeaconLanding()).toBeUndefined();
+
+    mockResolveConsent.mockReturnValue('granted');
+    releaseVisitBeacon();
+
+    expect(visitBeaconLanding()).toBe('/pricing');
+  });
+
+  it('is none when the waiting beacon is released without an answer', () => {
+    mockResolveConsent.mockReturnValue('unset');
+    beaconVisit();
+    setVisibility('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(visitBeaconLanding()).toBeUndefined();
+  });
+
+  it('is none when the request could not be made at all', () => {
+    mockResolveConsent.mockReturnValue('denied');
+    beaconVisit();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => {
+        throw new TypeError('keepalive is not supported');
+      })
+    );
+    mockResolveConsent.mockReturnValue('granted');
+    beaconVisit();
+
+    expect(visitBeaconLanding()).toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@ import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
 import { isWithin, realpathNearest, resolveWithinRoots } from './paths';
 import { writesOwnRepository } from './ownRepository';
-import { scanShell } from './shellScan';
+import { inUngrantedDistro, scanShell, SYSTEM_DISTRO, UNNAMED_DISTRO, WSL_MANAGEMENT } from './shellScan';
 import {
   expectShellRun,
   gitRunsConfiguredProgram,
@@ -15,9 +15,11 @@ import {
   sessionScriptRun,
   shellCommandRan,
 } from './sessionScripts';
-import { commandEnv, launchCommand } from './commandLaunch';
+import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
 import type { SandboxedCommand } from './sandbox';
+import { lowerPriority } from './lowPriority';
+import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   capOutputMiddle,
   optionalNumber,
@@ -75,6 +77,8 @@ export interface RunOptions {
   offerMove?(move: () => BackgroundProcessInfo | null): () => void;
   /** Perform the handover. Required alongside `offerMove`; throwing leaves the command running. */
   adopt?(handover: Handover): BackgroundProcessInfo;
+  /** See ToolContext.lowPriority. */
+  lowPriority?: boolean;
 }
 
 /**
@@ -192,14 +196,15 @@ function runCommand(
   return new Promise((resolve, reject) => {
     const child = spawn(launch.executable, [...launch.args], {
       cwd,
-      // Its own process group, so the timeout reaches the command's children too: signalling
-      // the shell alone would leave whatever it spawned running. It is also what lets the
-      // command be moved to the background intact - see `moveToBackground` below.
-      detached: true,
+      // Its own process group, so the timeout reaches the command's children too and the command
+      // can be moved to the background intact (see `moveToBackground`). `spawnsDetached` says why
+      // a WSL command is not detached.
+      detached: spawnsDetached(launch),
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env,
     });
+    if (options.lowPriority) lowerPriority(child.pid);
 
     const stdout = new CappedOutput();
     const stderr = new CappedOutput();
@@ -419,22 +424,35 @@ export async function shellApproval(
 
   let startDirectory: string;
   const directories: string[] = [];
+  const ungranted: string[] = [];
   try {
     startDirectory = await realpathNearest(await resolveCwd(input, context.roots, context.workingDirectory));
   } catch {
     startDirectory = context.workingDirectory ?? context.roots[0] ?? process.cwd();
-    directories.push(resolve(startDirectory, cwd));
+    const target = resolve(startDirectory, cwd);
+    (inUngrantedDistro(target, context.roots) ? ungranted : directories).push(target);
   }
 
   const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
-  if (!scan) return { detail, key, askInAuto: true };
+  if (!scan) return unreadApproval(tool, command, detail, key, ungranted, [startDirectory, ...context.roots]);
 
   // Recorded before the check, so a script written and run by this same command counts.
   for (const written of scan.writes) await recordSessionWrite(context, written);
   for (const tree of scan.writtenTrees) await recordSessionTreeWrite(context, tree);
-  const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => null);
+  let scriptCheckFailed = false;
+  const script = await sessionScriptRun(command, startDirectory, context.sessionId).catch(() => {
+    scriptCheckFailed = true;
+    return null;
+  });
   const gitProgram = gitRunsConfiguredProgram(scan.commands);
+  const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
+  const named = unreachable.filter(
+    place => place !== UNNAMED_DISTRO && place !== SYSTEM_DISTRO && place !== WSL_MANAGEMENT
+  );
   const reasons = [
+    ...(scriptCheckFailed
+      ? ['Could not check whether it runs code written in this session, so it is asked each time.']
+      : []),
     ...(scan.envFiles.length > 0 ? [`Reads ${scan.envFiles.join(', ')}, which usually holds secrets.`] : []),
     ...(scan.outbound.length > 0 ? [`Can send data off this computer (${scan.outbound.join(', ')}).`] : []),
     ...(script && script.names.length > 0
@@ -446,6 +464,18 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(named.length > 0
+      ? [`Reaches ${named.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`]
+      : []),
+    ...(unreachable.includes(UNNAMED_DISTRO)
+      ? ['Runs wsl in a distro it does not name, which may be one this project has no folder in.']
+      : []),
+    ...(unreachable.includes(SYSTEM_DISTRO)
+      ? ['Runs wsl in the WSL system distro, which no project folder is in.']
+      : []),
+    ...(unreachable.includes(WSL_MANAGEMENT)
+      ? ['Runs wsl with an option that manages WSL itself, such as --shutdown or --unregister.']
+      : []),
   ];
   // A push or gh write to the folder's own origin still says so on the card, but does not stop
   // auto mode; a reply that has read untrusted content asks anyway, as these are never contained.
@@ -456,14 +486,21 @@ export async function shellApproval(
   // not reaching outside the project, so it does not need that folder granted first.
   const main = scan.readOnly && context.workingDirectory ? await mainCheckoutOf(context.workingDirectory) : null;
   const outside = main ? scan.directories.filter(directory => !isWithin(main, directory)) : scan.directories;
-  const asks = scan.envFiles.length > 0 || ownRepository.includes(false) || !!script || !!gitProgram;
+  const asks =
+    scan.envFiles.length > 0 ||
+    ownRepository.includes(false) ||
+    !!script ||
+    scriptCheckFailed ||
+    !!gitProgram ||
+    unreachable.length > 0;
   // An exact "always" for the run lapses when the script is written again.
-  const runKey = script ? `${key}\x00${script.generation}` : key;
+  const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
   return {
     detail: [detail, ...reasons].join('\n\n'),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
+    ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     always: {
       namespace: tool,
@@ -476,6 +513,43 @@ export async function shellApproval(
       })),
       directories: [...new Set([...directories, ...outside])],
       paths: scan.paths ?? [],
+      ungranted: unreachable,
+    },
+  };
+}
+
+/** What `ungranted` holds for a command the scan could not read that may reach a WSL distro. */
+export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
+
+/**
+ * The prompt for a command the scan could not read. It asks in auto mode, and when the command
+ * may reach a WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it also
+ * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
+ */
+function unreadApproval(
+  tool: string,
+  command: string,
+  detail: string,
+  key: string,
+  ungranted: readonly string[],
+  places: readonly string[]
+): ApprovalPrompt {
+  const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
+  const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
+  if (!mayReachDistro) return { detail, key, askInAuto: true };
+  return {
+    detail: [
+      detail,
+      'Could not read this command, so it may reach a WSL distro this project has no folder in. It asks each time.',
+    ].join('\n\n'),
+    key,
+    askInAuto: true,
+    always: {
+      namespace: tool,
+      commands: [{ text: command, pattern: command, coverable: false, words: command }],
+      directories: [],
+      paths: [],
+      ungranted: [...ungranted, UNREAD_WSL_COMMAND],
     },
   };
 }
@@ -601,7 +675,7 @@ export const bashExecute: ToolDefinition = {
     const requestedTimeout = optionalNumber(input, 'timeout');
     const timeoutMs = Math.min(Math.max(requestedTimeout ?? DEFAULT_TIMEOUT_MS, 1_000), MAX_TIMEOUT_MS);
 
-    const launch = await launchCommand(command, context.roots, context.protectedPaths ?? []);
+    const launch = await launchCommand(command, context.roots, context.protectedPaths ?? [], cwd);
     const startedAt = new Date().toISOString();
     let moved = false;
     try {
@@ -609,6 +683,7 @@ export const bashExecute: ToolDefinition = {
       const outcome = await runCommand(launch, cwd, env, timeoutMs, context.signal, {
         ...bashExecuteRunOptions,
         ...movableOptions(context, { command, cwd, startedAt, launch }),
+        ...(context.lowPriority ? { lowPriority: true } : {}),
       });
 
       if (outcome.movedToBackground) {

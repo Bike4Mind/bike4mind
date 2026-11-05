@@ -53,6 +53,8 @@ import {
 } from '@bike4mind/local-models';
 import {
   activeParamsFraction,
+  fitMarginBytes,
+  memoryBudgets,
   ollamaBuildBytes,
   type HubBuild,
   type HubEntry,
@@ -76,7 +78,9 @@ import {
   type HubModelView,
   type HubSearchRequest,
   type HubSearchResult,
+  type GpuMemoryCap,
   type InstalledModelsResult,
+  type LoadedModelState,
   type ModelFit,
   type ModelHubError,
   type ModelHubErrorKind,
@@ -96,7 +100,11 @@ import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/
 import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
 import { serverHardware, withEnteredSpecs } from './enteredHardware';
 import { fitFromArch, fitFromSize, machineView, type FitWhere } from './fit';
+import { loadedStateOf, loadedStateTarget } from './loadedState';
 import { installedProjectorBytes, pinnedProjectorSizes } from './projectorBytes';
+import { catalogSampling } from './catalogSampling';
+import { clearsCap, isLinuxStoreDir, partialLoad } from './wslGpuCap';
+import type { CatalogSampling } from '@shared/generation';
 
 export interface ModelRuntimePort {
   readonly baseUrl: string;
@@ -182,6 +190,10 @@ export interface ModelHubServiceDeps {
   pathExists?: (path: string) => Promise<boolean>;
   /** True while a download to a saved server runs: that server's Ollama stops it if this computer sleeps. */
   keepAwake?: (on: boolean) => void;
+  /** Desktop runs on Windows or inside WSL, so Ollama at this computer's address may run in WSL. */
+  wslHost?: boolean;
+  /** Whether this computer's NVIDIA GPU uses the CPU's memory; null when nvidia-smi cannot say. */
+  integratedGpu?: () => Promise<boolean | null>;
   /** The main log. */
   warn: (message: string) => void;
   /** Minimum gap between progress pushes (ms). */
@@ -689,6 +701,13 @@ export class ModelHubService {
   readonly #stores = new Map<string, string>();
   readonly #pullWaiters = new Set<() => void>();
   #hardware: Promise<HardwareProfile> | null = null;
+  #gpuCap: GpuMemoryCap | null = null;
+  /** A load that looks capped, held while nvidia-smi or the model folder is checked. */
+  #capCandidate: GpuMemoryCap | null = null;
+  #gpuCapReads: Promise<void> = Promise.resolve();
+  /** nvidia-smi's answer for the session, null included; undefined until it settles. */
+  #integrated: boolean | null | undefined = undefined;
+  #integratedAsked = false;
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
@@ -719,6 +738,61 @@ export class ModelHubService {
       rating: specsRate(specs) ? 'entered' : 'probe',
       where: 'local',
     };
+  }
+
+  /** Applies `/api/ps` reads of this computer's Ollama to the WSL GPU memory warning one at a time, in call order. */
+  #watchGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
+    if (!target.local || !this.#deps.wslHost) return Promise.resolve();
+    return this.#queueGpuCap(() => this.#checkGpuCap(target, loaded));
+  }
+
+  #queueGpuCap(step: () => Promise<void>): Promise<void> {
+    this.#gpuCapReads = this.#gpuCapReads.then(step).catch(error => {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.#deps.warn(`MODELS: could not check for a WSL GPU memory limit: ${reason}`);
+    });
+    return this.#gpuCapReads;
+  }
+
+  async #checkGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
+    const { hardware } = await this.#localSizing();
+    const budgets = memoryBudgets(hardware);
+    const found = budgets.cpuOnly ? null : partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
+    if (!found) {
+      if (this.#gpuCap && clearsCap(loaded, this.#gpuCap)) this.#gpuCap = null;
+      if (this.#capCandidate && clearsCap(loaded, this.#capCandidate)) this.#capCandidate = null;
+      return;
+    }
+    if (this.#gpuCap) {
+      this.#gpuCap = found;
+      return;
+    }
+    this.#capCandidate = found;
+    await this.#confirmGpuCap(target);
+  }
+
+  /** nvidia-smi runs once per session, in the background; its answer is applied to the latest candidate. */
+  async #confirmGpuCap(target: Target): Promise<void> {
+    if (!this.#capCandidate) return;
+    if (this.#integrated === undefined) {
+      if (!this.#integratedAsked) {
+        this.#integratedAsked = true;
+        void Promise.resolve()
+          .then(() => this.#deps.integratedGpu?.())
+          .catch(() => null)
+          .then(answer => {
+            this.#integrated = answer ?? null;
+            return this.#queueGpuCap(() => this.#confirmGpuCap(target));
+          });
+      }
+      return;
+    }
+    const store = this.#integrated === true ? await this.storeLocation(target.id) : null;
+    if (store && store.source !== 'default' && isLinuxStoreDir(store.path)) {
+      this.#gpuCap = this.#capCandidate;
+      this.#deps.onInstalledChanged(target.id);
+    }
+    this.#capCandidate = null;
   }
 
   /** Null for a saved server without entered hardware: its models are not rated. */
@@ -994,6 +1068,16 @@ export class ModelHubService {
     return pinnedProjectorSizes(this.#deps.curated());
   }
 
+  /** The curated family sampling for a local model on any local server; chat sends it as a seed. */
+  catalogSampling(
+    name: string,
+    modelBlob?: string,
+    parameters?: string,
+    hasAdapter?: boolean
+  ): CatalogSampling | undefined {
+    return catalogSampling(this.#deps.curated(), name, modelBlob, parameters, hasAdapter);
+  }
+
   /**
    * The list's source status is the caller's to add; this service only sees the manifest. Fit and picks rate the
    * server's entered hardware, or this computer when it has none; `serverId` also sets which Ollama version decides
@@ -1260,11 +1344,8 @@ export class ModelHubService {
     const target = this.#target(serverId);
     if (!target) return { ok: false, error: hubError('not-found', SERVER_GONE) };
     try {
-      const [models, loaded] = await Promise.all([
-        target.runtime.list(),
-        target.runtime.loaded().catch(() => [] as LoadedModel[]),
-      ]);
-      const loadedNames = new Set(loaded.map(entry => entry.name));
+      const [models, loaded] = await Promise.all([target.runtime.list(), target.runtime.loaded().catch(() => null)]);
+      const loadedNames = new Set((loaded ?? []).map(entry => entry.name));
       let fits: (ModelFit | null)[] = models.map(() => null);
       const sizing = await this.#sizing(target);
       if (sizing) {
@@ -1273,14 +1354,31 @@ export class ModelHubService {
         const prefix = `${target.id}\0`;
         for (const key of this.#archs.keys()) if (key.startsWith(prefix) && !keep.has(key)) this.#archs.delete(key);
       }
+      if (loaded) await this.#watchGpuCap(target, loaded);
+      const cap = target.local ? this.#gpuCap : null;
       return {
         ok: true,
         models: models
           .map((model, index) => ({ ...model, loaded: loadedNames.has(model.name), fit: fits[index] }))
           .sort((a, b) => a.name.localeCompare(b.name)),
+        ...(cap ? { gpuMemoryCap: cap } : {}),
       };
     } catch (error) {
       return { ok: false, error: toModelHubError(error) };
+    }
+  }
+
+  /** Polled by the composer while idle on a local model, so any failure is `unknown` rather than an error. */
+  async loadedState(modelId: string): Promise<LoadedModelState> {
+    const where = loadedStateTarget(modelId);
+    const target = where ? this.#target(where.serverId) : null;
+    if (!where || !target || target.management === 'unsupported') return { kind: 'unsupported' };
+    try {
+      const loaded = await target.runtime.loaded();
+      void this.#watchGpuCap(target, loaded);
+      return loadedStateOf(loaded, where.model);
+    } catch {
+      return { kind: 'unknown' };
     }
   }
 

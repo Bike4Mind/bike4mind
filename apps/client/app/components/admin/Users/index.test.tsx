@@ -94,6 +94,64 @@ beforeEach(() => {
 });
 
 describe('UsersTab', () => {
+  it('clears a stored search at once, without writing the old term back while the debounce settles', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data: url === '/api/admin/users' ? { users: [], totalUsers: 0, page: 1, totalPages: 0 } : respond(url),
+    }));
+    act(() => useUsersTab.setState({ params: { ...DEFAULT_USERS_PARAMS, search: 'ada' } }));
+    renderTab();
+    const clearButton = await screen.findByTestId('admin-users-empty-clear-btn');
+
+    const searches: string[] = [];
+    const unsubscribe = useUsersTab.subscribe(state => searches.push(state.params.search));
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(clearButton);
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+      unsubscribe();
+    }
+
+    expect(searches).not.toContain('ada');
+    expect(useUsersTab.getState().params.search).toBe('');
+  });
+
+  it('clears a stored search at once when the anomaly banner review applies its filter', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data:
+        url === '/api/admin/signup-anomaly'
+          ? {
+              since: '2026-10-27T11:00:00.000Z',
+              until: '2026-10-27T12:00:00.000Z',
+              signupCount: 212,
+              apiKeyCount: 3,
+              signupSpike: true,
+              apiKeySpike: false,
+              truncated: false,
+              topDomain: 'example.test',
+            }
+          : respond(url),
+    }));
+    act(() => useUsersTab.setState({ params: { ...DEFAULT_USERS_PARAMS, search: 'ada' } }));
+    renderTab();
+    const reviewButton = await screen.findByTestId('users-review-cluster-btn');
+
+    const searches: string[] = [];
+    const unsubscribe = useUsersTab.subscribe(state => searches.push(state.params.search));
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(reviewButton);
+      act(() => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+      unsubscribe();
+    }
+
+    expect(searches).not.toContain('ada');
+    expect(useUsersTab.getState().params).toMatchObject({ search: '', signedUp: 'hour', groupBy: 'emailDomain' });
+  });
+
   it('renders the summary, the rows and one footer pager', async () => {
     renderTab();
     expect(await screen.findByTestId('admin-users-row-u1')).toBeTruthy();
@@ -229,6 +287,56 @@ describe('UsersTab', () => {
     expect(fakeAdminRouter.search).not.toHaveProperty('verdict');
     expect(fakeAdminRouter.search).not.toHaveProperty('funnelStep');
     expect(screen.queryByTestId('admin-filter-verdict')).toBeNull();
+  });
+
+  it('opens on the AI advisory link as a chip, asks the server for it, and badges the flagged rows', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data:
+        url === '/api/admin/shadow-detections/ai-advisory'
+          ? {
+              since: '2026-11-04T12:00:00.000Z',
+              advisories: [
+                {
+                  userId: 'u1',
+                  detectionId: 'd'.repeat(24),
+                  detector: 'accountCampaign',
+                  abuseProbability: 0.92,
+                  assessedAt: '2026-11-05T11:00:00.000Z',
+                },
+              ],
+              networks: [],
+              mailDomains: [],
+              truncated: false,
+            }
+          : respond(url),
+    }));
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, aiVerdict: 'abuse' }));
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    expect(screen.getByTestId('admin-filter-aiVerdict').textContent).toBe('AI advisory:\u00a0Likely abuse');
+    expect(apiGet).toHaveBeenCalledWith(
+      '/api/admin/users',
+      expect.objectContaining({ params: expect.objectContaining({ aiVerdict: 'abuse' }) })
+    );
+    expect(await screen.findByTestId('admin-users-ai-advisory-u1')).toHaveTextContent('\u2726 AI');
+    expect(screen.queryByTestId('admin-users-ai-advisory-u2')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('admin-filter-clear-aiVerdict-btn'));
+    await waitFor(() => expect(fakeAdminRouter.search).not.toHaveProperty('aiVerdict'));
+  });
+
+  it('keeps the rows and shows no badge when the AI advisory fetch fails', async () => {
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/shadow-detections/ai-advisory') throw new Error('forbidden');
+      return { data: respond(url) };
+    });
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/admin/shadow-detections/ai-advisory'));
+    expect(screen.getByTestId('admin-users-row-u2')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-users-ai-advisory-u1')).toBeNull();
   });
 
   it('reads a single active day as one UTC day', async () => {

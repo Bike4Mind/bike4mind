@@ -14,7 +14,12 @@ import {
   type TokenStore,
 } from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
-import { streamCompletion, supportsPromptCache, withCacheBreakpoints } from './completions';
+import {
+  COMPLETION_HEADER_TIMEOUT_MS,
+  streamCompletion,
+  supportsPromptCache,
+  withCacheBreakpoints,
+} from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
 /** One SSE frame. The blank-line terminator is what the parser splits on. */
@@ -50,6 +55,25 @@ describe('streamCompletion reasoning effort', () => {
   it('sends a prompt cache lifetime under options only when one is set', async () => {
     expect(await sentOptions({ ...REQUEST, cacheTtl: '1h' })).toMatchObject({ cacheTtl: '1h' });
     expect(await sentOptions(REQUEST)).not.toHaveProperty('cacheTtl');
+  });
+
+  it('sends a temperature override under options, and none without one', async () => {
+    expect(await sentOptions({ ...REQUEST, generation: { temperature: 0.3 } })).toMatchObject({ temperature: 0.3 });
+    expect(await sentOptions({ ...REQUEST, thinking: true })).not.toHaveProperty('temperature');
+  });
+
+  it('puts a thinking budget on the thinking request, and nothing when thinking is off', async () => {
+    const budget = { ...REQUEST, generation: { thinkingBudgetTokens: 8192 } };
+    expect((await sentOptions({ ...budget, thinking: true })).thinking).toEqual({ enabled: true, budget_tokens: 8192 });
+    expect(await sentOptions(budget)).not.toHaveProperty('thinking');
+  });
+
+  it('never sends sampling fields the hosted API does not take', async () => {
+    const options = await sentOptions({
+      ...REQUEST,
+      generation: { topP: 0.5, topK: 10, minP: 0.1, repeatPenalty: 1.2 },
+    });
+    expect(Object.keys(options).sort()).toEqual(['stream', 'tools']);
   });
 });
 
@@ -224,6 +248,7 @@ describe('streamCompletion', () => {
     expect(body).not.toHaveProperty('max_tokens');
     expect(body.options).not.toHaveProperty('thinking');
     expect(config.responseType).toBe('stream');
+    expect(config.timeout).toBe(COMPLETION_HEADER_TIMEOUT_MS);
   });
 
   it('sends an output ceiling as the top-level max_tokens the endpoint normalizes', async () => {
@@ -313,6 +338,20 @@ describe('streamCompletion', () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe('Model not enabled for this organization (status 403)');
   });
+
+  it.each(['ECONNABORTED', 'ETIMEDOUT'])(
+    'describes a %s header timeout as a slow server and a stopped turn, not the raw axios text',
+    async code => {
+      const post = vi.fn().mockRejectedValue(new AxiosError('timeout of 120000ms exceeded', code));
+      const instance = { post } as unknown as AxiosInstance;
+
+      const err = await streamCompletion(instance, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+      expect((err as Error).message).toBe(
+        'The Bike4Mind server took too long to start replying, so this turn stopped. Send your message again to continue.'
+      );
+    }
+  );
 });
 
 describe('streamCompletion through the shared authenticated client', () => {
@@ -414,6 +453,19 @@ describe('streamCompletion through the shared authenticated client', () => {
 
     expect(err).toBeInstanceOf(SessionRevokedError);
     expect(adapter).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits longer than the shared client's timeout for headers, and sends a timed-out request only once", async () => {
+    const { axios, adapter } = client(async config => {
+      throw new AxiosError(`timeout of ${config.timeout}ms exceeded`, 'ECONNABORTED', config);
+    });
+    axios.defaults.timeout = 30_000;
+
+    const err = await streamCompletion(axios, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+    expect(adapter).toHaveBeenCalledTimes(1);
+    expect(adapter.mock.calls[0][0].timeout).toBe(COMPLETION_HEADER_TIMEOUT_MS);
+    expect((err as Error).message).toMatch(/took too long to start replying/);
   });
 });
 

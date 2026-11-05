@@ -4,7 +4,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import type { ShadowDetectionSummaryRow } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { ShadowDetectionListResponse, ShadowDetectionRow } from '@client/app/hooks/data/shadowDetections';
+import type {
+  CampaignGroupRow,
+  ShadowDetectionListResponse,
+  ShadowDetectionRow,
+} from '@client/app/hooks/data/shadowDetections';
 
 // The data hooks are mocked so each path is driven directly.
 const m = vi.hoisted(() => ({
@@ -17,7 +21,10 @@ const m = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetections: m.useShadowDetections,
   useShadowDetectionVerdict: () => ({ mutateAsync: m.mutateAsync, isPending: false, error: m.verdictError }),
+  useAbuseAssessments: () => ({ data: [], isPending: false, error: null }),
+  useRequestAbuseAssessment: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
 }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { isAdmin: true } }) }));
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => m.search,
   useNavigate: () => m.navigate,
@@ -37,7 +44,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-import ShadowDetectionsTab from './ShadowDetectionsTab';
+import ShadowDetectionsTab, { formatPaymentAmount } from './ShadowDetectionsTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -60,6 +67,8 @@ const detection = (over: Partial<ShadowDetectionRow> = {}): ShadowDetectionRow =
   network: { ip: '203.0.113.7', asn: 64500, asnOrg: 'Example Hosting', country: 'NL', hosting: true },
   signals: [{ key: 'signups', label: 'Signups from one IP', observed: 3, threshold: 3 }],
   windowMinutes: 180,
+  group: null,
+  payment: null,
   detectedAt: '2026-10-30T10:00:00.000Z',
   verdict: null,
   verdicts: [],
@@ -239,6 +248,165 @@ describe('ShadowDetectionsTab', () => {
       );
     }
     expect(within(actors).getByText('203.0.113.7 / Example Hosting / NL / Hosting')).toBeTruthy();
+  });
+
+  it('links a payment-risk detection to its Stripe payment in the verdict dialog', async () => {
+    const payment = {
+      paymentIntentId: 'pi_123',
+      chargeId: 'ch_123',
+      kind: 'credits' as const,
+      outcome: 'succeeded' as const,
+      amount: 10000,
+      currency: 'usd',
+      riskLevel: 'elevated',
+      livemode: false,
+    };
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [detection({ detector: 'paymentRisk', wouldAction: 'contain', network: null, payment })],
+          summary: [summaryRow({ detector: 'paymentRisk' })],
+        })
+      )
+    );
+    renderTab();
+    const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+    expect(within(row).getByText('Payment risk')).toBeTruthy();
+    expect(within(row).getByTestId(`shadow-detection-stripe-link-${DETECTION_ID}`).getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/test/payments/pi_123'
+    );
+
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    const evidence = await screen.findByTestId('shadow-detection-dialog-payment');
+    expect(within(evidence).getByText('credits payment succeeded, 100.00 USD, Radar risk elevated')).toBeTruthy();
+    expect(within(evidence).getByText('Stripe test mode')).toBeTruthy();
+    expect(within(evidence).getByTestId('shadow-detection-dialog-stripe-link').getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/test/payments/pi_123'
+    );
+  });
+
+  it('links a live-mode payment to the live Stripe Dashboard', () => {
+    const payment = {
+      paymentIntentId: 'pi_123',
+      chargeId: 'ch_123',
+      kind: 'credits' as const,
+      outcome: 'succeeded' as const,
+      amount: 10000,
+      currency: 'usd',
+      riskLevel: 'elevated',
+      livemode: true,
+    };
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [detection({ detector: 'paymentRisk', wouldAction: 'contain', network: null, payment })],
+          summary: [summaryRow({ detector: 'paymentRisk' })],
+        })
+      )
+    );
+    renderTab();
+    const row = screen.getByTestId(`shadow-detection-row-${DETECTION_ID}`);
+    expect(within(row).getByTestId(`shadow-detection-stripe-link-${DETECTION_ID}`).getAttribute('href')).toBe(
+      'https://dashboard.stripe.com/payments/pi_123'
+    );
+  });
+
+  it('formats a payment amount in the currency minor unit', () => {
+    expect(formatPaymentAmount({ amount: 10000, currency: 'usd' })).toBe('100.00 USD');
+    expect(formatPaymentAmount({ amount: 1500, currency: 'jpy' })).toBe('1500 JPY');
+    expect(formatPaymentAmount({ amount: null, currency: 'usd' })).toBe('Unknown amount');
+  });
+
+  const [direct1, direct2, direct3, transitive] = ['b', 'c', 'd', 'e'].map(char => char.repeat(24));
+  const campaignGroup = (): CampaignGroupRow => ({
+    policyVersion: 1,
+    window: { from: '2026-10-27T10:00:00.000Z', to: '2026-10-30T10:00:00.000Z' },
+    firstObservedAt: '2026-10-29T10:00:00.000Z',
+    lastObservedAt: '2026-10-30T10:00:00.000Z',
+    members: [
+      { userId: direct1, membership: 'direct', linkCount: 3, signedUpAt: '2026-10-29T09:00:00.000Z' },
+      { userId: direct2, membership: 'direct', linkCount: 2, signedUpAt: '2026-10-29T09:01:00.000Z' },
+      { userId: direct3, membership: 'direct', linkCount: 2, signedUpAt: '2026-10-29T09:02:00.000Z' },
+      { userId: transitive, membership: 'transitive', linkCount: 1, signedUpAt: '2026-10-29T09:03:00.000Z' },
+    ],
+    links: [],
+    evidence: [
+      {
+        relationship: 'fingerprint',
+        axis: 'client',
+        value: 't13d1516h2_8daaf6152771_02713d6af862',
+        label: 'Client fingerprint t13d1516h2_8daaf6152771_02713d6af862',
+        population: 3,
+        userIds: [direct1, direct2, direct3],
+      },
+    ],
+    ignored: [
+      {
+        relationship: 'mailDomain',
+        value: 'gmail.com',
+        population: 412,
+        reason: 'personalMailProvider',
+        memberCount: 4,
+      },
+    ],
+    unknown: { fingerprint: 1, network: 0 },
+    truncated: false,
+    totals: { direct: 3, transitive: 1, links: 4 },
+  });
+  const openCampaignDialog = async (group: CampaignGroupRow) => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(
+        list({
+          data: [
+            detection({
+              detector: 'accountCampaign',
+              network: null,
+              userIds: [direct1, direct2, direct3, transitive],
+              group,
+            }),
+          ],
+        })
+      )
+    );
+    renderTab();
+    fireEvent.click(screen.getByTestId(`shadow-detection-grade-btn-${DETECTION_ID}`));
+    return screen.findByTestId('shadow-detection-campaign-group');
+  };
+
+  it('shows how each campaign member is linked, and what was discounted, in the verdict dialog', async () => {
+    const evidence = await openCampaignDialog(campaignGroup());
+
+    expect(screen.getByTestId(`shadow-detection-campaign-membership-${transitive}`).textContent).toBe('Transitive');
+    expect(screen.getByTestId(`shadow-detection-campaign-membership-${direct1}`).textContent).toBe('Direct');
+    expect(within(evidence).getByTestId(`shadow-detection-dialog-user-link-${direct1}`).getAttribute('href')).toBe(
+      `/admin/users/${direct1}`
+    );
+    expect(within(evidence).getByText(/3 direct, 1 transitive, 4 links/)).toBeTruthy();
+    expect(
+      within(screen.getByTestId('shadow-detection-campaign-evidence')).getByText(
+        'Client fingerprint t13d1516h2_8daaf6152771_02713d6af862 (3 members; shared by 3 scanned accounts)'
+      )
+    ).toBeTruthy();
+    expect(screen.getByTestId('shadow-detection-campaign-ignored').textContent).toContain(
+      'gmail.com: personal mail provider (4 members; shared by 412 scanned accounts)'
+    );
+    expect(screen.getByTestId('shadow-detection-campaign-unknown').textContent).toBe(
+      'Not captured, so neither for nor against a link: client fingerprint for 1 member.'
+    );
+    expect(screen.queryByTestId('shadow-detection-campaign-truncated')).toBeNull();
+  });
+
+  it('notes a truncated campaign group and hides empty ignored and unknown lists', async () => {
+    await openCampaignDialog({
+      ...campaignGroup(),
+      ignored: [],
+      unknown: { fingerprint: 0, network: 0 },
+      truncated: true,
+    });
+
+    expect(screen.getByTestId('shadow-detection-campaign-truncated')).toBeTruthy();
+    expect(screen.queryByTestId('shadow-detection-campaign-ignored')).toBeNull();
+    expect(screen.queryByTestId('shadow-detection-campaign-unknown')).toBeNull();
   });
 
   it('shows a failed verdict as an error in the dialog', async () => {

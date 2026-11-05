@@ -56,6 +56,8 @@ export function buildExploreContext(options: {
   models: readonly ChatModelOption[];
   sessionModel: string;
   onUsage(usage: ChatUsage): void;
+  /** See CompletionRequest.loopRunId. */
+  loopRunId?: string;
 }): ExploreContext {
   const target = (model: string) => {
     const maxTokens = options.models.find(option => option.id === model)?.maxOutputTokens;
@@ -64,7 +66,14 @@ export function buildExploreContext(options: {
   return {
     ...target(pickExploreModel(options.models, options.sessionModel)),
     fallback: target(options.sessionModel),
-    complete: (request, onEvent, signal) => streamCompletion(options.axios, options.endpoint, request, onEvent, signal),
+    complete: (request, onEvent, signal) =>
+      streamCompletion(
+        options.axios,
+        options.endpoint,
+        options.loopRunId ? { ...request, loopRunId: options.loopRunId } : request,
+        onEvent,
+        signal
+      ),
     addUsage: options.onUsage,
   };
 }

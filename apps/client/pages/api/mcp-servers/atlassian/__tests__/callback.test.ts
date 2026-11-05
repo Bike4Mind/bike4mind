@@ -134,3 +134,43 @@ describe('GET /api/mcp-servers/atlassian/callback - malformed state', () => {
     warnSpy.mockRestore();
   });
 });
+
+describe('GET /api/mcp-servers/atlassian/callback - authorization not completed', () => {
+  const call = async (query: Record<string, string>) => {
+    const { req, res } = createMocks({ method: 'GET', query });
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
+    return res;
+  };
+
+  it('logs a declined consent at warn with only the RFC 6749 code', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await call({ error: 'access_denied', state: 'opaque-state' });
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('oauth_error');
+    expect(warnSpy).toHaveBeenCalledWith('[Atlassian Callback] Authorization not completed', {
+      error: 'access_denied',
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  it('logs a callback with no code at all at warn', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const res = await call({});
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&atlassian=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('missing_code');
+    expect(warnSpy).toHaveBeenCalledWith('[Atlassian Callback] Missing authorization code');
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+});

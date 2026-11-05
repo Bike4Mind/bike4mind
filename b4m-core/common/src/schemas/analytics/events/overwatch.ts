@@ -81,6 +81,11 @@ export type OverwatchUserType = (typeof OVERWATCH_USERTYPE_VALUES)[number];
 // the mark onto that user's per-user rows as a top-level `lane` and never clears
 // it. 'synthetic' is the only value ever written: an absent lane means
 // "unmarked", never a verified real user, so there is no 'real' value.
+//
+// An internal account's events (User.isInternal, or an admin) carry a separate
+// metadata.internal: true instead, never alongside the synthetic lane and never as
+// false. A flag of its own rather than a second lane value, so readers of `lane` are
+// unchanged.
 // ---------------------------------------------------------------------------
 
 export const OVERWATCH_LANE_VALUES = ['synthetic'] as const;
@@ -117,6 +122,15 @@ export type OverwatchLane = (typeof OVERWATCH_LANE_VALUES)[number];
  * first stage that means visits, including visits by users who never sign in.
  */
 export const OVERWATCH_VISIT_EVENT = 'visit';
+
+/**
+ * Event name for a page of a visit after its landing, whether reached in the app or by a full
+ * page load (a new tab, a typed URL, a bookmark, a link, a reload), carrying that visit's
+ * identifier as its sessionId and the page's path as metadata.path. The landing itself is on the
+ * visit event, so a visit's pages are its landing followed by these, and its last event names the
+ * page it ended on. A reload records its page again, so consecutive events can repeat a path.
+ */
+export const OVERWATCH_PAGE_VIEW_EVENT = 'page_view';
 
 /** userId for an event with no identified user. Never fold it into a per-user aggregate. */
 export const OVERWATCH_ANONYMOUS_USER_ID = 'overwatch:anonymous';

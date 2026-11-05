@@ -23,7 +23,7 @@ export function noLocalModels(catalog: {
   runtime?: ModelRuntimeStatus | null;
 }): NoLocalModels | null {
   const { models, loading, runtime } = catalog;
-  if (models.some(model => model.server && !model.unavailable)) return null;
+  if (models.some(model => model.server && (!model.unavailable || model.pending))) return null;
   const down = (): NoLocalModels => ({
     reason: `Ollama is not running at ${runtime?.url ?? 'its default address'}. Start it (open the Ollama app or run "ollama serve"); this checks again every few seconds.`,
     fix: null,

@@ -231,12 +231,6 @@ describe('first-session feature defaults', () => {
 
 describe('public settings projection (M2.5 security boundary)', () => {
   describe('userReadableSettingKeys', () => {
-    it('includes the no-card unlock flags the billing card reads', () => {
-      const keys = new Set(userReadableSettingKeys());
-      expect(keys.has('noCardUnlockEnabled')).toBe(true);
-      expect(keys.has('noCardUnlockProbeInconclusiveAllows')).toBe(true);
-    });
-
     it('excludes admin-only operational config a non-admin has no claim to', () => {
       // These carry no `isSensitive` flag, which is exactly why the previous opt-OUT
       // filter served them to every authenticated caller.
@@ -931,6 +925,24 @@ describe('Credits System group', () => {
   it('is not repeated in the User Management index', () => {
     expect(API_SERVICE_GROUPS.USER_MANAGEMENT.settings.map(entry => entry.key)).not.toContain('enforceCredits');
   });
+
+  describe.each(['signupGrantSignupPoolDaily', 'signupGrantTricklePoolDaily'] as const)('%s', key => {
+    it.each([-1, 1.5, '-5', 'abc'])('rejects %j', value => {
+      expect(settingsMap[key].schema.safeParse(value).success).toBe(false);
+    });
+
+    it('accepts 0 and positive whole credits', () => {
+      expect(settingsMap[key].schema.safeParse(0).success).toBe(true);
+      expect(settingsMap[key].schema.safeParse(2500).success).toBe(true);
+      expect(settingsMap[key].schema.safeParse('2500').success).toBe(true);
+    });
+
+    it('is indexed in the Credits group with an order no sibling reuses', () => {
+      expect(API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.key)).toContain(key);
+      const orders = API_SERVICE_GROUPS.CREDITS.settings.map(entry => entry.order);
+      expect(new Set(orders).size).toBe(orders.length);
+    });
+  });
 });
 
 describe('kbSearchDefaultResults agrees with the search_knowledge_base tool fallback (#1831)', () => {
@@ -1492,6 +1504,16 @@ describe('BedrockNews Headword reward settings', () => {
   ] as const)('%s defaults to %s', (key, expected) => {
     expect(settingsMap[key].defaultValue).toBe(expected);
   });
+
+  it('keeps the partner key sensitive and only the site URL user-readable', () => {
+    expect(settingsMap.BedrockNewsPartnerKey.isSensitive).toBe(true);
+    expect(settingsMap.BedrockNewsPartnerKey.userReadable).toBeFalsy();
+    expect(settingsMap.BedrockNewsApiUrl.userReadable).toBeFalsy();
+    expect(settingsMap.BedrockNewsAppUrl.userReadable).toBe(true);
+    for (const key of ['BedrockNewsApiUrl', 'BedrockNewsAppUrl', 'BedrockNewsPartnerKey'] as const) {
+      expect(settingsMap[key].defaultValue).toBe('');
+    }
+  });
 });
 
 describe('spend monitor settings', () => {
@@ -1505,6 +1527,8 @@ describe('spend monitor settings', () => {
     spendMonitorAccountSpikeRatio: 10,
     spendMonitorAccountSpikeFloorCredits: 1000,
     spendMonitorAccountCeilingCredits: 5000,
+    spendMonitorTrustedAccountSpikeFloorCredits: 20_000,
+    spendMonitorTrustedAccountCeilingCredits: 40_000,
   } as const;
 
   it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
@@ -1519,14 +1543,28 @@ describe('spend monitor settings', () => {
     'spendMonitorPlatformCostFloorUsd',
     'spendMonitorAccountSpikeFloorCredits',
     'spendMonitorAccountCeilingCredits',
+    'spendMonitorTrustedAccountSpikeFloorCredits',
+    'spendMonitorTrustedAccountCeilingCredits',
   ] as const)('%s rejects 0 and accepts 1', key => {
     expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
     expect(settingsMap[key].schema.parse(1)).toBe(1);
   });
 
+  it.each(['spendMonitorTrustedEmailDomains', 'spendMonitorTrustedAccountIds'] as const)(
+    '%s defaults to an empty list in the CREDITS group',
+    key => {
+      expect(settingsMap[key].defaultValue).toBe('');
+      expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+    }
+  );
+
   it('keeps the settings admin-only', () => {
     const readable = new Set(userReadableSettingKeys());
-    for (const key of Object.keys(expectedDefaults)) {
+    for (const key of [
+      ...Object.keys(expectedDefaults),
+      'spendMonitorTrustedEmailDomains',
+      'spendMonitorTrustedAccountIds',
+    ]) {
       expect(readable.has(key as never)).toBe(false);
     }
   });
@@ -1547,10 +1585,41 @@ describe('stageHiddenSettingKeys', () => {
       'signupGrantActivityMinDays',
       'signupGrantActivityMinMessages',
       'signupGrantActivityPreviewTestMode',
+      'signupGrantDailyBudget',
     ]);
   });
 
   it('hides nothing elsewhere', () => {
     expect(stageHiddenSettingKeys(false)).toEqual([]);
+  });
+});
+
+describe('per-call provider cost settings (billed web_search / web_fetch)', () => {
+  it('default to the public list prices in USD', () => {
+    expect(settingsMap.SerpApiSearchCostUsd.schema.parse(undefined)).toBe(0.015);
+    expect(settingsMap.FirecrawlFetchCostUsd.schema.parse(undefined)).toBe(0.002);
+  });
+
+  it('say in their descriptions that the default is a list price', () => {
+    expect(settingsMap.SerpApiSearchCostUsd.description).toMatch(/list price/);
+    expect(settingsMap.FirecrawlFetchCostUsd.description).toMatch(/list price/);
+  });
+
+  it.each(['SerpApiSearchCostUsd', 'FirecrawlFetchCostUsd'] as const)(
+    '%s accepts a fractional plan cost and 0',
+    key => {
+      expect(settingsMap[key].schema.parse('0.0042')).toBe(0.0042);
+      expect(settingsMap[key].schema.parse('0')).toBe(0);
+    }
+  );
+
+  it.each(['SerpApiSearchCostUsd', 'FirecrawlFetchCostUsd'] as const)('%s refuses a negative or absurd cost', key => {
+    expect(settingsMap[key].schema.safeParse('-0.01').success).toBe(false);
+    expect(settingsMap[key].schema.safeParse('15').success).toBe(false);
+  });
+
+  it('puts the search cost beside the other search provider settings', () => {
+    expect(API_SERVICE_GROUPS.SEARCH.settings.map(s => s.key)).toContain('SerpApiSearchCostUsd');
+    expect(settingsMap.SerpApiSearchCostUsd.group).toBe(API_SERVICE_GROUPS.SEARCH.id);
   });
 });

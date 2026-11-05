@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AdminUserListItem } from './adminUserProjection';
 import type { EmailDomainGroup } from './signupAnomaly';
+import { USER_AI_VERDICT_FILTERS } from './aiAdvisory';
 
 /**
  * The admin users list's filter contract, shared by the list page, GET /api/admin/users and the
@@ -11,7 +12,7 @@ import type { EmailDomainGroup } from './signupAnomaly';
 export const USER_STATUS_FILTERS = ['active', 'suspended', 'restricted'] as const;
 export const USER_PLAN_FILTERS = ['DemoUser', 'PaidUser', 'VIPUser', 'ManagerUser', 'AdminUser'] as const;
 /** `email` means no external identity provider. */
-export const USER_SIGNUP_METHOD_FILTERS = ['email', 'google', 'github', 'facebook', 'okta', 'saml'] as const;
+export const USER_SIGNUP_METHOD_FILTERS = ['email', 'google', 'github', 'facebook', 'apple', 'okta', 'saml'] as const;
 export const USER_SIGNED_UP_FILTERS = ['hour', 'day', 'week', 'month'] as const;
 export const USER_RISK_FILTERS = ['high', 'medium', 'low'] as const;
 export const YES_NO_FILTERS = ['yes', 'no'] as const;
@@ -96,6 +97,8 @@ export const AdminUsersFilterFieldsSchema = z.object({
   // Classified live over the created window, which both need.
   verdict: z.enum(USER_VERDICT_FILTERS).optional(),
   funnelStep: z.enum(USER_FUNNEL_STEP_FILTERS).optional(),
+  // Accounts the AI advisory currently flags (see listAiAbuseAdvisories); needs no window of its own.
+  aiVerdict: z.enum(USER_AI_VERDICT_FILTERS).optional(),
   // UTC days with AI activity, both ends inclusive; set together.
   activeFrom: utcDay.optional(),
   activeTo: utcDay.optional(),

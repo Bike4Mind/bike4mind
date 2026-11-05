@@ -2,6 +2,7 @@ import {
   DEGENERATE_FINISH_REASON,
   isProviderRefusalStopReason,
   TRUNCATED_FINISH_REASON,
+  unwrapToolErrorText,
   type UsageEventStatus,
 } from '@bike4mind/common';
 
@@ -65,6 +66,16 @@ export const INCOMPLETE_ANSWER_NOTICE = 'The response ended before an answer was
 export const TRUNCATED_ANSWER_NOTICE =
   'The response hit the output length limit before an answer was written. Please try again, or ask for a shorter answer.';
 
+/** Cap on the tool error text shown in the failed-tool notice. */
+export const TOOL_FAILED_NOTICE_MAX_CHARS = 500;
+
+function toolFailedNotice({ name, message }: { name: string; message: string }): string {
+  let text = unwrapToolErrorText(message).trim();
+  if (!text) return INCOMPLETE_ANSWER_NOTICE;
+  if (text.length > TOOL_FAILED_NOTICE_MAX_CHARS) text = `${text.slice(0, TOOL_FAILED_NOTICE_MAX_CHARS)}...`;
+  return `The ${name} tool failed: ${text}`;
+}
+
 export interface AnswerCompletenessInput {
   /** A stopped turn ended because the user asked it to, so an empty answer is expected. */
   stopped: boolean;
@@ -83,6 +94,8 @@ export interface AnswerCompletenessInput {
    * which the adapter does only after the round streamed answer text, so the answer precedes the call.
    */
   endedOnAnswerTool: boolean;
+  /** Set when the last tool call failed; shown in place of the generic notice. */
+  lastToolError?: { name: string; message: string };
 }
 
 /**
@@ -96,6 +109,8 @@ export function buildIncompleteAnswerNotice(input: AnswerCompletenessInput): str
   if (input.stopped || input.producedNonTextDeliverable || input.visibleCharsAfterLastToolCall > 0) return null;
   if (input.endedOnAnswerTool) return null;
   if (input.stopReason === TRUNCATED_FINISH_REASON) return TRUNCATED_ANSWER_NOTICE;
-  if (input.toolCallCount > 0) return INCOMPLETE_ANSWER_NOTICE;
+  if (input.toolCallCount > 0) {
+    return input.lastToolError ? toolFailedNotice(input.lastToolError) : INCOMPLETE_ANSWER_NOTICE;
+  }
   return null;
 }

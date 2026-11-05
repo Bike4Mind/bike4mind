@@ -69,6 +69,7 @@ export * from './FeedbackTypes';
 export * from './OrgFeedbackSummaryTypes';
 export * from './ModalTypes';
 export * from './RegistrationInviteType';
+export * from './GrantPackageTypes';
 export * from './CounterTypes';
 export * from './IdentityProviderTypes';
 export * from './LLMTypes';
@@ -132,6 +133,7 @@ export * from './AdminAuditLogTypes';
 export * from './adminActionReason';
 export * from './adminAuditCatalogue';
 export * from './adminAuditQuery';
+export * from './adminAuditReview';
 export * from './adminUserActivity';
 export * from './adminUserTimeline';
 

@@ -13,6 +13,7 @@ import { useAuthState } from '../auth/useAuthState';
 import { ChatShell } from '../chat/ChatShell';
 import { AppUpdateNotice } from '../chat/UpdateNotice';
 import { isLocalChatActive, setLocalChatActive } from './localChatMode';
+import { centeredScreenSx } from './centeredScreenSx';
 
 export function Home() {
   const state = useAuthState();
@@ -72,7 +73,7 @@ export function Home() {
   }
 
   return (
-    <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', bgcolor: 'background.body', p: 3 }}>
+    <Box sx={centeredScreenSx}>
       <Card variant="outlined" sx={{ width: 'min(520px, 100%)', gap: 2 }}>
         {!state || state.status === 'initializing' ? (
           <Stack direction="row" spacing={1.5} alignItems="center" data-testid="auth-loading-stack">

@@ -23,10 +23,13 @@ export class SessionActivity {
   /** sessionId -> approvals outstanding. One turn can put several tools at the gate at once. */
   private readonly awaiting = new Map<string, number>();
 
+  /** Sessions with a relayed message waiting on their user, who is the one holding it up. */
+  private readonly held = new Set<string>();
+
   constructor(private readonly onChange: (event: ChatSessionStatusEvent) => void) {}
 
   statusOf(sessionId: string): ChatSessionStatus {
-    if ((this.awaiting.get(sessionId) ?? 0) > 0) return 'needs-action';
+    if ((this.awaiting.get(sessionId) ?? 0) > 0 || this.held.has(sessionId)) return 'needs-action';
     return this.replying.has(sessionId) || this.preparing.has(sessionId) ? 'processing' : 'done';
   }
 
@@ -37,7 +40,7 @@ export class SessionActivity {
    * per busy conversation rather than one per conversation that has ever existed.
    */
   snapshot(): ChatSessionStatusEvent[] {
-    const ids = new Set([...this.replying, ...this.preparing, ...this.awaiting.keys()]);
+    const ids = new Set([...this.replying, ...this.preparing, ...this.awaiting.keys(), ...this.held]);
     const events: ChatSessionStatusEvent[] = [];
     for (const sessionId of ids) {
       const status = this.statusOf(sessionId);
@@ -78,6 +81,10 @@ export class SessionActivity {
     });
   }
 
+  heldChanged(sessionId: string, waiting: boolean): void {
+    this.transition(sessionId, () => (waiting ? this.held.add(sessionId) : this.held.delete(sessionId)));
+  }
+
   /**
    * Drop a deleted conversation. Silent on purpose: the row whose status it would announce is
    * already gone from the sidebar by the time this runs.
@@ -86,6 +93,7 @@ export class SessionActivity {
     this.replying.delete(sessionId);
     this.preparing.delete(sessionId);
     this.awaiting.delete(sessionId);
+    this.held.delete(sessionId);
   }
 
   private transition(sessionId: string, mutate: () => void): void {

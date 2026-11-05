@@ -110,6 +110,8 @@ vi.mock('@server/analytics/signupEvents', () => ({
 }));
 const { reverseReward } = vi.hoisted(() => ({ reverseReward: vi.fn() }));
 vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: reverseReward }));
+const { reverseStanding } = vi.hoisted(() => ({ reverseStanding: vi.fn() }));
+vi.mock('@server/billing/purchaseReversal', () => ({ reversePurchaseStanding: reverseStanding }));
 vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
@@ -635,9 +637,44 @@ describe('charge.refunded - inviter reward', () => {
     expect(reverseReward).toHaveBeenCalledWith(expect.objectContaining({ amountCaptured: 3000 }));
   });
 
+  it('reverses the purchase standing only once the whole charge is refunded', async () => {
+    await deliver(refundedCharge({ refunded: false }));
+    expect(reverseStanding).not.toHaveBeenCalled();
+
+    await deliver(refundedCharge({ refunded: true, amount_refunded: 3000 }));
+    expect(reverseStanding).toHaveBeenCalledExactlyOnceWith({ paymentIntentId: 'pi_1', reason: 'refunded' }, logger);
+  });
+
+  it('still runs the payer-side refund steps when the standing reversal fails, then fails the event', async () => {
+    reverseStanding.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(refundedCharge({ refunded: true }))).rejects.toThrow('mongo down');
+    expect(mocks.findByPaymentIntentId).toHaveBeenCalledWith('pi_1');
+  });
+
   it('leaves the reward alone when the charge has no payment intent', async () => {
     await deliver(refundedCharge({ payment_intent: null }));
     expect(reverseReward).not.toHaveBeenCalled();
+  });
+
+  it('runs the payer-side refund steps and still fails the event when the reward take-back fails persistently', async () => {
+    reverseReward.mockRejectedValueOnce(new Error('mongo down')).mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(refundedCharge())).rejects.toThrow('mongo down');
+    expect(mocks.findByPaymentIntentId).toHaveBeenCalledWith('pi_1');
+
+    await expect(deliver(refundedCharge())).rejects.toThrow('mongo down');
+    expect(reverseReward).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies the reward take-back on the redelivery after a transient failure', async () => {
+    reverseReward.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(refundedCharge())).rejects.toThrow('mongo down');
+
+    const res = await deliver(refundedCharge());
+    expect(res._getStatusCode()).toBe(200);
+    expect(reverseReward).toHaveBeenCalledTimes(2);
   });
 
   it('still hands the refund to the inviter reward when the charge carries no refund list', async () => {
@@ -683,5 +720,30 @@ describe('charge.dispute.created - inviter reward', () => {
   it('leaves the reward alone when the dispute has no payment intent', async () => {
     await deliver(dispute({ payment_intent: null }));
     expect(reverseReward).not.toHaveBeenCalled();
+  });
+
+  it('runs the payer clawback and still fails the event when the reward reversal fails persistently', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: false });
+    reverseReward.mockRejectedValueOnce(new Error('mongo down')).mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(dispute())).rejects.toThrow('mongo down');
+    expect(mocks.subtractCredits).toHaveBeenCalledOnce();
+    expect(mocks.flagDisputePending).toHaveBeenCalledOnce();
+
+    await expect(deliver(dispute())).rejects.toThrow('mongo down');
+    expect(reverseReward).toHaveBeenCalledTimes(2);
+  });
+
+  it('applies the reversal on the redelivery after a transient failure', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: false });
+    reverseReward.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(dispute())).rejects.toThrow('mongo down');
+
+    const res = await deliver(dispute());
+    expect(res._getStatusCode()).toBe(200);
+    expect(reverseReward).toHaveBeenCalledTimes(2);
   });
 });

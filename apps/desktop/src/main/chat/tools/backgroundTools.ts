@@ -131,6 +131,7 @@ export const bashBackground: ToolDefinition = {
       roots: context.roots,
       protectedPaths: context.protectedPaths ?? [],
       wakeOnExit: true,
+      ...(context.lowPriority ? { lowPriority: true } : {}),
     });
 
     await registry.settle(started.id, SETTLE_MS);

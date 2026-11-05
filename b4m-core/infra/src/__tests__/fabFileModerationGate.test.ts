@@ -146,9 +146,17 @@ const ALLOWLIST: Record<string, string> = {
   'apps/client/server/s3/knowledgeModerationDeps.ts':
     'the moderation scanner wiring - downloads bytes to RUN the scan and PRODUCE moderationStatus (its closures are handed to moderateImportedKnowledgeFiles / the rescue sweep), never returns them to a client; cannot gate on isImageServeable (circular - it is what sets that field)',
 
+  // --- The reviewer's own view of a blocked upload: the point is to see the image the scanner
+  // refused, so it cannot gate on isImageServeable. Reachable only through a full admin on a
+  // freshly verified session, audited before the link is signed, 5 minute inline-only link. ---
+  'apps/client/server/moderation/incidentImageLink.ts':
+    'admin moderation review of a blocked upload - must read the image isImageServeable refuses; full admin + step-up only, audited per view, 5 minute inline-only raster link',
+
   // --- Not FabFile content: the bucket is shared, but the key is a server-rendered CSV. ---
   'apps/client/server/utils/adminAuditExportStorage.ts':
     'signs a server-rendered admin audit-log CSV it just staged under exports/ for a platform admin - not user-uploaded FabFile bytes, so there is no moderationStatus to gate on',
+  'apps/client/pages/api/users/me/data-export/[jobId].ts':
+    "signs the caller's own account data export zip under exports/ - not a FabFile row; the worker that built it already left out files that are not isImageServeable",
 
   // --- DI passthroughs: the file only wires a storage closure; the actual gate lives
   // in the shared service function the closure is handed to. ---
@@ -156,10 +164,10 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFilesByQuest -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/quests/[id]/files and GET /api/v1/quests/[id]/files, the latter also gating download_url on isImageServeable in toPublicFile',
   'apps/client/pages/api/sessions/[id]/files.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFilesBySession -> getFabFile, gated via the generateSignedUrl choke in fabFileService/get.ts',
-  'apps/client/pages/api/files/search.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
-  'apps/client/pages/api/files/byIds.ts':
-    'DI passthrough — generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts',
+  'apps/client/server/files/searchFilesForRequest.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/search and GET /api/v1/files/search',
+  'apps/client/server/files/listFilesByIds.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.listFabFiles, gated via the generateSignedUrl choke in fabFileService/get.ts; shared by GET /api/files/byIds and GET /api/v1/files/by-ids',
   'apps/client/pages/api/files/index.ts':
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
   'apps/client/server/files/updateFileForUser.ts':

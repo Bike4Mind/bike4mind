@@ -1,17 +1,21 @@
-import { Suspense, useState, type ReactNode } from 'react';
-import { Outlet, useLocation, useNavigate } from '@tanstack/react-router';
+import { Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { Outlet, useLocation, useNavigate, useRouterState } from '@tanstack/react-router';
 import { useShallow } from 'zustand/react/shallow';
 import MenuIcon from '@mui/icons-material/Menu';
 import { Box, Drawer, IconButton, Sheet, Typography } from '@mui/joy';
+import { isFullAdmin } from '@bike4mind/common';
 import RestrictedPage from '@client/app/components/common/RestrictedPage';
 import { ProviderBundle } from '@client/app/contexts/ProviderBundle';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useLiveOpsTriageEnv } from '@client/app/hooks/data/admin';
 import { useGetWaitingSubscribersCount } from '@client/app/hooks/data/subscribers';
+import { useUnreviewedAuditCount } from '@client/app/hooks/data/adminAuditLog';
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
 import { AdminTab } from './adminSidebarConfig';
+import { canEnterAdminConsole, canOpenAdminTab } from './adminTabPermissions';
 import { environmentChipLabel, resolveCurrentEnvironment } from './environmentBanner';
 import { adminTabToSlug } from './adminTabSlugs';
 import { adminFocus, adminScrollGutter } from './shared/adminStyles';
@@ -27,6 +31,14 @@ export const isAdminUserProfilePath = (pathname: string) => pathname.startsWith(
 
 /** Subscription detail pages (including the by-stripe resolver) belong to the Subscriptions tab. */
 export const isAdminSubscriptionDetailPath = (pathname: string) => pathname.startsWith('/admin/subscriptions/');
+
+/** The tab a detail page belongs to, or undefined off a detail page. */
+const detailPageTabFor = (pathname: string): AdminTab | undefined =>
+  isAdminUserProfilePath(pathname)
+    ? AdminTab.Users
+    : isAdminSubscriptionDetailPath(pathname)
+      ? AdminTab.Subscriptions
+      : undefined;
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -53,15 +65,29 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const isAdmin = !!currentUser?.isAdmin;
   const { data: liveOpsEnv } = useLiveOpsTriageEnv(isAdmin);
   const waitingSubscribers = useGetWaitingSubscribersCount({ enabled: isAdmin });
+  const impersonating = useAccessToken(s => s.impersonating);
+  const unreviewedAudit = useUnreviewedAuditCount({ enabled: isFullAdmin(currentUser) && !impersonating });
   const newSubscriptions = useNewSubscriptionsDot(isAdmin);
   const { collapsed, toggleCollapsed } = useAdminSidebarCollapsed();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const activeTab = isAdminUserProfilePath(pathname)
-    ? AdminTab.Users
-    : isAdminSubscriptionDetailPath(pathname)
-      ? AdminTab.Subscriptions
-      : storedActiveTab;
+  const detailPageTab = detailPageTabFor(pathname);
+  const activeTab = detailPageTab ?? storedActiveTab;
+
+  // A detail page belongs to its tab, so a delegate who cannot open that tab cannot open the page.
+  const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
+  const isDetailPageDenied = (path: string) => {
+    const tab = detailPageTabFor(path);
+    return tab !== undefined && !canOpenTab(tab);
+  };
+  // The outlet draws the matched route, which trails the location while the redirect commits, so
+  // check both: one render of a denied page would already fire its requests.
+  const renderedPathname = useRouterState({ select: state => state.matches.at(-1)?.pathname ?? '' });
+  const locationDenied = isDetailPageDenied(pathname);
+  const detailPageDenied = locationDenied || isDetailPageDenied(renderedPathname);
+  useEffect(() => {
+    if (locationDenied) navigate({ to: ADMIN_CONSOLE_PATH, replace: true });
+  }, [locationDenied, navigate]);
 
   const selectTab = (tab: AdminTab) => {
     setDrawerOpen(false);
@@ -74,7 +100,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
   const account = currentUser
     ? {
         name: currentUser.name || currentUser.username || currentUser.email || 'Admin',
-        role: 'Admin',
+        role: isAdmin ? 'Admin' : 'Delegated admin',
         photoUrl: currentUser.photoUrl ?? undefined,
       }
     : undefined;
@@ -85,9 +111,11 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
     enableUserMigration,
     showLiveOpsTriageTab: liveOpsEnv?.showTab ?? false,
     waitingSubscribersCount: waitingSubscribers.data?.count,
+    unreviewedAuditCount: unreviewedAudit.data,
     // No dot on the tab the admin is looking at; a row started meanwhile lights it once they leave.
     newSubscriptions: newSubscriptions && activeTab !== AdminTab.Subscriptions,
     hiddenNotifications,
+    canOpenTab,
     onTabSelect: selectTab,
     environmentLabel: environmentChipLabel[resolveCurrentEnvironment().environment],
   };
@@ -138,7 +166,9 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
                 Admin
               </Typography>
             </Box>
-            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>{children}</Box>
+            <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto', ...adminScrollGutter }}>
+              {detailPageDenied ? null : children}
+            </Box>
           </Box>
         </Box>
         <Drawer
@@ -163,7 +193,7 @@ export const AdminLayout = ({ children, enableUserMigration = false }: AdminLayo
  * here once, so no admin child route can render outside them or without the sidebar.
  */
 export const AdminLayoutRoute = ({ fallback }: { fallback: ReactNode }) => (
-  <RestrictedPage requireAdmin>
+  <RestrictedPage requireAccess={canEnterAdminConsole}>
     {/* Mounted only behind the guard, so an unauthorised visit does not trigger their fetches. */}
     <ProviderBundle>
       <AdminLayout>

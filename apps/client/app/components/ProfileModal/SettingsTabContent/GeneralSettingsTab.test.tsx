@@ -1,8 +1,9 @@
 import React from 'react';
-import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import GeneralSettingsTab from './GeneralSettingsTab';
 
 const mutation = { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false };
@@ -45,15 +46,10 @@ vi.mock('@/app/components/ProfileModal/NotebookExportModal', () => ({ default: (
 vi.mock('@/app/components/ProfileModal/NotebookImportModal', () => ({ default: () => null }));
 vi.mock('@/app/components/ProfileModal/NotebookCurationModal', () => ({ default: () => null }));
 vi.mock('@/app/components/ProfileModal/ImportHistoryJobsList', () => ({ default: () => null }));
-vi.mock('./MfaCard', () => ({ default: () => <div data-testid="mfa-card-stub" /> }));
 vi.mock('./VoicePreferenceSection', () => ({ default: () => null }));
-vi.mock('./ActiveSessionsSection', () => ({ default: () => null }));
-vi.mock('../SecurityTab/tabs/SupportAccessActivity', () => ({
-  SupportAccessActivity: () => <div data-testid="support-access-activity" />,
-}));
-vi.mock('./ApprovedAppsSection', () => ({ default: () => null }));
 vi.mock('./DocxTemplateSection', () => ({ default: () => null }));
 vi.mock('./WorkspaceVisibilitySection', () => ({ default: () => null }));
+vi.mock('./DownloadAccountDataRow', () => ({ default: () => <div data-testid="download-account-data-stub" /> }));
 vi.mock('../ExperimentalFeatureToggle', () => ({ default: () => null }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -63,14 +59,6 @@ const renderTab = () =>
       <GeneralSettingsTab />
     </CssVarsProvider>
   );
-
-describe('GeneralSettingsTab security section', () => {
-  it('mounts the MFA card inside the Security section', () => {
-    renderTab();
-    expect(within(screen.getByTestId('settings-security-section')).getByTestId('mfa-card-stub')).toBeTruthy();
-    expect(within(screen.getByTestId('settings-security-section')).getByTestId('support-access-activity')).toBeTruthy();
-  });
-});
 
 describe('GeneralSettingsTab danger zone', () => {
   beforeEach(() => {
@@ -143,5 +131,25 @@ describe('GeneralSettingsTab danger zone', () => {
     });
     expect(screen.queryByTestId('delete-all-notebooks-confirm')).toBeNull();
     expect(screen.queryByTestId('delete-all-files-confirm')).toBeNull();
+  });
+});
+
+describe('GeneralSettingsTab delete account', () => {
+  afterEach(() => useAccessToken.setState({ impersonating: false }));
+
+  it('shows the delete account button for the account owner', () => {
+    renderTab();
+    expect(screen.getByTestId('settings-delete-account-btn')).toBeTruthy();
+    expect(screen.getByTestId('download-account-data-stub')).toBeTruthy();
+    expect(screen.getByTestId('settings-danger-zone').textContent).toContain('first use Download your data above');
+  });
+
+  it('hides the delete account button while impersonating', () => {
+    useAccessToken.setState({ impersonating: true });
+    renderTab();
+    expect(screen.queryByTestId('settings-delete-account-btn')).toBeNull();
+    expect(screen.queryByTestId('download-account-data-stub')).toBeNull();
+    expect(screen.getByTestId('settings-delete-all-notebooks-btn')).toBeTruthy();
+    expect(screen.getByTestId('settings-danger-zone').textContent).not.toContain('Download your data');
   });
 });

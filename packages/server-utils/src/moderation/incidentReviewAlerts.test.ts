@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ImageModerationIncident } from '@bike4mind/common';
-import { withReviewerAlerts, type IncidentReviewAlertDeps, type RecordedIncident } from './incidentReviewAlerts';
+import {
+  renderIncidentReminderDigest,
+  withReviewerAlerts,
+  type IncidentReviewAlertDeps,
+  type RecordedIncident,
+} from './incidentReviewAlerts';
 
 const INPUT: ImageModerationIncident = {
   userId: 'user-7f3a',
@@ -14,7 +19,7 @@ const INPUT: ImageModerationIncident = {
 };
 
 const CREATED_AT = new Date('2026-10-19T12:34:56.000Z');
-const REVIEW_LINK = 'https://app.example/admin?tab=users&amp;incidentId=incident-123';
+const REVIEW_LINK = 'https://app.example/admin?tab=moderation-incidents&amp;incidentId=incident-123';
 
 function setup(overrides: Partial<IncidentReviewAlertDeps> = {}) {
   const recorded: RecordedIncident = { ...INPUT, id: 'incident-123', createdAt: CREATED_AT };
@@ -94,18 +99,21 @@ describe('withReviewerAlerts', () => {
     });
   });
 
-  it('does not alert for an incident recorded with a verdict already set', async () => {
-    const { deps, incidents } = setup();
-    vi.mocked(deps.incidents.record).mockResolvedValue({
-      id: 'incident-123',
-      createdAt: CREATED_AT,
-      reviewStatus: 'false_positive',
-    });
+  it.each(['false_positive', 'no_action'] as const)(
+    'does not alert for an incident recorded with a %s verdict already set',
+    async reviewStatus => {
+      const { deps, incidents } = setup();
+      vi.mocked(deps.incidents.record).mockResolvedValue({
+        id: 'incident-123',
+        createdAt: CREATED_AT,
+        reviewStatus,
+      });
 
-    await incidents.record(INPUT);
+      await incidents.record(INPUT);
 
-    expect(deps.sendEmail).not.toHaveBeenCalled();
-  });
+      expect(deps.sendEmail).not.toHaveBeenCalled();
+    }
+  );
 
   it('never includes image data, links to stored files, or user content in the alert', async () => {
     const { deps, incidents } = setup();
@@ -235,7 +243,7 @@ describe('withReviewerAlerts', () => {
 
     await incidents.record(INPUT);
 
-    expect(sentEmail(deps).html).toContain('/admin?tab=users&amp;incidentId=incident-123');
+    expect(sentEmail(deps).html).toContain('/admin?tab=moderation-incidents&amp;incidentId=incident-123');
   });
 
   it('renders an unknown surface and escapes the incident id', async () => {
@@ -248,5 +256,20 @@ describe('withReviewerAlerts', () => {
     expect(html).toContain('unknown');
     expect(html).toContain('incident-&lt;script&gt;&amp;');
     expect(html).not.toContain('<script>');
+  });
+});
+
+describe('renderIncidentReminderDigest', () => {
+  it('carries a count, an age and a link, and nothing about any incident', () => {
+    const email = renderIncidentReminderDigest(
+      { pendingCount: 3, oldestAgeMinutes: 61 },
+      'https://app.example/admin?a=1&b=2'
+    );
+
+    expect(email.subject).toBe('Moderation reviews still pending');
+    expect(email.html).toContain('>3<');
+    expect(email.html).toContain('1 hour<');
+    expect(email.html).toContain('https://app.example/admin?a=1&amp;b=2');
+    expect(email.html).not.toMatch(/incident-|user|label/i);
   });
 });

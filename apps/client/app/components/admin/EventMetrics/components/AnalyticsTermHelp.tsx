@@ -6,9 +6,11 @@ type AnalyticsTermHelpProps = {
   term: string;
   description: ReactNode;
   testId?: string;
+  /** Tooltip width in px; widen it for a multi-line legend. */
+  maxWidth?: number;
 };
 
-export function AnalyticsTermHelp({ term, description, testId }: AnalyticsTermHelpProps) {
+export function AnalyticsTermHelp({ term, description, testId, maxWidth = 300 }: AnalyticsTermHelpProps) {
   const [open, setOpen] = useState(false);
   // Set by a click, so a second click closes the help while a click after hover/focus-open keeps it.
   const pinned = useRef(false);
@@ -45,7 +47,7 @@ export function AnalyticsTermHelp({ term, description, testId }: AnalyticsTermHe
       onClose={close}
       describeChild
       disableTouchListener
-      sx={{ maxWidth: 300 }}
+      sx={{ maxWidth }}
     >
       <IconButton
         ref={buttonRef}

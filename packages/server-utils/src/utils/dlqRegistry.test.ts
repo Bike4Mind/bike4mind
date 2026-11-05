@@ -19,6 +19,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'github-webhook': 'https://sqs.us-east-2.amazonaws.com/123456789/githubWebhookQueueDLQ',
   'webhook-delivery': 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueueDLQ',
   'quest-export': 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueueDLQ',
+  'account-data-export': 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueueDLQ',
   'liveops-triage': 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueueDLQ',
   'email-ingestion': 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueueDLQ',
   'email-analysis': 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueueDLQ',
@@ -63,6 +64,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   githubWebhookQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubWebhookQueue',
   webhookDeliveryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/webhookDeliveryQueue',
   questExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/questExportQueue',
+  accountDataExportQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/accountDataExportQueue',
   liveOpsTriageQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/liveOpsTriageQueue',
   emailIngestionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailIngestionQueue',
   emailAnalysisQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/emailAnalysisQueue',
@@ -105,7 +107,7 @@ describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
     it('returns every DLQ entry', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(41);
+      expect(registry).toHaveLength(42);
     });
 
     it('each entry has required fields', () => {
