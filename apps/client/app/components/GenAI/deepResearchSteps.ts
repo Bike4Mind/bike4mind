@@ -47,12 +47,12 @@ export function buildResearchSteps(
     Math.max(0, Math.floor((Date.parse(a.timestamp) - startMs) / 1000)) || 0;
   const lastOpen = <K extends ResearchStep['kind']>(
     kind: K,
-    match?: (s: Extract<ResearchStep, { kind: K }>) => boolean
+    match?: (s: ResearchStep & { kind: K }) => boolean
   ) => {
     for (let i = steps.length - 1; i >= 0; i--) {
       const s = steps[i];
-      if (s.kind === kind && s.status === 'pending' && (!match || match(s as Extract<ResearchStep, { kind: K }>))) {
-        return s as Extract<ResearchStep, { kind: K }>;
+      if (s.kind === kind && s.status === 'pending' && (!match || match(s as ResearchStep & { kind: K }))) {
+        return s as ResearchStep & { kind: K };
       }
     }
     return undefined;
