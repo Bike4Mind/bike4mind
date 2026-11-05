@@ -16,6 +16,7 @@ import ModerationIncidentDetail from './ModerationIncidentDetail';
 import { REVIEW_STATUS_LABELS, formatLabel, surfaceLabel } from './moderationIncidentLabels';
 import {
   useModerationIncidentQueue,
+  type ClosedCursor,
   type ModerationIncidentQueueStatus,
   type ModerationIncidentRow,
 } from '@client/app/hooks/data/moderationIncidents';
@@ -33,12 +34,13 @@ const QUEUE_STATUS_OPTIONS = [
 export const ModerationIncidentsTab: React.FC = () => {
   const [queueStatus, setQueueStatus] = useState<ModerationIncidentQueueStatus>('open');
   // Closed verdicts never drain, so the Closed list pages back by createdAt instead.
-  const [closedBefore, setClosedBefore] = useState<string | undefined>(undefined);
-  const queue = useModerationIncidentQueue(queueStatus, closedBefore);
+  const [closedCursor, setClosedCursor] = useState<ClosedCursor | undefined>(undefined);
+  const closedBefore = closedCursor?.before;
+  const queue = useModerationIncidentQueue(queueStatus, closedCursor);
   const closed = queueStatus === 'closed';
   const changeQueueStatus = (status: ModerationIncidentQueueStatus) => {
     setQueueStatus(status);
-    setClosedBefore(undefined);
+    setClosedCursor(undefined);
   };
   const navigate = useNavigate();
   const { [MODERATION_INCIDENT_ID_PARAM]: incidentId } = useSearch({ strict: false }) as { incidentId?: string };
@@ -154,7 +156,7 @@ export const ModerationIncidentsTab: React.FC = () => {
             <Button
               size="sm"
               variant="plain"
-              onClick={() => setClosedBefore(undefined)}
+              onClick={() => setClosedCursor(undefined)}
               data-testid="moderation-incidents-newest-btn"
             >
               Show newest
@@ -164,7 +166,9 @@ export const ModerationIncidentsTab: React.FC = () => {
             <Button
               size="sm"
               variant="outlined"
-              onClick={() => setClosedBefore(rows[rows.length - 1].createdAt)}
+              onClick={() =>
+                setClosedCursor({ before: rows[rows.length - 1].createdAt, beforeId: rows[rows.length - 1].id })
+              }
               data-testid="moderation-incidents-older-btn"
             >
               Show older

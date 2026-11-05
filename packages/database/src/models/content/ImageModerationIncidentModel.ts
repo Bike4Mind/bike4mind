@@ -170,12 +170,23 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
 
   /**
    * Incidents with a final verdict (see CLOSED_REVIEW_STATUSES), newest first. `before` pages
-   * back: only incidents created strictly before it.
+   * back: only incidents created strictly before it, or created at `before` with an id below
+   * `beforeId` (so rows sharing one createdAt are neither skipped nor repeated across pages).
    */
-  async findClosed(limit: number, before?: Date): Promise<IImageModerationIncidentDocument[]> {
+  async findClosed(limit: number, before?: Date, beforeId?: string): Promise<IImageModerationIncidentDocument[]> {
+    const cursor = !before
+      ? {}
+      : beforeId
+        ? {
+            $or: [
+              { createdAt: { $lt: before } },
+              { createdAt: before, _id: { $lt: new mongoose.Types.ObjectId(beforeId) } },
+            ],
+          }
+        : { createdAt: { $lt: before } };
     return this.model
-      .find({ reviewStatus: { $in: CLOSED_REVIEW_STATUSES }, ...(before ? { createdAt: { $lt: before } } : {}) })
-      .sort({ createdAt: -1 })
+      .find({ reviewStatus: { $in: CLOSED_REVIEW_STATUSES }, ...cursor })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
       .lean() as unknown as IImageModerationIncidentDocument[];
   }
@@ -267,10 +278,10 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
    * (`reportedBy`, with `reportedAt`) are set when `status === 'reported'`; for 'false_positive'
    * the acting admin and time go to `falsePositiveBy`/`falsePositiveAt`. Returns null if the
    * transition is disallowed:
-   * - always blocked when already 'reported' (idempotency)
+   * - always blocked when already 'reported' (idempotency) or 'no_action' (a closing verdict is
+   *   never replaced by this method; recordManualReport is the override path)
    * - also blocked from 'confirmed_csam' when targeting 'false_positive', to prevent a
-   *   concurrent false_positive verdict from overriding an in-flight NCMEC submission, and from
-   *   'no_action', so one closing verdict never silently replaces another.
+   *   concurrent false_positive verdict from overriding an in-flight NCMEC submission.
    */
   async updateReviewStatus(
     id: string,
@@ -288,7 +299,8 @@ export class ImageModerationIncidentRepository extends BaseRepository<IImageMode
       update.falsePositiveAt = new Date();
       if (actorId) update.falsePositiveBy = actorId;
     }
-    const excluded = status === 'false_positive' ? ['reported', 'confirmed_csam', 'no_action'] : ['reported'];
+    const excluded =
+      status === 'false_positive' ? ['reported', 'confirmed_csam', 'no_action'] : ['reported', 'no_action'];
     return this.model.findOneAndUpdate({ _id: id, reviewStatus: { $nin: excluded } }, { $set: update }, { new: true });
   }
 

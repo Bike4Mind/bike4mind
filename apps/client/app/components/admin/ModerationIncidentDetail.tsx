@@ -14,6 +14,7 @@ import {
   Typography,
 } from '@mui/joy';
 import { Link } from '@tanstack/react-router';
+import { INCIDENT_OVERRIDABLE_REVIEW_STATUSES } from '@bike4mind/common';
 import { toast } from 'sonner';
 import { AdminDialog, AdminPageHeader, Fact, SectionCard, StatusChip, formatUtc, relativeTime } from './shared';
 import { REVIEW_STATUS_LABELS, formatConfidence, surfaceLabel } from './moderationIncidentLabels';
@@ -88,7 +89,8 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
   const imageFailed = imageUrl !== null && failedUrl === imageUrl;
   const isPending = data?.reviewStatus === 'pending_review';
   // Mirrors the verdict route: a report can also be recorded over an earlier closing verdict.
-  const canConfirm = isPending || data?.reviewStatus === 'false_positive' || data?.reviewStatus === 'no_action';
+  const canConfirm =
+    isPending || INCIDENT_OVERRIDABLE_REVIEW_STATUSES.some(overridable => overridable === data?.reviewStatus);
 
   const closeDialog = () => {
     if (verdict.isPending) return;

@@ -455,7 +455,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   if (!updated) {
     const incident = await imageModerationIncidentRepository.findById(incidentId);
     if (!incident) return res.status(404).json({ error: 'Incident not found' });
-    return res.status(409).json({ error: 'Incident already reported or being processed' });
+    return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });
   }
 
   req.logger.info(`[Moderation] incident ${incidentId} marked false_positive by admin=${req.user.id}`);

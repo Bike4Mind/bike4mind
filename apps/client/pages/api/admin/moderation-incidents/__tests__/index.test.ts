@@ -60,23 +60,53 @@ describe('admin/moderation-incidents', () => {
     const res = makeRes();
     await runHandler(makeReq({ status: 'closed', limit: '20' }), res);
 
-    expect(m.findClosed).toHaveBeenCalledWith(20, undefined);
+    expect(m.findClosed).toHaveBeenCalledWith(21, undefined, undefined);
     expect(m.findPendingReview).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith({
       incidents: [{ _id: 'inc-3', userId: 'u1', reviewStatus: 'no_action', userEmail: 'one@example.com' }],
       staleConfirmedCsam: [],
+      hasMore: false,
     });
+  });
+
+  it('reports hasMore only when more than limit closed rows exist, and returns just limit rows', async () => {
+    const rows = (n: number) => Array.from({ length: n }, (_, k) => ({ _id: `c-${k}`, userId: 'u1' }));
+    const exact = makeRes();
+    m.findClosed.mockResolvedValue(rows(2));
+    await runHandler(makeReq({ status: 'closed', limit: '2' }), exact);
+    expect(exact.json).toHaveBeenCalledWith(expect.objectContaining({ hasMore: false }));
+    expect(exact.json.mock.calls[0][0].incidents).toHaveLength(2);
+
+    const over = makeRes();
+    m.findClosed.mockResolvedValue(rows(3));
+    await runHandler(makeReq({ status: 'closed', limit: '2' }), over);
+    expect(over.json).toHaveBeenCalledWith(expect.objectContaining({ hasMore: true }));
+    expect(over.json.mock.calls[0][0].incidents).toHaveLength(2);
   });
 
   it('pages closed incidents back from a before cursor', async () => {
     await runHandler(makeReq({ status: 'closed', before: '2026-10-03T00:00:00.000Z' }), makeRes());
-    expect(m.findClosed).toHaveBeenCalledWith(50, new Date('2026-10-03T00:00:00.000Z'));
+    expect(m.findClosed).toHaveBeenCalledWith(51, new Date('2026-10-03T00:00:00.000Z'), undefined);
+  });
+
+  it('passes the beforeId tiebreaker to the closed list and ignores it for the open queue', async () => {
+    const beforeId = '65a1b2c3d4e5f60718293a4b';
+    await runHandler(makeReq({ status: 'closed', before: '2026-10-03T00:00:00.000Z', beforeId }), makeRes());
+    expect(m.findClosed).toHaveBeenCalledWith(51, new Date('2026-10-03T00:00:00.000Z'), beforeId);
+
+    m.findClosed.mockClear();
+    await runHandler(makeReq({ before: '2026-10-03T00:00:00.000Z', beforeId }), makeRes());
+    expect(m.findClosed).not.toHaveBeenCalled();
   });
 
   it('rejects an unknown status or a malformed cursor', async () => {
     const badCursor = makeRes();
     await runHandler(makeReq({ status: 'closed', before: 'not-a-date' }), badCursor);
     expect(badCursor.status).toHaveBeenCalledWith(400);
+
+    const badId = makeRes();
+    await runHandler(makeReq({ status: 'closed', before: '2026-10-03T00:00:00.000Z', beforeId: 'nope' }), badId);
+    expect(badId.status).toHaveBeenCalledWith(400);
 
     const res = makeRes();
     await runHandler(makeReq({ status: 'everything' }), res);

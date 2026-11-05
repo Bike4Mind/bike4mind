@@ -20,7 +20,7 @@ const incidents = (count: number, day: number) =>
   }));
 
 const loadQueue = async (
-  data: { incidents: unknown[]; staleConfirmedCsam: unknown[] },
+  data: { incidents: unknown[]; staleConfirmedCsam: unknown[]; hasMore?: boolean },
   ...args: Parameters<typeof useModerationIncidentQueue>
 ) => {
   mocks.get.mockResolvedValue({ data });
@@ -61,7 +61,10 @@ describe('useModerationIncidentQueue', () => {
   });
 
   it('ignores a closed cursor on the open queue', async () => {
-    await loadQueue({ incidents: [], staleConfirmedCsam: [] }, 'open', '2026-10-03T00:00:00.000Z');
+    await loadQueue({ incidents: [], staleConfirmedCsam: [] }, 'open', {
+      before: '2026-10-03T00:00:00.000Z',
+      beforeId: 'abc',
+    });
     expect(mocks.get).toHaveBeenCalledWith('/api/admin/moderation-incidents', {
       params: { limit: 100, status: 'open' },
     });
@@ -82,16 +85,20 @@ describe('useModerationIncidentQueue (closed)', () => {
     expect(data?.truncated).toBe(false);
   });
 
-  it('pages back with the before cursor and reports a full page as truncated', async () => {
-    const data = await loadQueue(
-      { incidents: incidents(100, 2), staleConfirmedCsam: [] },
-      'closed',
-      '2026-10-03T00:00:00.000Z'
-    );
+  it('pages back with the before and beforeId cursor and takes truncated from hasMore', async () => {
+    const data = await loadQueue({ incidents: incidents(100, 2), staleConfirmedCsam: [], hasMore: true }, 'closed', {
+      before: '2026-10-03T00:00:00.000Z',
+      beforeId: 'abc',
+    });
 
     expect(mocks.get).toHaveBeenCalledWith('/api/admin/moderation-incidents', {
-      params: { limit: 100, status: 'closed', before: '2026-10-03T00:00:00.000Z' },
+      params: { limit: 100, status: 'closed', before: '2026-10-03T00:00:00.000Z', beforeId: 'abc' },
     });
     expect(data?.truncated).toBe(true);
+  });
+
+  it('is not truncated for an exactly full closed page when hasMore is false', async () => {
+    const data = await loadQueue({ incidents: incidents(100, 2), staleConfirmedCsam: [], hasMore: false }, 'closed');
+    expect(data?.truncated).toBe(false);
   });
 });

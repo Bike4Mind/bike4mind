@@ -307,15 +307,19 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
-    it('returns 409 when the incident is already reported or being processed', async () => {
-      mockUpdateReviewStatus.mockResolvedValue(null);
-      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam' });
+    it.each(['confirmed_csam', 'reported', 'no_action'])(
+      'returns 409 naming the state when the incident is already %s',
+      async reviewStatus => {
+        mockUpdateReviewStatus.mockResolvedValue(null);
+        mockFindById.mockResolvedValue({ reviewStatus });
 
-      const res = makeRes();
-      await runHandler(makeReq({ verdict: 'false_positive' }), res);
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'false_positive' }), res);
 
-      expect(res.status).toHaveBeenCalledWith(409);
-    });
+        expect(res.status).toHaveBeenCalledWith(409);
+        expect(res.json).toHaveBeenCalledWith({ error: `Incident is already ${reviewStatus}` });
+      }
+    );
   });
 
   describe('verdict: no_action', () => {

@@ -58,24 +58,34 @@ const toRow = (incident: QueueIncidentJson, stuck: boolean): ModerationIncidentR
 
 const createdAtMs = (row: ModerationIncidentRow) => new Date(row.createdAt).getTime();
 
+/** Position in the closed list: the last row's createdAt (ISO) and id; pages continue after it. */
+export type ClosedCursor = { before: string; beforeId: string };
+
 /**
  * Open: unreviewed incidents plus stuck confirmed claims, oldest first. Closed: past verdicts, newest
- * first; `closedBefore` (an ISO createdAt) pages back to the ones created before it.
+ * first; `closedCursor` pages back to the ones after that row.
  */
-export function useModerationIncidentQueue(status: ModerationIncidentQueueStatus = 'open', closedBefore?: string) {
-  const before = status === 'closed' ? closedBefore : undefined;
+export function useModerationIncidentQueue(
+  status: ModerationIncidentQueueStatus = 'open',
+  closedCursor?: ClosedCursor
+) {
+  const cursor = status === 'closed' ? closedCursor : undefined;
   return useQuery({
-    queryKey: [...MODERATION_INCIDENT_QUEUE_QUERY_KEY, status, before ?? null],
+    queryKey: [...MODERATION_INCIDENT_QUEUE_QUERY_KEY, status, cursor?.before ?? null, cursor?.beforeId ?? null],
     queryFn: async () => {
-      const { incidents, staleConfirmedCsam } = (
-        await api.get<{ incidents: QueueIncidentJson[]; staleConfirmedCsam: QueueIncidentJson[] }>(ENDPOINT, {
-          params: { limit: QUEUE_LIST_LIMIT, status, ...(before ? { before } : {}) },
-        })
+      const { incidents, staleConfirmedCsam, hasMore } = (
+        await api.get<{ incidents: QueueIncidentJson[]; staleConfirmedCsam: QueueIncidentJson[]; hasMore?: boolean }>(
+          ENDPOINT,
+          { params: { limit: QUEUE_LIST_LIMIT, status, ...(cursor ?? {}) } }
+        )
       ).data;
       const rows = [...incidents.map(i => toRow(i, false)), ...staleConfirmedCsam.map(i => toRow(i, true))];
       rows.sort((a, b) => (status === 'closed' ? createdAtMs(b) - createdAtMs(a) : createdAtMs(a) - createdAtMs(b)));
-      // The route caps each list, so a full one means more are waiting behind it.
-      const truncated = incidents.length >= QUEUE_LIST_LIMIT || staleConfirmedCsam.length >= QUEUE_LIST_LIMIT;
+      // The open lists are capped by the route, so a full one means more are waiting; closed says so itself.
+      const truncated =
+        status === 'closed'
+          ? hasMore === true
+          : incidents.length >= QUEUE_LIST_LIMIT || staleConfirmedCsam.length >= QUEUE_LIST_LIMIT;
       return { rows, truncated };
     },
   });

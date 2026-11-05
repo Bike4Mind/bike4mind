@@ -98,6 +98,13 @@ describe('ModerationIncidentsTab', () => {
     expect(screen.queryByTestId('moderation-incidents-paging')).toBeNull();
   });
 
+  it('offers no Show older button when the closed list is not truncated', () => {
+    m.queue.mockReturnValue(ready([row({ id: 'inc-a', reviewStatus: 'no_action' })], false));
+    renderTab();
+    fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
+    expect(screen.queryByTestId('moderation-incidents-older-btn')).toBeNull();
+  });
+
   it('pages a full closed list back from its oldest row, and returns to the newest', () => {
     const page = [
       row({ id: 'inc-new', createdAt: '2026-10-05T10:00:00.000Z', reviewStatus: 'reported' }),
@@ -109,7 +116,10 @@ describe('ModerationIncidentsTab', () => {
     expect(screen.queryByTestId('moderation-incidents-truncated')).toBeNull();
 
     fireEvent.click(screen.getByTestId('moderation-incidents-older-btn'));
-    expect(m.queue).toHaveBeenLastCalledWith('closed', '2026-10-03T10:00:00.000Z');
+    expect(m.queue).toHaveBeenLastCalledWith('closed', {
+      before: '2026-10-03T10:00:00.000Z',
+      beforeId: 'inc-oldest',
+    });
     expect(screen.getByTestId('moderation-incidents-paging').textContent).toContain('from before');
 
     fireEvent.click(screen.getByTestId('moderation-incidents-newest-btn'));

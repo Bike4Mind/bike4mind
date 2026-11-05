@@ -258,6 +258,19 @@ describe('ImageModerationIncidentRepository', () => {
       const reclaimed = await imageModerationIncidentRepository.claimForNcmecSubmission(String(inc._id));
       expect(reclaimed?.reviewStatus).toBe('confirmed_csam');
     });
+
+    it.each(['pending_review', 'reported'] as const)(
+      'returns null when writing %s over a no_action row',
+      async target => {
+        const inc = await imageModerationIncidentRepository.record(baseIncident());
+        await imageModerationIncidentRepository.markNoAction(String(inc._id), 'admin-1');
+        const result = await imageModerationIncidentRepository.updateReviewStatus(String(inc._id), target, 'rpt-x');
+        expect(result).toBeNull();
+        const reloaded = await ImageModerationIncident.findById(inc._id);
+        expect(reloaded?.reviewStatus).toBe('no_action');
+        expect(reloaded?.ncmecReportId).toBeUndefined();
+      }
+    );
   });
 
   describe('resolveConfirmedCsam', () => {
@@ -500,6 +513,27 @@ describe('ImageModerationIncidentRepository', () => {
       expect(await imageModerationIncidentRepository.findClosed(1)).toHaveLength(1);
       const older = await imageModerationIncidentRepository.findClosed(10, new Date('2026-10-03T00:00:00Z'));
       expect(older.map(incident => String(incident._id))).toEqual([falsePositive, reported]);
+    });
+
+    it('pages rows sharing one createdAt without skipping or repeating any', async () => {
+      const sameAt = new Date('2026-10-03T00:00:00Z');
+      const ids: string[] = [];
+      for (let n = 0; n < 3; n++) {
+        const inc = await imageModerationIncidentRepository.record(baseIncident());
+        await ImageModerationIncident.collection.updateOne(
+          { _id: inc._id },
+          { $set: { createdAt: sameAt, reviewStatus: 'no_action' } }
+        );
+        ids.push(String(inc._id));
+      }
+      const newestFirst = [...ids].sort().reverse();
+
+      const first = await imageModerationIncidentRepository.findClosed(2);
+      const last = first[first.length - 1];
+      const second = await imageModerationIncidentRepository.findClosed(2, last.createdAt, String(last._id));
+
+      expect(first.map(incident => String(incident._id))).toEqual(newestFirst.slice(0, 2));
+      expect(second.map(incident => String(incident._id))).toEqual(newestFirst.slice(2));
     });
   });
 
