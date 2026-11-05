@@ -3,7 +3,9 @@ vi.mock('@server/auth/withAccountNotPurging', () => ({
 }));
 import { signupProtection } from '@bike4mind/server-utils/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 import { createMocks } from 'node-mocks-http';
 import {
   BadRequestError,

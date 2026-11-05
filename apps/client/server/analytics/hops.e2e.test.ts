@@ -37,7 +37,9 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: async () => undefined }));
-vi.mock('@bike4mind/server-utils/referrals/firstAnswerReward', () => ({ rewardInviterForFirstAnswer: async () => undefined }));
+vi.mock('@bike4mind/server-utils/referrals/firstAnswerReward', () => ({
+  rewardInviterForFirstAnswer: async () => undefined,
+}));
 vi.mock('@bike4mind/server-utils/analytics/emitActiveEvent', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/analytics/emitActiveEvent')>()),
   isAnalyticsConfigured: () => true,

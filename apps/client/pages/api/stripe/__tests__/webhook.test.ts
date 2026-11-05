@@ -138,7 +138,9 @@ vi.mock('@bike4mind/server-utils/analytics/signupEvents', () => ({
   emitBillingEvent: mocks.emitBillingEvent,
 }));
 const { reverseReward } = vi.hoisted(() => ({ reverseReward: vi.fn() }));
-vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: reverseReward }));
+vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({
+  reverseSubscriptionRewardForRefund: reverseReward,
+}));
 const { reverseStanding } = vi.hoisted(() => ({ reverseStanding: vi.fn() }));
 vi.mock('@server/billing/purchaseReversal', () => ({ reversePurchaseStanding: reverseStanding }));
 vi.mock('@server/billing/paymentFailureNotice', () => ({

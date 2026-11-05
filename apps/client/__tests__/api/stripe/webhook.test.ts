@@ -183,7 +183,9 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
 // (server/billing/earlyFraudWarning.test.ts, linkedAccounts.test.ts); here only the wiring.
 const mockRespondToEarlyFraudWarning = vi.fn();
 const mockPropagateAccountRisk = vi.fn();
-vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
+vi.mock('@bike4mind/server-utils/referrals/subscriptionReward', () => ({
+  reverseSubscriptionRewardForRefund: vi.fn(),
+}));
 const mockReversePurchaseStanding = vi.fn();
 vi.mock('@server/billing/purchaseReversal', () => ({
   reversePurchaseStanding: (...args: unknown[]) => mockReversePurchaseStanding(...args),

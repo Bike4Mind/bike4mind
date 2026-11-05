@@ -24,7 +24,9 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
-vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({ buildHeldGrantAdapters: () => h.adapters }));
+vi.mock('@bike4mind/server-utils/credits/heldSignupGrantAdapters', () => ({
+  buildHeldGrantAdapters: () => h.adapters,
+}));
 vi.mock('@bike4mind/database', () => ({ userRepository: { findById: h.findById } }));
 vi.mock('@bike4mind/services', () => ({ userService: { releaseHeldSignupGrant: h.release } }));
 vi.mock('@bike4mind/server-utils/utils/adminAudit', () => ({

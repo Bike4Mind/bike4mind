@@ -28,7 +28,10 @@ import {
   subscriptionMrr,
   type MrrGroup,
 } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionMrr';
-import { cancelCondition, viewConditions } from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
+import {
+  cancelCondition,
+  viewConditions,
+} from '@bike4mind/server-utils/admin/subscriptionsList/subscriptionViewConditions';
 import { computeRevenueTotals } from './revenueSnapshot';
 
 // ms

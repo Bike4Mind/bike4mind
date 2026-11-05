@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ForbiddenError } from '@bike4mind/common';
-vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
+vi.mock('@bike4mind/server-utils/auth/riskEvidence', () => ({
+  requestRiskEvidenceRefresh: vi.fn(async () => 'queued'),
+}));
 
 const guardAccount = vi.fn(async (_id: string, write: () => Promise<unknown>) => write());
 vi.mock('./withAccountNotPurging', () => ({
