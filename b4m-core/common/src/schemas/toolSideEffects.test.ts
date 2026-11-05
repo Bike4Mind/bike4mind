@@ -73,6 +73,8 @@ describe('tool side-effect declarations', () => {
     expect(getToolSideEffects('loop_oversee_status')).toBe('none');
     expect(getToolSideEffects('loop_directive_issue')).toBe('external');
     expect(getToolSideEffects('loop_directive_respond')).toBe('external');
+    expect(getToolSideEffects('loop_run_now')).toBe('external');
+    expect(getToolSideEffects('loop_resume')).toBe('external');
   });
 
   it('declares nothing for names it has never heard of', () => {

@@ -131,6 +131,8 @@ const EXTERNAL_REGISTRY_SIDE_EFFECTS: Record<string, ToolSideEffects> = {
   loop_oversee_status: 'none',
   loop_directive_issue: 'external',
   loop_directive_respond: 'external',
+  loop_run_now: 'external',
+  loop_resume: 'external',
 
   // Slack tool set
   slackbot_help: 'none',

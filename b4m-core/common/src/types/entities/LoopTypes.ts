@@ -332,7 +332,7 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     memory?: LoopRunMemory
   ): Promise<boolean>;
   /** Pulls a `live` loop's `nextRunAt` forward to `now` and ends its idle back-off; used when one of its tickets becomes ready. */
-  makeDueNow(id: string, now: Date): Promise<void>;
+  makeDueNow(id: string, now: Date): Promise<boolean>;
   /** Moves a still-`live` loop to `error` once it has `maxFailures` failures in a row. */
   markErroredIfFailing(id: string, maxFailures: number): Promise<void>;
   /** Drops a deleted loop from every other loop's `oversees`. */

@@ -201,7 +201,14 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
 
   async listPastDueLive(before: Date, limit: number): Promise<ILoop[]> {
     const results = await this.loopModel
-      .find({ status: 'live', nextRunAt: { $lte: before }, ...NO_LANE_ACTIVE })
+      // Capacity-held and backing-off loops never qualify, so they must not fill the window ahead of ones that do.
+      .find({
+        status: 'live',
+        nextRunAt: { $lte: before },
+        ...NO_LANE_ACTIVE,
+        'hold.kind': { $ne: 'capacity' },
+        idleStreak: { $not: { $gt: 0 } },
+      })
       .sort({ nextRunAt: 1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
@@ -324,11 +331,12 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
   }
 
   /** Also ends an idle back-off: something changed, so the loop has work worth a run again. */
-  async makeDueNow(id: string, now: Date): Promise<void> {
+  async makeDueNow(id: string, now: Date): Promise<boolean> {
     // $min over a missing nextRunAt yields `now` (aggregation $min ignores missing values).
-    await this.loopModel.updateOne({ _id: id, status: 'live' }, [
+    const result = await this.loopModel.updateOne({ _id: id, status: 'live' }, [
       { $set: { nextRunAt: { $min: ['$nextRunAt', now] }, idleStreak: 0, idleResetAt: now } },
     ]);
+    return result.matchedCount > 0;
   }
 
   /** Ends a live loop's idle back-off without making it due now: it next runs by `nextRunAt` at the latest. */
