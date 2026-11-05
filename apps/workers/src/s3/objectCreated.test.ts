@@ -398,6 +398,36 @@ describe('objectCreated - moderation claim identity', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not release moderation claim'));
   });
 
+  it('skips the record without rethrowing when the object was deleted before the scan read it', async () => {
+    // The uploader deleted the file mid-scan: a retry can only hit the same absence, so throwing
+    // would just burn Lambda's async retries and log an invoke error.
+    h.moderateUploadedFile.mockRejectedValue(
+      Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' })
+    );
+
+    await expect(run()).resolves.toBeUndefined();
+
+    const claimStamp = h.findOneAndUpdate.mock.calls[0][1].$set.moderationClaimedAt;
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', moderationStatus: 'scanning', moderationClaimedAt: claimStamp },
+      expect.objectContaining({ $set: expect.objectContaining({ moderationStatus: 'pending' }) })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('was removed from storage'));
+    expect(h.recomputeUploaded).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('still rethrows a 404 that is not NoSuchKey, so a bucket misconfig is retried', async () => {
+    h.moderateUploadedFile.mockRejectedValue(
+      Object.assign(new Error('The specified bucket does not exist'), {
+        name: 'NoSuchBucket',
+        $metadata: { httpStatusCode: 404 },
+      })
+    );
+
+    await expect(run()).rejects.toThrow('bucket does not exist');
+  });
+
   it('does not touch a claim it never won when the transaction throws', async () => {
     h.findOneAndUpdate.mockResolvedValue(null);
     h.findById.mockReturnValue({ session: () => ({ moderationStatus: 'scanning' }) });
