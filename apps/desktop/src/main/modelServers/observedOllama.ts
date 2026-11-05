@@ -8,7 +8,12 @@ import {
 import { QUANTIZED_KV_CACHE_TYPES, type QuantizedKvCacheType } from '@shared/modelServers';
 
 /** The launch variables Settings shows for an Ollama Desktop did not start. */
-export const OBSERVED_OLLAMA_KEYS = ['OLLAMA_KV_CACHE_TYPE', 'OLLAMA_FLASH_ATTENTION'] as const;
+export const OBSERVED_OLLAMA_KEYS = [
+  'OLLAMA_KV_CACHE_TYPE',
+  'OLLAMA_FLASH_ATTENTION',
+  'OLLAMA_CONTEXT_LENGTH',
+  'OLLAMA_NUM_PARALLEL',
+] as const;
 
 /**
  * What the Ollama at `url` on this computer runs with, read from its process or systemd unit; null when it cannot be

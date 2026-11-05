@@ -153,9 +153,15 @@ describe('hostLaunchers', () => {
 
 describe('observed Ollama settings', () => {
   it('keeps only the launch variables that are set', () => {
-    expect(observedLaunchVars({ OLLAMA_KV_CACHE_TYPE: ' q8_0 ', OLLAMA_HOST: '0.0.0.0', HOME: '/root' })).toEqual({
-      OLLAMA_KV_CACHE_TYPE: 'q8_0',
-    });
+    expect(
+      observedLaunchVars({
+        OLLAMA_KV_CACHE_TYPE: ' q8_0 ',
+        OLLAMA_NUM_PARALLEL: '4',
+        OLLAMA_CONTEXT_LENGTH: '65536',
+        OLLAMA_HOST: '0.0.0.0',
+        HOME: '/root',
+      })
+    ).toEqual({ OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_NUM_PARALLEL: '4', OLLAMA_CONTEXT_LENGTH: '65536' });
     expect(observedLaunchVars({})).toEqual({});
   });
 
