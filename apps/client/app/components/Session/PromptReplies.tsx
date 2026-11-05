@@ -1648,6 +1648,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               sources={deepResearchState.sources}
               completedSteps={deepResearchState.completedSteps}
               totalExpectedSteps={deepResearchState.totalExpectedSteps}
+              researchCompleted={deepResearchState.completed}
+              turnDone={completed}
+              startTime={deepResearchState.startTime}
+              endTime={deepResearchState.endTime}
             />
           )}
           {agentIds && agentIds.length > 0 && <AgentAttribution agentIds={agentIds} />}
