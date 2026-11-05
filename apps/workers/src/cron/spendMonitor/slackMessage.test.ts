@@ -222,4 +222,28 @@ describe('buildSpendAlertMessage', () => {
     expect(out).toContain(`${'x'.repeat(60)}...`);
     expect(out).not.toContain(long);
   });
+
+  it.each(['x', '&'])('bounds the complete folded-key field after escaping %s names', character => {
+    const alert = {
+      ...baseAlert,
+      context: { ...baseAlert.context, viaKeys: Array.from({ length: 100 }, () => character.repeat(80)) },
+    };
+    const message = build({ alert });
+    const fields = message.attachments
+      ?.flatMap(attachment => attachment.blocks)
+      .flatMap(block => {
+        if (typeof block !== 'object' || block === null || !('fields' in block) || !Array.isArray(block.fields))
+          return [];
+        return block.fields.flatMap((field: unknown) => {
+          if (typeof field !== 'object' || field === null || !('text' in field) || typeof field.text !== 'string')
+            return [];
+          return [field.text];
+        });
+      });
+    const keyField = fields?.find(field => field.startsWith('*Via API keys*'));
+    expect(keyField).toBeDefined();
+    expect(keyField?.length).toBeLessThanOrEqual(2000);
+    expect(keyField).toMatch(/, \+\d+ more$/);
+    expect(keyField).not.toMatch(/&(?:a|am|amp)?(?:,|$)/);
+  });
 });

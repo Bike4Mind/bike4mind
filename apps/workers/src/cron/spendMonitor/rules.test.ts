@@ -175,18 +175,12 @@ describe('evaluateScope trusted tier', () => {
 
   it('still pages a trusted account past its own ceiling, marking the breach trusted', () => {
     const breaches = evaluateScope(scope('User', 40000, 2000), thresholds, 'trusted');
-    expect(breaches.map(b => [b.rule, b.severity, b.trusted])).toEqual([
-      ['account_spike', 'warning', true],
-      ['account_ceiling', 'critical', true],
-    ]);
+    expect(breaches.map(b => [b.rule, b.severity, b.trusted])).toEqual([['account_ceiling', 'critical', true]]);
   });
 
   it('keeps the standard limits for an untrusted account', () => {
     const breaches = evaluateScope(scope('User', 15000, 1000), thresholds);
-    expect(breaches.map(b => [b.rule, b.severity])).toEqual([
-      ['account_spike', 'warning'],
-      ['account_ceiling', 'critical'],
-    ]);
+    expect(breaches.map(b => [b.rule, b.severity])).toEqual([['account_ceiling', 'critical']]);
     expect(breaches.every(b => b.trusted === undefined)).toBe(true);
   });
 

@@ -22,14 +22,21 @@ const SEVERITY_RANK: Record<SpendAlertSeverity, number> = { warning: 0, critical
 const higherSeverity = (a: SpendAlertSeverity, b: SpendAlertSeverity): SpendAlertSeverity =>
   SEVERITY_RANK[a] >= SEVERITY_RANK[b] ? a : b;
 
-const breachContext = (breach: SpendBreach): Record<string, unknown> => ({
-  baseline: breach.baseline,
-  ratio: breach.ratio,
-  ...(breach.trusted ? { trusted: true } : {}),
-  ...(breach.trustedExcluded ? { trustedExcluded: breach.trustedExcluded } : {}),
-  ...(breach.viaKeys ? { viaKeys: breach.viaKeys } : {}),
-  ...(breach.viaKeyIds ? { viaKeyIds: breach.viaKeyIds } : {}),
-});
+/** Key ids last for the incident; displayed names describe only the current breach. */
+function breachContext(breach: SpendBreach, previous: Record<string, unknown> = {}): Record<string, unknown> {
+  const previousKeyIds = Array.isArray(previous.viaKeyIds)
+    ? previous.viaKeyIds.filter((keyId): keyId is string => typeof keyId === 'string')
+    : [];
+  const viaKeyIds = [...new Set([...previousKeyIds, ...(breach.viaKeyIds ?? [])])];
+  return {
+    baseline: breach.baseline,
+    ratio: breach.ratio,
+    ...(breach.trusted ? { trusted: true } : {}),
+    ...(breach.trustedExcluded ? { trustedExcluded: breach.trustedExcluded } : {}),
+    ...(breach.viaKeys ? { viaKeys: breach.viaKeys } : {}),
+    ...(viaKeyIds.length > 0 ? { viaKeyIds } : {}),
+  };
+}
 
 const SPIKE_RULES: ReadonlySet<string> = new Set(['account_spike', 'apikey_spike']);
 const CEILING_RULES: ReadonlySet<string> = new Set(['account_ceiling', 'apikey_ceiling']);
@@ -49,7 +56,7 @@ function decideForBreach(alert: SpendAlertRecord, breach: SpendBreach, windowEnd
     peakValue: Math.max(alert.peakValue, breach.value),
     clearRuns: 0,
     lastEvaluatedWindowEnd: windowEnd,
-    context: breachContext(breach),
+    context: breachContext(breach, alert.context),
   };
   const severity = higherSeverity(alert.severity, breach.severity);
   // Compared against what was announced, not the stored severity, so a critical whose post failed is retried.

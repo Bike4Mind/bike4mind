@@ -569,6 +569,35 @@ describe('evaluateSpend', () => {
       expect(fakes.alerts.map(a => [a.rule, a.status])).toEqual([['account_ceiling', 'open']]);
     });
 
+    it('remembers every folded key across payer updates while showing only current keys', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      const history = steadyHistory('apiKey', 'k1', 100);
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+      await run(fakes);
+
+      fakes.nextWindow();
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k2', 2000)]);
+      await run(fakes);
+      expect(fakes.alerts[0].context).toMatchObject({ viaKeys: ['ci-key'], viaKeyIds: ['k1', 'k2'] });
+
+      fakes.nextWindow();
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000)]);
+      await run(fakes);
+      expect(fakes.alerts[0].context).toMatchObject({ viaKeyIds: ['k1', 'k2'] });
+      expect(fakes.alerts[0].context).not.toHaveProperty('viaKeys');
+
+      fakes.nextWindow();
+      fakes.setRollups([
+        ...platform,
+        ...history,
+        ...windowBuckets('User', 'u1', 1000),
+        ...windowBuckets('apiKey', 'k1', 1000),
+      ]);
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 0 });
+      expect(fakes.alerts.map(alert => [alert.rule, alert.status])).toEqual([['account_ceiling', 'open']]);
+    });
+
     it('still posts the unfolded cards when the lookup fails', async () => {
       const fakes = createFakes();
       fakes.deps.resolveScopeDeps = {
@@ -808,5 +837,4 @@ describe('evaluateSpend', () => {
     await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
     expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-source-mix-failed', expect.anything());
   });
-
 });

@@ -5,8 +5,8 @@ import {
   type ISpendRollup,
   type ISpendRollupRepository,
   type SpendAlertRecord,
-  type SpendSeriesPoint,
   type SpendRuleId,
+  type SpendSeriesPoint,
 } from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
 import { platformBaseline, scopeBaseline, SPEND_WINDOW_MS, windowSums } from './baselines';

@@ -43,6 +43,23 @@ const KEY_NAME_MAX = 60;
 const keyName = (name: string) =>
   escapeSlackLine(name.length > KEY_NAME_MAX ? `${name.slice(0, KEY_NAME_MAX)}...` : name);
 
+const SLACK_FIELD_MAX = 2000;
+
+function foldedKeysField(names: string[]): string {
+  const heading = '*Via API keys*\n';
+  const listed: string[] = [];
+  for (const name of names) {
+    const formattedName = keyName(name);
+    const candidate = [...listed, formattedName];
+    const remaining = names.length - candidate.length;
+    const suffix = remaining > 0 ? `, +${remaining} more` : '';
+    if (heading.length + candidate.join(', ').length + suffix.length > SLACK_FIELD_MAX) break;
+    listed.push(formattedName);
+  }
+  const remaining = names.length - listed.length;
+  return `${heading}${listed.join(', ')}${remaining > 0 ? `, +${remaining} more` : ''}`;
+}
+
 const formatCredits = (credits: number) => Math.round(credits).toLocaleString('en-US');
 const formatUsd = (usd: number) => `$${usd.toFixed(2)}`;
 const listPriceNote = (creditUsd: number) => `approx. at list price, ${formatUsd(creditUsd * 1000)} per 1,000 credits`;
@@ -110,15 +127,15 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
   ];
   if (scope.paidBy) fields.push(`*Paid by*\n${safe(scope.paidBy)}`);
+  const viaKeys = Array.isArray(alert.context.viaKeys)
+    ? alert.context.viaKeys.filter((name): name is string => typeof name === 'string')
+    : [];
+  if (viaKeys.length > 0) fields.push(foldedKeysField(viaKeys));
   // Platform ratios and floors are judged without trusted accounts; the reported total still includes them.
   if (trustedExcluded !== null) {
     const estimate = isCost ? ' (est.)' : '';
     fields.push(`*Trusted accounts, not in ratio*\n${formatAmount(alert.rule, trustedExcluded, creditUsd)}${estimate}`);
   }
-  const viaKeys = Array.isArray(alert.context.viaKeys)
-    ? alert.context.viaKeys.filter((name): name is string => typeof name === 'string')
-    : [];
-  if (viaKeys.length > 0) fields.push(`*Via API keys*\n${viaKeys.map(keyName).join(', ')}`);
 
   const sections: string[] = [];
   if (breakdown?.topModels.length) {
