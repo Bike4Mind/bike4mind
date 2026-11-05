@@ -290,9 +290,17 @@ export function useCreateFabFile(callbacks?: {
               return createFabFileOnServerWithUpload(parameters, file);
             })
           );
+          const failed = uploads.find(upload => upload.status === 'rejected');
+          if (failed) {
+            const created = result.length + uploads.filter(upload => upload.status === 'fulfilled').length;
+            if (created === 0) throw failed.reason;
+            // The toast reads this message; `cause` keeps the original error for inspection.
+            throw new Error(`Uploaded ${created} of ${data.length} files; ${getErrorMessage(failed.reason)}`, {
+              cause: failed.reason,
+            });
+          }
           for (const upload of uploads) {
-            if (upload.status === 'rejected') throw upload.reason;
-            result.push(upload.value);
+            if (upload.status === 'fulfilled') result.push(upload.value);
           }
         }
         return result;

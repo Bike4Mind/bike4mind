@@ -360,6 +360,13 @@ describe('useCreateFabFile', () => {
     expect(toastSuccess).toHaveBeenCalledWith('Uploaded: 7 files');
   });
 
+  it('keeps the exact error when the only file in the request fails', async () => {
+    const refusal = new Error('Upload limit reached');
+    createFabFileOnServerWithUpload.mockRejectedValue(refusal);
+    const { result } = renderHook(() => useCreateFabFile(), { wrapper: makeWrapper() });
+    await expect(result.current.mutateAsync(uploadItems().slice(0, 1))).rejects.toBe(refusal);
+  });
+
   it('waits for active uploads and starts no further group after a refusal', async () => {
     const pending: Array<{
       resolve: (value: IFabFileDocument) => void;
@@ -392,7 +399,9 @@ describe('useCreateFabFile', () => {
       for (const index of [1, 2, 3, 4]) pending[index].resolve({ id: String(index) } as IFabFileDocument);
     });
     await waitFor(() => expect(settled).toBe(true));
-    expect(failure).toBe(refusal);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('Uploaded 4 of 7 files; Upload limit reached');
+    expect((failure as Error).cause).toBe(refusal);
     expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(5);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['fabFiles'] });
     expect(toastSuccess).not.toHaveBeenCalled();
