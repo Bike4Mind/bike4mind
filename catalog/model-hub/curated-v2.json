@@ -1,8 +1,24 @@
 {
   "schemaVersion": 2,
-  "sequence": 2,
-  "updatedAt": "2026-11-02T00:00:00Z",
+  "sequence": 4,
+  "updatedAt": "2026-11-04T00:00:00Z",
   "changelog": [
+    {
+      "sequence": 4,
+      "date": "2026-11-04",
+      "added": [],
+      "removed": [],
+      "changed": ["qwen3-5-0-8b"],
+      "notes": "Recorded the build's draft_num_predict so fit checks plan the draft the way Ollama runs it."
+    },
+    {
+      "sequence": 3,
+      "date": "2026-11-04",
+      "added": [],
+      "removed": [],
+      "changed": ["qwen3-5-0-8b", "qwen3-5-4b", "qwen3-8-27b", "qwen3-8-27b-gsq"],
+      "notes": "Added the model cards' non-thinking sampling to the Qwen3.5 and Qwen3.8 families; the 0.8B has its own family for its card's text values."
+    },
     {
       "sequence": 2,
       "date": "2026-11-02",
@@ -31,10 +47,23 @@
   "families": {
     "qwen3-5": {
       "ggufArch": "qwen35",
-      "sampling": { "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5 } },
+      "sampling": {
+        "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5 },
+        "nonThinking": { "temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5 }
+      },
       "reasoning": { "via": "kwarg", "key": "enable_thinking", "levels": { "off": false, "high": true } },
       "ollama": { "renderer": "qwen3.5", "parser": "qwen3.5" },
       "source": "https://huggingface.co/Qwen/Qwen3.5-4B/blob/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a/README.md"
+    },
+    "qwen3-5-0-8b": {
+      "ggufArch": "qwen35",
+      "sampling": {
+        "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 20, "presence_penalty": 1.5 },
+        "nonThinking": { "temperature": 1, "top_p": 1, "top_k": 20, "min_p": 0, "presence_penalty": 2 }
+      },
+      "reasoning": { "via": "kwarg", "key": "enable_thinking", "levels": { "off": false, "high": true } },
+      "ollama": { "renderer": "qwen3.5", "parser": "qwen3.5" },
+      "source": "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/2fc06364715b967f1860aea9cf38778875588b17/README.md"
     },
     "gemma-4": {
       "ggufArch": "gemma4",
@@ -48,19 +77,18 @@
     },
     "qwen3-8": {
       "ggufArch": "qwen35",
-      "sampling": { "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 20 } },
+      "sampling": {
+        "thinking": { "temperature": 1, "top_p": 0.95, "top_k": 20 },
+        "nonThinking": { "temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5 }
+      },
       "reasoning": { "via": "kwarg", "key": "enable_thinking", "levels": { "off": false, "high": true } },
       "ollama": { "renderer": "qwen3.8", "parser": "qwen3.5" },
-      "source": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/generation_config.json"
+      "source": "https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/README.md"
     }
   },
   "rankings": {},
   "tiers": [
-    {
-      "memoryKind": "discrete",
-      "minGiB": 0,
-      "picks": [{ "slot": "best", "entry": "qwen3-5-0-8b", "build": "q8-0" }]
-    },
+    { "memoryKind": "discrete", "minGiB": 0, "picks": [{ "slot": "best", "entry": "qwen3-5-0-8b", "build": "q8-0" }] },
     {
       "memoryKind": "discrete",
       "minGiB": 8,
@@ -147,7 +175,7 @@
     {
       "id": "qwen3-5-0-8b",
       "name": "Qwen3.5 0.8B",
-      "family": "qwen3-5",
+      "family": "qwen3-5-0-8b",
       "roles": ["chat", "vision"],
       "why": "The smallest pick: runs on almost any computer and still thinks, calls tools and reads images.",
       "lineage": {
@@ -201,7 +229,8 @@
               "numCtx": null,
               "projector": "5ba2eb9bf28c5b5ff7a705f07bd9269f0f2dbd6cb2b4c46d5f98ed8d15d18883",
               "projectorBytes": 207346304,
-              "draft": "b0108ebdcf5adea94899909c0cd6c12565f079f819991e68e464cb2e69a5d93d"
+              "draft": "b0108ebdcf5adea94899909c0cd6c12565f079f819991e68e464cb2e69a5d93d",
+              "draftNumPredict": 2
             }
           },
           "runtimeMin": { "ollama": "0.30.0" },

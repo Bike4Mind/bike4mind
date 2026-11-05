@@ -8,6 +8,7 @@ import {
   RuntimeHttpError,
   type FetchLike,
   type LocalRuntime,
+  type OllamaEnvironment,
   type OpenAICompatibleProduct,
 } from '@bike4mind/local-models';
 import {
@@ -38,25 +39,41 @@ import {
 } from '@bike4mind/local-models/servers';
 import { localBackend, localModelId, type ChatModelOption } from '@shared/chat';
 import {
+  launchLockedMessage,
+  launchSettingsProblem,
   LOCAL_SERVER_ID,
   LOCAL_SERVER_NAME,
+  sameLaunch,
   serverIdOfRuntime,
   serverManagement,
+  sizesWithSavedLaunch,
   serverRuntimeId,
+  WINDOWS_ORPHAN_HINT,
+  type FlashAttention,
+  type LaunchOwner,
+  type LaunchRuntime,
   type ModelServerAddInput,
   type ModelServerHealth,
+  type ModelServerLaunchSettings,
+  type ModelServerLaunchView,
   type ModelServerProbeInput,
   type ModelServerProbeResult,
   type ModelServerSpecs,
   type ModelServerUpdateInput,
   type ModelServerView,
+  type QuantizedKvCacheType,
 } from '@shared/modelServers';
 import type { LocalChat } from '../chat/localChat';
-import { OllamaLocal } from '../chat/OllamaLocal';
+import { OllamaLocal, type LoadSettingsReader } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
+import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { ProcessProbe } from './adoptedServers';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
+import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
+import { loopbackLaunchPort, loopbackPortFree, loopbackPortListening } from './loopbackPort';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
+import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 
 export const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -64,6 +81,7 @@ const LOCAL_TIMEOUT_MS = 1_500;
 /** Background recheck while the app runs. */
 export const HEALTH_INTERVAL_MS = 60_000;
 const RECHECK_AFTER_MS = 10_000;
+const OBSERVE_TTL_MS = 5 * 60_000;
 /** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
 const RESOLVE_TIMEOUT_MS = 5_000;
 /** How long a picker load waits on a down server's check before listing its last models. */
@@ -144,6 +162,44 @@ export interface ModelServerRegistryDeps {
   localSpecsChanged?(): void;
   /** Defaults to `process.platform`; decides whether a LAN failure gets the macOS Local Network hint. */
   platform?: NodeJS.Platform;
+  /** Each model's load settings from the Models screen, which every request for it carries. */
+  loadSettings?: LoadSettingsReader;
+  /** How Desktop finds and starts the servers it runs; defaults to this computer's own (hostLaunchers). */
+  launchers?: Launchers;
+  /** The launch variables of the Ollama at `url` on this computer; null when they cannot be read, as without this. */
+  readOllamaEnv?(url: string): Promise<OllamaEnvironment | null>;
+  /** Whether a loopback port is free; defaults to binding for an address probe and connecting for observation. */
+  portFree?(port: number): Promise<boolean>;
+  /** Where the servers Desktop runs are listed, so a launch after a crash takes them back; none without it. */
+  ownedServers?: StoreFile;
+  /** Seals the llama-server key in `ownedServers`, as the store seals credentials. */
+  ownedCipher?: SecretCipher & { getSelectedStorageBackend?(): string };
+  /** For taking those back; defaults to this computer's (hostProcessProbe). */
+  processes?: ProcessProbe;
+}
+
+/** Where Desktop can start a server for a saved address, and what it runs there. */
+interface LaunchTarget {
+  runtime: LaunchRuntime;
+  /** Null for another machine or an SSH server, which Desktop never starts. */
+  port: number | null;
+  health: ModelServerHealth;
+  product: OpenAICompatibleProduct | null;
+  /** Where readOllamaSettings looks for the process. */
+  url: string;
+}
+
+interface LaunchState {
+  /** At the last check, something held the loopback port without answering there. */
+  portHeld: boolean;
+  /** Read from an Ollama Desktop did not start; null when unreadable. */
+  observed: Record<string, string> | null;
+  observedAt: number;
+  observedVersion: string | null;
+  /** The last readable `observed`, kept after that server stops so Desktop can start one like it. */
+  lastObserved: Record<string, string> | null;
+  /** The cache type and flash attention sizing last used, so a change can expire what was sized with the old ones. */
+  sizedWith: string;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -168,8 +224,19 @@ export class ModelServerRegistry {
   private readonly savedListeners = new Set<(id: string) => void>();
   private readonly checking = new WeakMap<Entry, Promise<Listing | undefined>>();
   private lateNoticeAt = 0;
+  private readonly supervisor: LocalServerSupervisor;
+  private readonly launchStates = new Map<string, LaunchState>();
 
-  constructor(private readonly deps: ModelServerRegistryDeps) {}
+  constructor(private readonly deps: ModelServerRegistryDeps) {
+    this.supervisor = new LocalServerSupervisor({
+      launchers: deps.launchers,
+      logger: deps.logger,
+      changed: id => this.launchChanged(id),
+      records: deps.ownedServers,
+      cipher: deps.ownedCipher,
+      processes: deps.processes,
+    });
+  }
 
   private get platform(): NodeJS.Platform {
     return this.deps.platform ?? process.platform;
@@ -212,6 +279,7 @@ export class ModelServerRegistry {
       health: this.localHealth,
       models: [],
       specs: this.localSpecs,
+      launch: this.launchView(LOCAL_SERVER_ID),
     };
     return [local, ...[...this.entries.values()].map(entry => this.view(entry))];
   }
@@ -220,6 +288,103 @@ export class ModelServerRegistry {
   specs(id: string): ModelServerSpecs | null {
     if (id === LOCAL_SERVER_ID) return this.localSpecs;
     return this.entries.get(id)?.record.specs ?? null;
+  }
+
+  /**
+   * The OLLAMA_KV_CACHE_TYPE the Ollama at `id` runs with, which fit sizes its cache with; undefined is f16. Known for
+   * one Desktop started, for another on this computer from its variables or else its saved launch settings, and as
+   * entered under Hardware for a remote or SSH one.
+   */
+  kvCacheType(id: string): QuantizedKvCacheType | undefined {
+    const owned = this.supervisor.owned(id);
+    if (owned) return owned.runtime === 'ollama' ? owned.settings.kvCacheType : undefined;
+    const owner = this.ownerOf(id);
+    if (owner === 'remote')
+      return this.launchTarget(id)?.runtime === 'ollama' ? this.specs(id)?.kvCacheType : undefined;
+    if (owner !== 'other') return undefined;
+    const observed = this.launchStates.get(id)?.observed;
+    if (observed) return observedKvCacheType(observed);
+    const saved = this.unobservedOllamaSettings(id);
+    return saved?.flashAttention === 'off' ? undefined : saved?.kvCacheType;
+  }
+
+  localKvCacheType(): QuantizedKvCacheType | undefined {
+    return this.kvCacheType(LOCAL_SERVER_ID);
+  }
+
+  /** Flash attention as the server at `id` runs it, known as kvCacheType is; undefined is auto. */
+  flashAttention(id: string): FlashAttention | undefined {
+    const owned = this.supervisor.owned(id);
+    if (owned) {
+      // ollamaLaunchEnv turns flash attention on for a quantized cache left at auto.
+      const quantized = owned.runtime === 'ollama' && owned.settings.kvCacheType !== undefined;
+      return owned.settings.flashAttention ?? (quantized ? 'on' : undefined);
+    }
+    if (this.ownerOf(id) !== 'other') return undefined;
+    const observed = this.launchStates.get(id)?.observed;
+    if (observed) return observedFlashAttention(observed);
+    const saved = this.unobservedOllamaSettings(id);
+    return saved?.flashAttention ?? (saved?.kvCacheType !== undefined ? 'on' : undefined);
+  }
+
+  /**
+   * The saved launch settings of a local Ollama Desktop did not start and whose variables cannot be read (only Linux
+   * reads them): the user's word for how it runs, such as an Ollama.app given OLLAMA_KV_CACHE_TYPE by launchctl.
+   */
+  private unobservedOllamaSettings(id: string): ModelServerLaunchSettings | null {
+    return this.launchTarget(id)?.runtime === 'ollama' ? this.launchSettings(id) : null;
+  }
+
+  /** Starts a server at this server's address on this computer, with its saved launch settings. */
+  async startServer(id: string): Promise<ModelServerView[]> {
+    await this.load();
+    await this.check(id);
+    const target = this.launchTarget(id);
+    if (!target) throw new Error('That model server is no longer saved.');
+    const owner = this.ownerOf(id);
+    if (target.port === null || owner === 'remote') throw new Error(launchRefusal(owner, nounOf(target)));
+    if (owner === 'desktop') throw new Error(`Desktop already runs this ${nounOf(target)}.`);
+    if (owner === 'other') {
+      throw new Error(
+        this.launchStates.get(id)?.portHeld
+          ? portHeldMessage(target.port)
+          : `Something already answers at 127.0.0.1:${target.port}. Stop it first.${
+              this.platform === 'win32' ? ` ${WINDOWS_ORPHAN_HINT}` : ''
+            }`
+      );
+    }
+    const settings = this.launchSettings(id);
+    const problem = launchSettingsProblem(settings, target.runtime);
+    if (problem) throw new Error(problem);
+    await this.supervisor.start(id, { runtime: target.runtime, port: target.port, settings });
+    return this.check(id);
+  }
+
+  /** Stops the server Desktop runs for `id`; one Desktop did not start is left alone. */
+  async stopServer(id: string): Promise<ModelServerView[]> {
+    await this.load();
+    const owner = this.ownerOf(id);
+    if (owner !== 'desktop') {
+      const target = this.launchTarget(id);
+      throw new Error(
+        target
+          ? launchRefusal(owner, nounOf(target), this.platform === 'win32')
+          : 'That model server is no longer saved.'
+      );
+    }
+    await this.supervisor.stop(id);
+    return this.check(id);
+  }
+
+  /** Stops and starts the server Desktop runs for `id`, so it picks up the saved launch settings. */
+  async restartServer(id: string): Promise<ModelServerView[]> {
+    await this.stopServer(id);
+    return this.startServer(id);
+  }
+
+  /** Every server Desktop started, before quitting. */
+  stopLocalServers(): Promise<void> {
+    return this.supervisor.stopAll();
   }
 
   /** Tests an address or SSH destination without saving it. */
@@ -268,6 +433,9 @@ export class ModelServerRegistry {
       const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
       // The system code tells a declined macOS Local Network permission (EHOSTUNREACH) apart from a down server.
       if (outcome.code) this.deps.logger.warn(`MODEL SERVERS: testing ${label} (${scope}) failed with ${outcome.code}`);
+      const port = launchPort(parsed);
+      // A closed port may time out instead of refusing (WSL mirrored networking), so binding it decides.
+      const launchable = port !== null && (await (this.deps.portFree ?? loopbackPortFree)(port));
       return failed(
         withLocalNetworkHint(
           `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
@@ -275,7 +443,7 @@ export class ModelServerRegistry {
           scope,
           this.platform
         ),
-        base
+        { ...base, ...(launchable ? { launchable } : {}) }
       );
     }
     let openToAnyone = false;
@@ -329,7 +497,9 @@ export class ModelServerRegistry {
   async add(input: ModelServerAddInput): Promise<ModelServerView[]> {
     await this.load();
     const probe = await this.probe(input);
-    if (!probe.ok || !probe.address) throw new Error(probe.error ?? 'The server did not answer.');
+    // Nothing answers yet at an address Desktop can start a server on.
+    const launching = input.launch === true && probe.launchable === true;
+    if ((!probe.ok && !launching) || !probe.address) throw new Error(probe.error ?? 'The server did not answer.');
     if (probe.openToAnyone && !input.acceptOpen) {
       throw new Error('This server answers anyone on the internet. Confirm that before saving it.');
     }
@@ -352,16 +522,24 @@ export class ModelServerRegistry {
 
   async update(id: string, input: ModelServerUpdateInput): Promise<ModelServerView[]> {
     await this.load();
+    if (input.launch) this.assertLaunchable(id, input.launch, input.kind);
     if (id === LOCAL_SERVER_ID) {
-      if (input.specs === undefined) throw new Error('This computer has no other settings to change here.');
-      this.localSpecs = await this.deps.store.setLocalSpecs(input.specs);
-      this.deps.localSpecsChanged?.();
-      this.saved(id);
+      if (input.specs === undefined && input.launch === undefined)
+        throw new Error('This computer has no other settings to change here.');
+      if (input.launch) await this.deps.store.setLocalLaunch(input.launch);
+      if (input.specs !== undefined) {
+        this.localSpecs = await this.deps.store.setLocalSpecs(input.specs);
+        this.deps.localSpecsChanged?.();
+        this.saved(id);
+      }
       this.emit();
       return this.views();
     }
     const entry = this.entries.get(id);
     if (!entry) throw new Error('That model server is no longer saved.');
+    if (input.kind && input.kind !== entry.record.kind && (this.supervisor.owned(id) || this.supervisor.busy(id))) {
+      throw new Error('Stop the server Desktop started here before changing its kind.');
+    }
     if (entry.ssh && input.kind && input.kind !== 'ollama') {
       throw new Error('An SSH server reaches Ollama on that machine, so its kind stays Ollama.');
     }
@@ -388,7 +566,9 @@ export class ModelServerRegistry {
 
   async remove(id: string): Promise<ModelServerView[]> {
     await this.load();
+    await this.supervisor.stop(id);
     await this.deps.store.remove(id);
+    this.launchStates.delete(id);
     const entry = this.entries.get(id);
     this.entries.delete(id);
     this.deps.edited?.();
@@ -616,6 +796,11 @@ export class ModelServerRegistry {
         this.run(id, signal, entry => entry.client.stream(request, onEvent, signal, onTrimmed, onNotice)),
       contextTokens: (modelId, signal) => this.run(id, signal, entry => entry.client.contextTokens(modelId, signal)),
       growFor: (modelId, tokens) => this.run(id, undefined, entry => entry.client.growFor(modelId, tokens)),
+      // For the Models screen's dialog only, so a failure here says nothing about the server's health.
+      loadOffer: async (modelId, draftTokens) => {
+        await this.load();
+        return (await this.entries.get(id)?.client.loadOffer?.(modelId, draftTokens)) ?? {};
+      },
     };
   }
 
@@ -718,15 +903,173 @@ export class ModelServerRegistry {
         error: 'Ollama is not running on this computer.',
       };
     }
+    await this.observe(LOCAL_SERVER_ID);
   }
 
   /** One check per server at a time; callers during a check share its result: the listing it made, if it made one. */
   private checkEntry(entry: Entry): Promise<Listing | undefined> {
     const running = this.checking.get(entry);
     if (running) return running;
-    const done = this.probeEntry(entry).finally(() => this.checking.delete(entry));
+    const done = this.probeEntry(entry)
+      .then(async listing => {
+        if (this.current(entry)) await this.observe(entry.record.id);
+        return listing;
+      })
+      .finally(() => this.checking.delete(entry));
     this.checking.set(entry, done);
     return done;
+  }
+
+  /** Who runs the server at `id`'s address. */
+  private ownerOf(id: string): LaunchOwner {
+    const target = this.launchTarget(id);
+    if (!target || target.port === null) return 'remote';
+    if (this.supervisor.owned(id) || this.supervisor.busy(id)) return 'desktop';
+    if (answers(target.health)) return 'other';
+    return this.launchStates.get(id)?.portHeld ? 'other' : 'none';
+  }
+
+  private launchTarget(id: string): LaunchTarget | null {
+    if (id === LOCAL_SERVER_ID) {
+      return {
+        runtime: 'ollama',
+        port: Number(LOCAL_OLLAMA_PORT),
+        health: this.localHealth,
+        product: null,
+        url: LOCAL_OLLAMA_URL,
+      };
+    }
+    const entry = this.entries.get(id);
+    if (!entry) return null;
+    return {
+      runtime: entry.record.kind === 'ollama' ? 'ollama' : 'llama-server',
+      port: entry.ssh ? null : launchPort(entry.parsed),
+      health: entry.health,
+      product: entry.product,
+      url: entry.parsed.baseUrl,
+    };
+  }
+
+  private launchSettings(id: string): ModelServerLaunchSettings {
+    return id === LOCAL_SERVER_ID ? this.deps.store.localLaunch() : this.deps.store.launchSettings(id);
+  }
+
+  private launchView(id: string): ModelServerLaunchView | null {
+    const target = this.launchTarget(id);
+    if (!target) return null;
+    const owner = this.ownerOf(id);
+    const settings = this.launchSettings(id);
+    const owned = this.supervisor.owned(id);
+    const busy = this.supervisor.busy(id);
+    const settingsProblem = launchSettingsProblem(settings, target.runtime);
+    const lastObserved = target.runtime === 'ollama' ? (this.launchStates.get(id)?.lastObserved ?? null) : null;
+    return {
+      runtime: target.runtime,
+      owner,
+      busy,
+      settings,
+      pendingRestart: !!owned && !sameLaunch(owned.settings, settings),
+      canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem,
+      problem:
+        owner === 'remote'
+          ? null
+          : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
+            ? portHeldMessage(target.port)
+            : (this.supervisor.problem(id) ?? settingsProblem),
+      observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
+      sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
+      sizingFlashAttention: this.flashAttention(id) ?? 'auto',
+      prefill: lastObserved && owner !== 'remote' ? observedPrefill(lastObserved) : null,
+      noun: nounOf(target),
+      ...(this.platform === 'win32' ? { windowsHost: true } : {}),
+    };
+  }
+
+  /**
+   * Refuses launch settings Desktop would not apply or size with: for a server it did not start (unless fit sizes it with
+   * them, see sizesWithSavedLaunch), or that the server cannot take.
+   */
+  private assertLaunchable(id: string, settings: ModelServerLaunchSettings, kind?: ModelServerView['kind']): void {
+    const target = this.launchTarget(id);
+    if (!target) throw new Error('That model server is no longer saved.');
+    const owner = this.ownerOf(id);
+    const observed = owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null;
+    const sizingOnly = sizesWithSavedLaunch({ owner, runtime: target.runtime, observed });
+    if (owner === 'remote' || (owner === 'other' && !sizingOnly)) {
+      throw new Error(launchRefusal(owner, nounOf(target), this.platform === 'win32'));
+    }
+    const runtime = kind ? (kind === 'ollama' ? 'ollama' : 'llama-server') : target.runtime;
+    const problem = launchSettingsProblem(settings, runtime);
+    if (problem) throw new Error(problem);
+  }
+
+  /**
+   * Reads the launch variables of an Ollama on this computer that Desktop did not start: when it starts answering, when
+   * its version changes, and at most every OBSERVE_TTL_MS otherwise, since a read scans processes and systemd units.
+   * Expires what was sized with the old cache type when that changes.
+   */
+  private async observe(id: string): Promise<void> {
+    const target = this.launchTarget(id);
+    if (!target) return;
+    const state = this.launchState(id);
+    const unanswered =
+      target.port !== null && !answers(target.health) && !this.supervisor.owned(id) && !this.supervisor.busy(id);
+    // A listener that never answers still holds the port. Connect, not bind: a periodic bind could make an Ollama
+    // starting at that moment fail with "address already in use".
+    const portFree = this.deps.portFree ?? (async (port: number) => !(await loopbackPortListening(port)));
+    state.portHeld = unanswered && !(await portFree(target.port as number));
+    const owner = this.ownerOf(id);
+    if (target.runtime !== 'ollama' || owner === 'remote') state.lastObserved = null;
+    if (target.runtime !== 'ollama' || owner !== 'other') {
+      state.observed = null;
+      state.observedAt = 0;
+    } else if (
+      state.observedAt === 0 ||
+      state.observedVersion !== target.health.version ||
+      Date.now() - state.observedAt >= OBSERVE_TTL_MS
+    ) {
+      const env = (await this.deps.readOllamaEnv?.(target.url).catch(() => null)) ?? null;
+      state.observed = env ? observedLaunchVars(env) : null;
+      if (state.observed) state.lastObserved = state.observed;
+      state.observedAt = Date.now();
+      state.observedVersion = target.health.version;
+    }
+    this.sizingChanged(id);
+  }
+
+  private launchState(id: string): LaunchState {
+    let state = this.launchStates.get(id);
+    if (!state) {
+      state = {
+        portHeld: false,
+        observed: null,
+        observedAt: 0,
+        observedVersion: null,
+        lastObserved: null,
+        sizedWith: sizingKey(undefined, undefined),
+      };
+      this.launchStates.set(id, state);
+    }
+    return state;
+  }
+
+  private sizingChanged(id: string): void {
+    const state = this.launchState(id);
+    const key = sizingKey(this.kvCacheType(id), this.flashAttention(id));
+    if (key === state.sizedWith) return;
+    state.sizedWith = key;
+    if (id === LOCAL_SERVER_ID) this.deps.localSpecsChanged?.();
+    else this.deps.edited?.();
+    this.saved(id);
+  }
+
+  /** A server Desktop runs started, stopped or exited. */
+  private launchChanged(id: string): void {
+    // A start aborted by remove() still settles here, after its server is gone.
+    if (!this.launchTarget(id)) return;
+    this.sizingChanged(id);
+    if (this.supervisor.busy(id)) this.emit();
+    else void this.check(id).catch(() => undefined);
   }
 
   private async probeEntry(entry: Entry): Promise<Listing | undefined> {
@@ -831,21 +1174,27 @@ export class ModelServerRegistry {
           origin: parsed.origin,
           label: record.name,
           app: 'Desktop',
-          credentialHeaders: () => this.deps.store.headers(record),
+          credentialHeaders: () => this.supervisor.headers(record.id) ?? this.deps.store.headers(record),
         });
     const runtimeId = serverRuntimeId(record.id);
     const hasCredentials = () => !!this.deps.store.headers(record);
     const product = previous?.record.kind === record.kind ? previous.product : null;
     const client: ServerClient =
       record.kind === 'ollama'
-        ? new OllamaLocal(undefined, undefined, {
-            runtimeId,
-            baseUrl: parsed.baseUrl,
-            label: record.name,
-            fetch,
-            hasCredentials,
-            redact: redactServerResponse,
-          })
+        ? new OllamaLocal(
+            undefined,
+            undefined,
+            {
+              runtimeId,
+              baseUrl: parsed.baseUrl,
+              label: record.name,
+              fetch,
+              hasCredentials,
+              redact: redactServerResponse,
+              kvCacheType: () => this.kvCacheType(record.id),
+            },
+            this.deps.loadSettings
+          )
         : new OpenAICompatibleChat({
             runtimeId,
             baseUrl: parsed.baseUrl,
@@ -854,6 +1203,7 @@ export class ModelServerRegistry {
             fetch,
             hasCredentials,
             redact: redactServerResponse,
+            loadSettings: this.deps.loadSettings,
             toolsChanged: () => this.toolsChanged(record.id),
             learnedThinkers: {
               read: () => this.deps.store.thinkers(record.id),
@@ -901,19 +1251,27 @@ export class ModelServerRegistry {
       health: entry.health,
       models: record.models,
       specs: record.specs,
+      launch: this.launchView(record.id),
     };
   }
 
   private load(): Promise<void> {
-    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()]).then(([records, specs]) => {
-      for (const record of records) {
-        if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
-          this.entries.set(record.id, this.build(record));
+    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()])
+      .then(([records, specs]) => {
+        for (const record of records) {
+          if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
+            this.entries.set(record.id, this.build(record));
+          }
         }
-      }
-      this.localSpecs = specs;
-      if (specs) this.deps.localSpecsChanged?.();
-    });
+        this.localSpecs = specs;
+        if (specs) this.deps.localSpecsChanged?.();
+      })
+      .then(() =>
+        this.supervisor.adopt(record => {
+          const target = this.launchTarget(record.id);
+          return target?.port === record.port && target.runtime === record.runtime;
+        })
+      );
     return this.loaded;
   }
 
@@ -951,6 +1309,38 @@ export class ModelServerRegistry {
 
 const LOCAL_OLLAMA_PORT = new URL(LOCAL_OLLAMA_URL).port;
 const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::', '::ffff:7f00:1']);
+
+/** The hosts a server Desktop starts answers on: it binds 127.0.0.1 only. */
+function launchPort(parsed: ParsedAddress): number | null {
+  return loopbackLaunchPort(parsed.baseUrl);
+}
+
+function sizingKey(kv: QuantizedKvCacheType | undefined, flash: FlashAttention | undefined): string {
+  return `${kv ?? 'f16'}/${flash ?? 'auto'}`;
+}
+
+const PRODUCT_NOUNS: Record<OpenAICompatibleProduct, string> = {
+  'llama-server': 'llama-server',
+  lmstudio: 'LM Studio server',
+  vllm: 'vLLM server',
+};
+
+function nounOf(target: Pick<LaunchTarget, 'runtime' | 'product'>): string {
+  if (target.runtime === 'ollama') return 'Ollama server';
+  return target.product ? PRODUCT_NOUNS[target.product] : 'server';
+}
+
+function launchRefusal(owner: LaunchOwner, noun: string, windowsHost = false): string {
+  return launchLockedMessage({ owner, noun, windowsHost }) ?? `Desktop is not running this ${noun}.`;
+}
+
+function answers(health: ModelServerHealth): boolean {
+  return health.state === 'online' || health.state === 'credentials' || health.state === 'refused';
+}
+
+function portHeldMessage(port: number): string {
+  return `Another program is using 127.0.0.1:${port} but does not answer there. Stop it, then check again.`;
+}
 
 /** The port "This computer" already uses: saving it again would list the same Ollama twice. */
 function isLocalOllama(parsed: ParsedAddress): boolean {

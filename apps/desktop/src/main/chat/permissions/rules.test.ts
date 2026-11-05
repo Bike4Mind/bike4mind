@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { realpathSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { permissionProtectedLocations } from '../protectedLocations';
 import { scanShell } from '../tools/shellScan';
 import { permissionSubject } from './subject';
 import {
@@ -334,6 +336,242 @@ describe('PermissionRuleSet', () => {
       }
     }
   );
+
+  it('does not allow a shell write into an app folder whose configured spelling runs through a symlink', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await mkdir(join(base, 'proj'));
+      await mkdir(join(base, 'home'));
+      await writeFile(join(base, 'proj', 'payload'), '{}');
+      await symlink(join(base, 'config'), join(base, 'cfg-link'));
+      const script = `cp payload ${join(base, 'config', 'App', 'tool-access.json')}`;
+      const scan = await scanShell(script, join(base, 'proj'), [base]);
+      if (!scan) throw new Error('Expected the command to parse');
+      const subject: PermissionSubject = { tool: 'bash_execute', shell: { script, ...scan } };
+      const roots = [
+        ...permissionProtectedLocations(join(base, 'cfg-link', 'App'), join(base, 'home'), join(base, 'managed'), {
+          warn: () => {},
+        }).paths(),
+      ];
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, roots), subject)).toBeNull();
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, [join(base, 'cfg-link', 'App')]), subject)).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('does not allow an edit that reaches a protected folder through a symlinked parent', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await symlink(join(base, 'config'), join(base, 'cfg-link'));
+      const rules = set({ allow: [`Edit(/${base}/**)`] }, [join(base, 'config', 'App')]);
+      const linked = join(base, 'cfg-link', 'App');
+      expect(decide(rules, { tool: 'file_write', paths: [join(linked, 'tool-access.json')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_write', paths: [join(linked, 'new', 'file.json')] })).toBeNull();
+      expect(rules.coversFolder(linked)).toBe(false);
+      expect(decide(rules, { tool: 'file_write', paths: [join(base, 'cfg-link', 'Other.json')] })).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('does not allow an edit of a dangling link inside a protected folder reached through an alias', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'home', 'prot'), { recursive: true });
+      await mkdir(join(base, 'out'));
+      await symlink(join(base, 'home'), join(base, 'alias'));
+      await symlink(join(base, 'out', 'x'), join(base, 'home', 'prot', 'lnk'));
+      const rules = set({ allow: ['Edit'] }, [join(base, 'home', 'prot')]);
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'alias', 'prot', 'lnk')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'alias', 'other')] })).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('does not allow an edit of a path whose parent cannot be resolved, though the path itself can', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    const native = realpathSync.native;
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path) === join(base, 'dir')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      return native(path, options);
+    });
+    try {
+      await mkdir(join(base, 'dir'));
+      await writeFile(join(base, 'dir', 'file'), 'x');
+      const rules = set({ allow: ['Edit'] }, [join(base, 'prot')]);
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'dir', 'file')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'other')] })).toBe('allow');
+    } finally {
+      vi.restoreAllMocks();
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the protected roots from their provider on each decision', () => {
+    let roots: readonly string[] = [];
+    const compiled = compileRule(parsed('Edit', true), 'allow', SOURCE, { home: HOME, root: PROJECT, cwd: PROJECT });
+    if (!compiled) throw new Error('Expected the rule to compile');
+    const rules = new PermissionRuleSet([compiled], () => roots);
+    const subject: PermissionSubject = { tool: 'file_edit', paths: [join(PROJECT, 'prot', 'file')] };
+    expect(decide(rules, subject)).toBe('allow');
+    roots = [join(PROJECT, 'prot')];
+    expect(decide(rules, subject)).toBeNull();
+    expect(rules.coversFolder(join(PROJECT, 'prot'))).toBe(false);
+  });
+
+  it('applies no allow rule while a protected folder is unresolved', () => {
+    let unresolved: readonly string[] = ['/home/someone/.claude'];
+    const rules = ['Edit(**)', 'Bash(git status:*)'].map(text => {
+      const compiled = compileRule(parsed(text, true), 'allow', SOURCE, { home: HOME, root: PROJECT, cwd: PROJECT });
+      if (!compiled) throw new Error('Expected the rule to compile');
+      return compiled;
+    });
+    const set = new PermissionRuleSet(rules, [], () => unresolved);
+    const edit: PermissionSubject = { tool: 'file_edit', paths: [join(PROJECT, 'file')] };
+    const bash = shell('git status', ['git status'], [PROJECT]);
+    expect(decide(set, edit)).toBeNull();
+    expect(decide(set, bash)).toBeNull();
+    unresolved = [];
+    expect(decide(set, edit)).toBe('allow');
+    expect(decide(set, bash)).toBe('allow');
+  });
+
+  describe('when a path cannot be resolved', () => {
+    let base: string;
+    let rules: PermissionRuleSet;
+
+    beforeEach(async () => {
+      base = await realpath(await mkdtemp(join(tmpdir(), 'permission-unresolved-')));
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await mkdir(join(base, 'locked'));
+      await symlink(join(base, 'config', 'App'), join(base, 'locked', 'alias'));
+      await symlink(join(base, 'loop-a'), join(base, 'loop-b'));
+      await symlink(join(base, 'loop-b'), join(base, 'loop-a'));
+      rules = set({ allow: [`Edit(/${base}/**)`, 'Bash(cp:*)'] }, [join(base, 'config', 'App')]);
+      const native = realpathSync.native;
+      vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path).startsWith(join(base, 'locked'))) {
+          throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        }
+        return native(path, options);
+      });
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await rm(base, { recursive: true, force: true });
+    });
+
+    it('still allows a resolvable path beside it', () => {
+      expect(decide(rules, { tool: 'file_write', paths: [join(base, 'notes.md')] })).toBe('allow');
+      expect(rules.coversFolder(join(base, 'notes'))).toBe(true);
+    });
+
+    it.each([
+      ['EACCES', ['locked', 'alias']],
+      ['ELOOP', ['loop-a']],
+    ])('treats it as protected on %s', (_code, parts) => {
+      const directory = join(base, ...parts);
+      const target = join(directory, 'tool-access.json');
+      expect(decide(rules, { tool: 'file_write', paths: [target] })).toBeNull();
+      const script = `cp x ${target}`;
+      const command = { text: script, words: script, coverable: true };
+      expect(
+        decide(rules, {
+          tool: 'bash_execute',
+          shell: { script, commands: [command], directories: [], paths: [target] },
+        })
+      ).toBeNull();
+      expect(rules.coversFolder(directory)).toBe(false);
+      expect(decide(rules, shell(script, [script], [directory]))).toBeNull();
+    });
+  });
+
+  describe.each(['darwin', 'win32'] as const)('on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    beforeEach(() => Object.defineProperty(process, 'platform', { value: platform }));
+    afterEach(() => {
+      if (original) Object.defineProperty(process, 'platform', original);
+    });
+
+    it('treats a case variant of a protected folder as the folder', () => {
+      const rules = set({ allow: [`Edit(/${HOME}/**)`, 'Bash(cp:*)'] }, [`${HOME}/Library/App`]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/library/app/tool-access.json`] })).toBeNull();
+      const script = `cp x ${HOME}/LIBRARY/APP/tool-access.json`;
+      expect(decide(rules, shell(script, [script]))).toBeNull();
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/notes.md`] })).toBe('allow');
+    });
+  });
+
+  describe('on win32, for a protected folder reached through the WSL share', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    beforeEach(() => Object.defineProperty(process, 'platform', { value: 'win32' }));
+    afterEach(() => {
+      if (original) Object.defineProperty(process, 'platform', original);
+    });
+
+    const APP = 'C:\\Users\\me\\AppData\\Roaming\\App';
+    const SHARE = '\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App';
+
+    it('allows an edit elsewhere, so the refusals below come from the protected folder', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: ['D:\\notes'] })).toBe('allow');
+      expect(rules.coversFolder('D:\\notes')).toBe(true);
+    });
+
+    it('does not allow an edit through the share spelling of the app folder', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: [SHARE] })).toBeNull();
+    });
+
+    it('does not cover the share spelling of the app folder as a folder', () => {
+      expect(set({ allow: ['Edit'] }, [APP]).coversFolder(SHARE)).toBe(false);
+    });
+
+    it('does not allow an edit to a child of the app folder through the share spelling', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${SHARE}\\tool-access.json`] })).toBeNull();
+    });
+
+    it.each(['cp x C:/Users/me/AppData/Roaming/App/x', 'cp x /mnt/c/Users/me/AppData/Roaming/App/x'])(
+      'does not allow a shell call spelling the app folder as %s',
+      script => {
+        expect(decide(set({ allow: ['Bash(cp:*)'] }, [APP]), shell(script, [script]))).toBeNull();
+      }
+    );
+
+    it('still allows a shell call that names an unrelated folder', () => {
+      const script = 'cp x D:/notes/x';
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, [APP]), shell(script, [script]))).toBe('allow');
+    });
+  });
+
+  it('keeps the case of a protected folder on linux', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const rules = set({ allow: [`Edit(/${HOME}/**)`] }, [`${HOME}/Library/App`]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/library/app/x.json`] })).toBe('allow');
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/Library/App/x.json`] })).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original);
+    }
+  });
+
+  it('does not allow a shell call naming a case variant of a permission file on macOS', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      const script = 'cp x .CLAUDE/settings.json';
+      expect(decide(set({ allow: ['Bash(cp:*)'] }), shell(script, [script]))).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original);
+    }
+  });
 
   it('never allows an irreversible call, but still denies or asks', () => {
     expect(decide(set({ allow: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBeNull();

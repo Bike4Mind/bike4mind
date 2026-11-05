@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { withTransaction } from '@bike4mind/db-core';
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userService } from '@bike4mind/services';
 import { CURRENT_POLICY_VERSION, newSignupGrant, PENDING_FREE_CREDITS_TAG } from '@bike4mind/common';
@@ -15,8 +17,6 @@ import {
   AdminSettings,
 } from '@bike4mind/database';
 import { unlockSignupGrantFromActivity } from './activityUnlock';
-import { unlockSignupGrantFromOrgInvite } from './orgInviteUnlock';
-import { checkSignupGrantEligibility } from './signupGrantEligibility';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -300,6 +300,31 @@ describe('staged signup ledger', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(2);
   });
 
+  it('pays nothing to an alias inside a caller transaction and still commits it', async () => {
+    expect(
+      (await userService.releaseSignupTranche((await createAlias('joined@gmail.com')).id, adapters)).creditsGranted
+    ).toBe(12);
+    const alias = await withTransaction(async () => {
+      const created = await createAlias('j.o.i.n.e.d+alias@googlemail.com');
+      expect((await userService.releaseSignupTranche(created.id, adapters)).creditsGranted).toBe(0);
+      return created;
+    });
+    expect((await User.findById(alias.id))?.signupGrant?.stage).toBe('pending_email');
+    expect(await CreditTransaction.countDocuments({})).toBe(1);
+  });
+
+  it('fails loudly when the payout cannot see the account its caller is creating', async () => {
+    const als = (mongoose as unknown as { transactionAsyncLocalStorage: AsyncLocalStorage<unknown> })
+      .transactionAsyncLocalStorage;
+    await withTransaction(async () => {
+      const created = await createAlias('unseen@example.test');
+      await expect(als.exit(() => userService.releaseSignupTranche(created.id, adapters))).rejects.toThrow(
+        'Signup grant account not found'
+      );
+    });
+    expect(await CreditTransaction.countDocuments({})).toBe(0);
+  });
+
   it('allows only one staged alias payout when claims race', async () => {
     const users = await Promise.all([createAlias('race@gmail.com'), createAlias('r.a.c.e+alias@googlemail.com')]);
     // Both contenders can miss the advisory pre-check; exercise the unique-index denial,
@@ -343,47 +368,6 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(0);
     expect((await User.findById(user.id))?.signupGrant?.stage).toBe('pending_email');
     expect(await CreditTransaction.countDocuments({})).toBe(0);
-  });
-
-  it('recovers a failed organization acceptance release through persisted evidence and never mints twice', async () => {
-    const user = await createUser();
-    const email = 'NAME+TAG@example.test';
-    await User.updateOne({ _id: user.id }, { email });
-    await userService.releaseSignupTranche(user.id, adapters);
-    const organization = await Organization.create({
-      name: 'Synthetic organization',
-      userId: 'owner',
-      users: [{ userId: user.id, permissions: ['read'] }],
-    });
-    // A regexp-like address must not earn credits for someone else's acceptance.
-    await Invite.create({
-      type: 'Organization',
-      documentId: organization.id,
-      recipients: { pending: [], accepted: ['nameeeetag@exampleXtest'], refused: [] },
-      remaining: 0,
-    });
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    const acceptedInvite = await Invite.create({
-      type: 'Organization',
-      documentId: organization.id,
-      recipients: { pending: [], accepted: [email.toLowerCase()], refused: [] },
-      remaining: 0,
-    });
-    // Existing accepted invites cannot pay until an operator explicitly enables this source.
-    expect((await unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).creditsGranted).toBe(0);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.currentCredits).toBe(12);
-    await AdminSettings.create({ settingName: 'signupGrantOrgInviteEnabled', settingValue: 'true' });
-    const update = vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('temporary grant write failure'));
-    await expect(unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).rejects.toThrow(
-      'temporary grant write failure'
-    );
-    update.mockRestore();
-    expect((await User.findById(user.id))?.currentCredits).toBe(12);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(28);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.currentCredits).toBe(40);
-    expect(await CreditTransaction.countDocuments({ transactionId: `unlock-grant:${user.id}` })).toBe(1);
   });
 
   it.each(['malformed policy', 'invalid policy', 'invalid enabled policy'])(
@@ -627,7 +611,12 @@ describe('staged signup ledger', () => {
                     } as never)
                   : adminSettings.findBySettingName(name),
           },
-          registrationInvites: { findByCode: async () => null, update: async () => undefined },
+          registrationInvites: {
+            findByCode: async () => null,
+            update: async () => undefined,
+            claimUnused: async () => true,
+            releaseClaim: async () => undefined,
+          },
         },
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
         collectRiskSignals,

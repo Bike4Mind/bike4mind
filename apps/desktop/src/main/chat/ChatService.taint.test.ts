@@ -765,6 +765,22 @@ describe('ChatService untrusted content in a reply', () => {
       expect(calls('session_send', 'awaiting-approval')).toHaveLength(0);
     });
 
+    it('lists the conversations once for a send the user approved on its card', async () => {
+      const [from, to] = await twoSessions();
+      await service.setApprovalMode(from, 'ask');
+      const listed = vi.spyOn(store, 'list');
+      await reply(from, [['session_send', { session_id: to, message: 'once' }]]);
+      const card = await awaitCall('session_send', 'awaiting-approval');
+      approvals.resolve(card.approvalId!, { decision: 'once' });
+      const sent = await vi.waitUntil(() => calls('session_send', 'done')[0] ?? calls('session_send', 'error')[0], {
+        timeout: 5000,
+        interval: 10,
+      });
+      // No queue is wired here, so the send stops after resolving its target, which is the part measured.
+      expect(sent.error).toMatch(/cannot deliver messages/);
+      expect(listed).toHaveBeenCalledTimes(1);
+    });
+
     it('still asks a tainted send that only has an answer from before the taint', async () => {
       const [from, to] = await twoSessions();
       await service.setApprovalMode(from, 'ask');

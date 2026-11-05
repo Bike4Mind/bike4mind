@@ -14,11 +14,11 @@ describe('signup grant copy configuration', () => {
     h.values = { stagedSignupGrantEnabled: 'true', defaultFreeCredits: 37, signupGrantCredits: 12 };
   });
   it.each([
-    [false, 37],
-    ['false', 37],
+    [false, 12],
+    ['false', 12],
     [true, 12],
     ['true', 12],
-  ])('reads the old tranche only while the retired staged flag %j is on, like the server', (flag, credits) => {
+  ])('reads the old tranche whatever the retired staged flag %j says, like the server', (flag, credits) => {
     h.values.stagedSignupGrantEnabled = flag;
     expect(renderHook(useSignupGrantCredits).result.current).toBe(credits);
   });
@@ -31,15 +31,15 @@ describe('signup grant copy configuration', () => {
     h.values.signupGrantCredits = 0;
     expect(renderHook(useSignupGrantCredits).result.current).toBe(0);
   });
-  it.each([undefined, null])('uses the server legacy fallback when the signup setting is %j', signup => {
+  it.each([undefined, null])('ignores the retired defaultFreeCredits when the signup setting is %j', signup => {
     h.values.signupGrantCredits = signup;
-    expect(renderHook(useSignupGrantCredits).result.current).toBe(37);
+    expect(renderHook(useSignupGrantCredits).result.current).toBe(0);
   });
   it.each(['', ' ', -1, 1.5, Infinity, 'invalid'])(
     'treats an invalid configured tranche %j as unset, like the server',
     signup => {
       h.values.signupGrantCredits = signup;
-      expect(renderHook(useSignupGrantCredits).result.current).toBe(37);
+      expect(renderHook(useSignupGrantCredits).result.current).toBe(0);
     }
   );
   it('prefers the initial credits key over the old tranche key, honouring an explicit 0', () => {

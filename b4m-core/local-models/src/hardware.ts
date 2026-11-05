@@ -75,6 +75,12 @@ interface NvidiaGpu {
   memoryBytes: number | null;
 }
 
+/**
+ * nvidia-smi on Windows on Arm lists the NPU beside the GPU (`NVIDIA NPU, [N/A]`). No --query-gpu field gives the
+ * device type (only `nvidia-smi -q` prints its Product Brand), so the row is told apart by name.
+ */
+const isNpu = (name: string) => /\bNPU\b/i.test(name);
+
 /** Parses `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits` (memory in MiB). */
 export function parseNvidiaSmi(stdout: string): NvidiaGpu[] {
   return stdout.split(/\r?\n/).flatMap((line): NvidiaGpu[] => {
@@ -82,7 +88,7 @@ export function parseNvidiaSmi(stdout: string): NvidiaGpu[] {
     if (separator < 0) return [];
     const name = line.slice(0, separator).trim();
     const memory = line.slice(separator + 1).trim();
-    if (!name) return [];
+    if (!name || isNpu(name)) return [];
     if (/^\[?N\/A\]?$/i.test(memory)) return [{ name, memoryBytes: null }];
     const mib = Number(memory);
     return Number.isFinite(mib) && mib > 0 ? [{ name, memoryBytes: Math.round(mib * MIB) }] : [];
@@ -283,7 +289,7 @@ export function parseNvidiaSmiUsage(stdout: string): GpuUsage[] {
   return stdout.split(/\r?\n/).flatMap((line): GpuUsage[] => {
     const match = /^(.*),([^,]*),([^,]*)$/.exec(line);
     const name = match?.[1].trim();
-    if (!match || !name) return [];
+    if (!match || !name || isNpu(name)) return [];
     const total = mib(match[2]);
     return [{ vendor: 'nvidia', name, memoryBytes: total || null, memoryUsedBytes: mib(match[3]) }];
   });

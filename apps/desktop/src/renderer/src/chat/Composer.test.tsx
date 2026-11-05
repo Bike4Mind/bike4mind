@@ -139,24 +139,39 @@ afterEach(() => {
   host = null;
 });
 
+function tree(props: Partial<Parameters<typeof Composer>[0]> = {}) {
+  return (
+    <CssVarsProvider>
+      <Composer
+        sessionId="s1"
+        disabled={false}
+        streaming={false}
+        attachments={draft}
+        onSend={() => {}}
+        onStop={() => {}}
+        {...props}
+      />
+    </CssVarsProvider>
+  );
+}
+
 function mount(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
   act(() => {
-    root?.render(
-      <CssVarsProvider>
-        <Composer
-          sessionId="s1"
-          disabled={false}
-          streaming={false}
-          attachments={draft}
-          onSend={() => {}}
-          onStop={() => {}}
-          {...props}
-        />
-      </CssVarsProvider>
-    );
+    root?.render(tree(props));
+  });
+}
+
+/**
+ * Render again into the same root, which is what switching conversations does: the shell keys
+ * the thread beside this on the session id, but hands this one a new `sessionId` prop and
+ * leaves it mounted.
+ */
+function rerender(props: Partial<Parameters<typeof Composer>[0]> = {}): void {
+  act(() => {
+    root?.render(tree(props));
   });
 }
 
@@ -328,6 +343,50 @@ describe('skills mid-sentence', () => {
     mount({ skills, onRunCommand: () => {} });
     type('/clear');
     expect(marks()).toEqual(['clear']);
+  });
+});
+
+describe('the draft and the conversation it belongs to', () => {
+  it('does not carry what was typed into the conversation switched to', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('');
+  });
+
+  it('gives each draft back on returning to the conversation it was typed in', () => {
+    mount({ sessionId: 's1' });
+    type('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    type('something else entirely');
+
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('half a thought meant for s1');
+    rerender({ sessionId: 's2' });
+    expect(input().value).toBe('something else entirely');
+  });
+
+  // Sending is what ends a draft, so coming back must not resurrect the message just sent.
+  it('keeps nothing for a conversation whose draft was sent', () => {
+    const send = vi.fn();
+    mount({ sessionId: 's1', onSend: send });
+    type('ship it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('ship it');
+
+    rerender({ sessionId: 's2' });
+    rerender({ sessionId: 's1' });
+    expect(input().value).toBe('');
+  });
+
+  it('leaves no command menu open from the conversation left behind', () => {
+    mount({ sessionId: 's1', onRunCommand: () => {} });
+    type('/comp');
+    expect(rows()).toHaveLength(1);
+
+    rerender({ sessionId: 's2', onRunCommand: () => {} });
+    expect(rows()).toHaveLength(0);
   });
 });
 
@@ -536,6 +595,79 @@ describe('the context ring slot', () => {
   it('hides it with the credits ring while disabled or not ready', () => {
     expect(statusMarkup({ contextStatus, disabled: true })).not.toContain('composer-context-ring');
     expect(statusMarkup({ contextStatus, notReady: 'No folder' })).not.toContain('composer-context-ring');
+  });
+});
+
+describe('session mentions', () => {
+  const ID_DOCS = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ID_API = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const session = (id: string, title: string, extra: Record<string, unknown> = {}) =>
+    ({ id, title, mode: 'chat', messageCount: 1, updatedAt: '2026-10-01T00:00:00.000Z', ...extra }) as never;
+  const mentionSessions = [
+    session(ID_DOCS, 'Docs pass', { project: { directory: '/w/docs-site', name: 'docs-site', branch: 'main' } }),
+    session(ID_API, 'API rework'),
+    session('s1', 'Current'),
+    session('gone', 'Archived one', { archived: true }),
+  ];
+  const options = () => Array.from(host?.querySelectorAll('[data-testid="composer-mention-option"]') ?? []);
+
+  it('opens on an at sign, without the open or archived sessions, naming the project folder', () => {
+    mount({ mentionSessions });
+    type('hello @');
+    expect(options().map(option => option.textContent)).toEqual(['Docs passdocs-site', 'API reworkNo project']);
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).not.toBeNull();
+  });
+
+  it('filters by the text after the at sign and stays closed when nothing matches', () => {
+    mount({ mentionSessions });
+    type('@api');
+    expect(options()).toHaveLength(1);
+    type('@zzz');
+    expect(host?.querySelector('[data-testid="composer-mention-menu"]')).toBeNull();
+  });
+
+  it('is off for a host that passes no sessions', () => {
+    mount();
+    type('@');
+    expect(options()).toHaveLength(0);
+  });
+
+  it('walks with the arrows, inserts the title on Enter, and sends the markup', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('ask @');
+    press('ArrowDown');
+    press('Enter');
+    expect(input().value).toBe('ask @API rework ');
+
+    type('ask @API rework about it');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith(`ask @[API rework](session:${ID_API}) about it`);
+  });
+
+  it('drops a chosen mention whose label was deleted before sending', () => {
+    const send = vi.fn();
+    mount({ mentionSessions, onSend: send });
+    type('@');
+    press('Enter');
+    expect(input().value).toBe('@Docs pass ');
+
+    type('plain text');
+    press('Enter');
+    expect(send).toHaveBeenCalledWith('plain text');
+  });
+
+  it('closes on Escape and highlights a chosen title', () => {
+    mount({ mentionSessions });
+    type('@do');
+    press('Escape');
+    expect(options()).toHaveLength(0);
+
+    type('@');
+    press('Enter');
+    expect(Array.from(host?.querySelectorAll('[data-skill-token]') ?? []).map(mark => mark.textContent)).toEqual([
+      '@Docs pass',
+    ]);
   });
 });
 

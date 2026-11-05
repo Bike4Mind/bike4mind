@@ -3,6 +3,7 @@ export * from './adminUserNotes';
 export * from './signupGrant';
 export * from './apiErrorCodes';
 export * from './groupTypes';
+export * from './importHistoryFailure';
 export * from './insufficientCredits';
 export * from './memberCreditPeriod';
 export * from './validation';
@@ -117,6 +118,8 @@ export * from './schemas/riskEvidence';
 export * from './schemas/accountCampaign';
 export * from './schemas/shadowDetection';
 export * from './schemas/abuseAssessment';
+export * from './schemas/stripeDispute';
+export * from './schemas/autoContainment';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/teamPlanSettings';
@@ -211,7 +214,6 @@ export * from './adminPermissions';
 
 export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
 
-export * from './noCardUnlock';
 export * from './preferenceArena';
 export * from './ipBlock';
 export { regionalPersonalEmailProviders } from './organizationUtils';

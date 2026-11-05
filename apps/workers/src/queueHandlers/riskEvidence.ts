@@ -22,6 +22,7 @@ import { userService } from '@bike4mind/services';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { requestRiskEvidenceRefresh, riskEvidenceDb } from '@server/auth/riskEvidence';
+import { checkStrongLink, liveStrongLinkDeps } from '@server/security/autoContainment/strongLink';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
 import type { SQSBatchResponse, SQSRecord } from 'aws-lambda';
@@ -94,6 +95,20 @@ function summaryMetrics(summary: RiskEvidenceSummary, requestedAt: Date): RiskEv
   ];
 }
 
+/**
+ * The strong-link rule (security/autoContainment/strongLink.ts) for a new account, after its signup
+ * evidence is stored so the assessment reads it. Never throws: a retry would refresh the evidence
+ * again, and the hourly sweep still covers the account.
+ */
+async function checkStrongLinkSafely(userId: string, logger: Logger): Promise<void> {
+  try {
+    const result = await checkStrongLink(userId, liveStrongLinkDeps(logger));
+    if (result.status === 'recorded') logger.info('Strong-link rule recorded a detection', { userId, ...result });
+  } catch (error) {
+    logger.error('Strong-link rule failed', { userId, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 /** Handle one record, appending its metrics to `metrics`; throws only for a failure SQS should retry. */
 export async function processRiskEvidenceRecord(
   record: Pick<SQSRecord, 'body'>,
@@ -129,6 +144,7 @@ export async function processRiskEvidenceRecord(
       outcome(RiskEvidenceMetrics.REFRESHES, result.status),
       ...(result.status === 'stored' ? summaryMetrics(result.summary, message.requestedAt) : [])
     );
+    if (message.trigger === 'signup') await checkStrongLinkSafely(message.userId, logger);
   } catch (error) {
     // userId and trigger only: the message carries nothing else, and no source payload is logged.
     logger.warn('Risk evidence refresh failed', {

@@ -31,7 +31,11 @@ vi.mock('@bike4mind/server-utils/utils/sessionAccess', () => ({ assertSessionAcc
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsModel: vi.fn(async () => ({ modelId: 'm', llm: {} })) },
 }));
-vi.mock('@bike4mind/services', () => ({ sessionService: { autoName: h.autoName } }));
+vi.mock('@bike4mind/services', () => ({
+  sessionService: { autoName: h.autoName },
+  meterCompletionBackend: (llm: unknown) => llm,
+}));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ questRepository: {}, sessionRepository: {} }));
 
 await import('../auto-rename');

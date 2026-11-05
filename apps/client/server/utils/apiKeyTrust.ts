@@ -7,7 +7,7 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 
-type ApiKeyTrustUser = userApiKeyService.ApiKeyTrustSubject & { id: string };
+type ApiKeyTrustUser = userApiKeyService.ApiKeyTrustSubject & { id: string; isSystem?: boolean };
 
 /**
  * The API key trust gate's view of one account, with the settings it was judged against.
@@ -39,15 +39,18 @@ export async function resolveApiKeyTrust(
  * Request-time ceilings (per minute, and per day when that setting is on) for a personal key whose
  * owner passes the API access policy but is untrusted, so keys minted before the gate existed are
  * throttled rather than revoked.
- * Lifts on its own once the owner becomes trusted. Org-billed keys are exempt, as they are at mint
- * time. The key's own lower limit wins. `ownerUntrusted` lets a caller skip re-judging the owner.
+ * Lifts on its own once the owner becomes trusted. Org-billed keys and keys owned by a system account
+ * (e.g. the Overwatch ingest user, which cannot sign in or mint keys itself) are exempt and keep the
+ * limits they were minted with. Mint time skips trust for the shared system user (createUserApiKey's
+ * systemUserId check); here any owner flagged isSystem is exempt. The key's own lower limit wins.
+ * `ownerUntrusted` lets a caller skip re-judging the owner.
  */
 export async function resolveUntrustedKeyLimits(
   owner: ApiKeyTrustUser,
   key: { rateLimit: IUserApiKeyRateLimit; billingOwnerType?: string },
   req?: ActiveSubscriptionsRequest
 ): Promise<{ rateLimit: IUserApiKeyRateLimit; ownerUntrusted: boolean }> {
-  if (key.billingOwnerType === CreditHolderType.Organization)
+  if (key.billingOwnerType === CreditHolderType.Organization || owner.isSystem === true)
     return { rateLimit: key.rateLimit, ownerUntrusted: false };
   const { assessment, settings } = await resolveApiKeyTrust(owner, req);
   if (assessment.status !== 'untrusted') return { rateLimit: key.rateLimit, ownerUntrusted: false };

@@ -1,5 +1,6 @@
 import {
   THROTTLE_SOURCES,
+  ACCOUNT_DELETION_SOURCES,
   THROTTLE_TIERS,
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
@@ -31,6 +32,7 @@ import {
   MFA_ATTEMPT_RESET_WINDOW_MS,
   PAYMENT_UNLOCK_REASONS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  SIGNUP_INVITE_SOURCES,
   SIGNUP_UNLOCK_FORFEIT_CAUSES,
   Collection,
   PaginatedResponse,
@@ -290,6 +292,18 @@ const UserThrottleSchema = new Schema(
   { _id: false }
 );
 
+const UserDeletionSchema = new Schema(
+  {
+    requestedAt: { type: Date, required: true },
+    scheduledFor: { type: Date, required: true },
+    source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    purgeStartedAt: { type: Date, required: false },
+    purgeLeaseId: { type: String, required: false },
+    purgeLeaseExpiresAt: { type: Date, required: false },
+  },
+  { _id: false }
+);
+
 const UserRiskSignalSchema = new Schema(
   {
     type: {
@@ -301,6 +315,17 @@ const UserRiskSignalSchema = new Schema(
   },
   { _id: false }
 );
+
+/** An account's signup facts as automated containment reads them (UserRepository.findSignupLinkFacts). */
+export type UserSignupLinkFacts = {
+  id: string;
+  createdAt: Date | null;
+  signupIp: string | null;
+  signupDatacenter: boolean | null;
+  /** `otc`, `google`, `github`, ...; `email` when nothing more is recorded. */
+  signupMethod: string;
+  landingNotebookOwnerId: string | null;
+};
 
 /** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
 export type UserLinkState = {
@@ -565,6 +590,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return result.modifiedCount === 1;
   }
 
+  async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, signupGrant: { $type: 'object' }, 'signupGrant.inviteBonusPaid': { $exists: false } },
+      { $set: { 'signupGrant.inviteBonusPaid': credits } }
+    );
+    return result.modifiedCount === 1;
+  }
+
   /**
    * Claim the one free-credit grant allowed per inbox (canonicalizeEmail of the account's email).
    * True when this account holds the claim, including from an earlier attempt, so a retried grant
@@ -655,7 +688,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     return this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email username lastActiveAt isOnline photoUrl');
+      .select('name email emailVerified username lastActiveAt isOnline photoUrl');
   }
 
   /**
@@ -690,6 +723,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
+  async findAdminTargetsByIds(ids: string[]) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('email username isAdmin adminPermissions')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      email: d.email ?? undefined,
+      username: d.username ?? undefined,
+      isAdmin: d.isAdmin ?? undefined,
+      adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+    }));
+  }
+
   /**
    * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
    * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
@@ -702,6 +751,47 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .select('email')
       .lean({ virtuals: true });
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
+  }
+
+  /** Accounts whose self-serve deletion grace period ended at or before `now`, oldest first; served by user_deletion_scheduledFor. */
+  async findDeletionDueUserIds(now: Date, limit: number): Promise<string[]> {
+    const docs = await this.model
+      // $type repeats the partial index's filter, without which the planner cannot use it.
+      .find({ 'deletion.scheduledFor': { $type: 'date', $lte: now } })
+      .select('_id')
+      .sort({ 'deletion.scheduledFor': 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
+  }
+
+  /** Stamps IUser.signupLanding once; a later call never overwrites it. */
+  async recordSignupLanding(userId: string, notebookOwnerId: string, capturedAt: Date): Promise<void> {
+    await this.model.updateOne(
+      { _id: convertIds([userId])[0], signupLanding: null },
+      { $set: { signupLanding: { notebookOwnerId, capturedAt } } }
+    );
+  }
+
+  /** The signup facts automated containment reads per account; ids that are not users are absent. */
+  async findSignupLinkFacts(ids: string[]): Promise<UserSignupLinkFacts[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select(
+        'createdAt signupMeta.ip signupMeta.isDatacenter acquisition.signupMethod authProviders.strategy signupLanding'
+      )
+      .lean();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      createdAt: doc.createdAt ?? null,
+      signupIp: doc.signupMeta?.ip ?? null,
+      signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
+      // acquisition is consent-gated; the first auth provider is the durable fallback, as the users list reads it.
+      signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+      landingNotebookOwnerId: doc.signupLanding?.notebookOwnerId ?? null,
+    }));
   }
 
   /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
@@ -777,6 +867,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { new: true }
     );
     return result;
+  }
+
+  /**
+   * Clears lastCreditsPurchasedAt only while it still equals `stamp`, so a purchase landing after the
+   * caller read it (which rewrites the stamp) survives. Resolves whether the stamp was cleared.
+   */
+  async clearPurchaseStampIfUnchanged(userId: string, stamp: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastCreditsPurchasedAt: stamp },
+      { $set: { lastCreditsPurchasedAt: null } }
+    );
+    return result.modifiedCount === 1;
   }
 
   /**
@@ -1272,6 +1374,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           dripCredits: { type: Number, min: 0 },
           lastDripDay: { type: String },
           lastDripPeriod: { type: String },
+          inviteBonusPaid: { type: Number, min: 0 },
           activity: {
             type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
             default: undefined,
@@ -1297,6 +1400,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
             ),
             default: undefined,
           },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1315,6 +1422,16 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     throttle: { type: UserThrottleSchema, required: false, default: undefined },
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
+    deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountDataExportLease: {
+      type: new Schema(
+        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
@@ -1337,6 +1454,18 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    signupInvite: {
+      type: new Schema(
+        {
+          source: { type: String, enum: SIGNUP_INVITE_SOURCES, required: true },
+          inviteId: { type: String, required: true },
+          organizationId: { type: String },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password
@@ -1549,6 +1678,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
     // Written once at signup - see IUser.signupMeta.
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
+    // Written once at an OAuth signup that landed on another account's notebook - see IUser.signupLanding.
+    signupLanding: {
+      type: new Schema(
+        { notebookOwnerId: { type: String, required: true }, capturedAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
     // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
     riskScore: { type: RiskScoreSchema, required: false, default: undefined },
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
@@ -1667,8 +1805,8 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
-// Serves the per-organization org_invite unlock cap (apps/client/server/credits/orgInviteUnlock.ts).
-// Sparse: only accounts an org invite unlocked carry the field. Explicit name so the migration
+// Serves the per-organization lookup of accounts an org invite unlocked.
+// Sparse: only those accounts carry the field. Explicit name so the migration
 // 20260921235968 and autoIndex (mongo.ts) agree.
 UserSchema.index({ 'signupGrant.unlockedOrgId': 1 }, { sparse: true, name: 'signupGrant_unlockedOrgId' });
 UserSchema.index({ createdAt: 1 });
@@ -1715,6 +1853,11 @@ UserSchema.index(
 );
 // Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
 UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
+// Serves the account deletion purge job's scan for grace periods that have ended.
+UserSchema.index(
+  { 'deletion.scheduledFor': 1 },
+  { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

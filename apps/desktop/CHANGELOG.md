@@ -1,5 +1,13 @@
 # @bike4mind/desktop
 
+## Unreleased
+
+- Start, stop and restart local model servers from Settings, with launch settings,
+  crash recovery on Linux/macOS, and sizing based on effective server settings.
+
+- Add per-model context, draft token and keep-loaded settings on Models > Installed, shared
+  by chats, titles, suggestions and summaries, with context memory ratings where measurable.
+
 ## 0.1.12
 
 ### Patch Changes

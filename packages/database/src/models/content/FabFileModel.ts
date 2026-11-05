@@ -3496,7 +3496,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return fabFileIds;
   }
 
-  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+  async hardDeleteWithChunks(
+    fabFileId: string,
+    chunkBatchSize = 1000,
+    beforeBatch?: () => Promise<void>
+  ): Promise<void> {
     if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
       throw new Error('Cleanup chunk batch size must be between 1 and 1000');
     }
@@ -3512,6 +3516,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       throw new LegalHoldError(`Cannot hard-delete FabFile ${fabFileId}: moderationStatus is 'blocked' (legal hold)`);
     }
     for (;;) {
+      await beforeBatch?.();
       const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
         .limit(chunkBatchSize + 1)
         .lean();
@@ -3523,6 +3528,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         continue;
       }
       const completed = await withTransaction(async () => {
+        await beforeBatch?.();
         // Include chunks committed between the candidate read and transaction start.
         const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
           .limit(chunkBatchSize + 1)
@@ -4016,6 +4022,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     moderationLastAttemptAt: { type: Date, required: false },
     // See IFabFile.storageChargedAt and packages/server-utils/src/s3/storageCharge.ts.
     storageChargedAt: { type: Date, required: false },
+    // Server-stamped only; claimStorageCharge never charges an exempt row (see IFabFile.storageExempt).
+    storageExempt: { type: Boolean, required: false },
     error: { type: String, required: false },
     presignedUrl: { type: String },
     fileUrl: { type: String },
@@ -4273,6 +4281,17 @@ FabFileSchema.index({ userId: 1, moderationStatus: 1 });
 FabFileSchema.index(
   { organizationId: 1, deletedAt: 1 },
   { partialFilterExpression: { organizationId: { $type: 'string' } } }
+);
+
+// An org pool's recent client uploads (apps/client/server/files/pendingUploads.ts), including
+// completed rows whose charge transaction has not committed. Pre-built by
+// 20260921239800_ensure-fabfile-pending-upload-index.
+FabFileSchema.index(
+  { organizationId: 1, createdAt: 1 },
+  {
+    name: 'organizationId_1_createdAt_1_clientUpload',
+    partialFilterExpression: { organizationId: { $type: 'string' }, clientUpload: true },
+  }
 );
 
 // Public v1 file list (listOwnedBeforeId): equality on the owned/live/unarchived filter, then the

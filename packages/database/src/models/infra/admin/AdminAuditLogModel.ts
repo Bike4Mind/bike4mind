@@ -1,15 +1,19 @@
 import mongoose, { Model, model, Schema, Types } from 'mongoose';
 import {
   ADMIN_AUDIT_CREDIT_GRANT_ACTIONS,
+  AUDIT_REVIEW_BASELINE_DAYS,
   IMPERSONATION_ENDED_ACTION,
   IMPERSONATION_STARTED_ACTION,
   type AuditEntry,
   type AuditLogCursor,
   type AuditLogFilters,
+  type AuditReviewQueueEntry,
+  type AuditReviewQueueQuery,
   type AuditSummary,
   type IAdminAuditLogRepository,
   type NewAdminAuditEntry,
 } from '@bike4mind/common';
+import { AdminAuditReviewModel, toAuditReview } from './AdminAuditReviewModel';
 
 /** The stored shape: everything on an AuditEntry except `id` (virtual from `_id`) and `source` (read-side tag). */
 export type AdminAuditLogRecord = Omit<AuditEntry, 'id' | 'source'>;
@@ -171,6 +175,10 @@ const LIST_QUERY_MAX_TIME_MS = 15_000;
 
 type FilterClause = Record<string, unknown>;
 
+const deletionActionFilter = (): FilterClause => ({
+  $or: [{ action: { $regex: /\.deleted$/ } }, { action: 'user.deletion.completed' }],
+});
+
 const buildFilterClauses = (filters: AuditLogFilters): FilterClause[] => {
   const clauses: FilterClause[] = [];
   const equals = (field: string, value: string | undefined) => {
@@ -188,7 +196,8 @@ const buildFilterClauses = (filters: AuditLogFilters): FilterClause[] => {
   equals('context.requestId', filters.requestId);
   equals('related.impersonationSessionId', filters.impersonationSessionId);
   // The schema restricts verb to [a-z_], so it needs no regex escaping.
-  if (filters.verb !== undefined) clauses.push({ action: { $regex: `\\.${filters.verb}$` } });
+  if (filters.verb === 'deleted') clauses.push(deletionActionFilter());
+  else if (filters.verb !== undefined) clauses.push({ action: { $regex: `\\.${filters.verb}$` } });
   if (filters.from !== undefined) clauses.push({ occurredAt: { $gte: new Date(filters.from) } });
   if (filters.to !== undefined) clauses.push({ occurredAt: { $lte: new Date(filters.to) } });
   return clauses;
@@ -230,6 +239,11 @@ type SummaryFacets = {
   impersonations: Array<{ count: number }>;
   deletions: Array<{ count: number }>;
   deniedAttempts: Array<{ count: number }>;
+};
+
+type ReviewQueueFacets = {
+  total: Array<{ count: number }>;
+  page: Array<StoredRecord & { reviews: Parameters<typeof toAuditReview>[0][] }>;
 };
 
 const facetCount = (match: FilterClause) => [{ $match: match }, { $count: 'count' }];
@@ -306,10 +320,84 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
     return { entries: pageRecords.map(toAuditEntry), nextCursor };
   }
 
+  async listReviewQueue(
+    query: AuditReviewQueueQuery,
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditReviewQueueEntry[]; nextCursor: AuditLogCursor | null; total: number }> {
+    const unreviewed = query.status === 'unreviewed';
+    if (!unreviewed && !query.from) throw new Error('from is required for the all review queue');
+
+    // Unreviewed has no product date bound: an old entry nobody signed off is exactly what the queue is for.
+    // Everything before the rollout baseline is already reviewed, so that cutoff is a safe scan floor.
+    const baselineFloor = unreviewed ? await this.findBaselineFloor() : null;
+    const match: FilterClause = unreviewed
+      ? {
+          severity: 'critical',
+          ...(baselineFloor ? { occurredAt: { $gte: baselineFloor } } : {}),
+          // Exact match, unlike auditReviewConflict: stored actor and target ids are lowercase ObjectId hex.
+          'actor.userId': { $ne: query.viewerUserId },
+          $nor: [{ 'target.kind': 'user', 'target.id': query.viewerUserId }],
+        }
+      : { severity: 'critical', occurredAt: { $gte: query.from } };
+
+    const [facets] = await this.auditLogModel
+      .aggregate<ReviewQueueFacets>([
+        { $match: match },
+        { $sort: { occurredAt: -1, _id: -1 } },
+        {
+          $lookup: {
+            from: AdminAuditReviewModel.collection.name,
+            localField: '_id',
+            foreignField: 'auditEntryId',
+            as: 'reviews',
+          },
+        },
+        ...(unreviewed ? [{ $match: { reviews: { $size: 0 } } }] : []),
+        {
+          $facet: {
+            total: [{ $count: 'count' }],
+            page: [
+              ...(page.cursor ? [{ $match: { $and: buildCursorClauses(page.cursor) } }] : []),
+              { $limit: page.limit + 1 },
+            ],
+          },
+        },
+      ])
+      .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });
+
+    const rows = facets?.page ?? [];
+    const pageRows = rows.slice(0, page.limit);
+    const last = pageRows[pageRows.length - 1];
+    const nextCursor =
+      rows.length > page.limit && last ? { occurredAt: last.occurredAt, id: last._id.toString() } : null;
+    const entries = pageRows.map(({ reviews, ...record }): AuditReviewQueueEntry => {
+      const [review] = reviews;
+      return { ...toAuditEntry(record), review: review ? toAuditReview(review) : null };
+    });
+    return { entries, nextCursor, total: readCount(facets?.total) };
+  }
+
+  /** A lower bound below the rollout baseline cutoff, with a day of slack for how long the migration ran. */
+  private async findBaselineFloor(): Promise<Date | null> {
+    const first = await AdminAuditReviewModel.findOne({ baseline: true })
+      .sort({ reviewedAt: 1 })
+      .select({ reviewedAt: 1 })
+      .lean<{ reviewedAt: Date }>();
+    if (!first) return null;
+    return new Date(first.reviewedAt.getTime() - (AUDIT_REVIEW_BASELINE_DAYS + 1) * 24 * 60 * 60 * 1000);
+  }
+
   async findById(id: string): Promise<AuditEntry | null> {
     if (!OBJECT_ID_HEX_PATTERN.test(id)) return null;
     const record = await this.auditLogModel.findById(id).lean<StoredRecord>();
     return record ? toAuditEntry(record) : null;
+  }
+
+  async findByIds(ids: string[]): Promise<AuditEntry[]> {
+    const validIds = ids.filter(id => OBJECT_ID_HEX_PATTERN.test(id));
+    if (validIds.length === 0) return [];
+    const records = await this.auditLogModel.find({ _id: { $in: validIds } }).lean<StoredRecord[]>();
+    return records.map(toAuditEntry);
   }
 
   async summarize(since: Date): Promise<Omit<AuditSummary, 'windowDays' | 'since'>> {
@@ -343,8 +431,8 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
               action: { $nin: [IMPERSONATION_STARTED_ACTION, IMPERSONATION_ENDED_ACTION] },
             }),
             impersonations: facetCount({ action: IMPERSONATION_STARTED_ACTION }),
-            deletions: facetCount({ action: { $regex: '\\.deleted$' } }),
-            deniedAttempts: facetCount({ action: { $regex: '\\.denied$' } }),
+            deletions: facetCount(deletionActionFilter()),
+            deniedAttempts: facetCount({ action: { $regex: /\.denied$/ } }),
           },
         },
       ])

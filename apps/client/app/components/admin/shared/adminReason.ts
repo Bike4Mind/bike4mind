@@ -10,6 +10,8 @@ import {
  * the server's `parseAdminActionReason`.
  */
 export const ADMIN_REASON_PRESETS = {
+  subscriptionCancel: ['Customer request', 'Billing dispute', 'Duplicate subscription', 'Account closure'],
+  subscriptionResume: ['Customer changed their mind', 'Canceled in error', 'Customer request'],
   creditAdjustment: ['Goodwill credit', 'Refund', 'Support request', 'Abuse / automated signups'],
   suspension: ['Abuse / automated signups', 'Payment fraud', 'Terms violation', 'Customer request'],
   reinstatement: ['Suspended in error', 'Appeal accepted', 'Issue resolved'],
@@ -45,6 +47,9 @@ export const ADMIN_REASON_PRESETS = {
     'Event or conference signups',
     'Internal testing',
   ],
+  signupGrantBlock: ['Abuse / automated signups', 'Credit farming', 'Suspicious usage', 'Under investigation'],
+  signupGrantUnblock: ['Reviewed, not abusive', 'Blocked in error', 'Appeal accepted'],
+  signupGrantRelease: ['Goodwill grant', 'Support request', 'Verified customer', 'Internal testing'],
   bulkUserAction: ['Spam or bot account', 'Terms of service violation', 'Billing correction', 'Account cleanup'],
   bulkAbuseResponse: ['Spam or bot cohort', 'Credit farming', 'Disposable email domain', 'Coordinated signup abuse'],
   compChange: ['Pilot or trial ended', 'Granted in error', 'Customer request', 'Account cleanup'],
@@ -57,6 +62,12 @@ export const ADMIN_REASON_PRESETS = {
   ipBlock: ['Card testing or payment fraud', 'Abuse / automated signups', 'Credential stuffing', 'Under investigation'],
   ipUnblock: ['Blocked in error', 'Legitimate users affected', 'Threat has ended'],
   signupRiskApproval: ['Verified legitimate user', 'Known customer or partner', 'False positive signal'],
+  stripeDisputeResolve: [
+    'Handled in Stripe',
+    'Organization billing contact resolved it',
+    'Duplicate of another dispute',
+  ],
+  stripeDisputeUndoContain: ['Customer verified as legitimate', 'Contained in error'],
   shadowDetectionVerdict: [
     'Reviewed account activity',
     'Matches a known abuse pattern',

@@ -55,6 +55,27 @@ vi.mock('@bike4mind/database', () => ({
     incrementCredits: vi.fn(),
   },
   paymentAttemptRepository: { findVisitId: (...args: unknown[]) => mockFindVisitId(...args) },
+  stripeDisputeRepository: {
+    recordOpened: (...args: unknown[]) => mockRecordDisputeOpened(...args),
+    recordClosed: (...args: unknown[]) => mockRecordDisputeClosed(...args),
+    markUserGone: vi.fn(),
+  },
+}));
+
+// The dispute lifecycle has its own suites (server/billing/stripeDisputes.e2e.test.ts); here only the wiring.
+const mockRecordDisputeOpened = vi.fn();
+const mockRecordDisputeClosed = vi.fn();
+const mockResolveLostUserDispute = vi.fn();
+const mockResolveWonDispute = vi.fn();
+vi.mock('@server/billing/stripeDisputes', () => ({
+  disputeFacts: (dispute: { id: string; status: string }, subject: string, subjectId: string | null) => ({
+    stripeDisputeId: dispute.id,
+    stripeStatus: dispute.status,
+    subject,
+    subjectId,
+  }),
+  resolveLostUserDispute: (...args: unknown[]) => mockResolveLostUserDispute(...args),
+  resolveWonDispute: (...args: unknown[]) => mockResolveWonDispute(...args),
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({
@@ -156,6 +177,10 @@ vi.mock('@server/credits/paymentUnlockForfeit', () => ({
 const mockRespondToEarlyFraudWarning = vi.fn();
 const mockPropagateAccountRisk = vi.fn();
 vi.mock('@server/referrals/subscriptionReward', () => ({ reverseSubscriptionRewardForRefund: vi.fn() }));
+const mockReversePurchaseStanding = vi.fn();
+vi.mock('@server/billing/purchaseReversal', () => ({
+  reversePurchaseStanding: (...args: unknown[]) => mockReversePurchaseStanding(...args),
+}));
 vi.mock('@server/billing/earlyFraudWarning', () => ({
   respondToEarlyFraudWarning: (...args: unknown[]) => mockRespondToEarlyFraudWarning(...args),
 }));
@@ -304,6 +329,8 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockEmitProductEvent.mockResolvedValue(undefined);
     mockRadarRiskLine.mockResolvedValue(null);
     mockFindVisitId.mockResolvedValue(null);
+    mockRecordDisputeOpened.mockResolvedValue(undefined);
+    mockRecordDisputeClosed.mockImplementation(async (facts: object) => ({ ...facts, state: 'open' }));
   });
 
   describe('payment risk wiring', () => {
@@ -1013,18 +1040,45 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       expect(mockDeactivateAll).not.toHaveBeenCalled();
     });
 
-    it('takes no action when dispute is lost', async () => {
+    it('resolves a lost dispute without clearing the dispute flag', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      mockResolveLostUserDispute.mockResolvedValue({ status: 'already_resolved' });
+
       await invokeWebhookWithEvent(makeDisputeClosedEvent('lost'));
 
+      expect(mockResolveLostUserDispute).toHaveBeenCalledOnce();
+      expect(mockUserUpdate).not.toHaveBeenCalled();
+    });
+
+    it('records a warning_closed dispute and takes no account action', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+
+      await invokeWebhookWithEvent(makeDisputeClosedEvent('warning_closed'));
+
+      expect(mockRecordDisputeClosed).toHaveBeenCalledOnce();
+      expect(mockResolveLostUserDispute).not.toHaveBeenCalled();
       expect(mockUserUpdate).not.toHaveBeenCalled();
       expect(mockPostMessageToSlack).not.toHaveBeenCalled();
     });
 
-    it('takes no action when dispute closes as warning_closed', async () => {
-      await invokeWebhookWithEvent(makeDisputeClosedEvent('warning_closed'));
+    it('reverses the purchase standing when the dispute is lost', async () => {
+      await invokeWebhookWithEvent(makeDisputeClosedEvent('lost'));
 
-      expect(mockUserUpdate).not.toHaveBeenCalled();
-      expect(mockPostMessageToSlack).not.toHaveBeenCalled();
+      expect(mockReversePurchaseStanding).toHaveBeenCalledWith(
+        { paymentIntentId: 'pi_123', reason: 'dispute_lost' },
+        expect.anything()
+      );
+    });
+
+    it.each(['won', 'warning_closed'])('does not reverse the purchase when the dispute closes %s', async status => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+
+      await invokeWebhookWithEvent(makeDisputeClosedEvent(status));
+
+      expect(mockReversePurchaseStanding).not.toHaveBeenCalled();
     });
 
     it('logs a warning when user cannot be found for a won dispute', async () => {
@@ -1042,6 +1096,43 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
   });
 
   describe('charge.refunded', () => {
+    const refundedEvent = (refunded: boolean, refunds?: { data: Array<{ id: string; amount: number }> }) => ({
+      type: 'charge.refunded',
+      data: {
+        object: { id: 'ch_full', payment_intent: 'pi_full', amount: 2000, amount_captured: 2000, refunded, refunds },
+      },
+    });
+
+    it('reverses the purchase standing on a full refund', async () => {
+      await invokeWebhookWithEvent(refundedEvent(true, { data: [{ id: 're_full', amount: 2000 }] }));
+
+      expect(mockReversePurchaseStanding).toHaveBeenCalledWith(
+        { paymentIntentId: 'pi_full', reason: 'refunded' },
+        expect.anything()
+      );
+    });
+
+    it('reverses the purchase standing on a full refund whose event omits the refund list', async () => {
+      await invokeWebhookWithEvent(refundedEvent(true));
+
+      expect(mockReversePurchaseStanding).toHaveBeenCalledWith(
+        { paymentIntentId: 'pi_full', reason: 'refunded' },
+        expect.anything()
+      );
+    });
+
+    it('leaves the purchase standing alone on a partial refund', async () => {
+      await invokeWebhookWithEvent(refundedEvent(false, { data: [{ id: 're_part', amount: 500 }] }));
+
+      expect(mockReversePurchaseStanding).not.toHaveBeenCalled();
+    });
+
+    it('rethrows a failed standing reversal so Stripe redelivers', async () => {
+      mockReversePurchaseStanding.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(invokeWebhookWithEvent(refundedEvent(true))).rejects.toThrow('db down');
+    });
+
     it('clawbacks 50% of credits on a 50% refund', async () => {
       const mockUser = { id: 'user123', name: 'Test', email: 'test@example.com' };
       const mockTx = { id: 'tx1', ownerId: 'user123', credits: 1000, stripePaymentIntentId: 'pi_ref' };

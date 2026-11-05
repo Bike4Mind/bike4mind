@@ -202,6 +202,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   numReferralsAvailable: true,
   regInvites: true,
   referredByUserId: true,
+  signupInvite: true,
   organizationId: true,
   lastActiveAt: true,
   isOnline: true,
@@ -224,6 +225,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   lastCreditsPurchasedAt: true,
   apiKeyTrustApproved: true,
   newAccountSpendCapLifted: true,
+  deletion: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
 /** A redacted integration object: only the named non-secret subfields survive. */
@@ -248,6 +250,7 @@ export const selfUserResponseSchema = z.object({
       unlockedBy: z.enum(SIGNUP_GRANT_UNLOCK_REASONS).optional(),
       unlockedOrgId: z.string().optional(),
       dripCredits: z.number().int().nonnegative().optional(),
+      inviteBonusPaid: z.number().int().nonnegative().optional(),
       lastDripPeriod: z
         .string()
         .regex(/^preview:\d{1,4}:\d+$/)

@@ -144,6 +144,25 @@ export interface CreateFabFileAdapters {
    * for the claim (it read it off the stored object, not off the request) may let it outrank the name.
    */
   mimeTypePrecedence?: 'extension-first' | 'claim-first';
+  /**
+   * In-flight client-upload bytes already billed to the owning pool (keyed by the owner org, undefined
+   * for a personal file), counted as used by the quota check. Pass it only on a door that leaves a
+   * pending client upload, i.e. a create without `content`.
+   */
+  pendingUploadBytes?: (organizationId: string | undefined) => number;
+  /**
+   * The caller writes the bytes itself right after a create without `content` (createByUrl, session
+   * summaries), so no presigned PUT is minted and the row is not a client upload (IFabFile.clientUpload).
+   */
+  serverUpload?: boolean;
+  /**
+   * Skips the owner's storage quota gate and stamps the row `storageExempt`, so the S3 upload event
+   * never charges it either (claimStorageCharge). An adapter rather than a `createFabFileSchema`
+   * field for the same reason as `provenance`: that schema is parsed from a caller-controlled HTTP
+   * body. The `MaxFileSize` cap still applies. Its one intended caller is the legacy QuestMaster
+   * conversion, which writes files the user never asked for.
+   */
+  storageExempt?: boolean;
 }
 
 /**
@@ -178,7 +197,18 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 export const prepareFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence, objectKey }: CreateFabFileAdapters
+  {
+    db,
+    storage,
+    provenance,
+    administeredOrgIds,
+    logger,
+    mimeTypePrecedence,
+    objectKey,
+    pendingUploadBytes,
+    serverUpload,
+    storageExempt,
+  }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -231,15 +261,20 @@ export const prepareFabFile = async (
     });
   }
 
-  await checkStorageLimitForOwner({ user, organizationId: ownerOrganizationId }, params.fileSize, id =>
-    db.organizations.findById(id)
-  );
+  if (!storageExempt) {
+    await checkStorageLimitForOwner(
+      { user, organizationId: ownerOrganizationId, pendingBytes: pendingUploadBytes?.(ownerOrganizationId) },
+      params.fileSize,
+      id => db.organizations.findById(id)
+    );
+  }
 
   const buildData: Omit<IFabFileDocument, 'id'> = {
     userId,
     ...params,
     ...(ownerOrganizationId && { organizationId: ownerOrganizationId }),
     ...(tags !== undefined && { tags }),
+    ...(storageExempt && { storageExempt: true }),
     ...(provenance && {
       sourceType: provenance.sourceType,
       ...(provenance.sourceMetadata && { sourceMetadata: provenance.sourceMetadata }),
@@ -271,7 +306,7 @@ export const prepareFabFile = async (
       buildData.fileUrl = await storage.generateSignedUrl(filePath, DEFAULT_EXPIRE_IN_SECONDS, 'get');
       buildData.fileUrlExpireAt = signedUrlExpiresAt(buildData.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
     }
-  } else {
+  } else if (!serverUpload) {
     // Bound to the declared size, the one the size and storage checks above ran on.
     buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put', { ContentLength: params.fileSize });
     buildData.clientUpload = true;

@@ -518,6 +518,7 @@ export function toCampaignShadowDetection(group: AccountCampaignGroup, windowMin
     signals: accountCampaignSignals(group),
     windowMinutes,
     group,
+    payment: null,
     detectedAt: group.lastObservedAt,
   };
 }

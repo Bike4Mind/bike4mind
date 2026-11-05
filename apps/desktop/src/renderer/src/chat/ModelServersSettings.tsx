@@ -19,14 +19,25 @@ import type {
   ModelServerAuthKind,
   ModelServerCredentialInput,
   ModelServerKind,
+  ModelServerLaunchAction,
+  ModelServerLaunchSettings,
+  ModelServerLaunchView,
   ModelServerMutationResult,
   ModelServerProbeResult,
   ModelServerSpecs,
   ModelServerState,
   ModelServerTransportType,
   ModelServerView,
+  QuantizedKvCacheType,
 } from '@shared/modelServers';
-import { specsProblem } from '@shared/modelServers';
+import {
+  launchLockedMessage,
+  launchSettingsProblem,
+  QUANTIZED_KV_CACHE_TYPES,
+  sizesWithSavedLaunch,
+  specsProblem,
+  WINDOWS_ORPHAN_HINT,
+} from '@shared/modelServers';
 import { formatMemory, type MachineView } from '@shared/models';
 
 const KIND_LABEL: Record<ModelServerKind, string> = { ollama: 'Ollama', 'openai-compatible': 'OpenAI-compatible' };
@@ -167,7 +178,13 @@ function CredentialFields({
   );
 }
 
-type SpecsDraft = { ram: string; gpu: string; bandwidth: string; unified: boolean };
+type SpecsDraft = {
+  ram: string;
+  gpu: string;
+  bandwidth: string;
+  unified: boolean;
+  kv: QuantizedKvCacheType | null;
+};
 
 const figure = (value: number | null | undefined) => (value === null || value === undefined ? '' : String(value));
 const parsed = (value: string) => (value.trim() === '' ? null : Number(value));
@@ -178,6 +195,7 @@ function specsDraft(specs: ModelServerSpecs | null): SpecsDraft {
     gpu: figure(specs?.gpuMemoryGiB),
     bandwidth: figure(specs?.bandwidthGBps),
     unified: specs?.unified ?? false,
+    kv: specs?.kvCacheType ?? null,
   };
 }
 
@@ -187,7 +205,13 @@ function draftSpecs(draft: SpecsDraft): ModelServerSpecs {
     gpuMemoryGiB: parsed(draft.gpu),
     bandwidthGBps: parsed(draft.bandwidth),
     unified: draft.unified,
+    ...(draft.kv ? { kvCacheType: draft.kv } : {}),
   };
+}
+
+/** A remote or SSH Ollama: Desktop cannot set its cache type, so Hardware says which one it runs with. */
+function hardwareKvCache(server: ModelServerView): boolean {
+  return server.kind === 'ollama' && server.launch?.owner === 'remote';
 }
 
 export function specsSummary(specs: ModelServerSpecs): string {
@@ -195,6 +219,7 @@ export function specsSummary(specs: ModelServerSpecs): string {
     specs.ramGiB !== null ? `${specs.ramGiB} GB RAM${specs.unified ? ' shared with the GPU' : ''}` : null,
     specs.gpuMemoryGiB !== null ? `${specs.gpuMemoryGiB} GB GPU memory` : null,
     specs.bandwidthGBps !== null ? `${specs.bandwidthGBps} GB/s memory bandwidth` : null,
+    specs.kvCacheType ? `${specs.kvCacheType} KV cache` : null,
   ]
     .filter(Boolean)
     .join(', ');
@@ -304,6 +329,32 @@ function SpecsFields({
         in Curated picks
         {gpuBandwidth ? ", so enter the GPU's own figure, not the system RAM's." : '.'}
       </Typography>
+      {hardwareKvCache(server) && (
+        <FormControl size="sm" sx={{ maxWidth: 260 }}>
+          <FormLabel>KV cache type</FormLabel>
+          <Select
+            size="sm"
+            value={draft.kv ?? 'f16'}
+            onChange={(_event, value) =>
+              setDraft({ ...draft, kv: QUANTIZED_KV_CACHE_TYPES.find(type => type === value) ?? null })
+            }
+            slotProps={{ button: { 'data-testid': 'model-servers-specs-kv-select' } }}
+          >
+            <Option value="f16" data-testid="model-servers-specs-kv-option-f16">
+              f16 (Ollama&apos;s default)
+            </Option>
+            {QUANTIZED_KV_CACHE_TYPES.map(type => (
+              <Option key={type} value={type} data-testid={`model-servers-specs-kv-option-${type}`}>
+                {type}
+              </Option>
+            ))}
+          </Select>
+          <FormHelperText>
+            What OLLAMA_KV_CACHE_TYPE is set to where this Ollama runs, which its API does not report. It applies to
+            every model on the server. With q8_0 or q4_0, Ollama fails to load models while flash attention is off.
+          </FormHelperText>
+        </FormControl>
+      )}
       {problem && (
         <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-specs-error">
           {problem}
@@ -331,6 +382,297 @@ function SpecsFields({
           </Button>
         )}
       </Stack>
+    </Stack>
+  );
+}
+
+type LaunchDraft = {
+  kv: QuantizedKvCacheType | 'f16';
+  flash: 'auto' | 'on' | 'off';
+  binaryPath: string;
+  modelsDir: string;
+};
+
+/** Saved settings win; with none saved, what Desktop read from the server fills the form. */
+function prefilled(launch: ModelServerLaunchView): boolean {
+  return launch.prefill !== null && Object.keys(launch.settings).length === 0;
+}
+
+function launchDraft(launch: ModelServerLaunchView): LaunchDraft {
+  const settings = prefilled(launch) && launch.prefill ? launch.prefill.settings : launch.settings;
+  return {
+    kv: settings.kvCacheType ?? 'f16',
+    flash: settings.flashAttention ?? 'auto',
+    binaryPath: settings.binaryPath ?? '',
+    modelsDir: settings.modelsDir ?? '',
+  };
+}
+
+function draftLaunch(draft: LaunchDraft, runtime: ModelServerLaunchView['runtime']): ModelServerLaunchSettings {
+  const path = (value: string) => value.trim() || undefined;
+  const binaryPath = runtime === 'llama-server' ? path(draft.binaryPath) : undefined;
+  const modelsDir = runtime === 'llama-server' ? path(draft.modelsDir) : undefined;
+  return {
+    ...(runtime === 'ollama' && draft.kv !== 'f16' ? { kvCacheType: draft.kv } : {}),
+    ...(draft.flash !== 'auto' ? { flashAttention: draft.flash } : {}),
+    ...(binaryPath ? { binaryPath } : {}),
+    ...(modelsDir ? { modelsDir } : {}),
+  };
+}
+
+const OWNER_LOOK: Record<
+  Exclude<ModelServerLaunchView['owner'], 'remote'>,
+  { color: 'success' | 'neutral'; label: string }
+> = {
+  desktop: { color: 'success', label: 'Started by Desktop' },
+  other: { color: 'neutral', label: 'Not started by Desktop' },
+  none: { color: 'neutral', label: 'Not running' },
+};
+
+/** What an unmanaged server runs with, as far as Desktop can read it, and what fit sizes with. */
+function observedLine(launch: ModelServerLaunchView): string {
+  const flash = launch.sizingFlashAttention === 'auto' ? '' : ` with flash attention ${launch.sizingFlashAttention}`;
+  const sizing = `Fit badges assume a${launch.sizingKvCacheType === 'f16' ? 'n' : ''} ${launch.sizingKvCacheType} KV cache${flash}.`;
+  if (launch.runtime !== 'ollama') return sizing;
+  if (!launch.observed) return `Desktop can't read this server's settings. ${sizing}`;
+  const set = Object.entries(launch.observed).map(([key, value]) => `${key}=${value}`);
+  return `${set.length > 0 ? `It runs with ${set.join(', ')}.` : "It runs with Ollama's defaults."} ${sizing}`;
+}
+
+/** Settings a server reads when it starts, and Start, Stop and Restart for one Desktop runs on this computer. */
+function LaunchSection({
+  server,
+  launch,
+  busy,
+  onSave,
+  onAction,
+}: {
+  server: ModelServerView;
+  launch: ModelServerLaunchView;
+  busy: boolean;
+  onSave: (settings: ModelServerLaunchSettings) => Promise<boolean>;
+  onAction: (action: ModelServerLaunchAction) => Promise<boolean>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<LaunchDraft>(() => launchDraft(launch));
+  const [problem, setProblem] = useState<string | null>(null);
+  const sizingOnly = sizesWithSavedLaunch(launch);
+  const locked = sizingOnly
+    ? `This ${launch.noun} was not started by Bike4Mind Desktop. Fit badges use the KV cache type and flash attention saved here, and Desktop applies all of these settings when it starts the server.${
+        launch.windowsHost ? ` ${WINDOWS_ORPHAN_HINT}` : ''
+      }`
+    : launchLockedMessage(launch);
+  const disabled = busy || !!launch.busy || (locked !== null && !sizingOnly);
+  const ollama = launch.runtime === 'ollama';
+
+  useEffect(() => {
+    if (!open) setDraft(launchDraft(launch));
+  }, [open, launch]);
+
+  if (launch.owner === 'remote') {
+    if (server.kind !== 'ollama') return null;
+    return (
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-locked">
+        {locked} Fit badges assume a{launch.sizingKvCacheType === 'f16' ? 'n' : ''} {launch.sizingKvCacheType} KV cache,
+        set under Hardware.
+      </Typography>
+    );
+  }
+
+  const look = OWNER_LOOK[launch.owner];
+  // A listener that holds the port without answering (see ModelServerRegistry.ownerOf).
+  const label =
+    launch.owner === 'other' && (server.health.state === 'unreachable' || server.health.state === 'unknown')
+      ? 'In use by another program'
+      : look.label;
+  const checked = (): ModelServerLaunchSettings | null => {
+    const settings = draftLaunch(draft, launch.runtime);
+    const issue = launchSettingsProblem(settings, launch.runtime);
+    setProblem(issue);
+    return issue ? null : settings;
+  };
+  const save = () => {
+    const settings = checked();
+    if (settings) void onSave(settings).then(ok => ok && setOpen(false));
+  };
+  // With nothing saved, Start runs what the form shows, so the prefill is saved first.
+  const start = async () => {
+    if (prefilled(launch)) {
+      const settings = checked();
+      if (!settings || !(await onSave(settings))) return;
+      setOpen(false);
+    }
+    await onAction('start');
+  };
+  const path = (key: 'binaryPath' | 'modelsDir', label: string, testId: string, hint: string) => (
+    <FormControl size="sm" sx={{ flex: 1, minWidth: 220 }}>
+      <FormLabel>{label}</FormLabel>
+      <Input
+        size="sm"
+        value={draft[key]}
+        placeholder={hint}
+        disabled={disabled}
+        onChange={event => setDraft({ ...draft, [key]: event.target.value })}
+        slotProps={{ input: { 'data-testid': testId } }}
+      />
+    </FormControl>
+  );
+
+  return (
+    <Stack spacing={1} data-testid="model-servers-launch" data-owner={launch.owner}>
+      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+        <Chip size="sm" variant="soft" color={look.color} data-testid="model-servers-launch-owner">
+          {launch.busy === 'starting' ? 'Starting' : launch.busy === 'stopping' ? 'Stopping' : label}
+        </Chip>
+        {launch.canStart && (
+          <Button
+            size="sm"
+            variant="outlined"
+            disabled={busy || !!launch.busy}
+            onClick={() => void start()}
+            data-testid="model-servers-launch-start-btn"
+          >
+            Start
+          </Button>
+        )}
+        {launch.owner === 'desktop' && !launch.busy && (
+          <>
+            <Button
+              size="sm"
+              variant={launch.pendingRestart ? 'solid' : 'outlined'}
+              disabled={busy}
+              onClick={() => void onAction('restart')}
+              data-testid="model-servers-launch-restart-btn"
+            >
+              {launch.pendingRestart ? 'Restart to apply' : 'Restart'}
+            </Button>
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={busy}
+              onClick={() => void onAction('stop')}
+              data-testid="model-servers-launch-stop-btn"
+            >
+              Stop
+            </Button>
+          </>
+        )}
+        <Button
+          size="sm"
+          variant="plain"
+          color="neutral"
+          onClick={() => setOpen(value => !value)}
+          data-testid="model-servers-launch-settings-btn"
+        >
+          Launch settings
+        </Button>
+      </Stack>
+      {locked && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-locked">
+          {locked}
+        </Typography>
+      )}
+      {launch.owner === 'other' && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-observed">
+          {observedLine(launch)}
+        </Typography>
+      )}
+      {launch.pendingRestart && (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-pending">
+          The saved launch settings apply on the next start.
+        </Typography>
+      )}
+      {launch.problem && (
+        <Alert size="sm" color="warning" variant="soft" data-testid="model-servers-launch-problem">
+          {launch.problem}
+        </Alert>
+      )}
+      {open && (
+        <Stack spacing={1} data-testid="model-servers-launch-form">
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            {ollama && (
+              <FormControl size="sm" sx={{ minWidth: 180 }}>
+                <FormLabel>KV cache type</FormLabel>
+                <Select
+                  size="sm"
+                  value={draft.kv}
+                  disabled={disabled}
+                  onChange={(_event, value) =>
+                    setDraft({ ...draft, kv: QUANTIZED_KV_CACHE_TYPES.find(type => type === value) ?? 'f16' })
+                  }
+                  slotProps={{ button: { 'data-testid': 'model-servers-launch-kv-select' } }}
+                >
+                  <Option value="f16" data-testid="model-servers-launch-kv-option-f16">
+                    f16 (default)
+                  </Option>
+                  {QUANTIZED_KV_CACHE_TYPES.map(type => (
+                    <Option key={type} value={type} data-testid={`model-servers-launch-kv-option-${type}`}>
+                      {type}
+                    </Option>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
+            <FormControl size="sm" sx={{ minWidth: 160 }}>
+              <FormLabel>Flash attention</FormLabel>
+              <Select
+                size="sm"
+                value={draft.flash}
+                disabled={disabled}
+                onChange={(_event, value) => value && setDraft({ ...draft, flash: value })}
+                slotProps={{ button: { 'data-testid': 'model-servers-launch-flash-select' } }}
+              >
+                <Option value="auto">Auto</Option>
+                <Option value="on" data-testid="model-servers-launch-flash-option-on">
+                  On
+                </Option>
+                <Option value="off" data-testid="model-servers-launch-flash-option-off">
+                  Off
+                </Option>
+              </Select>
+            </FormControl>
+          </Stack>
+          {!ollama && (
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              {path('modelsDir', 'Models folder', 'model-servers-launch-models-dir-input', '/path/to/gguf-models')}
+              {path('binaryPath', 'llama-server program', 'model-servers-launch-binary-input', 'llama-server on PATH')}
+            </Stack>
+          )}
+          <Typography level="body-xs" textColor="text.tertiary">
+            {ollama
+              ? 'Ollama reads these when it starts, for every model it loads. A q8_0 or q4_0 cache uses less memory and needs flash attention.'
+              : 'llama-server serves every GGUF file in the models folder and loads each one when a chat first asks for it.'}
+          </Typography>
+          <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-spill-hint">
+            On an NVIDIA or AMD GPU that shares system memory, a model that outgrows the GPU&apos;s share uses more
+            system memory instead of failing to load. To turn that off, start Desktop with B4M_DISABLE_GPU_SPILL=1.
+          </Typography>
+          {prefilled(launch) && launch.prefill && (
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-prefilled">
+              {launch.owner === 'other'
+                ? `Filled in from what this server runs with: ${launch.prefill.from}.`
+                : `Filled in from the Ollama that ran here: ${launch.prefill.from}. ${
+                    launch.owner === 'desktop' ? 'Save, then restart to use these.' : 'Start uses these.'
+                  }`}
+            </Typography>
+          )}
+          {problem && (
+            <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-launch-error">
+              {problem}
+            </Alert>
+          )}
+          <Button
+            size="sm"
+            disabled={disabled}
+            sx={{ alignSelf: 'flex-start' }}
+            onClick={save}
+            data-testid="model-servers-launch-save-btn"
+          >
+            Save launch settings
+          </Button>
+        </Stack>
+      )}
     </Stack>
   );
 }
@@ -526,6 +868,15 @@ function ServerRow({
             onDone={() => setEditingSpecs(false)}
           />
         )}
+        {server.launch && (
+          <LaunchSection
+            server={server}
+            launch={server.launch}
+            busy={busy}
+            onSave={launch => update({ launch })}
+            onAction={action => run(() => window.b4m.modelServers.launch(server.id, action))}
+          />
+        )}
         {error && (
           <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-row-error">
             {error}
@@ -645,6 +996,9 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     }
   };
 
+  // Nothing answers at an address on this computer, so Desktop can start a server there once it is saved.
+  const launching = !!probe && !probe.ok && probe.launchable === true;
+
   const save = async () => {
     setBusy(true);
     setError(null);
@@ -657,6 +1011,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
         kind,
         access,
         acceptOpen,
+        ...(launching ? { launch: true } : {}),
       });
       if (result.ok) {
         onResult(result);
@@ -667,7 +1022,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
     }
   };
 
-  const ready = !!probe?.ok && !!name.trim() && (!probe.openToAnyone || acceptOpen);
+  const ready = (!!probe?.ok || launching) && !!name.trim() && (!probe?.openToAnyone || acceptOpen);
 
   return (
     <Sheet variant="soft" sx={{ p: 1.25, borderRadius: 'sm' }} data-testid="model-servers-add">
@@ -735,7 +1090,7 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
         >
           Test
         </Button>
-        {probe && !probe.ok && (
+        {probe && !probe.ok && !launching && (
           <Alert
             size="sm"
             color={probe.needsCredentials ? 'warning' : 'danger'}
@@ -746,14 +1101,20 @@ function AddServer({ onResult }: { onResult: (result: ModelServerMutationResult)
             {probe.needsCredentials ? ' Choose a bearer token or a custom header above, then test again.' : ''}
           </Alert>
         )}
-        {probe?.ok && (
+        {probe && (probe.ok || launching) && (
           <Stack spacing={1.25}>
-            <Alert size="sm" color="success" variant="soft" data-testid="model-servers-add-result">
-              Found {probe.kind ? KIND_LABEL[probe.kind] : 'a server'}
-              {probe.version ? ` ${probe.version}` : ''}
-              {probe.models !== null ? `, ${probe.models} ${probe.models === 1 ? 'model' : 'models'}` : ''}
-              {probe.latencyMs !== null ? `, ${probe.latencyMs} ms` : ''}.
-            </Alert>
+            {launching ? (
+              <Alert size="sm" color="neutral" variant="soft" data-testid="model-servers-add-launchable">
+                Nothing answers at this address yet. Save it, then start Ollama or llama-server there from Desktop.
+              </Alert>
+            ) : (
+              <Alert size="sm" color="success" variant="soft" data-testid="model-servers-add-result">
+                Found {probe.kind ? KIND_LABEL[probe.kind] : 'a server'}
+                {probe.version ? ` ${probe.version}` : ''}
+                {probe.models !== null ? `, ${probe.models} ${probe.models === 1 ? 'model' : 'models'}` : ''}
+                {probe.latencyMs !== null ? `, ${probe.latencyMs} ms` : ''}.
+              </Alert>
+            )}
             {probe.unencrypted && (
               <Alert size="sm" color="warning" variant="soft" data-testid="model-servers-add-unencrypted">
                 Unencrypted: plain http on a private network. Anyone on that network can read the conversation.

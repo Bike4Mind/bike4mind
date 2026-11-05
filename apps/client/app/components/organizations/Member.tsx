@@ -12,7 +12,7 @@ import {
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useShareDocument } from '@client/app/hooks/data/invites';
+import { useCancelInvite, useShareDocument } from '@client/app/hooks/data/invites';
 import { useGetOrganizationUsers, useGetPendingOrganizationUsers, useGetUsers } from '@client/app/hooks/data/user';
 import { IGetUsersParams } from '@client/app/utils/userAPICalls';
 import SearchIcon from '@mui/icons-material/Search';
@@ -27,7 +27,9 @@ import { toast } from 'sonner';
 import OrganizationUserCard from './UserCard';
 import MemberCreditBudgetCard from './MemberCreditBudgetCard';
 import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
-import { useOrganizationSeats } from '@client/app/hooks/data/organizations';
+import { useOrganizationInvites, useOrganizationSeats } from '@client/app/hooks/data/organizations';
+
+import { z } from 'zod';
 
 interface OrganizationMembersProps {
   organization: IOrganizationDocument;
@@ -40,6 +42,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   const { currentUser } = useUser();
   const { data: pendingUsers } = useGetPendingOrganizationUsers(organization.id);
   const { maxSeats, currentSeats, availableSeats } = useOrganizationSeats(organization.id);
+  const { data: pendingInvites, isError: pendingInvitesError } = useOrganizationInvites(organization.id);
   const { t } = useTranslation();
   const queryClient = useQueryClient();
 
@@ -50,8 +53,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   const [modalSearch, setModalSearch] = useState('');
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const params: IGetUsersParams = useMemo(
-    () => ({ search: modalSearch, page: 1, limit: 10, publicView: true }),
-    [modalSearch]
+    () => ({
+      search: modalSearch,
+      page: 1,
+      limit: 10,
+      publicView: true,
+      pendingInviteOrganizationId: organization.id,
+    }),
+    [modalSearch, organization.id]
   );
   const { data: usersData, isFetching } = useGetUsers(params, { enabled: modalSearch.length >= 3 });
 
@@ -63,6 +72,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
   const shareDocument = useShareDocument({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', organization.id] });
+      queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
 
       setModalSearch('');
       setSelectedUserIds([]);
@@ -71,6 +81,15 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     onError: err => {
       toast.error(err.message);
     },
+  });
+
+  const cancelEmailInvite = useCancelInvite({
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', organization.id, 'invites'] });
+      queryClient.invalidateQueries({ queryKey: ['users', 'organization', organization.id] });
+      toast.success('Invitation cancelled');
+    },
+    onError: error => toast.error(error.message),
   });
 
   const toggleSortOrder = () => {
@@ -101,7 +120,11 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         creditUsage: getMemberCreditUsage(organization, u.id),
       })) || [];
     result.push(
-      ...(pendingUsers?.map(u => ({ ...u, status: 'pending' as const, permissions: [], creditUsage: null })) || [])
+      ...(pendingUsers
+        ?.filter(
+          user => !pendingInvites || pendingInvites.some(invite => invite.recipients?.pending?.includes(user.id))
+        )
+        .map(u => ({ ...u, status: 'pending' as const, permissions: [], creditUsage: null })) || [])
     );
 
     if (search) {
@@ -112,7 +135,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     }
 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
-  }, [users, search, sortOrder, pendingUsers, organization]);
+  }, [users, search, sortOrder, pendingUsers, pendingInvites, organization]);
 
   // Each roster control mirrors the server predicate behind its own endpoint; only the owner may
   // revoke a manager.
@@ -150,19 +173,85 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
     [organization.id, permissions.value, shareDocument]
   );
 
+  const pendingEmails = useMemo(
+    () =>
+      new Set(
+        (pendingInvites ?? []).flatMap(invite => invite.recipients?.pending ?? []).map(email => email.toLowerCase())
+      ),
+    [pendingInvites]
+  );
+
+  const renderNoResults = useCallback(
+    (term: string) => {
+      const email = term.trim().toLowerCase();
+      const canInvite =
+        term === modalSearch &&
+        !isFetching &&
+        z.email().safeParse(email).success &&
+        email !== currentUser?.email?.toLowerCase() &&
+        !pendingEmails.has(email) &&
+        canInviteMembers &&
+        hasAvailableSeats;
+      return (
+        <Stack spacing={1} alignItems="center">
+          <Typography level="body-sm">Enter their full email address to invite them to the team.</Typography>
+          {canInvite && (
+            <Button
+              data-testid="organization-invite-by-email-btn"
+              loading={shareDocument.isPending}
+              onClick={() =>
+                shareDocument.mutate({
+                  description: "You've been invited to join the organization",
+                  recipients: [email],
+                  id: organization.id,
+                  type: InviteType.Organization,
+                  permissions: permissions.value,
+                })
+              }
+            >
+              Invite {email} by email
+            </Button>
+          )}
+        </Stack>
+      );
+    },
+    [
+      modalSearch,
+      isFetching,
+      currentUser?.email,
+      pendingEmails,
+      canInviteMembers,
+      hasAvailableSeats,
+      shareDocument,
+      organization.id,
+      permissions.value,
+    ]
+  );
+  const pendingEmailInvites = (pendingInvites ?? []).flatMap(invite =>
+    (invite.recipients?.pending ?? [])
+      .filter(recipient => z.email().safeParse(recipient).success || recipient.includes('***@'))
+      .map(email => ({ inviteId: invite.id, email }))
+  );
+
   const alreadyInvitedUsers = useMemo(() => {
     const userMap = new Map<string, 'accepted' | 'pending'>();
     organization.users.forEach(member => userMap.set(member.userId, 'accepted'));
-    pendingUsers?.forEach(user => userMap.set(user.id, 'pending'));
+    pendingInvites?.forEach(invite => {
+      invite.recipients?.pending?.forEach(recipient => {
+        const key = recipient.toLowerCase();
+        if (!userMap.has(key)) userMap.set(key, 'pending');
+      });
+    });
     return userMap;
-  }, [organization.users, pendingUsers]);
+  }, [organization.users, pendingInvites]);
 
   const getInviteStatus = useCallback(
-    (user: any) => {
+    (user: { id: string; email?: string | null; username?: string; pendingInvite?: boolean }) => {
+      if (user.pendingInvite) return 'pending' as const;
       return (
         alreadyInvitedUsers.get(user.id) ||
-        alreadyInvitedUsers.get(user.email ?? '') ||
-        alreadyInvitedUsers.get(user.username) ||
+        alreadyInvitedUsers.get(user.email?.toLowerCase() ?? '') ||
+        alreadyInvitedUsers.get(user.username ?? '') ||
         undefined
       );
     },
@@ -349,6 +438,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
                 onAdd={handleAddMembers}
                 isPending={shareDocument.isPending}
                 renderItem={renderUserItem}
+                isItemDisabled={user => !!getInviteStatus(user)}
+                renderNoResults={renderNoResults}
                 isLoadingMore={isFetching}
                 showButtonBadge={false}
               />
@@ -371,6 +462,34 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization }) => 
         </Box>
       </Stack>
 
+      {pendingInvitesError && (
+        <Typography color="danger" data-testid="organization-pending-invites-error">
+          Pending invitations could not be loaded. Try again.
+        </Typography>
+      )}
+      {pendingEmailInvites.length > 0 && (
+        <Stack spacing={1} data-testid="organization-pending-email-invites">
+          <Typography level="title-sm">Pending email invitations</Typography>
+          {pendingEmailInvites.map(({ inviteId, email }) => (
+            <Stack key={`${inviteId}:${email}`} direction="row" spacing={1} alignItems="center">
+              <Typography level="body-sm">{email}</Typography>
+              {canInviteMembers && !email.includes('*') && (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  data-testid="organization-cancel-email-invite-btn"
+                  loading={cancelEmailInvite.isPending}
+                  onClick={() =>
+                    cancelEmailInvite.mutate({ id: organization.id, type: InviteType.Organization, email })
+                  }
+                >
+                  Cancel invitation
+                </Button>
+              )}
+            </Stack>
+          ))}
+        </Stack>
+      )}
       {/* Members List */}
       <Stack
         className="organization-members-list-container"

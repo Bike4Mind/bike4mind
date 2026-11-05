@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatSessionStatus } from '@shared/chat';
-import { applyStatusEvents, STATUS_LABEL } from './sessionStatus';
+import type { ChatSessionStatus, SessionSetupStep } from '@shared/chat';
+import { applyPreparingEvents, applyStatusEvents, STATUS_LABEL } from './sessionStatus';
 
 const empty: ReadonlyMap<string, ChatSessionStatus> = new Map();
 
@@ -58,5 +58,32 @@ describe('applyStatusEvents', () => {
   it('names every state, so a badge always has a label', () => {
     const states: ChatSessionStatus[] = ['processing', 'needs-action', 'done'];
     for (const state of states) expect(STATUS_LABEL[state]).toBeTruthy();
+  });
+});
+
+describe('applyPreparingEvents', () => {
+  const none: ReadonlyMap<string, SessionSetupStep> = new Map();
+
+  it('tracks the step of a preparing event, and removes on one without it', () => {
+    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: 'worktree' }]);
+    expect(preparing.get('a')).toBe('worktree');
+
+    const installing = applyPreparingEvents(preparing, [
+      { sessionId: 'a', status: 'processing', preparing: 'dependencies' },
+    ]);
+    expect(installing.get('a')).toBe('dependencies');
+
+    const replying = applyPreparingEvents(installing, [{ sessionId: 'a', status: 'processing' }]);
+    expect(replying.has('a')).toBe(false);
+    expect(preparing.get('a')).toBe('worktree');
+  });
+
+  it('returns the same map when nothing changed', () => {
+    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: 'worktree' }]);
+
+    expect(applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing', preparing: 'worktree' }])).toBe(
+      preparing
+    );
+    expect(applyPreparingEvents(none, [{ sessionId: 'b', status: 'done' }])).toBe(none);
   });
 });

@@ -12,8 +12,11 @@ export const ANALYTICS_COMPARE = ['prev', 'off'] as const;
 export type AnalyticsCompare = (typeof ANALYTICS_COMPARE)[number];
 export const ANALYTICS_SIGNUPS = ['legit', 'all'] as const;
 export type AnalyticsSignupsMode = (typeof ANALYTICS_SIGNUPS)[number];
+/** Whose activity the active-user numbers count; "internal" is the admin/system/synthetic/staff set the rollup excludes. */
+export const ANALYTICS_ACCOUNTS = ['external', 'internal', 'all'] as const;
+export type AnalyticsAccounts = (typeof ANALYTICS_ACCOUNTS)[number];
 
-export const ANALYTICS_DEFAULTS = { range: '28d', compare: 'prev', signups: 'legit' } as const;
+export const ANALYTICS_DEFAULTS = { range: '28d', compare: 'prev', signups: 'legit', accounts: 'external' } as const;
 
 /** Longest custom range, in days: one year plus a leap day. */
 export const ANALYTICS_MAX_CUSTOM_DAYS = 366;
@@ -27,6 +30,7 @@ export const analyticsOverviewQuerySchema = z
     to: dayString.optional(),
     compare: z.enum(ANALYTICS_COMPARE).default(ANALYTICS_DEFAULTS.compare),
     signups: z.enum(ANALYTICS_SIGNUPS).default(ANALYTICS_DEFAULTS.signups),
+    accounts: z.enum(ANALYTICS_ACCOUNTS).default(ANALYTICS_DEFAULTS.accounts),
   })
   .refine(query => query.range !== 'custom' || (query.from && query.to), {
     message: 'A custom range needs both a start and an end date.',
@@ -39,9 +43,11 @@ export type AnalyticsBucket = 'day' | 'week' | 'month';
 /** A tile value over the range's complete days, and the same over the previous period when compare is on. */
 export type AnalyticsStat = { value: number | null; previous: number | null };
 
+export type ActiveUserCounts = { dau: number; wau: number; mau: number };
+
 export type ActiveUsersDay = {
   day: string;
-  /** Null when the rollup row for the day is missing: drawn as a gap, never as zero. */
+  /** For the selected accounts. Null when the rollup row for the day is missing: drawn as a gap, never as zero. */
   dau: number | null;
   wau: number | null;
   mau: number | null;
@@ -49,9 +55,27 @@ export type ActiveUsersDay = {
   partial: boolean;
   /** The same position in the previous period, when compare is on. */
   previousMau?: number | null;
+  /** Both sides whatever the selection, for the hover; internal is null on rows rolled up before it was recorded. */
+  external: ActiveUserCounts | null;
+  internal: ActiveUserCounts | null;
 };
 
 export type RequestsBySourceDay = { day: string; partial: boolean; counts: Record<string, number> | null };
+
+/** Chart A's series: the top features by requests over the range, then everything else as one series. */
+export const ANALYTICS_TOP_FEATURES = 6;
+export const ANALYTICS_TOP_MODELS = 10;
+export const ANALYTICS_OTHER_FEATURE = 'other';
+
+export type UsageDay = {
+  day: string;
+  partial: boolean;
+  /** Requests per series in `usage.features`; null when the rollup row is missing. */
+  byFeature: Record<string, number> | null;
+  credits: number | null;
+};
+
+export type ModelUsage = { model: string; requests: number; /** Percent of all requests, 0 to 100. */ share: number };
 
 export type SignupBucket = {
   /** First UTC day of the bucket, clipped to the range. */
@@ -78,12 +102,18 @@ export type AnalyticsOverview = {
     bucket: AnalyticsBucket;
   };
   signupsMode: AnalyticsSignupsMode;
+  accounts: AnalyticsAccounts;
   /** Latest rollup computedAt among the rows read, ISO. */
   lastUpdated: string | null;
   /** lastUpdated is older than ANALYTICS_STALE_AFTER_MS, or there is no rollup at all. */
   stale: boolean;
   /** Complete days in the range with no rollup row. */
   missingDays: string[];
+  /**
+   * Internal or all only: days with rollup or live data but no usable internal counts (rolled up before
+   * they were recorded, or within 28 days of such a row). Includes today; never overlaps missingDays.
+   */
+  internalMissingDays: string[];
   stats: {
     mau: AnalyticsStat;
     avgDau: AnalyticsStat;
@@ -92,11 +122,49 @@ export type AnalyticsOverview = {
     newSignups: AnalyticsStat & { suspected: number | null };
   };
   activeUsers: { days: ActiveUsersDay[]; bySource: RequestsBySourceDay[]; sources: string[] };
+  /** Rankings and totals cover the complete days present in the rollup, so they match analytics_daily. */
+  usage: {
+    /** Top features first, ANALYTICS_OTHER_FEATURE last when anything falls outside them. */
+    features: string[];
+    days: UsageDay[];
+    models: ModelUsage[];
+    /** Requests on models outside the top ANALYTICS_TOP_MODELS. */
+    otherModelRequests: number;
+    totals: { requests: number; credits: number };
+    /** Complete days with a rollup that the rankings and totals cover; 0 when they cover today alone. */
+    summaryDays: number;
+  };
   signups: {
     buckets: SignupBucket[];
     totals: { legit: number; suspected: number; unclassified: number };
     bySignal: { signal: SignupSignal | string; count: number }[];
   };
+};
+
+export type TopAccountRow = {
+  id: string;
+  name: string;
+  /** User level or org subscription; null when unknown. */
+  plan: string | null;
+  activeDays: number;
+  requests: number;
+  credits: number;
+  /** Percent of the included accounts' requests in the range, 0 to 100. */
+  share: number;
+  /** False when the user or org no longer exists, so there is no page to open; the name is then its id. */
+  known: boolean;
+};
+
+/** GET /api/admin/analytics/top-accounts: the heaviest accounts over the range's complete rollup days. */
+export type AnalyticsTopAccounts = {
+  /** Inclusive UTC days the tables cover; null when the range has no complete day yet. */
+  covered: { from: string; to: string } | null;
+  /** Covered days with no nightly rollup yet; their usage is not in the tables. */
+  missingDays: string[];
+  users: TopAccountRow[];
+  orgs: TopAccountRow[];
+  /** Users left out of both tables (and of the org sums) over the range. */
+  excluded: { suspected: number; suspended: number };
 };
 
 export const ANALYTICS_STALE_AFTER_MS = 30 * 60 * 60 * 1000;

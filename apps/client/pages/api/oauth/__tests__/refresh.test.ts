@@ -1,3 +1,6 @@
+vi.mock('@server/auth/withAccountNotPurging', () => ({
+  withAccountNotPurging: async (_id: string, write: () => Promise<unknown>) => write(),
+}));
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**

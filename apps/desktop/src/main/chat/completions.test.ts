@@ -1,5 +1,7 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { PassThrough } from 'node:stream';
-import {
+import axios, {
   AxiosError,
   type AxiosAdapter,
   type AxiosInstance,
@@ -14,7 +16,12 @@ import {
   type TokenStore,
 } from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
-import { streamCompletion, supportsPromptCache, withCacheBreakpoints } from './completions';
+import {
+  COMPLETION_HEADER_TIMEOUT_MS,
+  streamCompletion,
+  supportsPromptCache,
+  withCacheBreakpoints,
+} from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
 /** One SSE frame. The blank-line terminator is what the parser splits on. */
@@ -229,6 +236,99 @@ describe('streamCompletion', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it("does not let the client's request timeout cut an open stream that goes quiet", async () => {
+    // A real socket through real axios: the defect lives in how follow-redirects applies the
+    // timeout, which a fake post cannot show. Quiet for 3x the timeout, then the answer.
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write(': ping\n\n');
+      setTimeout(() => response.end(frame({ type: 'content', text: 'late' }) + frame('[DONE]')), 600);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const events: CompletionStreamEvent[] = [];
+      await streamCompletion(axios.create({ timeout: 200 }), `http://127.0.0.1:${port}/`, REQUEST, event =>
+        events.push(event)
+      );
+      expect(events).toEqual([{ type: 'content', text: 'late' }]);
+    } finally {
+      server.close();
+    }
+  });
+
+  describe('a dropped connection', () => {
+    const dropped = () => Object.assign(new Error('aborted'), { code: 'ECONNRESET' });
+
+    function sequentialAxios(streams: PassThrough[]) {
+      const post = vi.fn();
+      for (const stream of streams) post.mockResolvedValueOnce({ data: stream, status: 200 });
+      return { instance: { post } as unknown as AxiosInstance, post };
+    }
+
+    it('is not retried when it drops before the reply produced anything', async () => {
+      const first = new PassThrough();
+      const { instance, post } = sequentialAxios([first, new PassThrough()]);
+      const events: CompletionStreamEvent[] = [];
+
+      const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+      first.write(frame({ type: 'meta', requestId: 'r1' }));
+      await vi.waitUntil(() => events.length === 1, { timeout: 2000, interval: 5 });
+      first.destroy(dropped());
+
+      await expect(done).rejects.toThrow('The connection to the server dropped before the reply finished (aborted).');
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not retried once content arrived, and says what happened instead of a bare "aborted"', async () => {
+      const stream = new PassThrough();
+      const { instance, post } = sequentialAxios([stream]);
+      const events: CompletionStreamEvent[] = [];
+
+      const done = streamCompletion(instance, '/c', REQUEST, event => events.push(event));
+      stream.write(frame({ type: 'content', text: 'half' }));
+      await vi.waitUntil(() => events.length === 1, { timeout: 2000, interval: 5 });
+      stream.destroy(dropped());
+
+      await expect(done).rejects.toThrow('The connection to the server dropped before the reply finished (aborted).');
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('is not retried after the caller aborted', async () => {
+      const stream = new PassThrough();
+      const { instance, post } = sequentialAxios([stream, new PassThrough()]);
+      const controller = new AbortController();
+
+      const done = streamCompletion(instance, '/c', REQUEST, () => {}, controller.signal);
+      await vi.waitUntil(() => post.mock.calls.length === 1, { timeout: 2000, interval: 5 });
+      controller.abort();
+      stream.destroy(dropped());
+
+      await expect(done).resolves.toBeUndefined();
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('counts a stream with no bytes for the idle timeout as dropped', async () => {
+      const { instance, post } = sequentialAxios([new PassThrough(), new PassThrough()]);
+
+      const done = streamCompletion(instance, '/c', REQUEST, () => {}, undefined, { idleTimeoutMs: 30 });
+
+      await expect(done).rejects.toThrow(/dropped before the reply finished \(no data for \d+s\)/);
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a server-reported error alone: it is not a drop', async () => {
+      const stream = new PassThrough();
+      const { instance, post } = sequentialAxios([stream, new PassThrough()]);
+
+      const done = streamCompletion(instance, '/c', REQUEST, () => {});
+      stream.write(frame({ type: 'error', message: 'insufficient credits' }));
+
+      await expect(done).rejects.toThrow('insufficient credits');
+      expect(post).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('asks for a stream, declaring no tools when the caller passes none', async () => {
     const stream = new PassThrough();
     const { instance, post } = fakeAxios(stream);
@@ -243,6 +343,7 @@ describe('streamCompletion', () => {
     expect(body).not.toHaveProperty('max_tokens');
     expect(body.options).not.toHaveProperty('thinking');
     expect(config.responseType).toBe('stream');
+    expect(config.timeout).toBe(COMPLETION_HEADER_TIMEOUT_MS);
   });
 
   it('sends an output ceiling as the top-level max_tokens the endpoint normalizes', async () => {
@@ -332,6 +433,20 @@ describe('streamCompletion', () => {
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe('Model not enabled for this organization (status 403)');
   });
+
+  it.each(['ECONNABORTED', 'ETIMEDOUT'])(
+    'describes a %s header timeout as a slow server and a stopped turn, not the raw axios text',
+    async code => {
+      const post = vi.fn().mockRejectedValue(new AxiosError('timeout of 120000ms exceeded', code));
+      const instance = { post } as unknown as AxiosInstance;
+
+      const err = await streamCompletion(instance, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+      expect((err as Error).message).toBe(
+        'The Bike4Mind server took too long to start replying, so this turn stopped. Send your message again to continue.'
+      );
+    }
+  );
 });
 
 describe('streamCompletion through the shared authenticated client', () => {
@@ -433,6 +548,19 @@ describe('streamCompletion through the shared authenticated client', () => {
 
     expect(err).toBeInstanceOf(SessionRevokedError);
     expect(adapter).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits longer than the shared client's timeout for headers, and sends a timed-out request only once", async () => {
+    const { axios, adapter } = client(async config => {
+      throw new AxiosError(`timeout of ${config.timeout}ms exceeded`, 'ECONNABORTED', config);
+    });
+    axios.defaults.timeout = 30_000;
+
+    const err = await streamCompletion(axios, '/c', REQUEST, () => {}).catch((caught: Error) => caught);
+
+    expect(adapter).toHaveBeenCalledTimes(1);
+    expect(adapter.mock.calls[0][0].timeout).toBe(COMPLETION_HEADER_TIMEOUT_MS);
+    expect((err as Error).message).toMatch(/took too long to start replying/);
   });
 });
 

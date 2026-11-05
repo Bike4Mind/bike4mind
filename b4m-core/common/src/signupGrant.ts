@@ -44,7 +44,7 @@ export interface SignupGrant {
   creditsReleased: number;
   nextCondition: 'email_verification' | 'verification' | null;
   unlockedBy?: SignupGrantUnlockReason;
-  /** Organization whose invite released the remainder; caps org_invite unlocks per org. */
+  /** Organization whose invite released the remainder (historical; no longer enforced). */
   unlockedOrgId?: string;
   /** Credits released by the activity drip so far; absent on grants that predate it. */
   dripCredits?: number;
@@ -58,7 +58,23 @@ export interface SignupGrant {
   heldUnlock?: { reason: PaymentUnlockReason; heldAt: Date; releaseAt: Date };
   /** A disputed, refunded or fraud-warned payment: only an admin can release more of the grant. */
   unlockForfeited?: { cause: SignupUnlockForfeitCause; at: Date };
+  /**
+   * Invite bonus paid on top of the grant (payInviteBonus). Never counted in creditsReleased, so the
+   * unlock remainder and the drip cap are computed as if no bonus were paid.
+   */
+  inviteBonusPaid?: number;
+  /**
+   * An admin stopped every grant and reward for this account; nothing already granted is taken back.
+   * Only the time lives here: the reason and the acting admin are in the audit entry. redactUserSecretsForSelf
+   * (REST) and the users websocket field limits remove this field from every user-facing copy, admin views of
+   * another user included, so admin tooling reads block state from its own admin endpoint.
+   */
+  blocked?: { at: Date };
 }
+
+/** Whether an admin has stopped grants and rewards for this account (see SignupGrant.blocked). */
+export const isSignupGrantBlocked = (user: { signupGrant?: Pick<SignupGrant, 'blocked'> | null }): boolean =>
+  !!user.signupGrant?.blocked;
 
 export function hasPaidSignupDrip(
   grant: Pick<SignupGrant, 'lastDripDay' | 'lastDripPeriod'>,
@@ -155,9 +171,10 @@ export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlocked
 }
 
 /**
- * Resolves the schedule from stored values. Must stay in sync with the client mirror in
- * apps/client/app/hooks/useSignupGrantSchedule.ts and the seed in
- * packages/scripts/migrate/migrations/20260921237400_seed-signup-grant-schedule.ts.
+ * Resolves the schedule from stored values, including the retired toggles. Only the migrations in
+ * packages/scripts/migrate/migrations (20260921237400_seed-signup-grant-schedule.ts and
+ * 20260921237450_pin-signup-grant-initial-and-cap.ts) read it directly; runtime goes through
+ * runtimeSignupGrantSchedule below.
  */
 export function signupGrantScheduleFromValues(
   read: (key: SignupGrantCreditKey) => number | undefined,
@@ -192,13 +209,27 @@ export function signupGrantScheduleFromValues(
   };
 }
 
+/**
+ * The schedule as runtime reads it. defaultFreeCredits and stagedSignupGrantEnabled are retired: the seed
+ * migration above pinned their effect into the schedule keys, so they never size a payout here. Shared by
+ * resolveSignupGrantSchedule and the client mirror (useSignupGrantSchedule.ts) so both read the same keys.
+ */
+export function runtimeSignupGrantSchedule(
+  read: (key: SignupGrantCreditKey) => number | undefined,
+  activity: boolean
+): SignupGrantSchedule {
+  return signupGrantScheduleFromValues(key => (key === 'defaultFreeCredits' ? undefined : read(key)), {
+    staged: true,
+    activity,
+  });
+}
+
 const SCHEDULE_KEYS: SignupGrantCreditKey[] = [
   'signupGrantInitialCredits',
   'signupGrantDailyCredits',
   'signupGrantDripCap',
   'signupGrantInviteBonusCredits',
   'signupGrantCredits',
-  'defaultFreeCredits',
   'signupGrantActivityDailyCredits',
   'signupGrantActivityMaxCredits',
   'verifiedUnlockCredits',
@@ -209,7 +240,7 @@ type ScheduleSettingsReader = Pick<IAdminSettingsRepository, 'findBySettingName'
 
 /** The new schedule keys win; while one is unset its pre-schedule key still applies. One batched read when available. */
 export async function resolveSignupGrantSchedule(adminSettings: ScheduleSettingsReader): Promise<SignupGrantSchedule> {
-  const toggleKeys = ['stagedSignupGrantEnabled', 'signupGrantActivityEnabled'] as const;
+  const toggleKeys = ['signupGrantActivityEnabled'] as const;
   const values = new Map<string, unknown>();
   if (adminSettings.findBySettingNames) {
     for (const row of await adminSettings.findBySettingNames([...SCHEDULE_KEYS, ...toggleKeys])) {
@@ -220,10 +251,10 @@ export async function resolveSignupGrantSchedule(adminSettings: ScheduleSettings
       values.set(key, (await adminSettings.findBySettingName(key))?.settingValue);
     }
   }
-  return signupGrantScheduleFromValues(key => storedGrantCredits(key, values.get(key)), {
-    staged: isStoredToggleOn(values.get('stagedSignupGrantEnabled')),
-    activity: isStoredToggleOn(values.get('signupGrantActivityEnabled')),
-  });
+  return runtimeSignupGrantSchedule(
+    key => storedGrantCredits(key, values.get(key)),
+    isStoredToggleOn(values.get('signupGrantActivityEnabled'))
+  );
 }
 
 export async function resolveSignupGrantSettings(adminSettings: ScheduleSettingsReader) {
@@ -238,7 +269,8 @@ export async function resolveSignupGrantSettings(adminSettings: ScheduleSettings
  * `totalCredits` sets the enrolled entitlement (tranche first, remainder locked) instead of the signup settings.
  * It is a floor, not a ceiling: the drip and verification unlocks still grow the pool to the live drip cap
  * (signupGrantUnlockCredits, the drip branch in stagedSignupGrant.ts), so an invitee gets the larger of
- * `totalCredits` and the open-signup schedule. signupGrantInviteBonusCredits is the planned on-top bonus.
+ * `totalCredits` and the open-signup schedule. signupGrantInviteBonusCredits is the on-top invite bonus
+ * (payInviteBonus).
  */
 export async function newSignupGrant(adminSettings: ScheduleSettingsReader, totalCredits?: number) {
   const schedule = await resolveSignupGrantSchedule(adminSettings);

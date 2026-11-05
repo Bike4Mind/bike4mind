@@ -8,7 +8,9 @@ export type {
   ModelArch,
   ModelCapabilities,
   ModelContents,
+  ModelImportRuntime,
   ModelInspection,
+  OllamaCreateRequest,
   OllamaRegistryLayers,
   OpenAICompatibleProduct,
   PullOptions,
@@ -46,6 +48,7 @@ export { isAbliteratedModel } from './abliterated';
 export {
   BUNDLED_CURATED_JSON_TEXT,
   configuredNumCtx,
+  curatedBuildForInstalled,
   curatedBuildForRef,
   curatedEntryForRef,
   curatedLibrary,
@@ -65,6 +68,8 @@ export {
   type CuratedListing,
   type CuratedSource,
   type CuratedTierPick,
+  type InstalledMatch,
+  type InstalledModelKey,
   type LoadCuratedOptions,
 } from './curated';
 export {
@@ -173,6 +178,32 @@ export {
   type OllamaRuntimeOptions,
 } from './ollama';
 export { DEFAULT_OLLAMA_REGISTRY, ollamaLibraryLayers, type OllamaLibraryLayersOptions } from './ollamaRegistry';
+export {
+  SPLIT_IMPORT_MIN_OLLAMA,
+  importParameters,
+  importProjector,
+  createFileNameProblem,
+  planSplitImport,
+  removeSplitStaging,
+  runSplitImport,
+  siblingLayers,
+  splitImportBlock,
+  splitImportCreateRequest,
+  splitImportName,
+  splitImportSpace,
+  splitPartPath,
+  stagedPartBytes,
+  sweepSplitImports,
+  type ImportDisks,
+  type ImportSpace,
+  type SiblingHub,
+  type SiblingLayers,
+  type SplitImportBlock,
+  type SplitImportDeps,
+  type SplitImportPart,
+  type SplitImportPlan,
+  type SplitImportProgress,
+} from './splitImport';
 export { OpenAICompatibleRuntime, type OpenAICompatibleRuntimeOptions } from './openaiCompatible';
 export {
   DEFAULT_HUGGING_FACE_ENDPOINT,
@@ -180,6 +211,7 @@ export {
   MAX_HUB_SEARCH_LIMIT,
   OLLAMA_HUGGING_FACE_HOST,
   OLLAMA_SIGNED_HUGGING_FACE_HOST,
+  ollamaHubName,
   ollamaModelKey,
   ollamaPullRef,
   ollamaRefAliases,
@@ -234,22 +266,27 @@ export {
   LLAMA_SERVER_TUNING_FLAGS,
   MIN_LLAMA_SERVER_BUILD,
   findLlamaServer,
+  startLlamaRouter,
   startLlamaServer,
   type FindLlamaServerOptions,
+  type LlamaRouterProcess,
   type LlamaServerBinary,
   type LlamaServerExit,
   type LlamaServerFlashAttention,
   type LlamaServerProcess,
   type LlamaServerTuning,
+  type StartLlamaRouterOptions,
   type StartLlamaServerOptions,
 } from './llamaServer';
 export {
   DEFAULT_LLAMA_SERVER_PULL_QUANT,
   LLAMA_SERVER_RUNTIME_ID,
   LlamaServerRuntime,
+  ROUTER_LOG_NAME,
   parseLlamaServerPullRef,
   type LlamaServerRuntimeOptions,
   type StartModelOptions,
+  type StartRouterOptions,
 } from './llamaServerRuntime';
 export {
   gpuQueries,
@@ -300,6 +337,20 @@ export {
   type SystemdUnit,
   type UnitEnvironmentEvent,
 } from './ollamaInstall';
+export {
+  DEFAULT_OLLAMA_SERVE_START_TIMEOUT_MS,
+  DEFAULT_OLLAMA_SERVE_STOP_TIMEOUT_MS,
+  OLLAMA_LAUNCH_KEYS,
+  OllamaServeError,
+  findOllamaBinary,
+  ollamaLaunchEnv,
+  startOllamaServe,
+  type FindOllamaOptions,
+  type OllamaLaunchSettings,
+  type OllamaServeExit,
+  type OllamaServeProcess,
+  type StartOllamaServeOptions,
+} from './ollamaServe';
 export {
   mountFor,
   parseMountinfo,

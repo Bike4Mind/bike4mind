@@ -193,6 +193,13 @@ class Manifest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Object count'):
             sb.check_manifest(dest, buckets)
 
+    def test_unexpected_archive_name_rejected(self):
+        dest, buckets, manifest = self.make_backup()
+        manifest['mongo']['file'] = 'other.gz'
+        (dest / 'manifest.json').write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, 'archive name'):
+            sb.check_manifest(dest, buckets)
+
     def test_bucket_set_mismatch_rejected(self):
         dest, _, _ = self.make_backup()
         _, other = sb.resolve_targets(config(APP_FILES_BUCKET='renamed'))
@@ -227,14 +234,22 @@ def assert_mongo_steps_wired(test, cmds, kwargs_list):
     test.assertGreater(seen, 0)
 
 
-def recorder(user_dbs=''):
+def recorder(user_dbs='', counts=None):
+    """counts: {bucket: n} per `mc ls` call, as a list (before, after); defaults to empty then the backup's."""
     calls = []
     calls_kwargs = []
+    count_outputs = list(counts or [])
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
         calls_kwargs.append(kwargs)
-        return subprocess.CompletedProcess(cmd, 0, stdout=user_dbs if 'mongosh' in ' '.join(cmd) else '')
+        text = ' '.join(cmd)
+        out = ''
+        if 'mongosh' in text:
+            out = user_dbs
+        elif 'mc ls' in text:
+            out = ''.join(f'{name} {n}\n' for name, n in count_outputs.pop(0).items())
+        return subprocess.CompletedProcess(cmd, 0, stdout=out)
 
     fake_run.kwargs = calls_kwargs
     return calls, fake_run
@@ -242,16 +257,16 @@ def recorder(user_dbs=''):
 
 def kind(cmd):
     text = ' '.join(cmd)
-    for name in ('mongorestore', 'mongodump', 'mongosh', 'mc mirror', 'createbuckets', ' up '):
+    for name in ('mongorestore', 'mongodump', 'mongosh', 'mc mirror', 'mc ls', 'createbuckets', ' up '):
         if name in text and not (name == 'createbuckets' and ('mc mirror' in text)):
             return name.strip()
     return text
 
 
 class Restore(unittest.TestCase):
-    def restore(self, user_dbs='', *flags, dest=None):
+    def restore(self, user_dbs='', *flags, dest=None, stored=None, after=None):
         backup_dir, buckets = make_backup_dir(self)
-        calls, fake_run = recorder(user_dbs)
+        calls, fake_run = recorder(user_dbs, [stored or {}, after if after is not None else {n: 0 for n in buckets.values()}])
         args = sb.parser().parse_args(['restore', '--from', str(dest or backup_dir), *flags])
         with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, ENV)), \
                 mock.patch.object(sb, 'run', side_effect=fake_run):
@@ -264,9 +279,10 @@ class Restore(unittest.TestCase):
 
     def test_fresh_target_call_order_and_no_drop(self):
         calls = self.restore()
-        self.assertEqual([kind(c) for c in calls], ['up', 'mongosh', 'mongorestore', 'createbuckets', 'mc mirror'])
-        self.assertNotIn('--drop', calls[2][-1])
-        self.assertNotIn('--remove', calls[4][-1])
+        self.assertEqual([kind(c) for c in calls], ['up', 'mongosh', 'mc ls', 'mongorestore', 'createbuckets', 'mc mirror', 'mc ls'])
+        self.assertNotIn('--drop', calls[3][-1])
+        self.assertIn('--stopOnError', calls[3][-1])
+        self.assertNotIn('--remove', calls[5][-1])
         self.assertIn('print(names.join', calls[1][-1])
         self.assertNotIn('dropDatabase', calls[1][-1])
         assert_mongo_steps_wired(self, calls, self.kwargs)
@@ -274,7 +290,7 @@ class Restore(unittest.TestCase):
     def test_populated_target_aborts_before_any_write(self):
         with self.assertRaisesRegex(SystemExit, 'already has data'):
             self.restore('bike4mind\n')
-        self.assertEqual([kind(c) for c in self.calls], ['up', 'mongosh'])
+        self.assertEqual([kind(c) for c in self.calls], ['up', 'mongosh', 'mc ls'])
         self.assertIn('print(names.join', self.calls[1][-1])
         self.assertNotIn('dropDatabase', self.calls[1][-1])
         assert_mongo_steps_wired(self, self.calls, self.kwargs)
@@ -282,14 +298,34 @@ class Restore(unittest.TestCase):
     def test_yes_drops_user_databases_then_restores_without_drop(self):
         calls = self.restore('bike4mind\n', '--yes')
         self.assertEqual([kind(c) for c in calls],
-                         ['up', 'mongosh', 'mongosh', 'mongorestore', 'createbuckets', 'mc mirror'])
+                         ['up', 'mongosh', 'mc ls', 'mongosh', 'mongorestore', 'createbuckets', 'mc mirror', 'mc ls'])
         self.assertIn('print(names.join', calls[1][-1])
         self.assertNotIn('dropDatabase', calls[1][-1])
-        self.assertIn(DROP_ACTION, calls[2][-1])
-        self.assertIn('new Mongo(process.env.' + sb.URI_ENV, calls[2][-1])
+        self.assertIn(DROP_ACTION, calls[3][-1])
+        self.assertIn('new Mongo(process.env.' + sb.URI_ENV, calls[3][-1])
         assert_mongo_steps_wired(self, calls, self.kwargs)
-        self.assertNotIn('--drop', calls[3][-1])
-        self.assertIn('--remove', calls[5][-1])
+        self.assertNotIn('--drop', calls[4][-1])
+        self.assertIn('--remove', calls[6][-1])
+
+    def test_populated_minio_alone_aborts_before_any_write(self):
+        with self.assertRaisesRegex(SystemExit, 'objects in b-fab_file_bucket'):
+            self.restore('', stored={'b-fab_file_bucket': 3})
+        self.assertEqual([kind(c) for c in self.calls], ['up', 'mongosh', 'mc ls'])
+
+    def test_yes_with_only_minio_populated_removes_extra_objects(self):
+        calls = self.restore('', '--yes', stored={'b-fab_file_bucket': 3})
+        self.assertNotIn('mongosh', [kind(c) for c in calls][3:4])
+        self.assertIn('--remove', calls[-2][-1])
+
+    def test_count_mismatch_after_restore_fails(self):
+        with self.assertRaisesRegex(SystemExit, 'verification failed.*b-fab_file_bucket'):
+            self.restore(after={'b-fab_file_bucket': 1})
+
+    def test_count_script_and_parse(self):
+        script = sb.count_script(['a b', 'c'])
+        self.assertIn("local/'a b'", script)
+        self.assertIn('2>/dev/null', script)
+        self.assertEqual(sb.parse_counts("a b 3\nc 0\nnoise\n"), {'a b': 3, 'c': 0})
 
     def test_tampered_backup_aborts_before_touching_the_target(self):
         dest, _ = make_backup_dir(self)
@@ -340,6 +376,19 @@ class Backup(unittest.TestCase):
         self.assertEqual(self.calls, ['mongodump', 'mc mirror'])
         assert_mongo_steps_wired(self, self.cmds, self.kwargs)
         self.assertTrue((dest / 'manifest.json').is_file())
+
+    def test_missing_git_still_writes_manifest(self):
+        dest = self.tempdir() / 'b'
+        real_run = subprocess.run
+
+        def no_git(cmd, **kwargs):
+            if cmd[0] == 'git':
+                raise FileNotFoundError('git')
+            return real_run(cmd, **kwargs)
+
+        with mock.patch.object(subprocess, 'run', side_effect=no_git), mock.patch('sys.stderr'):
+            self.backup(dest)
+        self.assertIsNone(json.loads((dest / 'manifest.json').read_text())['revision'])
 
     def test_destination_is_private(self):
         dest = self.tempdir() / 'b'

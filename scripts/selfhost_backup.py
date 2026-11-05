@@ -91,7 +91,7 @@ def mongorestore_cmd(compose):
     """Never --drop: it replaces the admin users mid-restore, and the oplog replay that
     follows then runs unauthenticated whenever the target's root user is not the dump's.
     Overwriting existing data drops the user databases first (mongo_drop_dbs_cmd)."""
-    return exec_cmd(compose, with_config('mongorestore --oplogReplay --archive --gzip'))
+    return exec_cmd(compose, with_config('mongorestore --oplogReplay --stopOnError --archive --gzip'))
 
 
 def user_dbs_cmd(compose, action):
@@ -127,6 +127,24 @@ def mirror_script(buckets, restore, remove=False):
     return '; '.join(lines)
 
 
+def count_script(buckets):
+    """Print `<bucket> <object count>` per bucket; a bucket that does not exist yet counts 0."""
+    lines = [MC_ALIAS]
+    for name in buckets:
+        q = shlex.quote(name)
+        lines.append(f'echo {q} $(mc ls --recursive local/{q} 2>/dev/null | wc -l | tr -d " ")')
+    return '; '.join(lines)
+
+
+def parse_counts(text):
+    counts = {}
+    for line in (text or '').splitlines():
+        name, _, number = line.rpartition(' ')
+        if name and number.isdigit():
+            counts[name] = int(number)
+    return counts
+
+
 def count_files(directory):
     return sum(1 for p in Path(directory).rglob('*') if p.is_file())
 
@@ -160,7 +178,9 @@ def check_manifest(dest, buckets):
         raise ValueError('Unsupported manifest version')
     if set(manifest['buckets']) != set(buckets.values()):
         raise ValueError('Backup bucket set does not match the target configuration')
-    if sha256(Path(dest) / manifest['mongo']['file']) != manifest['mongo']['sha256']:
+    if manifest['mongo']['file'] != MONGO_ARCHIVE:
+        raise ValueError('Unexpected Mongo archive name in manifest')
+    if sha256(Path(dest) / MONGO_ARCHIVE) != manifest['mongo']['sha256']:
         raise ValueError('Mongo archive checksum mismatch')
     for name, info in manifest['buckets'].items():
         if count_files(Path(dest) / 'objects' / name) != info['objects']:
@@ -216,6 +236,17 @@ def load(args):
     return compose, buckets, {**os.environ, URI_ENV: instance_uri(uri)}
 
 
+def source_revision():
+    """Git revision of this tool, or None (tarball install, no git) with a warning."""
+    try:
+        done = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=Path(__file__).parent,
+                              capture_output=True, text=True, check=True)
+        return done.stdout.strip() or None
+    except (OSError, subprocess.CalledProcessError):
+        print('Warning: git revision unavailable; manifest records none.', file=sys.stderr)
+        return None
+
+
 def backup(args):
     compose, buckets, env = load(args)
     dest = Path(args.dest).resolve()
@@ -231,7 +262,7 @@ def backup(args):
         step('object mirror', mc_cmd(compose, dest / 'objects', mirror_script(buckets.values(), restore=False), False), env=env)
     except SystemExit as error:
         raise SystemExit(f'{error}; {dest} is incomplete, remove it before retrying') from None
-    revision = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    revision = source_revision()
     manifest = build_manifest(dest, buckets, started, utcnow(), revision)
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Backup complete: {dest}')
@@ -241,17 +272,32 @@ def backup(args):
 def restore(args):
     compose, buckets, env = load(args)
     dest = Path(args.source).resolve()
-    check_manifest(dest, buckets)
+    manifest = check_manifest(dest, buckets)
     step('start mongo and minio', [*compose, 'up', '-d', '--no-deps', '--wait', 'mongo', 'minio'])
     existing = step('target check', mongo_user_dbs_cmd(compose), redact_stderr=True, env=env, stdout=subprocess.PIPE).stdout.strip()
-    if existing and not args.yes:
-        raise SystemExit(f'Target Mongo already has data ({existing}); restore into a fresh project or pass --yes to overwrite')
+    objects = dest / 'objects'
+
+    def target_counts():
+        script = count_script(buckets.values())
+        out = step('count objects', mc_cmd(compose, objects, script, True), env=env, stdout=subprocess.PIPE).stdout
+        return parse_counts(out)
+
+    stored = [name for name, count in target_counts().items() if count]
+    if (existing or stored) and not args.yes:
+        found = existing or 'objects in ' + ', '.join(stored)
+        raise SystemExit(f'Target already has data ({found}); restore into a fresh project or pass --yes to overwrite')
     if existing:
         step('drop user databases', mongo_drop_dbs_cmd(compose), redact_stderr=True, env=env)
     step('mongorestore', mongorestore_cmd(compose), redact_stderr=True, env=env, stdin=open(dest / MONGO_ARCHIVE, 'rb'))
     step('createbuckets', [*compose, 'run', '--rm', '--no-deps', 'createbuckets'], env=env)  # buckets, webhooks, lifecycle
-    script = mirror_script(buckets.values(), restore=True, remove=bool(existing))
-    step('object mirror', mc_cmd(compose, dest / 'objects', script, True), env=env)
+    script = mirror_script(buckets.values(), restore=True, remove=args.yes)
+    step('object mirror', mc_cmd(compose, objects, script, True), env=env)
+    restored = target_counts()
+    wrong = {name: (info['objects'], restored.get(name)) for name, info in manifest['buckets'].items()
+             if restored.get(name) != info['objects']}
+    if wrong:
+        detail = ', '.join(f'{name} (backup {want}, target {got})' for name, (want, got) in wrong.items())
+        raise SystemExit(f'Restore verification failed, object counts differ: {detail}')
     print(f'Restore complete from {dest}')
 
 
@@ -266,7 +312,7 @@ def parser():
     b.add_argument('--dest', required=True)
     r = sub.add_parser('restore', help='Restore a backup directory into the selected project')
     r.add_argument('--from', dest='source', required=True)
-    r.add_argument('--yes', action='store_true', help='Overwrite a target that already has data: drops every non-system database and removes objects not in the backup')
+    r.add_argument('--yes', action='store_true', help='Overwrite a target that already has data (Mongo or any bucket object): drops every non-system database and removes objects not in the backup')
     return p
 
 

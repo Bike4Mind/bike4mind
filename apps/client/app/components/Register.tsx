@@ -2,6 +2,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
+import OtcNoCodeHint from './OtcNoCodeHint';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
@@ -355,7 +356,10 @@ const Register: React.FC = () => {
   };
 
   const handleSocialLogin = (provider: 'google' | 'github' | 'okta' | 'apple') => {
-    startOAuthSignIn(`/api/auth/${provider}`).catch((error: unknown) => {
+    // Carried through the signed OAuth state and redeemed if this login creates the account.
+    const code = inviteCode.trim();
+    const startUrl = code ? `/api/auth/${provider}?inviteCode=${encodeURIComponent(code)}` : `/api/auth/${provider}`;
+    startOAuthSignIn(startUrl).catch((error: unknown) => {
       toast.error(error instanceof Error ? error.message : 'Sign-in could not start. Please try again.');
     });
   };
@@ -881,6 +885,7 @@ const Register: React.FC = () => {
                 capped={rateLimit.capped}
                 testId="register-otc-rate-limit-alert"
               />
+              <OtcNoCodeHint testId="register-otc-no-code-hint" />
 
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
                 <Link

@@ -105,6 +105,18 @@ describe('logging middleware — request ID correlation', () => {
   });
 });
 
+describe('logging middleware - request path', () => {
+  it.each([
+    ['/api/files?search=&pagination=1', { search: '', pagination: '1' }, '/api/files'],
+    ['/api/sessions/66ab12?view=full', { id: '66ab12', view: 'full' }, '/api/sessions/:id'],
+  ])('logs path for %s', (url, query, expected) => {
+    const { req, res, next } = makeReqRes({}, url);
+    req.query = query;
+    logging(req, res, next);
+    expect(logLine(req.logger).path).toBe(expected);
+  });
+});
+
 describe('logging middleware - per-request log context', () => {
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -128,6 +140,11 @@ describe('logging middleware - per-request log context', () => {
     expect(lines.find(l => l.requestId === 'a')).toMatchObject({ path: '/api/a' });
     expect(lines.find(l => l.requestId === 'b')).toMatchObject({ path: '/api/b' });
     expect(lines).toHaveLength(2);
+  });
+
+  it('keeps the query string out of the path field', async () => {
+    await runRequest('q', '/api/auth/google?inviteCode=REF-123', 1);
+    expect(lastLines().find(l => l.requestId === 'q')).toMatchObject({ path: '/api/auth/google' });
   });
 
   it('keeps userId inside the request that set it', async () => {

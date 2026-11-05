@@ -83,6 +83,8 @@ interface Install {
   command: string;
 }
 
+export type InstallWait = 'done' | 'failed' | 'timeout' | 'none';
+
 export interface InstallRequest {
   sessionId: string;
   workingDirectory: string;
@@ -100,13 +102,46 @@ export interface InstallRequest {
  */
 export class DependencyInstaller {
   private readonly installs = new Map<string, Install>();
+  /** A start still planning, so waitFor called right after maybeStart does not see 'none'. */
+  private readonly starting = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly registry: Pick<BackgroundProcessRegistry, 'start' | 'get' | 'tail'>,
+    private readonly registry: Pick<BackgroundProcessRegistry, 'start' | 'get' | 'tail' | 'settle'>,
     private readonly now: () => number = Date.now
   ) {}
 
   async maybeStart(request: InstallRequest): Promise<void> {
+    const pending = this.start(request);
+    this.starting.set(request.sessionId, pending);
+    try {
+      await pending;
+    } finally {
+      if (this.starting.get(request.sessionId) === pending) this.starting.delete(request.sessionId);
+    }
+  }
+
+  /** Whether this session has an install still running, once any start under way has planned. */
+  async isInstalling(sessionId: string): Promise<boolean> {
+    await this.starting.get(sessionId)?.catch(() => undefined);
+    const install = this.installs.get(sessionId);
+    return install ? this.registry.get(install.processId, sessionId)?.status === 'running' : false;
+  }
+
+  /** Wait up to `ms` (ms) for this session's install to end; 'none' when there is no install. */
+  async waitFor(sessionId: string, ms: number): Promise<InstallWait> {
+    const startedAt = this.now();
+    // A start that threw leaves no install behind, which is what the lookup below reports.
+    await this.starting.get(sessionId)?.catch(() => undefined);
+    const install = this.installs.get(sessionId);
+    if (!install) return 'none';
+    await this.registry.settle(install.processId, Math.max(0, ms - (this.now() - startedAt)));
+    const info = this.registry.get(install.processId, sessionId);
+    if (!info) return 'none';
+    if (info.status === 'running') return 'timeout';
+    return info.status === 'exited' && info.exitCode === 0 ? 'done' : 'failed';
+  }
+
+  private async start(request: InstallRequest): Promise<void> {
     if (request.outcome !== 'created') return;
     const plan = await planInstall(request.workingDirectory);
     if (!plan) return;
@@ -125,7 +160,7 @@ export class DependencyInstaller {
    * Coarse on purpose: this text is part of the system prompt, so it changes only when the
    * install starts, ends, or fails - never with progress - and prompt caching mostly survives.
    */
-  promptLines(sessionId: string): string[] {
+  promptLines(sessionId: string, { spawned = false }: { spawned?: boolean } = {}): string[] {
     const install = this.installs.get(sessionId);
     if (!install) return [];
     const info = this.registry.get(install.processId, sessionId);
@@ -137,17 +172,31 @@ export class DependencyInstaller {
       info,
       install,
       () => this.registry.tail(install.processId, sessionId, FAILURE_TAIL_CHARS),
-      this.now()
+      this.now(),
+      spawned
     );
   }
 }
 
-function describe(info: BackgroundProcessInfo, install: Install, tail: () => string | null, now: number): string[] {
+function describe(
+  info: BackgroundProcessInfo,
+  install: Install,
+  tail: () => string | null,
+  now: number,
+  spawned: boolean
+): string[] {
   const handle = `handle ${install.processId}, \`${install.command}\``;
   if (info.status === 'running') {
     return [
-      `Dependencies are installing in the background (${handle}). Check with bash_output before`,
-      'running tests or builds, and do not start another install.',
+      `Dependencies are installing in the background (${handle}). Do not poll it with bash_output:`,
+      'you are told automatically when it finishes. Do not start another install.',
+      // A spawned agent's turn ending counts as the agent finishing, so it cannot wait by ending it.
+      ...(spawned
+        ? [
+            'Do other work that does not need node_modules first, and never call bash_output repeatedly',
+            'with the same id.',
+          ]
+        : []),
     ];
   }
   if (info.status === 'killed') return [];

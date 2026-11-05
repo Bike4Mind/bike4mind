@@ -55,7 +55,9 @@ vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
   fabFilesService: { signedUrlExpiresAt: (_url: string, seconds: number) => new Date(Date.now() + seconds * 1000) },
+  meterCompletionBackend: (llm: unknown) => llm,
 }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({ createRequestCompletionMeter: () => vi.fn() }));
 
 vi.mock('axios', () => ({ default: { get: h.axiosGet } }));
 
@@ -157,7 +159,11 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
     await expect(
       run({ id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 }, res)
     ).rejects.toBe(refusal);
-    expect(assertMediaModelAdmission).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'test-image-model', true);
+    expect(assertMediaModelAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'u1' }),
+      'test-image-model',
+      true
+    );
     const operations = await h.getOperationsModel.mock.results[0].value;
     expect(operations.llm.complete).not.toHaveBeenCalled();
     expect(h.storageUpload).not.toHaveBeenCalled();

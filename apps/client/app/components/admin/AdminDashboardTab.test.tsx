@@ -26,6 +26,7 @@ vi.mock('./useAdminActivitySummary', () => ({ useAdminActivitySummary }));
 vi.mock('./EventMetrics/components/UsageBySourceCard', () => ({
   UsageBySourceCard: () => <div data-testid="usage-by-source-card" />,
 }));
+vi.mock('./AiAdvisory/AiAdvisoryStrip', () => ({ AiAdvisoryStrip: () => null }));
 vi.mock('./Signups/NewSignupsTile', () => ({
   NewSignupsTile: () => <div data-testid="admin-dashboard-signups-tile" />,
 }));

@@ -1,4 +1,4 @@
-import type { ISpendAlert, SpendRuleId } from '@bike4mind/common';
+import { escapeSlackLine, type ISpendAlert, type SpendRuleId } from '@bike4mind/common';
 import {
   ADMIN_LINKS,
   composeAlarmMessage,
@@ -38,8 +38,31 @@ const PLATFORM_RULES: ReadonlySet<SpendRuleId> = new Set(['platform_spike', 'pla
 
 const safe = escapeMrkdwn;
 
+/** A key name is user text on a single labeled line: no line breaks, bounded length. */
+const KEY_NAME_MAX = 60;
+const keyName = (name: string) =>
+  escapeSlackLine(name.length > KEY_NAME_MAX ? `${name.slice(0, KEY_NAME_MAX)}...` : name);
+
+const SLACK_FIELD_MAX = 2000;
+
+function foldedKeysField(names: string[]): string {
+  const heading = '*Via API keys*\n';
+  const listed: string[] = [];
+  for (const name of names) {
+    const formattedName = keyName(name);
+    const candidate = [...listed, formattedName];
+    const remaining = names.length - candidate.length;
+    const suffix = remaining > 0 ? `, +${remaining} more` : '';
+    if (heading.length + candidate.join(', ').length + suffix.length > SLACK_FIELD_MAX) break;
+    listed.push(formattedName);
+  }
+  const remaining = names.length - listed.length;
+  return `${heading}${listed.join(', ')}${remaining > 0 ? `, +${remaining} more` : ''}`;
+}
+
 const formatCredits = (credits: number) => Math.round(credits).toLocaleString('en-US');
 const formatUsd = (usd: number) => `$${usd.toFixed(2)}`;
+const listPriceNote = (creditUsd: number) => `approx. at list price, ${formatUsd(creditUsd * 1000)} per 1,000 credits`;
 
 function formatDuration(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
@@ -60,7 +83,7 @@ function formatAmount(rule: SpendRuleId, amount: number, creditUsd: number): str
 
 function listPriceContext(stage: string, rule: SpendRuleId, creditUsd: number): string[] {
   const context = [safe(stage)];
-  if (rule !== 'platform_cost_spike') context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
+  if (rule !== 'platform_cost_spike') context.push(listPriceNote(creditUsd));
   return context;
 }
 
@@ -70,7 +93,8 @@ function buildResolveMessage(input: SpendAlertMessageInput, title: string): Slac
     alert.rule === 'platform_cost_spike' ? formatUsd(alert.peakValue) : `${formatCredits(alert.peakValue)} credits`;
   const endedAt = alert.resolvedAt ?? new Date();
   const duration = formatDuration(endedAt.getTime() - alert.openedAt.getTime());
-  const line = `Resolved: ${title} - ${scope.label}, peak ${peak}, lasted ${duration}`;
+  const tier = alert.context.trusted === true ? ' (trusted)' : '';
+  const line = `Resolved: ${title} - ${scope.label}${tier}, peak ${peak}, lasted ${duration}`;
 
   return composeAlarmMessage({
     stage: input.stage,
@@ -92,14 +116,26 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   const baseline = numberOrNull(alert.context.baseline);
   const ratio = numberOrNull(alert.context.ratio);
   const isCost = alert.rule === 'platform_cost_spike';
+  const trusted = alert.context.trusted === true;
+  const excluded = numberOrNull(alert.context.trustedExcluded);
+  const trustedExcluded = excluded !== null && excluded > 0 ? excluded : null;
 
   const fields = [
-    `*Scope*\n${safe(scope.label)}`,
+    `*Scope*\n${safe(scope.label)}${trusted ? ' (trusted)' : ''}`,
     `*Last ${WINDOW_LABEL}*\n${formatAmount(alert.rule, alert.lastValue, creditUsd)}`,
-    `*Normal (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
+    `*${trustedExcluded === null ? 'Normal' : 'Normal excl. trusted'} (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
   ];
   if (scope.paidBy) fields.push(`*Paid by*\n${safe(scope.paidBy)}`);
+  const viaKeys = Array.isArray(alert.context.viaKeys)
+    ? alert.context.viaKeys.filter((name): name is string => typeof name === 'string')
+    : [];
+  if (viaKeys.length > 0) fields.push(foldedKeysField(viaKeys));
+  // Platform ratios and floors are judged without trusted accounts; the reported total still includes them.
+  if (trustedExcluded !== null) {
+    const estimate = isCost ? ' (est.)' : '';
+    fields.push(`*Trusted accounts, not in ratio*\n${formatAmount(alert.rule, trustedExcluded, creditUsd)}${estimate}`);
+  }
 
   const sections: string[] = [];
   if (breakdown?.topModels.length) {
@@ -110,11 +146,11 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
     const lines = breakdown.topAccounts.map(a => `${safe(a.label)}: ${formatCredits(a.credits)}`);
     sections.push(`*Top accounts (credits)*\n${lines.join('\n')}`);
   }
-  if (!PLATFORM_RULES.has(alert.rule) && breakdown?.sources && Object.keys(breakdown.sources).length > 0) {
-    const lines = Object.entries(breakdown.sources).map(
-      ([source, credits]) => `${safe(source)}: ${formatCredits(credits)}`
-    );
-    sections.push(`*Source mix (credits)*\n${lines.join('\n')}`);
+  if (breakdown?.sources && Object.keys(breakdown.sources).length > 0) {
+    const lines = Object.entries(breakdown.sources)
+      .sort((left, right) => right[1] - left[1])
+      .map(([source, credits]) => `${safe(source)}: ${formatCredits(credits)}`);
+    sections.push(`*Where it was spent (credits)*\n${lines.join('\n')}`);
   }
 
   const buttons: { label: string; url: string }[] = [];
@@ -125,7 +161,8 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   }
 
   const context = [safe(stage), `${kind === 'escalate' ? 'escalated, ' : ''}${alert.severity}`];
-  if (!isCost) context.push(`approx. at list price, ${formatUsd(creditUsd)} per credit`);
+  if (trusted) context.push('trusted-account limits');
+  if (!isCost) context.push(listPriceNote(creditUsd));
 
   return composeAlarmMessage({
     stage,

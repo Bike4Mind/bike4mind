@@ -64,7 +64,7 @@ import { PromptCacheTtlPreference } from './PromptCacheTtlPreference';
 import { LocalContextPreference } from './LocalContextPreference';
 import { createLateReload } from './lateReload';
 import { registerGenerationIpc } from './generationIpc';
-import { registerModelSettingsIpc } from './modelSettingsIpc';
+import { modelSettingsChanged, registerModelSettingsIpc } from './modelSettingsIpc';
 import { ModelSettingsStore } from './ModelSettingsStore';
 import { registerLocalContextIpc } from './localContextIpc';
 import { localContextSizing, localHardware } from './localContextSizing';
@@ -72,6 +72,7 @@ import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
+import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
@@ -100,15 +101,17 @@ import { SessionStore } from './SessionStore';
 import { LocalHistory } from './LocalHistory';
 import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
-import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
+import { forgetLocalContexts, forgetLocalContextOf, OllamaLocal } from './OllamaLocal';
 import { registerModelServersIpc } from '../modelServers/ipc';
-import { LocalModels } from '../modelServers/LocalModels';
+import { LocalModels, optionCatalogSampling, type CatalogSamplingHook } from '../modelServers/LocalModels';
+import { hostLaunchers } from '../modelServers/LocalServerSupervisor';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
+import { readHostOllamaEnv } from '../modelServers/observedOllama';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
-import type { CatalogSampling } from '@shared/generation';
+import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -142,6 +145,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
@@ -303,8 +307,12 @@ export interface RegisteredChat {
   modelServers: ModelServerRegistry;
   /** Stops their health checks and any pending model list reload, on quit. */
   stopModelServers(): void;
+  /** Stops the servers Desktop started, on the quit pass that can wait. */
+  stopLocalServers(): Promise<void>;
   /** The Settings choice of local model context, which the Models screen's fit badges also plan for. */
   localContext: LocalContextPreference;
+  /** Per-model defaults; the fit badges plan for each model's own context and draft too. */
+  modelSettings: ModelSettingsStore;
   /** The capability ledger, which the Models screen records approved downloads in. */
   capabilityLedger: CapabilityLedger;
 }
@@ -389,8 +397,8 @@ export function registerChat(
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
     pinnedProjectors?(): ReadonlyMap<string, number>;
-    /** The curated family sampling for an installed Ollama model; see ModelHubService.catalogSampling. */
-    catalogSampling?(ollamaName: string): CatalogSampling | undefined;
+    /** The curated family sampling for an installed local model; see ModelHubService.catalogSampling. */
+    catalogSampling?: CatalogSamplingHook;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
@@ -450,12 +458,15 @@ export function registerChat(
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = app.getPath('home');
   const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
+  const permissionProtected = permissionProtectedLocations(userData, home, dirname(MANAGED_SETTINGS_PATH), logger);
+  const toolProtected = toolProtectedLocations(userData, logger);
   const permissions: PermissionService = new PermissionService({
     store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
     claudeCode,
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
-    protectedRoots: [userData, join(home, '.claude'), dirname(MANAGED_SETTINGS_PATH)],
+    protectedRoots: () => permissionProtected.paths(),
+    unresolvedProtected: () => permissionProtected.unresolved(),
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -494,13 +505,20 @@ export function registerChat(
   const localSizing = localContextSizing({
     setting: () => localContext.read(),
     pinnedProjectors: () => hooks.pinnedProjectors?.() ?? new Map(),
+    kvCacheType: () => modelServers.localKvCacheType(),
+    flashAttention: () => modelServers.flashAttention(LOCAL_SERVER_ID),
   });
   const lateReload = createLateReload(() => {
     models.forgetLocal();
     send(IPC_CHANNELS.chatModelsChanged, undefined);
   }, LATE_RELOAD_DEBOUNCE_MS);
+  const modelSettings = new ModelSettingsStore(join(userData, MODEL_SETTINGS_FILE_NAME), message =>
+    logger.warn(message)
+  );
+  const loadSettings = (modelId: string) => modelSettings.get(modelId);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
+    loadSettings,
     store: new ModelServerStore(safeStorage, privateFile(join(userData, 'model-servers.json')), logger),
     logger,
     changed: servers => {
@@ -509,6 +527,12 @@ export function registerChat(
     },
     edited: () => models.forgetLocal(),
     listedLate: lateReload.notify,
+    readOllamaEnv: url => readHostOllamaEnv(url),
+    launchers: hostLaunchers({
+      unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
+    }),
+    ownedServers: privateFile(join(userData, 'local-servers.json')),
+    ownedCipher: safeStorage,
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();
@@ -517,12 +541,11 @@ export function registerChat(
   });
   localHardware.setOverride(probed => withEnteredSpecs(probed, modelServers.specs(LOCAL_SERVER_ID)));
   void modelServers.start().catch(error => logger.warn(`MODEL SERVERS: could not load: ${String(error)}`));
-  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
   const local = new LocalModels(
-    new OllamaLocal((url, init) => net.fetch(url, init), localSizing),
+    new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
     modelServers,
-    // Matched by name on every server; requestGeneration keeps each server to the fields it takes.
-    option => hooks.catalogSampling?.(option.name)
+    // Matched on every server; requestGeneration keeps each server to the fields it takes.
+    optionCatalogSampling(hooks.catalogSampling)
   );
   const models = new ModelCatalog(
     {
@@ -709,7 +732,12 @@ export function registerChat(
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
-    protectedPaths: [userData],
+    get protectedPaths() {
+      return toolProtected.paths();
+    },
+    get unresolvedProtectedPaths() {
+      return toolProtected.unresolved();
+    },
     get deferredTools() {
       return deferredTools.current();
     },
@@ -810,10 +838,18 @@ export function registerChat(
     isPromptCacheTtl(ttl) ? service.setSessionPromptCacheTtl(sessionId, ttl) : null
   );
   registerGenerationIpc(ipcMain, service);
-  registerModelSettingsIpc(ipcMain, modelSettings);
+  registerModelSettingsIpc(ipcMain, modelSettings, {
+    offer: (modelId, draftTokens) => local.loadOffer(modelId, draftTokens),
+    changed: modelSettingsChanged({
+      forgetContext: forgetLocalContextOf,
+      refreshModels: () => models.forgetLocal(),
+      announce: () => send(IPC_CHANNELS.chatModelsChanged, undefined),
+    }),
+  });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
+  registerSessionOrchestrateIpc(ipcMain, service);
   // Validated here rather than trusted, for the same reason the folder grant goes through a
   // native picker: this is the only door to the approval mode, so an unrecognised value must
   // not reach the store and land as something looser than the user asked for.
@@ -1075,6 +1111,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
     service.cancelQueued(sessionId, queuedId)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatGetHeldRelays, (_event, sessionId: string) => service.heldRelaysFor(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatResolveHeldRelay, (_event, sessionId: string, heldId: string, deliver: boolean) =>
+    service.resolveHeldRelay(sessionId, heldId, deliver === true)
   );
   ipcMain.handle(IPC_CHANNELS.chatSendQueuedNow, (_event, sessionId: string, queuedId: string) =>
     service.sendQueuedNow(sessionId, queuedId)
@@ -1421,7 +1461,9 @@ export function registerChat(
       lateReload.stop();
       modelServers.stop();
     },
+    stopLocalServers: () => modelServers.stopLocalServers(),
     localContext,
+    modelSettings,
     capabilityLedger,
   };
 }

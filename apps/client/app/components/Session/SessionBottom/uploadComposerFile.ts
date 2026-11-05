@@ -77,6 +77,14 @@ export const cancelComposerUpload = (tempId: string) => inFlightUploads.get(temp
 const uploadErrorMessage = (err: unknown) =>
   isAxiosError(err) && typeof err.response?.data === 'string' ? undefined : sanitizeErrorMessage(getErrorMessage(err));
 
+const GENERIC_UPLOAD_ERROR = 'Failed to upload file';
+
+// Keyed by message so a multi-file drop with the same refusal shows one toast.
+function toastUploadRefusal(message: string | undefined) {
+  const text = message || GENERIC_UPLOAD_ERROR;
+  toast.error(text, { id: `composer-upload-refused:${text}` });
+}
+
 /**
  * Upload a file attached in the chat composer (drop, picker or paste) as a pending
  * message thumbnail. Rejects on failure: the thumbnail is removed if the upload was
@@ -240,18 +248,15 @@ export async function uploadComposerFile(
 
     console.error('Error creating fab file:', err);
     const storageMessage = storageLimitMessage(err);
+    const errorMessage = storageMessage ?? uploadErrorMessage(err);
     setPendingMessageFiles(prev =>
-      prev.map(item =>
-        item.fabFile.id === tempId
-          ? {
-              ...item,
-              status: 'error' as const,
-              errorMessage: storageMessage ?? uploadErrorMessage(err),
-            }
-          : item
-      )
+      prev.map(item => (item.fabFile.id === tempId ? { ...item, status: 'error' as const, errorMessage } : item))
     );
-    if (storageMessage) toastStorageLimit(storageMessage);
+    if (storageMessage) {
+      toastStorageLimit(storageMessage);
+    } else {
+      toastUploadRefusal(errorMessage);
+    }
     throw err;
   } finally {
     inFlightUploads.delete(tempId);

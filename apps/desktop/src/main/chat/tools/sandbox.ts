@@ -1,8 +1,8 @@
-import { accessSync, constants, realpathSync } from 'node:fs';
+import { accessSync, constants } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, platform, tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { isWithin } from './paths';
+import { join } from 'node:path';
+import { guardForm, guardFormWithin, withDriveSpellings, withRealPath } from './paths';
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 
@@ -121,11 +121,13 @@ export function protectionFor(candidates: readonly string[], access: 'read' | 'w
   // macOS and Windows volumes are case-insensitive by default, and realpath keeps the caller's
   // casing for a name that does not exist yet: `.claude/Settings.local.json` would create the
   // very file Claude Code loads. Folding everywhere only ever refuses more.
-  const folded = candidates.map(fold);
+  const folded = withDriveSpellings(candidates).map(fold);
   for (const guard of guards()) {
     if (access === 'read' && guard.readable) continue;
-    for (const spelling of spellings(guard.path).map(fold)) {
-      if (folded.some(candidate => (guard.prefix ? candidate.startsWith(spelling) : isWithin(spelling, candidate)))) {
+    for (const spelling of withRealPath(guard.path).map(fold)) {
+      if (
+        folded.some(candidate => (guard.prefix ? candidate.startsWith(spelling) : guardFormWithin(spelling, candidate)))
+      ) {
         return guard.reason;
       }
     }
@@ -135,7 +137,7 @@ export function protectionFor(candidates: readonly string[], access: 'read' | 'w
 }
 
 function fold(path: string): string {
-  return path.toLowerCase();
+  return guardForm(path).toLowerCase();
 }
 
 export function sandboxAvailable(): boolean {
@@ -161,26 +163,6 @@ function expandHome(value: string): string {
 }
 
 /**
- * Seatbelt matches the resolved path, so a rule on a symlinked spelling never fires: macOS's
- * tmpdir() is /var/folders/..., which is really /private/var/folders/..., and without the
- * resolved form every tool that writes a temp file (vitest, tsc, npm) fails with EPERM.
- */
-function spellings(path: string): string[] {
-  const resolved = resolveNearest(path);
-  return resolved === path ? [path] : [path, resolved];
-}
-
-/** A path that does not exist yet still has to be spelled under its parent's resolved path. */
-function resolveNearest(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    const parent = dirname(path);
-    return parent === path ? path : join(resolveNearest(parent), basename(path));
-  }
-}
-
-/**
  * The profile that confines a shell command.
  *
  * Seatbelt is last-match-wins, so the order is load-bearing: the blanket write denial has to
@@ -198,7 +180,7 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
     '',
     '(deny file-write*)',
     ...[...writableRoots, tmpdir()]
-      .flatMap(spellings)
+      .flatMap(withRealPath)
       .map(root => `(allow file-write* (subpath "${escapeProfilePath(root)}"))`),
     '(allow file-write* (subpath "/tmp"))',
     '(allow file-write* (subpath "/private/tmp"))',
@@ -213,16 +195,18 @@ export function buildProfile(writableRoots: readonly string[], alwaysDenied: rea
     // regex above, which only ever sees the resolved path.
     '(deny file-write-create (require-all (regex #"/\\.claude$") (vnode-type SYMLINK)))',
     '(deny file-write-unlink (regex #"/\\.claude$"))',
-    ...spellings(expandHome('~/.claude')).map(path => `(deny file-write-unlink (literal "${escapeProfilePath(path)}"))`)
+    ...withRealPath(expandHome('~/.claude')).map(
+      path => `(deny file-write-unlink (literal "${escapeProfilePath(path)}"))`
+    )
   );
   for (const guard of guards()) {
     const operations = guard.readable ? 'file-write*' : 'file-read* file-write*';
     const filter = guard.prefix ? 'prefix' : 'subpath';
-    for (const path of spellings(guard.path)) {
+    for (const path of withRealPath(guard.path)) {
       lines.push(`(deny ${operations} (${filter} "${escapeProfilePath(path)}"))`);
     }
   }
-  for (const denied of alwaysDenied.flatMap(spellings)) {
+  for (const denied of alwaysDenied.flatMap(withRealPath)) {
     lines.push(`(deny file-read* file-write* (subpath "${escapeProfilePath(denied)}"))`);
   }
 

@@ -21,6 +21,7 @@ import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
+import { registerAttention } from './attention';
 import { appWindows } from './windows';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
@@ -126,6 +127,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
+  registerAttention();
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
@@ -140,7 +142,9 @@ void app.whenReady().then(async () => {
     spareWorktrees,
     modelServers,
     stopModelServers,
+    stopLocalServers,
     localContext,
+    modelSettings,
     capabilityLedger,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
@@ -148,9 +152,14 @@ void app.whenReady().then(async () => {
     observeStream: event => fleet.observe(event),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
-    catalogSampling: name => models.catalogSampling(name),
+    catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
+      models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
-  const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
+  const models = registerModels(
+    modelServers,
+    { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
+    capabilityLedger
+  );
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;
@@ -188,6 +197,7 @@ void app.whenReady().then(async () => {
         terminals.shutdown(),
         browser.cookies.clearOnQuit(),
         spareWorktrees.dispose(),
+        stopLocalServers(),
       ]).catch(() => undefined);
     },
   });
@@ -221,6 +231,7 @@ void app.whenReady().then(async () => {
       terminals.shutdown(),
       browser.cookies.clearOnQuit(),
       spareWorktrees.dispose(),
+      stopLocalServers(),
     ])
       .catch(() => undefined)
       .finally(() => app.quit());

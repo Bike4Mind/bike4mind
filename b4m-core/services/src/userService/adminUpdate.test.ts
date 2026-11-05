@@ -32,7 +32,7 @@ function makeAdapters(startingCredits: number) {
   });
   const update = vi.fn().mockResolvedValue(undefined);
   // No purchase on the ledger unless a test says otherwise.
-  const findByOwnerWithFilters = vi.fn().mockResolvedValue([]);
+  const findUnreversedPurchase = vi.fn().mockResolvedValue(null);
 
   const db: any = {
     users: {
@@ -45,23 +45,25 @@ function makeAdapters(startingCredits: number) {
       existsOtherUserWithUsername: vi.fn().mockResolvedValue(false),
       existsOtherUserWithEmail: vi.fn().mockResolvedValue(false),
       setModerationStatus: vi.fn().mockResolvedValue(undefined),
+      setRiskReviewState: vi.fn().mockResolvedValue(true),
       incrementCredits,
     },
     organizations: { findById: vi.fn(), update: vi.fn() },
     friendship: {},
     userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
     realtimeConnections: { endConnections: vi.fn().mockResolvedValue({ connectionIds: [] }) },
-    creditTransactions: { createTransaction, findByOwnerWithFilters },
+    creditTransactions: { createTransaction, findUnreversedPurchase },
   };
   return {
     adapters: { db },
     createTransaction,
-    findByOwnerWithFilters,
+    findUnreversedPurchase,
     incrementCredits,
     update,
     target,
     deactivateAllByUserId: db.userApiKeys.deactivateAllByUserId,
     endConnections: db.realtimeConnections.endConnections,
+    setRiskReviewState: db.users.setRiskReviewState,
   };
 }
 
@@ -434,29 +436,36 @@ describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
   });
 
   it('re-stamps lastCreditsPurchasedAt when an admin grant repairs an account with a purchase row', async () => {
-    const { adapters, update, target, findByOwnerWithFilters } = makeAdapters(100);
+    const { adapters, update, target, findUnreversedPurchase } = makeAdapters(100);
     target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
-    findByOwnerWithFilters.mockResolvedValueOnce([{ id: 'purchase-row', type: 'purchase' }]);
+    findUnreversedPurchase.mockResolvedValueOnce({ id: 'purchase-row', type: 'purchase' });
     const before = Date.now();
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 5000, creditReason: 'repair' }, adapters);
 
-    expect(findByOwnerWithFilters).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User, {
-      transactionTypes: ['purchase'],
-      limit: 1,
-    });
+    expect(findUnreversedPurchase).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User);
     // Newer than the row, so creditPurchaseReconciliation stops flagging the repaired purchase.
     const stamp = update.mock.calls[0][0].lastCreditsPurchasedAt as Date;
     expect(stamp.getTime()).toBeGreaterThanOrEqual(before);
   });
 
+  it('does not re-stamp when every purchase on the ledger was refunded or lost a dispute', async () => {
+    const { adapters, update, target, findUnreversedPurchase } = makeAdapters(100);
+    target.lastCreditsPurchasedAt = null;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: 5000, creditReason: 'goodwill' }, adapters);
+
+    expect(findUnreversedPurchase).toHaveBeenCalledWith(TARGET_ID, CreditHolderType.User);
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
   it('does not read the ledger for a deduction, so a clawback never stamps a buyer', async () => {
-    const { adapters, update, findByOwnerWithFilters } = makeAdapters(12000);
-    findByOwnerWithFilters.mockResolvedValue([{ id: 'purchase-row', type: 'purchase' }]);
+    const { adapters, update, findUnreversedPurchase } = makeAdapters(12000);
+    findUnreversedPurchase.mockResolvedValue({ id: 'purchase-row', type: 'purchase' });
 
     await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -2500 }, adapters);
 
-    expect(findByOwnerWithFilters).not.toHaveBeenCalled();
+    expect(findUnreversedPurchase).not.toHaveBeenCalled();
     expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
   });
 
@@ -629,6 +638,49 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
       'write failed'
     );
     expect(deactivateAllByUserId).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser - signup risk review on ban', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const scored = (reviewState: string) => ({
+    riskScore: { score: 60, signals: [], computedAt: new Date(), reviewState },
+  });
+
+  it.each(['pending', 'none', 'approved'])('moves a %s review to banned and reports it', async reviewState => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, scored(reviewState));
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+
+    expect(setRiskReviewState).toHaveBeenCalledExactlyOnceWith(TARGET_ID, reviewState, 'banned');
+    expect(result.bannedRiskReviewFrom).toBe(reviewState);
+  });
+
+  it('reports nothing when the review moved before the ban reached it', async () => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, scored('pending'));
+    setRiskReviewState.mockResolvedValueOnce(false);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters);
+
+    expect(result.bannedRiskReviewFrom).toBeNull();
+  });
+
+  it.each([
+    ['an unscored account', {}, { isBanned: true }],
+    ['a review already banned', scored('banned'), { isBanned: true }],
+    ['re-banning a banned user', { isBanned: true, ...scored('pending') }, { isBanned: true }],
+    ['unbanning, which leaves the review banned', { isBanned: true, ...scored('banned') }, { isBanned: false }],
+    ['an unrelated update', scored('pending'), { name: 'New Name' }],
+  ])('leaves the review alone for %s', async (_label, seed, patch) => {
+    const { adapters, target, setRiskReviewState } = makeAdapters(100);
+    Object.assign(target, seed);
+
+    const result = await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
+
+    expect(setRiskReviewState).not.toHaveBeenCalled();
+    expect(result.bannedRiskReviewFrom).toBeNull();
   });
 });
 

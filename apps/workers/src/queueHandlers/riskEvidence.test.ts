@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 
-const { refreshRiskEvidence, requestRiskEvidenceRefresh, emitMetrics } = vi.hoisted(() => ({
+const { refreshRiskEvidence, requestRiskEvidenceRefresh, emitMetrics, checkStrongLink } = vi.hoisted(() => ({
+  checkStrongLink: vi.fn(),
   refreshRiskEvidence: vi.fn(),
   requestRiskEvidenceRefresh: vi.fn(),
   emitMetrics: vi.fn(async () => undefined),
@@ -11,6 +12,10 @@ vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/services', () => ({ userService: { refreshRiskEvidence } }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetrics }));
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh, riskEvidenceDb: () => ({}) }));
+vi.mock('@server/security/autoContainment/strongLink', () => ({
+  checkStrongLink,
+  liveStrongLinkDeps: () => ({}),
+}));
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({ dispatchWithLogger: (fn: unknown) => fn }));
 
 import { dispatch, processRiskEvidenceRecord as processRecord, RiskEvidenceMetrics } from './riskEvidence';
@@ -62,6 +67,29 @@ describe('processRiskEvidenceRecord', () => {
         expect.objectContaining({ name: RiskEvidenceMetrics.SOURCE_ROWS, value: 4 }),
       ])
     );
+  });
+
+  it('runs the strong-link rule after a signup refresh, and only after a signup', async () => {
+    refreshRiskEvidence.mockResolvedValue({ status: 'skipped' });
+    checkStrongLink.mockResolvedValue({ status: 'no_link' });
+
+    await processRiskEvidenceRecord(body(refreshMessage), logger);
+    expect(checkStrongLink).not.toHaveBeenCalled();
+
+    await processRiskEvidenceRecord(body({ ...refreshMessage, trigger: 'signup' }), logger);
+    expect(checkStrongLink).toHaveBeenCalledWith(USER_ID, {});
+  });
+
+  it('keeps a signup refresh successful when the strong-link rule fails', async () => {
+    refreshRiskEvidence.mockResolvedValue({ status: 'skipped' });
+    checkStrongLink.mockRejectedValue(new Error('decisions down'));
+    const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as Logger;
+
+    await expect(processRiskEvidenceRecord(body({ ...refreshMessage, trigger: 'signup' }), log)).resolves.not.toThrow();
+    expect(log.error).toHaveBeenCalledWith('Strong-link rule failed', {
+      userId: USER_ID,
+      error: 'decisions down',
+    });
   });
 
   it('turns a completion message into a debounced request, not a refresh', async () => {

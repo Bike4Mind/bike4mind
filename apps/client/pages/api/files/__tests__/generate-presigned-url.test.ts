@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(),
   getSettingsValue: vi.fn(),
   findOverrides: vi.fn(),
+  userFindById: vi.fn(),
   s3ClientConfigs: [] as unknown[],
   baseApiOptions: undefined as unknown,
 }));
@@ -48,6 +49,8 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag, find: h.lakeFind },
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
+  // The personal quota check re-reads the uploader; `run` serves the request's own user.
+  userRepository: { findById: h.userFindById },
 }));
 
 // The endpoint resolves its actor via toAccessContext (#1668); stub it so the real one's
@@ -98,8 +101,11 @@ const req = (body: unknown, overrides: Record<string, unknown> = {}) =>
     ...overrides,
   }) as never;
 
-const run = (body: unknown, res: unknown, overrides?: Record<string, unknown>) =>
-  (handler as (req: unknown, res: unknown) => Promise<void>)(req(body, overrides), res);
+const run = (body: unknown, res: unknown, overrides?: Record<string, unknown>) => {
+  const request = req(body, overrides) as { user: unknown };
+  h.userFindById.mockResolvedValue(request.user);
+  return (handler as (req: unknown, res: unknown) => Promise<void>)(request, res);
+};
 
 const body = (overrides: Record<string, unknown> = {}) => ({
   fileName: 'report.txt',

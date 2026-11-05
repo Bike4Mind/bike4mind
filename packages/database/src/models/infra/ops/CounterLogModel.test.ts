@@ -532,7 +532,13 @@ describe('findYoungAccountSpend', () => {
     expect(result.totalCredits).toBe(540);
     expect(result.accountCount).toBe(2);
     expect(result.topSpenders).toEqual([
-      { userId: big, creditsSpent: 500, accountCreatedAt: threeDaysBefore, stripeCustomerId: null },
+      {
+        userId: big,
+        creditsSpent: 500,
+        accountCreatedAt: threeDaysBefore,
+        stripeCustomerId: null,
+        email: 'big@example.com',
+      },
     ]);
   });
 
@@ -550,6 +556,21 @@ describe('findYoungAccountSpend', () => {
     expect(result.topSpenders.map(({ userId, stripeCustomerId }) => ({ userId, stripeCustomerId }))).toEqual([
       { userId: paying, stripeCustomerId: 'cus_paying' },
       { userId: unpaid, stripeCustomerId: null },
+    ]);
+  });
+
+  it("carries each spender's email, or null when the account has none", async () => {
+    const withEmail = await seedUser('named@example.com', threeDaysBefore);
+    const noEmail = new mongoose.Types.ObjectId();
+    await mongoose.connection.collection('users').insertOne({ _id: noEmail, createdAt: threeDaysBefore });
+    await spendFor(withEmail, 300, halfHourAgo);
+    await spendFor(noEmail.toString(), 200, halfHourAgo);
+
+    const result = await counterLogRepository.findYoungAccountSpend(windowStart, windowEnd, 10);
+
+    expect(result.topSpenders.map(({ userId, email }) => ({ userId, email }))).toEqual([
+      { userId: withEmail, email: 'named@example.com' },
+      { userId: noEmail.toString(), email: null },
     ]);
   });
 

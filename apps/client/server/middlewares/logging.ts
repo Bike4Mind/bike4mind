@@ -6,8 +6,9 @@ import { createRequestLogger, runWithRequestLogger } from './requestLogger';
 export const logging: RequestHandler = (req, res, next) => {
   const invertedParams = invert(req.query ?? {});
   req.baseUrl ??= req.url
+    .split('?')[0]
     .split('/')
-    .map(v => (invertedParams[v] ? `:${invertedParams[v]}` : v))
+    .map(v => (v && invertedParams[v] ? `:${invertedParams[v]}` : v))
     .join('/');
   // Correlation ID - accept the caller's value (sanitized) or generate one,
   // then echo it back so callers can correlate a failure with our logs.
@@ -17,6 +18,6 @@ export const logging: RequestHandler = (req, res, next) => {
   );
   res.setHeader(REQUEST_ID_HEADER, req.requestId);
 
-  req.logger = createRequestLogger(req, { requestId: req.requestId, path: req.baseUrl });
+  req.logger = createRequestLogger(req, { requestId: req.requestId, path: req.baseUrl.split('?')[0] });
   runWithRequestLogger(req.logger, next);
 };

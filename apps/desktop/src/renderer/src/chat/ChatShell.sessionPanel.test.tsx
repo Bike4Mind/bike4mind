@@ -64,6 +64,7 @@ const session = (id: string, over: Partial<ChatSessionSummary>): ChatSessionSumm
     id,
     title: id,
     mode: 'code',
+    model: 'test-model',
     messageCount: 0,
     createdAt: '2026-10-01T00:00:00.000Z',
     updatedAt: '2026-10-01T00:00:00.000Z',

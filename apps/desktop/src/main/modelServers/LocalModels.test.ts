@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LocalChat } from '../chat/localChat';
 import type { OllamaLocal } from '../chat/OllamaLocal';
 import { credentialInput } from './ipc';
-import { LocalModels } from './LocalModels';
+import { LocalModels, optionCatalogSampling } from './LocalModels';
 import { credentialHeaders } from './ModelServerStore';
 
 function chatStub(): LocalChat {
@@ -38,6 +38,24 @@ describe('LocalModels', () => {
     expect((await local.models()).map(model => model.id)).toEqual(['local:ollama:qwen', 'local:srv-abc123:qwen']);
     registry.models.mockRejectedValueOnce(new Error('boom'));
     expect((await local.models()).map(model => model.id)).toEqual(['local:ollama:qwen']);
+  });
+
+  it("asks the sampling hook with a model's name, weights blob and Modelfile parameters", () => {
+    const hook = vi.fn(() => undefined);
+    optionCatalogSampling(hook)({
+      id: 'local:ollama:x',
+      name: 'x',
+      modelBlob: 'b'.repeat(64),
+      modelParameters: 'top_k 1',
+      hasAdapter: true,
+    });
+    expect(hook).toHaveBeenCalledWith({
+      name: 'x',
+      modelBlob: 'b'.repeat(64),
+      parameters: 'top_k 1',
+      hasAdapter: true,
+    });
+    expect(() => optionCatalogSampling(undefined)({ id: 'local:ollama:x', name: 'x' })).not.toThrow();
   });
 
   it('attaches the catalog sampling it is given for a listed model, and nothing when there is none', async () => {

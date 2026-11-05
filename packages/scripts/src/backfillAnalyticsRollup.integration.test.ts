@@ -139,9 +139,9 @@ describe('backfillAnalyticsRollup', () => {
   it('retries a day when refreshing a later window failed before completion', async () => {
     await backfillAnalyticsRollup({ dryRun: false, from: '2026-06-03', to: '2026-06-03', now: NOW, log: silent });
     const update = vi
-      .spyOn(analyticsUserDayRepository, 'countDistinctUsers')
-      .mockResolvedValueOnce(2)
-      .mockResolvedValueOnce(2)
+      .spyOn(analyticsUserDayRepository, 'distinctUserIds')
+      .mockResolvedValueOnce(['a', 'b'])
+      .mockResolvedValueOnce(['a', 'b'])
       .mockRejectedValueOnce(new Error('window refresh failed'));
     await expect(
       backfillAnalyticsRollup({

@@ -1,5 +1,6 @@
 import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { PromptCacheTtl } from '@bike4mind/common';
+import type { AttentionNotice, AttentionOpenEvent } from './attention';
 import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
@@ -14,6 +15,7 @@ import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   ModelServerAddInput,
+  ModelServerLaunchAction,
   ModelServerMutationResult,
   ModelServerProbeInput,
   ModelServerProbeResult,
@@ -37,6 +39,7 @@ import type {
   ChatModelCatalog,
   CreationTool,
   ChatMoveToBackgroundResult,
+  ChatHeldRelay,
   ChatQueueEvent,
   ChatQueuedMessage,
   ChatSession,
@@ -60,7 +63,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { GenerationSettings } from './generation';
-import type { ModelSettings } from './modelSettings';
+import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
@@ -171,8 +174,11 @@ export const IPC_CHANNELS = {
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
+  chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
   chatSetModelSettings: 'chat:set-model-settings',
+  chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
+  chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
@@ -210,6 +216,8 @@ export const IPC_CHANNELS = {
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
+  chatGetHeldRelays: 'chat:get-held-relays',
+  chatResolveHeldRelay: 'chat:resolve-held-relay',
   chatSendQueuedNow: 'chat:send-queued-now',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
@@ -290,6 +298,7 @@ export const IPC_CHANNELS = {
   modelServersRemove: 'servers:remove',
   modelServersCheck: 'servers:check',
   modelServersProbedHardware: 'servers:probed-hardware',
+  modelServersLaunch: 'servers:launch',
   /** main -> renderer push; a server was added, changed, or its health was rechecked. */
   modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
@@ -482,6 +491,12 @@ export const IPC_CHANNELS = {
   terminalData: 'terminal:data',
   /** main -> renderer push; one conversation's tab list changed. */
   terminalsChanged: 'terminal:changed',
+  /** A session needs the user while the app is in the background; see @shared/attention. */
+  attentionNotify: 'attention:notify',
+  attentionClaim: 'attention:claim',
+  attentionSetBadge: 'attention:set-badge',
+  /** main -> renderer push: the user clicked a notice. */
+  attentionOpen: 'attention:open',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -755,10 +770,18 @@ export interface DesktopApi {
     setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
     /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
     getModelSettings(modelId: string): Promise<ModelSettings | null>;
+    /** Values the settings file holds for this model that this version keeps but does not use. Null for an id that is not one. */
+    getUnsupportedModelSettings(modelId: string): Promise<UnsupportedModelSetting[] | null>;
     /** Replace a device-side model's defaults; `{}` clears them. Null when the id or set is not valid. */
     setModelSettings(modelId: string, settings: ModelSettings): Promise<ModelSettings | null>;
+    /**
+     * The load-time options a device-side model takes, its context sizes rated for `draftTokens` (undefined: the
+     * model's own draft count). Null for an id that is not one.
+     */
+    getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
+    setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
@@ -862,6 +885,13 @@ export interface DesktopApi {
      * message. Unlike `stopReply`, the queue is NOT handed back.
      */
     sendQueuedMessageNow(sessionId: string, queuedId: string): Promise<void>;
+    /**
+     * Messages from other conversations waiting for this one's user to let them in. Read on
+     * open; changes arrive as the 'held-relays' stream event carrying the whole list.
+     */
+    getHeldRelays(sessionId: string): Promise<ChatHeldRelay[]>;
+    /** Let a held message in (it runs like any relay) or decline it (its sender is told). */
+    resolveHeldRelay(sessionId: string, heldId: string, deliver: boolean): Promise<void>;
     /** Subscribe to queue changes; returns the unsubscribe. */
     onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
     /**
@@ -1111,6 +1141,8 @@ export interface DesktopApi {
     check(id?: string): Promise<ModelServerView[]>;
     /** This computer's hardware as probed, before entered specs; null when the probe failed. */
     probedHardware(): Promise<MachineView | null>;
+    /** Starts, stops or restarts the server Desktop runs at a server's address on this computer. */
+    launch(id: string, action: ModelServerLaunchAction): Promise<ModelServerMutationResult>;
     onChanged(listener: (servers: ModelServerView[]) => void): () => void;
   };
   /** User-made sidebar sections; see @shared/sidebarSections. */
@@ -1213,6 +1245,19 @@ export interface DesktopApi {
      * the link was opened. Nothing about a link in a reply needs to know.
      */
     openExternal(url: string): Promise<void>;
+  };
+  /** OS notices for sessions that need the user while the app is not focused. */
+  attention: {
+    /**
+     * Of `sessionIds`, the ones this window may announce. Every open window sees the same entry into
+     * needs-action, so main hands each entry to the first window that asks and the rest get nothing.
+     */
+    claim(sessionIds: string[]): Promise<string[]>;
+    /** Main shows it only while no app window is focused, so the caller need not check. */
+    notify(notice: AttentionNotice): Promise<void>;
+    /** Sessions waiting on the user, as the macOS dock badge; 0 clears it. A no-op elsewhere. */
+    setBadgeCount(count: number): Promise<void>;
+    onOpen(listener: (event: AttentionOpenEvent) => void): () => void;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

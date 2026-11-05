@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,7 +13,10 @@ import {
   loadCuratedManifest,
   type HardwareProfile,
   ollamaPullRef,
+  ollamaRefAliases,
+  type DownloadOptions,
   type HubGgufBuild,
+  type HubGgufFile,
   type HubModelDetail,
   type HubSearchPage,
   type InspectOptions,
@@ -24,11 +27,16 @@ import {
   type OllamaRegistryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
-import { ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
+import { estimateFit, ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
-import type { ModelServerSpecs } from '@shared/modelServers';
+import type { ModelServerSpecs, QuantizedKvCacheType } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return { ...actual, estimateFit: vi.fn(actual.estimateFit) };
+});
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import { fitFromArch } from './fit';
 import { ServerUnreachableError } from '../modelServers/errors';
@@ -197,7 +205,19 @@ function harness(
     setting?: LocalContextSetting;
     checkBackoffMs?: number[];
     token?: string | null;
-    deps?: Pick<ModelHubServiceDeps, 'onPullStarted' | 'freeSpace' | 'defaultStoreDir' | 'pathExists'>;
+    deps?: Pick<
+      ModelHubServiceDeps,
+      | 'onPullStarted'
+      | 'freeSpace'
+      | 'defaultStoreDir'
+      | 'pathExists'
+      | 'modelSettings'
+      | 'wslHost'
+      | 'integratedGpu'
+      | 'specs'
+      | 'importDir'
+      | 'sameDisk'
+    >;
   } = {}
 ) {
   const pulls: Deferred[] = [];
@@ -1006,6 +1026,249 @@ describe('ModelHubService saved servers', () => {
   );
 });
 
+// Dedicated GPU memory is whatever the probe or Settings reports; these sizes stand for different firmware splits.
+describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB of GPU memory', gpuGib => {
+  const LINUX_STORE = '/usr/share/ollama/.ollama/models';
+  const hardware = {
+    ...machine('discrete', 46, gpuGib),
+    platform: 'win32',
+    arch: 'arm64',
+    gpuVendor: 'nvidia' as const,
+  };
+  const installedModel = (name: string): InstalledModel => ({
+    name,
+    sizeBytes: GIB,
+    quantization: 'Q8_0',
+    family: 'qwen',
+    parameterSize: '27B',
+    modifiedAt: '2026-11-01T00:00:00Z',
+    capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+  });
+  const loadedModel = (name: string, sizeGib: number, gpuGib: number): LoadedModel => ({
+    name,
+    sizeBytes: sizeGib * GIB,
+    vramBytes: gpuGib * GIB,
+    contextLength: 131072,
+    expiresAt: null,
+  });
+  // Under the GPU memory, held to about a third of it: what a smaller WSL VM leaves stock Ollama.
+  const capped = loadedModel('big:q8_0', gpuGib * 0.6, gpuGib * 0.3);
+  const capView = { model: capped.name, sizeBytes: capped.sizeBytes, gpuBytes: capped.vramBytes };
+
+  function wslHarness(
+    options: {
+      wslHost?: boolean;
+      integrated?: boolean | null;
+      storeDir?: string;
+      specs?: ModelServerSpecs;
+      probed?: HardwareProfile;
+      defaultStoreDir?: () => string | null;
+    } = {}
+  ) {
+    const integratedGpu = vi.fn(async () => (options.integrated === undefined ? true : options.integrated));
+    const made = harness({
+      hardware: options.probed ?? hardware,
+      deps: {
+        wslHost: options.wslHost ?? true,
+        integratedGpu,
+        pathExists: async path => !path.startsWith('/'),
+        specs: id => (id === 'local' ? (options.specs ?? null) : null),
+        ...(options.defaultStoreDir && { defaultStoreDir: options.defaultStoreDir }),
+      },
+    });
+    made.runtime.list.mockResolvedValue([installedModel('big:q8_0'), installedModel('small:q4')]);
+    const inspect = made.runtime.inspect.getMockImplementation()!;
+    made.runtime.inspect.mockImplementation(async (name, inspectOptions) => ({
+      ...(await inspect(name, inspectOptions)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir: options.storeDir ?? LINUX_STORE },
+    }));
+    return { ...made, integratedGpu };
+  }
+
+  const capOf = async (service: ModelHubService, serverId?: string) => {
+    const result = await service.installed(serverId);
+    if (!result.ok) throw new Error(result.error.message);
+    return result.gpuMemoryCap ?? null;
+  };
+  // nvidia-smi runs in the background, so the warning can follow the read that saw the load.
+  const flagged = (service: ModelHubService, view: object = capView) =>
+    vi.waitFor(async () => expect(await capOf(service)).toMatchObject(view));
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+  it('warns once Ollama in WSL holds a model that fits the GPU partly on the CPU', async () => {
+    const { service, runtime } = wslHarness();
+    expect(await capOf(service)).toBeNull();
+    runtime.loaded.mockResolvedValue([loadedModel('small:q4', 2, 2), capped]);
+    await flagged(service);
+  });
+
+  it('warns about a model that fits the GPU loaded entirely on the CPU', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: 0 }]);
+    await flagged(service, { ...capView, gpuBytes: 0 });
+  });
+
+  it('notices the load from the composer polling it, before Models is opened', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([capped]);
+    await service.loadedState('local:ollama:big:q8_0');
+    runtime.loaded.mockResolvedValue([]);
+    await flagged(service);
+  });
+
+  it('keeps the warning after the model unloads and while small models load fully', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([capped]);
+    await flagged(service);
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toEqual(capView);
+    runtime.loaded.mockResolvedValue([loadedModel('small:q4', gpuGib * 0.2, gpuGib * 0.2)]);
+    expect(await capOf(service)).toEqual(capView);
+  });
+
+  it('keeps the warning while a small model runs fully on the GPU beside the capped one', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: 0 }, loadedModel('small:q4', 2, 2)]);
+    await flagged(service, { ...capView, gpuBytes: 0 });
+    for (let read = 0; read < 4; read++) expect(await capOf(service)).toMatchObject({ gpuBytes: 0 });
+  });
+
+  it('notifies the renderer when nvidia-smi confirms the limit after the listing returned', async () => {
+    const { service, runtime, installedChanged } = wslHarness();
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await vi.waitFor(() => expect(installedChanged).toHaveBeenCalledWith('local'));
+  });
+
+  it('logs a failed model folder lookup, keeps listing, and flags on a later read', async () => {
+    const defaultStoreDir = vi.fn<() => string | null>(() => {
+      throw new Error('no home directory');
+    });
+    const { service, runtime, warn } = wslHarness({ defaultStoreDir });
+    const inspect = runtime.inspect.getMockImplementation()!;
+    runtime.inspect.mockImplementation(async (name, options) => ({
+      ...(await inspect(name, options)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir: null },
+    }));
+    runtime.loaded.mockResolvedValue([capped]);
+    expect(await capOf(service)).toBeNull();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringMatching(/WSL GPU memory limit/)));
+    runtime.inspect.mockImplementation(inspect);
+    await flagged(service);
+  });
+
+  it('does not warn when nvidia-smi fails outright', async () => {
+    const { service, runtime, integratedGpu } = wslHarness();
+    integratedGpu.mockRejectedValue(new Error('boom'));
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await settle();
+    expect(await capOf(service)).toBeNull();
+    expect(integratedGpu).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([1, 0.95])(
+    'clears the warning once a model larger than the capped GPU part loads with %s of it on the GPU',
+    async share => {
+      const { service, runtime } = wslHarness();
+      runtime.loaded.mockResolvedValue([capped]);
+      await flagged(service);
+      runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: capped.sizeBytes * share }]);
+      expect(await capOf(service)).toBeNull();
+    }
+  );
+
+  it('rates the load against hardware entered in Settings in place of the probe', async () => {
+    const enteredGib = gpuGib * 2;
+    const { service, runtime } = wslHarness({
+      specs: { ramGiB: 46, gpuMemoryGiB: enteredGib, bandwidthGBps: null, unified: false },
+    });
+    const pastProbe = loadedModel('bigger:bf16', enteredGib * 0.6, gpuGib * 0.3);
+    runtime.loaded.mockResolvedValue([pastProbe]);
+    await flagged(service, { model: 'bigger:bf16' });
+  });
+
+  it('does not warn about a model larger than the GPU memory', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([loadedModel('huge:bf16', gpuGib * 1.3, gpuGib * 0.3)]);
+    await capOf(service);
+    await settle();
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it.each([
+    ['the GPU is discrete', { integrated: false }],
+    ['nvidia-smi cannot say whether the GPU is integrated', { integrated: null }],
+    ['Desktop runs on neither Windows nor WSL', { wslHost: false }],
+    ['Ollama runs on Windows itself', { storeDir: 'C:\\Users\\me\\.ollama\\models' }],
+  ])('does not warn when %s', async (_case, options) => {
+    const { service, runtime } = wslHarness(options);
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await settle();
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('asks nvidia-smi once per session, also when it could not say', async () => {
+    const { service, runtime, integratedGpu } = wslHarness({ integrated: null });
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await settle();
+    await capOf(service);
+    await settle();
+    await service.loadedState('local:ollama:big:q8_0');
+    expect(await capOf(service)).toBeNull();
+    expect(integratedGpu).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists models without waiting on nvidia-smi, and warns once it answers', async () => {
+    const { service, runtime, integratedGpu } = wslHarness();
+    let answer: (value: boolean) => void = () => {};
+    integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
+    runtime.loaded.mockResolvedValue([capped]);
+    const waited = new Promise(resolve => setTimeout(() => resolve('waited'), 1_000));
+    expect(await Promise.race([capOf(service), waited])).toBeNull();
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+    answer(true);
+    await flagged(service);
+  });
+
+  it('drops a load awaiting nvidia-smi once a later read shows a larger model fully on the GPU', async () => {
+    const { service, runtime, integratedGpu } = wslHarness();
+    let answer: (value: boolean) => void = () => {};
+    integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: capped.sizeBytes }]);
+    await capOf(service);
+    answer(true);
+    await settle();
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('does not warn about a failed /api/ps read, and keeps an earlier warning through it', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockRejectedValue(new Error('timeout'));
+    expect(await capOf(service)).toBeNull();
+    runtime.loaded.mockResolvedValue([capped]);
+    await flagged(service);
+    runtime.loaded.mockRejectedValue(new Error('timeout'));
+    expect(await capOf(service)).toEqual(capView);
+  });
+
+  it('does not warn for a saved server, whose GPU is not this computer', async () => {
+    const integratedGpu = vi.fn(async () => true);
+    const { service, runtimes } = servers({ hardware, deps: { wslHost: true, integratedGpu } });
+    runtimes.a.list.mockResolvedValue([installedModel('big:q8_0')]);
+    runtimes.a.loaded.mockResolvedValue([capped]);
+    expect(await capOf(service, 'a')).toBeNull();
+    expect(await capOf(service)).toBeNull();
+    expect(integratedGpu).not.toHaveBeenCalled();
+  });
+});
+
 describe('ModelHubService entered hardware', () => {
   const GPU_16: ModelServerSpecs = { ramGiB: 32, gpuMemoryGiB: 16, bandwidthGBps: 448, unified: false };
   const installedModel: InstalledModel = {
@@ -1019,7 +1282,12 @@ describe('ModelHubService entered hardware', () => {
   };
 
   /** This computer is a 62 GB CPU-only box with chat fixed at 32K; server `a` has whatever `specs.a` says. */
-  function rated(specs: Record<string, ModelServerSpecs | null>) {
+  function rated(
+    specs: Record<string, ModelServerSpecs | null>,
+    setting: LocalContextSetting = { mode: 'fixed', tokens: 32768 },
+    kv: Record<string, QuantizedKvCacheType> = {},
+    flash: Record<string, 'on' | 'off'> = {}
+  ) {
     const local = harness({ hardware: machine('cpu', 62) });
     const remote = harness();
     const service = new ModelHubService({
@@ -1030,7 +1298,9 @@ describe('ModelHubService entered hardware', () => {
       libraryLayers: local.libraryLayers,
       hardware: local.hardware,
       specs: id => specs[id] ?? null,
-      localContext: async () => ({ mode: 'fixed', tokens: 32768 }),
+      kvCacheType: id => kv[id],
+      flashAttention: id => flash[id],
+      localContext: async () => setting,
       curated: () => CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
@@ -1164,6 +1434,58 @@ describe('ModelHubService entered hardware', () => {
     expect(curatedFit(list, 'gemma-4-12b')?.detail).toContain('Replies at about 51 tokens/s early in a chat.');
     expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('system RAM');
     expect(curatedFit(list, 'gemma-4-26b')?.detail).not.toContain('Replies');
+  });
+
+  it('sizes the KV cache with the type the server runs with, this computer included', async () => {
+    const need = (detail = '') => Number(/about (\d+(?:\.\d+)?) GiB/.exec(detail)?.[1]);
+    const f16 = await rated({}).service.curated();
+    const q8 = await rated({}, undefined, { local: 'q8_0' }).service.curated();
+    expect(q8.rating).toBe('probe');
+    expect(curatedFit(f16, 'qwen3-8-27b')?.detail).not.toContain('KV cache');
+    expect(curatedFit(q8, 'qwen3-8-27b')?.detail).toContain('the 32K context chat will use with a q8_0 KV cache');
+    expect(need(curatedFit(q8, 'qwen3-8-27b')?.detail)).toBeLessThan(need(curatedFit(f16, 'qwen3-8-27b')?.detail));
+    const server = rated({ a: GPU_16 }, undefined, { a: 'q4_0' });
+    expect(curatedFit(await server.service.curated('a'), 'gemma-4-12b')?.detail).toContain('with a q4_0 KV cache');
+    server.remote.runtime.list.mockResolvedValue([installedModel]);
+    const installed = await server.service.installed('a');
+    expect(installed.ok && installed.models[0].fit?.detail).toContain('with a q4_0 KV cache');
+  });
+
+  it('sizes with the flash attention the server runs with, this computer included', async () => {
+    const need = (detail = '') => Number(/about (\d+(?:\.\d+)?) GiB/.exec(detail)?.[1]);
+    const auto = await rated({}, undefined, { local: 'q8_0' }).service.curated();
+    const off = await rated({}, undefined, { local: 'q8_0' }, { local: 'off' }).service.curated();
+    expect(curatedFit(off, 'qwen3-8-27b')?.detail).not.toContain('q8_0 KV cache');
+    expect(need(curatedFit(off, 'qwen3-8-27b')?.detail)).toBeGreaterThan(need(curatedFit(auto, 'qwen3-8-27b')?.detail));
+    const server = rated({ a: GPU_16 }, undefined, { a: 'q4_0' }, { a: 'off' });
+    expect(curatedFit(await server.service.curated('a'), 'gemma-4-12b')?.detail).not.toContain('q4_0 KV cache');
+    server.remote.runtime.list.mockResolvedValue([installedModel]);
+    const installed = await server.service.installed('a');
+    expect(installed.ok && installed.models[0].fit?.detail).not.toContain('q4_0 KV cache');
+  });
+
+  it("rates the larger context Auto gives chat on this computer's GPU with a quantized KV cache", async () => {
+    const gpu = { ramGiB: 64, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false };
+    const contexts = async (kv: Record<string, QuantizedKvCacheType>) =>
+      (await rated({ local: gpu }, AUTO_LOCAL_CONTEXT, kv).service.curated()).entries.map(
+        entry => entry.builds[0].fit?.context ?? 0
+      );
+    const f16 = await contexts({});
+    const q8 = await contexts({ local: 'q8_0' });
+    expect(q8.every((tokens, index) => tokens >= f16[index])).toBe(true);
+    expect(q8.some((tokens, index) => tokens > f16[index])).toBe(true);
+  });
+
+  it('rates the smaller context Auto gives chat when the daemon runs with flash attention off', async () => {
+    const gpu = { ramGiB: 64, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false };
+    const contexts = async (flash: Record<string, 'off'>) =>
+      (await rated({ local: gpu }, AUTO_LOCAL_CONTEXT, { local: 'q8_0' }, flash).service.curated()).entries.map(
+        entry => entry.builds[0].fit?.context ?? 0
+      );
+    const auto = await contexts({});
+    const off = await contexts({ local: 'off' });
+    expect(off.every((tokens, index) => tokens <= auto[index])).toBe(true);
+    expect(off.some((tokens, index) => tokens < auto[index])).toBe(true);
   });
 });
 
@@ -1317,6 +1639,75 @@ describe('ModelHubService fit', () => {
     ]);
   });
 
+  it('rates an installed model at its own draft count', async () => {
+    const { service, runtime } = harness({
+      deps: {
+        modelSettings: async (modelId: string) => (modelId === 'local:ollama:mtp:latest' ? { draftTokens: 3 } : {}),
+      },
+    });
+    runtime.list.mockResolvedValue([installed({ name: 'mtp:latest' })]);
+    const base = await runtime.inspect('x');
+    runtime.inspect.mockResolvedValue({ ...base, arch: { ...SMALL_ARCH, mtpLayers: 1 } });
+    vi.mocked(estimateFit).mockClear();
+    await service.installed();
+    const runtimes = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime);
+    expect(runtimes.length).toBeGreaterThan(0);
+    expect(runtimes.every(fit => fit.draftMax === 3 && fit.speculative)).toBe(true);
+  });
+
+  it('rates an installed model for a DRAFT layer at Ollama default draft count', async () => {
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue([installed({ name: 'drafted:latest' })]);
+    const base = await runtime.inspect('x');
+    runtime.inspect.mockResolvedValue({
+      ...base,
+      contents: { template: null, license: null, modelBlob: SHA, draftBlobs: [SHA] },
+    });
+    vi.mocked(estimateFit).mockClear();
+    await service.installed();
+    const drafts = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime.draftMax);
+    expect(drafts.length).toBeGreaterThan(0);
+    expect(drafts.every(draftMax => draftMax === 4)).toBe(true);
+  });
+
+  it('rates a curated row and the same installed model with the same draft count and context', async () => {
+    const entry = CURATED.entries.find(candidate => candidate.id === 'qwen3-5-0-8b');
+    const reviewed = entry?.builds[0];
+    const source = reviewed && libraryOf(reviewed);
+    if (!entry || !reviewed || !source) throw new Error('bundled catalog lost qwen3-5-0-8b');
+    const drafts = () => new Set(vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime.draftMax));
+
+    const curated = harness({ curated: { ...CURATED, entries: [entry] } });
+    vi.mocked(estimateFit).mockClear();
+    const row = (await curated.service.curated()).entries[0].builds[0];
+    expect(drafts()).toEqual(new Set([2]));
+
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue([installed({ name: source.ref, sizeBytes: source.sizeBytes })]);
+    const base = await runtime.inspect(source.ref);
+    runtime.inspect.mockResolvedValue({ ...base, arch: entry.arch as ModelArch, parameters: 'draft_num_predict 2' });
+    vi.mocked(estimateFit).mockClear();
+    const result = await service.installed();
+    expect(drafts()).toEqual(new Set([2]));
+    expect(result.ok && result.models[0].fit?.context).toBe(row.fit.context);
+  });
+
+  it('rates an installed model at its own context from the Models screen, and the rest at the Settings one', async () => {
+    const { service, runtime } = harness({
+      setting: { mode: 'fixed', tokens: 32768 },
+      deps: {
+        modelSettings: async (modelId: string) =>
+          modelId === 'local:ollama:own:latest' ? { context: { mode: 'fixed', tokens: 16384 } } : {},
+      },
+    });
+    runtime.list.mockResolvedValue([installed({ name: 'own:latest' }), installed({ name: 'other:latest' })]);
+    const result = await service.installed();
+    expect(result.ok ? result.models.map(model => [model.name, model.fit?.context]) : []).toEqual([
+      ['other:latest', 32768],
+      ['own:latest', 16384],
+    ]);
+  });
+
   it('caps a size-rated installed model at the context limit Ollama reports, and says when none is known', async () => {
     const fitsUnder = async (setting: LocalContextSetting) => {
       const { service, runtime } = harness({ setting });
@@ -1440,7 +1831,7 @@ describe('ModelHubService curated list', () => {
     expect(list.entries.every(entry => entry.vision && entry.thinking && entry.tools)).toBe(true);
     expect(list.entries.find(entry => entry.id === 'gemma-4-26b')).toMatchObject({
       params: '25.2B, 3.8B active',
-      licenseName: 'apache-2.0',
+      licenseName: 'Apache 2.0',
       licenseKind: 'permissive',
       sourceName: 'Ollama',
       sourceUrl: 'https://ollama.com/library/gemma4',
@@ -2956,4 +3347,450 @@ describe('token operation failures and ordering', () => {
       expect(tokens.get).toHaveBeenCalledTimes(2);
     }
   );
+});
+
+describe('ModelHubService split builds', () => {
+  const SPLIT_ID = 'qwen2.5-0.5b-instruct-q8_0';
+  const SPLIT_REF = `hf.co/${REPO}:Q8_0`;
+  const PROJECTOR_SHA = 'f'.repeat(64);
+  const PARAMS_SHA = 'e'.repeat(64);
+  const shard = (index: number, sizeBytes: number) => ({
+    path: `${SPLIT_ID}-0000${index}-of-00002.gguf`,
+    sizeBytes,
+    sha256: String(index).repeat(64),
+    url: `https://x/${index}`,
+  });
+  const splitDetail = (overrides: Partial<HubModelDetail> = {}) =>
+    detail({
+      builds: [
+        build(),
+        build({
+          id: SPLIT_ID,
+          quant: 'Q8_0',
+          label: 'Q8_0',
+          files: [shard(1, 300), shard(2, 200)],
+          sizeBytes: 500,
+          split: true,
+          ollamaRef: null,
+          ollamaRefIssue: 'split',
+        }),
+      ],
+      projectors: [
+        { path: 'mmproj-BF16.gguf', sizeBytes: 60, sha256: 'b'.repeat(64), url: 'https://x/b', quant: 'BF16' },
+        { path: 'mmproj-F16.gguf', sizeBytes: 50, sha256: PROJECTOR_SHA, url: 'https://x/f', quant: 'F16' },
+      ],
+      ...overrides,
+    });
+  const splitRequest = { ...request, buildId: SPLIT_ID, sizeBytes: 500 };
+
+  async function importing(options: Parameters<typeof harness>[0] = {}) {
+    const root = await mkdtemp(join(tmpdir(), 'hub-split-'));
+    const h = harness({ detail: splitDetail(), ...options, deps: { importDir: () => root, ...options.deps } });
+    const blobs = new Set<string>();
+    const events: string[] = [];
+    const runtime = Object.assign(h.runtime, {
+      hasBlob: vi.fn(async (digest: string) => blobs.has(digest)),
+      uploadBlob: vi.fn(async (digest: string, path: string) => {
+        events.push(`upload ${path.slice(path.lastIndexOf('/') + 1)}`);
+        blobs.add(digest);
+      }),
+      create: vi.fn(async (_request: { model: string }) => {
+        events.push('create');
+      }),
+    });
+    const hub = Object.assign(h.hub, {
+      download: vi.fn(async (file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+        events.push(`download ${file.path}`);
+        opts?.onProgress?.({ status: 'downloading', completedBytes: file.sizeBytes, totalBytes: file.sizeBytes });
+        await writeFile(destination, 'x');
+        return { path: destination, sizeBytes: file.sizeBytes, sha256: file.sha256, resumedBytes: 0 };
+      }),
+      ollamaRegistryJson: vi.fn(async () => ({ stop: ['<|im_end|>'], temperature: 0.7, typical_p: 1 })),
+    });
+    hub.ollamaLayers.mockImplementation(async () => ({
+      model: SHA,
+      others: [
+        { mediaType: 'application/vnd.ollama.image.projector', digest: PROJECTOR_SHA },
+        { mediaType: 'application/vnd.ollama.image.params', digest: PARAMS_SHA },
+      ],
+    }));
+    const left = () => readdir(root);
+    return { ...h, runtime, hub, root, blobs, events, left, cleanup: () => rm(root, { recursive: true, force: true }) };
+  }
+
+  it('offers a split build on this computer under its hf.co name, and says why not on a saved server', async () => {
+    const t = await importing();
+    try {
+      const view = await t.service.detail(REPO);
+      expect(view.ok && view.model.builds[1]).toMatchObject({
+        ollamaRef: SPLIT_REF,
+        installedNames: ollamaRefAliases(SPLIT_REF),
+        blockedReason: null,
+        importParts: 2,
+      });
+      expect(view.ok && view.model.builds[0].importParts).toBeNull();
+      const plain = await harness({ detail: splitDetail() }).service.detail(REPO);
+      expect(plain.ok && plain.model.builds[1]).toMatchObject({
+        blockedReason: expect.stringMatching(/Split/),
+        importParts: null,
+      });
+      const remote = await servers({ detail: splitDetail() }).service.detail(REPO, 'a');
+      expect(remote.ok && remote.model.builds[1].blockedReason).toMatch(/only to Ollama on this computer/);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('downloads each part, hands it to Ollama, then creates the model with the sibling projector and params', async () => {
+    const t = await importing();
+    try {
+      let finish = () => {};
+      t.runtime.create.mockImplementationOnce(async () => {
+        t.events.push('create');
+        await new Promise<void>(resolve => (finish = resolve));
+      });
+      const result = t.service.pull(splitRequest);
+      await vi.waitFor(() => expect(t.runtime.create).toHaveBeenCalled());
+      expect(t.service.pulls()[0]).toMatchObject({ phase: 'finishing', completedBytes: 550, totalBytes: 550 });
+      finish();
+      await expect(result).resolves.toEqual({ ok: true, ref: SPLIT_REF });
+
+      expect(t.events).toEqual([
+        `download ${SPLIT_ID}-00001-of-00002.gguf`,
+        `upload ${'1'.repeat(64)}.gguf`,
+        `download ${SPLIT_ID}-00002-of-00002.gguf`,
+        `upload ${'2'.repeat(64)}.gguf`,
+        'download mmproj-F16.gguf',
+        `upload ${PROJECTOR_SHA}.gguf`,
+        'create',
+      ]);
+      expect(t.runtime.create).toHaveBeenCalledWith(
+        {
+          model: SPLIT_REF,
+          files: {
+            [`${SPLIT_ID}-00001-of-00002.gguf`]: `sha256:${'1'.repeat(64)}`,
+            [`${SPLIT_ID}-00002-of-00002.gguf`]: `sha256:${'2'.repeat(64)}`,
+            'mmproj-F16.gguf': `sha256:${PROJECTOR_SHA}`,
+          },
+          parameters: { stop: ['<|im_end|>'], temperature: 0.7 },
+        },
+        expect.anything()
+      );
+      expect(t.hub.ollamaLayers).toHaveBeenCalledWith(REPO, 'Q4_K_M', expect.anything());
+      expect(t.hub.ollamaRegistryJson).toHaveBeenCalledWith(REPO, PARAMS_SHA, expect.anything());
+      expect(t.hub.verifyOllamaRef).not.toHaveBeenCalled();
+      expect(t.runtime.pull).not.toHaveBeenCalled();
+      expect(t.installedChanged).toHaveBeenCalledTimes(1);
+      expect(t.service.pulls()).toEqual([]);
+      expect(await t.left()).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('still imports without a projector or params when the sibling cannot be read', async () => {
+    const t = await importing({ detail: splitDetail({ projectors: [] }) });
+    try {
+      t.hub.ollamaLayers.mockRejectedValue(new Error('registry down'));
+      const result = await t.service.pull(splitRequest);
+      expect(result).toMatchObject({ ok: true, ref: SPLIT_REF, notice: expect.stringMatching(/could not be read/) });
+      expect(t.runtime.create.mock.calls[0]?.[0]).not.toHaveProperty('parameters');
+      expect(t.warn).toHaveBeenCalledWith(expect.stringMatching(/registry down/));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('counts a store Desktop cannot see as one disk with staging', async () => {
+    let root = '';
+    let stagingFree = 849;
+    const freeSpace = vi.fn(async (path: string) => (path === root ? stagingFree : 10_000));
+    const sameDisk = vi.fn(async () => false);
+    const t = await importing({ deps: { freeSpace, sameDisk, pathExists: async () => false } });
+    root = t.root;
+    try {
+      t.runtime.list.mockResolvedValue([
+        {
+          name: 'qwen2.5:0.5b',
+          sizeBytes: 1,
+          quantization: null,
+          family: null,
+          parameterSize: null,
+          modifiedAt: null,
+          capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+        },
+      ]);
+      const inspect = t.runtime.inspect.getMockImplementation();
+      t.runtime.inspect.mockImplementation(async (name, options) => ({
+        ...(await inspect!(name, options)),
+        contents: { template: null, license: null, modelBlob: SHA, storeDir: '/root/.ollama/models' },
+      }));
+      // 550 bytes in all, 300 in the largest part: one disk needs 850 on the staging disk.
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({
+        ok: false,
+        error: { kind: 'cannot-pull', message: expect.stringContaining('on the disk Desktop downloads to') },
+      });
+      expect(t.hub.download).not.toHaveBeenCalled();
+      stagingFree = 850;
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('counts parts already staged as progress when checking the room for a retry', async () => {
+    const free = vi.fn(async () => 549);
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => true, freeSpace: free },
+    });
+    try {
+      await writeFile(join(t.root, `${'1'.repeat(64)}.gguf.partial`), Buffer.alloc(300));
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+      free.mockResolvedValue(550);
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('keeps the staged part when the app quits mid-part', async () => {
+    const t = await importing();
+    try {
+      const stall = async (_file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+        await writeFile(`${destination}.partial`, 'half');
+        return new Promise<never>((_resolve, reject) => {
+          const stop = () => reject(new DOMException('aborted', 'AbortError'));
+          // The test may abort while the partial is still being written.
+          if (opts?.signal?.aborted) stop();
+          else opts?.signal?.addEventListener('abort', stop);
+        });
+      };
+      t.hub.download.mockImplementationOnce(stall);
+      const quit = t.service.pull(splitRequest);
+      await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
+      t.service.dispose();
+      await expect(quit).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(await t.left()).toEqual([`${'1'.repeat(64)}.gguf.partial`]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  // 550 bytes in all, 300 in the largest part.
+  it.each([
+    { sameDisk: true, staging: 10_000, store: 849, where: "on the disk with Ollama's models" },
+    { sameDisk: false, staging: 10_000, store: 549, where: "on the disk with Ollama's models" },
+    { sameDisk: false, staging: 299, store: 10_000, where: 'on the disk Desktop downloads to' },
+  ])('refuses before downloading when a disk lacks the room: %j', async ({ sameDisk, staging, store, where }) => {
+    let root = '';
+    const freeSpace = vi.fn(async (path: string) => (path === '/default' ? store : path === root ? staging : 0));
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => sameDisk, freeSpace },
+    });
+    root = t.root;
+    try {
+      const result = await t.service.pull(splitRequest);
+      expect(result).toMatchObject({
+        ok: false,
+        error: { kind: 'cannot-pull', message: expect.stringContaining(where) },
+      });
+      expect(t.hub.download).not.toHaveBeenCalled();
+      expect(t.service.pulls()).toEqual([]);
+      freeSpace.mockResolvedValue(10_000);
+      await expect(t.service.pull(splitRequest)).resolves.toEqual({ ok: true, ref: SPLIT_REF });
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('cancels mid-part and leaves nothing staged', async () => {
+    const t = await importing();
+    try {
+      t.hub.download.mockImplementationOnce(async (_file, destination, opts) => {
+        await writeFile(`${destination}.partial`, 'half');
+        return new Promise<never>((_resolve, reject) => {
+          const stop = () => reject(new DOMException('aborted', 'AbortError'));
+          // The test may abort while the partial is still being written.
+          if (opts?.signal?.aborted) stop();
+          else opts?.signal?.addEventListener('abort', stop);
+        });
+      });
+      const result = t.service.pull(splitRequest);
+      await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
+      t.service.cancel(pullKey(REPO, SPLIT_ID));
+      await expect(result).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      expect(t.service.pulls()).toEqual([]);
+      expect(t.runtime.create).not.toHaveBeenCalled();
+      expect(t.installedChanged).not.toHaveBeenCalled();
+      expect(await t.left()).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  describe('two builds of one repo sharing a projector', () => {
+    const OTHER_ID = 'qwen2.5-0.5b-instruct-q4_0';
+    const otherShard = (index: number) => ({
+      path: `${OTHER_ID}-0000${index - 2}-of-00002.gguf`,
+      sizeBytes: 100,
+      sha256: String(index).repeat(64),
+      url: `https://x/${index}`,
+    });
+    const otherRequest = { ...request, buildId: OTHER_ID, sizeBytes: 200 };
+
+    async function sharing() {
+      const base = splitDetail();
+      const t = await importing({
+        detail: {
+          ...base,
+          builds: [
+            ...base.builds,
+            {
+              ...base.builds[1],
+              id: OTHER_ID,
+              quant: 'Q4_0',
+              label: 'Q4_0',
+              files: [otherShard(3), otherShard(4)],
+              sizeBytes: 200,
+            },
+          ],
+        },
+      });
+      const fallback = t.hub.download.getMockImplementation()!;
+      const releases: Array<() => void> = [];
+      const hold = (_destination: string, opts?: DownloadOptions) =>
+        new Promise<void>((resolve, reject) => {
+          releases.push(resolve);
+          opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      return { t, fallback, hold, releases };
+    }
+
+    it('keeps the shared part another import holds open when one build is cancelled', async () => {
+      const { t, fallback, hold, releases } = await sharing();
+      try {
+        t.hub.download.mockImplementation(async (file, destination, opts) => {
+          if (file.sha256 === PROJECTOR_SHA) {
+            await writeFile(`${destination}.partial`, 'half');
+            await writeFile(`${destination}.lock`, 'held');
+            await hold(destination, opts);
+            await writeFile(destination, 'x');
+            return { path: destination, sizeBytes: file.sizeBytes, sha256: file.sha256, resumedBytes: 0 };
+          }
+          if (file.sha256 === '3'.repeat(64)) {
+            await writeFile(`${destination}.partial`, 'half');
+            await hold(destination, opts);
+          }
+          return fallback(file, destination, opts);
+        });
+        const first = t.service.pull(splitRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        const second = t.service.pull(otherRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(2));
+        t.service.cancel(pullKey(REPO, OTHER_ID));
+        await expect(second).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect((await t.left()).sort()).toEqual([`${PROJECTOR_SHA}.gguf.lock`, `${PROJECTOR_SHA}.gguf.partial`]);
+        releases[0]();
+        await expect(first).resolves.toMatchObject({ ok: true });
+      } finally {
+        await t.cleanup();
+      }
+    });
+
+    it('does not remove a shared part when the other build succeeds', async () => {
+      const { t, fallback, hold, releases } = await sharing();
+      try {
+        t.hub.download.mockImplementation(async (file, destination, opts) => {
+          if (file.sha256 === '3'.repeat(64)) await hold(destination, opts);
+          return fallback(file, destination, opts);
+        });
+        t.runtime.create.mockImplementationOnce(async () => {
+          await writeFile(join(t.root, `${PROJECTOR_SHA}.gguf.partial`), 'x');
+        });
+        const second = t.service.pull(otherRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(await t.left()).toEqual([`${PROJECTOR_SHA}.gguf.partial`]);
+        t.service.cancel(pullKey(REPO, OTHER_ID));
+        await second;
+      } finally {
+        await t.cleanup();
+      }
+    });
+  });
+
+  it("fails with Ollama's reason, keeps the staged part, and a retry fetches only what Ollama lacks", async () => {
+    const t = await importing();
+    try {
+      t.runtime.uploadBlob.mockImplementationOnce(async (digest: string) => {
+        t.blobs.add(digest);
+      });
+      t.runtime.uploadBlob.mockImplementationOnce(async () => {
+        throw new LocalRuntimeError('ollama could not take the part: digest mismatch', 'ollama');
+      });
+      const failed = await t.service.pull(splitRequest);
+      expect(failed).toMatchObject({ ok: false });
+      expect(t.service.pulls()[0]).toMatchObject({
+        phase: 'failed',
+        error: { message: expect.stringMatching(/digest mismatch/) },
+      });
+      expect(t.runtime.create).not.toHaveBeenCalled();
+      expect(await t.left()).toHaveLength(1);
+
+      t.hub.download.mockClear();
+      await expect(t.service.pull(splitRequest)).resolves.toEqual({ ok: true, ref: SPLIT_REF });
+      expect(t.hub.download.mock.calls.map(([file]) => file.path)).toEqual([
+        `${SPLIT_ID}-00002-of-00002.gguf`,
+        'mmproj-F16.gguf',
+      ]);
+      expect(await t.left()).toEqual([]);
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('removes the staged parts of a failed import when the user dismisses it', async () => {
+    const t = await importing();
+    try {
+      t.runtime.uploadBlob.mockRejectedValueOnce(new LocalRuntimeError('ollama could not take the part', 'ollama'));
+      await t.service.pull(splitRequest);
+      expect(await t.left()).toHaveLength(1);
+      t.service.dismiss(pullKey(REPO, SPLIT_ID));
+      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('removes the staged parts of a failed import when its retry is refused', async () => {
+    const free = vi.fn(async () => 10_000);
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => true, freeSpace: free },
+    });
+    try {
+      t.runtime.uploadBlob.mockRejectedValueOnce(new LocalRuntimeError('ollama could not take the part', 'ollama'));
+      await t.service.pull(splitRequest);
+      expect(await t.left()).toHaveLength(1);
+      free.mockResolvedValue(1);
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+      expect(t.service.pulls()).toEqual([]);
+      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
+  it('needs Ollama 0.35.0 or newer to add a split build', async () => {
+    const t = await importing({ version: '0.34.2' });
+    try {
+      const result = await t.service.pull(splitRequest);
+      expect(result).toMatchObject({ ok: false, error: { message: expect.stringMatching(/0\.35\.0/) } });
+      expect(t.hub.download).not.toHaveBeenCalled();
+    } finally {
+      await t.cleanup();
+    }
+  });
 });

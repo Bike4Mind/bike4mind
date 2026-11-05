@@ -199,7 +199,7 @@ const ModelfileOverrideSchema = z.object({
   // A hub-bundled template id, never inline template text.
   templateRef: SlugSchema.optional(),
   dropStops: z.array(z.string().min(1).max(32)).max(8).default([]),
-  draftNumPredict: z.number().int().min(1).max(16).optional(),
+  draftNumPredict: z.number().int().min(0).max(16).optional(),
 });
 
 // Every layer the registry serves beside the weights; a client pulls only while it serves exactly these. numCtx is
@@ -214,9 +214,14 @@ const OllamaLayersSchema = z
     // The served projector's size, which Hugging Face weight sizes leave out.
     projectorBytes: ByteCountSchema.optional(),
     draft: Sha256Schema.nullable().default(null),
+    // The params layer's draft_num_predict, which Ollama speculates with unless a request sets one.
+    draftNumPredict: z.number().int().min(0).max(16).optional(),
     installedTemplate: Sha256Schema.optional(),
   })
   .refine(layers => layers.params !== null || layers.numCtx === null, { message: 'numCtx needs a params layer' })
+  .refine(layers => layers.params !== null || layers.draftNumPredict === undefined, {
+    message: 'draftNumPredict needs a params layer',
+  })
   .refine(layers => layers.projector !== null || layers.projectorBytes === undefined, {
     message: 'projectorBytes needs a projector layer',
   });
@@ -729,11 +734,13 @@ export const HubManifestSchema = ManifestObjectSchema.superRefine(refineManifest
 export type HubManifest = z.infer<typeof HubManifestSchema>;
 export type HubManifestInput = z.input<typeof HubManifestSchema>;
 
-/**
- * The published catalog as CI and the publish script hold it: a sequence its changelog leads with and strictly
- * decreases from, and a newest item naming only listed entries (older items are history, removals unlisted ones).
- */
-export const CuratedCatalogSchema = HubManifestSchema.superRefine((manifest, ctx) => {
+interface PublishedShape {
+  sequence?: number;
+  changelog: HubChangelogItem[];
+  entries: ReadonlyArray<{ id: string }>;
+}
+
+function refinePublished(manifest: PublishedShape, ctx: z.RefinementCtx<PublishedShape>): void {
   const issue = (path: PropertyKey[], message: string) => ctx.addIssue({ code: 'custom', path, message });
   if (manifest.sequence === undefined) return issue(['sequence'], 'a published catalog needs a sequence');
   const [newest, ...older] = manifest.changelog;
@@ -747,7 +754,42 @@ export const CuratedCatalogSchema = HubManifestSchema.superRefine((manifest, ctx
   for (const id of [...newest.added, ...newest.changed]) if (!ids.has(id)) issue(['changelog', 0], `no entry ${id}`);
   for (const removed of newest.removed)
     if (ids.has(removed.id)) issue(['changelog', 0, 'removed'], `entry ${removed.id} is still listed`);
-});
+}
+
+/**
+ * The published catalog as CI and the publish script hold it: a sequence its changelog leads with and strictly
+ * decreases from, and a newest item naming only listed entries (older items are history, removals unlisted ones).
+ */
+export const CuratedCatalogSchema = HubManifestSchema.superRefine(refinePublished);
+
+// Building blocks the v3 manifest (modelHubV3.ts) reuses, so both versions validate entries and builds alike.
+export {
+  BuildSchema as HubBuildSchema,
+  ChangelogItemSchema as HubChangelogItemSchema,
+  ContextSchema as HubContextSchema,
+  EntryHeaderSchema as HubEntryHeaderSchema,
+  FamilySchema as HubFamilySchema,
+  HttpsUrlSchema as HubHttpsUrlSchema,
+  LicenseRefSchema as HubLicenseRefSchema,
+  LicenseSchema as HubLicenseSchema,
+  RevokedKeyIdsSchema as HubRevokedKeyIdsSchema,
+  RuntimeVersionSchema as HubRuntimeVersionSchema,
+  SlugSchema as HubSlugSchema,
+  TierSchema as HubTierSchema,
+  buildIssues as hubBuildIssues,
+  headerIssues as hubHeaderIssues,
+  licenseRank as hubLicenseRank,
+  maxKeys as hubMaxKeys,
+  refinePublished as refinePublishedCatalog,
+  type EntryHeader as HubEntryHeader,
+  type EntryIssue as HubEntryIssue,
+};
+export const HUB_MAX_ENTRIES = MAX_ENTRIES;
+export const HUB_MAX_FAMILIES = MAX_FAMILIES;
+export const HUB_MAX_BUILDS = MAX_BUILDS;
+export const HUB_MAX_CHANGELOG = MAX_CHANGELOG;
+export const HUB_MAX_TIERS = MAX_TIERS;
+export const HUB_TIER_KINDS = TIER_KINDS;
 
 /** Something a client skipped while reading a newer or partly invalid manifest. */
 export interface HubManifestDrop {

@@ -1,10 +1,12 @@
+import { readlinkSync, realpathSync } from 'node:fs';
 import { readlink, realpath, stat } from 'node:fs/promises';
-import { dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 import {
   parseWslPath,
   wslLocation,
   wslOperandPlaces,
   wslRealpath,
+  wslDrivePath,
   wslUncPath,
   type OperandReader,
   type WslLocation,
@@ -13,7 +15,7 @@ import {
 export type { OperandReader } from '../../wsl/wslPath';
 
 /** The kernel's own limit (MAXSYMLINKS); past it the open fails with ELOOP anyway. */
-const MAX_LINK_HOPS = 32;
+export const MAX_LINK_HOPS = 32;
 
 /**
  * Thrown when a tool is pointed outside every granted root. Carries no filesystem detail
@@ -41,6 +43,44 @@ function comparable(path: string): string {
 
 const sameDistro = (a: WslLocation | null, b: WslLocation): boolean =>
   a !== null && a.distro.toLowerCase() === b.distro.toLowerCase();
+
+/** `paths` plus, on Windows, the drive path each WSL `/mnt/<x>` share path in them reaches. */
+export function withDriveSpellings(paths: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') return [...paths];
+  return paths.flatMap(path => {
+    const drive = wslDrivePath(path);
+    return drive ? [path, drive] : [path];
+  });
+}
+
+/** On macOS and Windows, whose volumes ignore case by default, `path` in lower case. */
+export function caseFolded(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'darwin' || platform === 'win32' ? path.toLowerCase() : path;
+}
+
+/** `path` as the guards compare it: case folded where volumes ignore case, and `/`-separated on Windows. */
+export function guardForm(path: string, platform: NodeJS.Platform = process.platform): string {
+  const folded = caseFolded(path, platform);
+  return platform === 'win32' ? folded.replace(/\\/g, '/') : folded;
+}
+
+/** isWithin for two `guardForm` paths. */
+export function guardFormWithin(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root.endsWith('/') ? root : `${root}/`);
+}
+
+/** Whether any spelling of one target lies within any `guarded` path, its WSL drive spellings included. */
+export function withinGuarded(
+  guarded: readonly string[],
+  candidates: readonly string[],
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  const spellings = withDriveSpellings(candidates, platform).map(path => guardForm(path, platform));
+  return guarded.some(entry => {
+    const root = guardForm(entry, platform);
+    return spellings.some(spelling => guardFormWithin(root, spelling));
+  });
+}
 
 /** True when `candidate` is `root` itself or lies beneath it. */
 export function isWithin(rootPath: string, candidatePath: string): boolean {
@@ -264,6 +304,138 @@ export async function hostPhysicalTarget(target: string): Promise<string> {
   return real;
 }
 
+/**
+ * `path`, plus its real path when a symlink makes the two differ, so a guard built from it holds
+ * against targets the checks have resolved. A path that does not exist yet is spelled under its
+ * nearest existing parent's real path. Sync, and runs per decision, so keep callers off hot loops.
+ */
+export function withRealPath(path: string): string[] {
+  return spellingsOf(path).known;
+}
+
+/** `withRealPath`, and whether both its real path and its own location resolved. */
+export function spellingsOf(path: string): { known: string[]; resolved: boolean } {
+  const real = realpathSyncNearest(path);
+  const own = ownLocation(path);
+  const known = [path, ...(real === null ? [] : [real]), ...(own === null ? [] : [own])];
+  return { known: [...new Set(known)], resolved: real !== null && own !== null };
+}
+
+/**
+ * Where `path` itself sits: its parent's real path plus its name, without following a final link.
+ * A relative path or a root is returned as given; null only when the parent cannot be resolved.
+ */
+export function ownLocation(path: string): string | null {
+  const parent = dirname(path);
+  if (!isAbsolute(path) || parent === path) return path;
+  const real = realpathSyncNearest(parent);
+  return real === null ? null : join(real, basename(path));
+}
+
+/**
+ * Codes meaning no file by this name exists. ERR_INVALID_ARG_VALUE is a NUL in the name; ENAMETOOLONG
+ * counts only when one component exceeds 255 bytes on POSIX or 255 UTF-16 units on Windows
+ * (see isMissingPathError).
+ */
+export const MISSING_PATH_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'ERR_INVALID_ARG_VALUE']);
+
+const MAX_COMPONENT_LENGTH = 255;
+
+/** True when `code` from resolving `path` means no such file exists. A too-long total path could still hold a real link. */
+export function isMissingPathError(code: unknown, path: string): boolean {
+  if (MISSING_PATH_CODES.has(String(code))) return true;
+  if (code !== 'ENAMETOOLONG') return false;
+  // POSIX limits a component in bytes and allows a backslash in a name; Windows counts UTF-16 units.
+  const win = process.platform === 'win32';
+  return path
+    .split(win ? /[\\/]/ : '/')
+    .some(part => (win ? part.length : Buffer.byteLength(part, 'utf8')) > MAX_COMPONENT_LENGTH);
+}
+
+// Windows volumes outside the mount manager (RAM disks, some virtual drives) make native throw EISDIR.
+function nativeOrJsRealpath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch (error) {
+    if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EISDIR') throw error;
+    return realpathSync(path);
+  }
+}
+
+/**
+ * Whether `code` from reading the link `name` at `candidate` means nothing by that name exists.
+ * APFS, HFS+ and drvfs take 255 UTF-16 units, up to 765 bytes, so ENAMETOOLONG proves the name too
+ * long only while `candidate` is under PATH_MAX; past it the path's length may be what failed.
+ */
+export function isMissingNameError(code: unknown, candidate: string, name: string): boolean {
+  if (!isMissingPathError(code, name)) return false;
+  if (code !== 'ENAMETOOLONG' || process.platform === 'win32') return true;
+  return Buffer.byteLength(candidate) < (process.platform === 'darwin' ? 1024 : 4096);
+}
+
+/** A path resolved as far as it exists, the rest kept as given, and whether all of it exists. */
+export interface NearestPath {
+  path: string;
+  exists: boolean;
+}
+
+/** What one resolution has walked: link hops and names, each bounded. */
+export interface NearestWalk {
+  hops: number;
+  names: number;
+}
+
+/** Half of Linux PATH_MAX: more names than any path the kernel accepts can hold. */
+export const MAX_WALK_NAMES = 2048;
+
+/**
+ * `path` with symlinks resolved as far as it exists, the rest kept as given. Null when resolution
+ * fails for any reason but a missing component (EACCES, ELOOP, ...): where it lands is then unknown.
+ */
+export function realpathSyncNearest(path: string): string | null {
+  return nearestSync(path, { hops: 0, names: 0 })?.path ?? null;
+}
+
+/**
+ * When realpath fails as missing or too long, `path` is resolved one name at a time under its
+ * parent's physical path: macOS realpath refuses any path of PATH_MAX (1024) bytes or more, and
+ * Linux readlink past 4096, while the physical spelling may be short. A name that cannot be read
+ * under an existing parent is null. resolveSubject's `nearest` mirrors this.
+ */
+function nearestSync(path: string, walk: NearestWalk): NearestPath | null {
+  try {
+    return { path: nativeOrJsRealpath(path), exists: true };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENAMETOOLONG' && !isMissingPathError(code, path)) return null;
+  }
+  const parentPath = dirname(path);
+  if (++walk.names > MAX_WALK_NAMES || parentPath === path) return null;
+  const parent = nearestSync(parentPath, walk);
+  if (parent === null) return null;
+  const name = basename(path);
+  const candidate = join(parent.path, name);
+  // Nothing under a missing folder can be a link, but `..` climbs back out to where one can be.
+  if (!parent.exists) return name === '..' ? null : { path: candidate, exists: false };
+  let target: string;
+  try {
+    target = readlinkSync(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') {
+      try {
+        return { path: nativeOrJsRealpath(candidate), exists: true };
+      } catch {
+        return null;
+      }
+    }
+    return isMissingNameError(code, candidate, name) ? { path: candidate, exists: false } : null;
+  }
+  // A dangling link is still followed by a write, which creates its target.
+  if (++walk.hops > MAX_LINK_HOPS) return null;
+  return nearestSync(isAbsolute(target) ? target : `${parent.path}${sep}${target}`, walk);
+}
+
 async function realpathOrSelf(target: string): Promise<string> {
   return realpath(target).catch(() => target);
 }
@@ -309,10 +481,16 @@ export async function physicalTarget(target: string): Promise<string> {
         continue;
       }
       const candidate = join(current, part);
-      const link = await readlink(candidate).catch(() => null);
+      const link = await linkAt(candidate, target);
+      if (link === undefined) {
+        current = candidate;
+        continue;
+      }
       if (link === null) {
         // Existing components also supply their canonical casing on case-insensitive volumes.
-        current = await realpath(candidate).catch(() => candidate);
+        current = await realpath(candidate).catch(() => {
+          throw new PathAccessDenied(target);
+        });
         continue;
       }
       if (++hops > MAX_LINK_HOPS) throw new PathAccessDenied(target);
@@ -321,5 +499,21 @@ export async function physicalTarget(target: string): Promise<string> {
       pending = [...link.slice(root.length).split(sep), ...pending];
     }
     return current;
+  }
+}
+
+/**
+ * The link text at `candidate`: null when it is no link, undefined when it does not exist; any other
+ * failure refuses, worded like a path outside the roots so the refusal does not tell the two apart.
+ */
+async function linkAt(candidate: string, target: string): Promise<string | null | undefined> {
+  try {
+    return await readlink(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') return null;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+    // ENAMETOOLONG, EACCES, ...: the name could still be a link.
+    throw new PathAccessDenied(target);
   }
 }

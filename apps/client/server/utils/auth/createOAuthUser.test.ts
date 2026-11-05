@@ -59,6 +59,68 @@ describe('createUniqueOAuthUser', () => {
     expect(mockCreate.mock.calls[1][0]).not.toHaveProperty('signupGrant');
   });
 
+  it('enrolls the schedule grant, not defaultFreeCredits, with the retired staged toggle off', async () => {
+    mockFindSetting.mockImplementation(async (name: string) => ({
+      settingValue: {
+        stagedSignupGrantEnabled: 'false',
+        defaultFreeCredits: '5000',
+        signupGrantInitialCredits: '40',
+        signupGrantDripCap: '0',
+      }[name],
+    }));
+    await createUniqueOAuthUser({
+      name: 'Pat',
+      baseUsername: 'pat',
+      email: 'pat@example.test',
+      oauthCredentials,
+      pendingFreeCredits: true,
+    });
+    expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({ signupCredits: 40, unlockCredits: 0 });
+  });
+
+  describe('referral invite', () => {
+    const referralInvite = { inviteId: 'invite-1', inviterId: 'inviter-1', grantCredits: 30 };
+    beforeEach(() => {
+      mockFindSetting.mockImplementation(async (name: string) => ({
+        settingValue: { stagedSignupGrantEnabled: 'true', signupGrantCredits: '12', verifiedUnlockCredits: '28' }[name],
+      }));
+    });
+
+    it('marks the account invited, names the inviter and sizes the grant from the invite total', async () => {
+      await createUniqueOAuthUser({
+        name: 'Pat',
+        baseUsername: 'pat',
+        email: 'pat@example.test',
+        oauthCredentials,
+        pendingFreeCredits: true,
+        referralInvite,
+      });
+      const doc = mockCreate.mock.calls[0][0];
+      expect(doc.referredByUserId).toBe('inviter-1');
+      expect(doc.signupInvite).toEqual({ source: 'referral', inviteId: 'invite-1', at: expect.any(Date) });
+      expect(doc.signupGrant).toMatchObject({ signupCredits: 12, unlockCredits: 18 });
+    });
+
+    it('keeps the default grant when the invite carries no credit total', async () => {
+      await createUniqueOAuthUser({
+        name: 'Pat',
+        baseUsername: 'pat',
+        email: 'pat@example.test',
+        oauthCredentials,
+        pendingFreeCredits: true,
+        referralInvite: { ...referralInvite, grantCredits: 0 },
+      });
+      expect(mockCreate.mock.calls[0][0].signupGrant).toMatchObject({ signupCredits: 12, unlockCredits: 28 });
+    });
+
+    it('sets neither field without a referral invite', async () => {
+      await createUniqueOAuthUser({ name: 'Pat', baseUsername: 'pat', email: 'pat@example.test', oauthCredentials });
+      const doc = mockCreate.mock.calls[0][0];
+      expect(doc).not.toHaveProperty('signupInvite');
+      expect(doc).not.toHaveProperty('referredByUserId');
+    });
+  });
+
   it('tags the account pending-free-credits only when asked', async () => {
     await createUniqueOAuthUser({
       name: 'Pat',

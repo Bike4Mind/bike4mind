@@ -37,7 +37,8 @@ export const AdminUsersBulkActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('revokeApiKeys') }),
   z.object({ type: z.literal('addTag'), tag: z.string().trim().min(1).max(64) }),
   /**
-   * Suspend + set credits to 0 + revoke API keys, as one transaction per user. `blockEmailDomains`
+   * Suspend + remove any positive balance + revoke API keys, as one transaction per user. A negative
+   * balance is debt the account still owes and is kept, never written off. `blockEmailDomains`
    * also adds the users' owned email domains to blockedEmailDomains first, so no new account can sign up on them.
    */
   z.object({ type: z.literal('contain'), blockEmailDomains: z.boolean().optional() }),

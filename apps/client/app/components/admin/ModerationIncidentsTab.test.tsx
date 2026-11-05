@@ -30,9 +30,28 @@ const renderTab = () =>
     </CssVarsProvider>
   );
 
+const row = (over: Partial<ModerationIncidentRow>): ModerationIncidentRow => ({
+  id: 'inc',
+  createdAt: '2026-10-01T10:00:00.000Z',
+  userId: 'user-1',
+  userEmail: 'flagged@example.com',
+  topLabel: { name: 'Explicit Nudity', parentName: 'Explicit', confidence: 97.5 },
+  surface: 'upload',
+  reviewStatus: 'pending_review',
+  stuck: false,
+  ...over,
+});
 const rows: ModerationIncidentRow[] = [
-  { id: 'inc-old', createdAt: '2026-10-01T10:00:00.000Z', surface: 'upload', stuck: false },
-  { id: 'inc-stuck', createdAt: '2026-10-02T10:00:00.000Z', surface: 'generation', stuck: true },
+  row({ id: 'inc-old' }),
+  row({
+    id: 'inc-stuck',
+    createdAt: '2026-10-02T10:00:00.000Z',
+    surface: 'generation',
+    reviewStatus: 'confirmed_csam',
+    userEmail: null,
+    topLabel: null,
+    stuck: true,
+  }),
 ];
 const ready = (data: ModerationIncidentRow[], truncated = false) => ({
   data: { rows: data, truncated },
@@ -59,6 +78,52 @@ describe('ModerationIncidentsTab', () => {
     expect(first.textContent).toMatch(/ago/);
     expect(second.textContent).toContain('Report stuck');
     expect(screen.getByTestId('admin-page-header').textContent).toContain('(2)');
+    expect(m.queue).toHaveBeenCalledWith('open', undefined);
+  });
+
+  it('names the flagged user and the top label, falling back to the user id', () => {
+    renderTab();
+    const first = screen.getByTestId('moderation-incident-row-inc-old').textContent ?? '';
+    expect(first).toContain('flagged@example.com');
+    expect(first).toContain('Explicit Nudity (Explicit) 97.5%');
+    expect(screen.getByTestId('moderation-incident-row-inc-stuck').textContent).toContain('user-1');
+  });
+
+  it('switches to closed incidents and shows each verdict', () => {
+    renderTab();
+    m.queue.mockReturnValue(ready([row({ id: 'inc-closed', reviewStatus: 'no_action' })]));
+    fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
+    expect(m.queue).toHaveBeenLastCalledWith('closed', undefined);
+    expect(screen.getByTestId('moderation-incident-row-inc-closed').textContent).toContain('No action');
+    expect(screen.queryByTestId('moderation-incidents-paging')).toBeNull();
+  });
+
+  it('offers no Show older button when the closed list is not truncated', () => {
+    m.queue.mockReturnValue(ready([row({ id: 'inc-a', reviewStatus: 'no_action' })], false));
+    renderTab();
+    fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
+    expect(screen.queryByTestId('moderation-incidents-older-btn')).toBeNull();
+  });
+
+  it('pages a full closed list back from its oldest row, and returns to the newest', () => {
+    const page = [
+      row({ id: 'inc-new', createdAt: '2026-10-05T10:00:00.000Z', reviewStatus: 'reported' }),
+      row({ id: 'inc-oldest', createdAt: '2026-10-03T10:00:00.000Z', reviewStatus: 'no_action' }),
+    ];
+    m.queue.mockReturnValue(ready(page, true));
+    renderTab();
+    fireEvent.click(screen.getByTestId('moderation-incidents-status-closed'));
+    expect(screen.queryByTestId('moderation-incidents-truncated')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('moderation-incidents-older-btn'));
+    expect(m.queue).toHaveBeenLastCalledWith('closed', {
+      before: '2026-10-03T10:00:00.000Z',
+      beforeId: 'inc-oldest',
+    });
+    expect(screen.getByTestId('moderation-incidents-paging').textContent).toContain('from before');
+
+    fireEvent.click(screen.getByTestId('moderation-incidents-newest-btn'));
+    expect(m.queue).toHaveBeenLastCalledWith('closed', undefined);
   });
 
   it('opens an incident through the incidentId search param', () => {

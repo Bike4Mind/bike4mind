@@ -64,7 +64,11 @@ export async function startPull(
   build: HubBuildView,
   consent: PullConsent,
   onRecheck: () => void,
-  { serverId, curated }: { serverId?: string; curated?: { entryId: string; buildId: string } } = {}
+  {
+    serverId,
+    curated,
+    onNotice,
+  }: { serverId?: string; curated?: { entryId: string; buildId: string }; onNotice?: (text: string) => void } = {}
 ): Promise<ModelHubError | null> {
   const result = await window.b4m.models.pull({
     repo: model.id,
@@ -75,7 +79,10 @@ export async function startPull(
     ...(serverId === undefined ? {} : { serverId }),
     ...(curated ? { curated } : {}),
   });
-  if (result.ok) return null;
+  if (result.ok) {
+    if (result.notice) onNotice?.(result.notice);
+    return null;
+  }
   if (result.error.kind === 'runtime-unavailable') onRecheck();
   if (result.listed || result.error.kind === 'cancelled') return null;
   return result.error;
@@ -255,6 +262,7 @@ function ModelDetail({
   const [detail, setDetail] = useState<DetailState>({ state: 'loading' });
   const [confirmingOn, setConfirming] = useState<{ build: HubBuildView; serverId: string | undefined } | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
+  const [pullNotice, setPullNotice] = useState<string | null>(null);
   const canPull = target.management === 'allowed';
 
   useEffect(() => {
@@ -300,7 +308,8 @@ function ModelDetail({
   const start = async (build: HubBuildView, serverId: string | undefined, consent: PullConsent) => {
     setConfirming(null);
     setPullError(null);
-    const error = await startPull(model, build, consent, onRecheck, { serverId });
+    setPullNotice(null);
+    const error = await startPull(model, build, consent, onRecheck, { serverId, onNotice: setPullNotice });
     if (!error) return;
     setPullError(hubErrorText(error));
     if (error.kind === 'changed') void load();
@@ -377,6 +386,11 @@ function ModelDetail({
       {pullError && (
         <Alert color="danger" variant="soft" data-testid="models-detail-pull-error">
           {pullError}
+        </Alert>
+      )}
+      {pullNotice && (
+        <Alert color="warning" variant="soft" data-testid="models-detail-pull-notice">
+          {pullNotice}
         </Alert>
       )}
 

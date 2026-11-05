@@ -114,3 +114,24 @@ it.each([0, 1001, 1.5, NaN])('rejects invalid batch size %s before database writ
     deletion.mockRestore();
   }
 });
+
+it('rechecks the purge lease between chunk batches and retains the row after lease loss', async () => {
+  const file = await FabFile.create({
+    userId: 'owner',
+    fileName: 'lease.txt',
+    filePath: 'lease.txt',
+    mimeType: 'text/plain',
+    type: KnowledgeType.FILE,
+    fileSize: 3,
+    status: 'complete',
+    deletedAt: new Date(),
+  });
+  await FabFileChunk.insertMany(
+    Array.from({ length: 3 }, (_, index) => ({ fabFileId: file.id, text: `chunk-${index}`, tokenCount: 1 }))
+  );
+  const beforeBatch = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValue(new Error('lease lost'));
+  await expect(fabFileRepository.hardDeleteWithChunks(file.id, 1, beforeBatch)).rejects.toThrow('lease lost');
+  expect(await FabFileChunk.countDocuments({ fabFileId: file.id })).toBe(2);
+  expect(await FabFile.collection.findOne({ _id: file._id })).not.toBeNull();
+  await fabFileRepository.hardDeleteWithChunks(file.id, 1);
+});

@@ -4,9 +4,11 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatModelOption } from '@shared/chat';
-import type { ModelSettings } from '@shared/modelSettings';
+import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from '@shared/modelSettings';
+import type { LoadedModelState } from '@shared/models';
 import { desktopTheme } from '../theme';
-import { hasModelDefaults, ModelDefaultsDialog, seedNote, seedsFor } from './ModelDefaultsDialog';
+import { contextSizeLabel } from '@shared/localContextSetting';
+import { contextSent, hasModelDefaults, ModelDefaultsDialog, seedNote, seedsFor } from './ModelDefaultsDialog';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 window.matchMedia ??= ((query: string) => ({
@@ -48,17 +50,51 @@ const GPT_OSS: ChatModelOption = {
   },
 };
 
+/** This computer's Ollama: Auto picks 64K, 256K would not load, and the model has an MTP head that is off by default. */
+const OLLAMA_OFFER: ModelLoadOffer = {
+  context: {
+    kind: 'ollama',
+    settings: 65536,
+    auto: 65536,
+    sizes: [
+      { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+      { size: 32768, tokens: 32768, autoTokens: 32768, loads: true },
+      { size: 65536, tokens: 65536, autoTokens: 65536, loads: true },
+      { size: 131072, tokens: 131072, autoTokens: 65536, loads: true },
+      { size: 262144, tokens: 262144, autoTokens: 65536, loads: false },
+    ],
+    ceiling: 262144,
+  },
+  draft: { modelDefault: 0, max: 16 },
+  keepAlive: true,
+};
+
 let root: Root;
 let host: HTMLElement;
 let stored: ModelSettings;
+let unsupported: UnsupportedModelSetting[];
+let offer: ModelLoadOffer;
+let loadedState: LoadedModelState;
 const setModelSettings = vi.fn<(modelId: string, settings: ModelSettings) => Promise<ModelSettings | null>>();
+const getModelLoadOffer = vi.fn<(modelId: string, draftTokens?: number) => Promise<ModelLoadOffer | null>>();
 
 beforeEach(() => {
   stored = {};
+  unsupported = [];
+  offer = {};
+  loadedState = { kind: 'unloaded' };
   setModelSettings.mockReset();
   setModelSettings.mockImplementation(async (_id, settings) => settings);
+  getModelLoadOffer.mockReset();
+  getModelLoadOffer.mockImplementation(async () => offer);
   (window as unknown as { b4m: unknown }).b4m = {
-    chat: { getModelSettings: vi.fn(async () => stored), setModelSettings },
+    chat: {
+      getModelSettings: vi.fn(async () => stored),
+      getUnsupportedModelSettings: vi.fn(async () => unsupported),
+      setModelSettings,
+      getModelLoadOffer,
+    },
+    models: { getLoadedState: vi.fn(async () => loadedState) },
   };
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -71,13 +107,15 @@ afterEach(async () => {
 });
 
 const onClose = vi.fn();
+const onSaved = vi.fn();
 
 async function render(option: ChatModelOption | null) {
   onClose.mockReset();
+  onSaved.mockReset();
   await act(async () =>
     root.render(
       <CssVarsProvider theme={desktopTheme}>
-        <ModelDefaultsDialog option={option} onClose={onClose} />
+        <ModelDefaultsDialog option={option} onClose={onClose} onSaved={onSaved} />
       </CssVarsProvider>
     )
   );
@@ -177,7 +215,7 @@ describe('ModelDefaultsDialog', () => {
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.6 } });
   });
 
-  it('saves a thinking level only for a model that lists levels', async () => {
+  it('saves a stored thinking level back as it was, on a model that lists levels or not', async () => {
     stored = { effort: 'high' };
     await render(GPT_OSS);
     await click('model-defaults-save-btn');
@@ -185,7 +223,55 @@ describe('ModelDefaultsDialog', () => {
 
     await render(QWEN);
     await click('model-defaults-save-btn');
-    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, {});
+    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, { effort: 'high' });
+  });
+
+  it('saves a hidden topK and an unlisted xhigh level back as stored when another field changes', async () => {
+    stored = { generation: { temperature: 0.6, topK: 30 }, effort: 'xhigh' };
+    await render(GPT_OSS);
+    await fill('temperature', '0.7');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(GPT_OSS.id, {
+      generation: { temperature: 0.7, topK: 30 },
+      effort: 'xhigh',
+    });
+  });
+
+  it('saves an untouched stored value past what the control allows unclamped', async () => {
+    stored = { generation: { temperature: 0.6, topK: 500 } };
+    await render(QWEN);
+    expect(input('topK').value).toBe('500');
+    await fill('temperature', '0.7');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.7, topK: 500 } });
+  });
+
+  it('leaves a stored value past what the control allows unclamped when focus passes through its field', async () => {
+    stored = { generation: { temperature: 0.6, topK: 500 } };
+    await render(QWEN);
+    await act(async () => {
+      input('topK').focus();
+      input('topK').blur();
+    });
+    expect(input('topK').value).toBe('500');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.6, topK: 500 } });
+  });
+
+  it('clears the fields it does not draw too on Clear all', async () => {
+    stored = { generation: { topK: 30 }, effort: 'xhigh' };
+    await render(GPT_OSS);
+    await click('model-defaults-clear-btn');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(GPT_OSS.id, {});
+  });
+
+  it('names a stored value this version keeps but does not use', async () => {
+    unsupported = [{ field: 'effort', value: 'ultra' }];
+    await render(GPT_OSS);
+    expect(
+      [...document.querySelectorAll('[data-testid="model-defaults-unsupported-note"]')].map(n => n.textContent)
+    ).toEqual(['effort "ultra" is kept in the settings file but not used by this version of Desktop.']);
   });
 
   it('clears every field, and saving that clears the stored defaults', async () => {
@@ -194,6 +280,22 @@ describe('ModelDefaultsDialog', () => {
     await click('model-defaults-clear-btn');
     expect(input('temperature').value).toBe('');
     expect(input('topK').value).toBe('');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
+  it('does not bring a cleared default back when a field then holds text it cannot parse', async () => {
+    stored = { generation: { temperature: 0.6 } };
+    await render(QWEN);
+    await click('model-defaults-clear-btn');
+    const temperature = input('temperature');
+    Object.defineProperty(temperature, 'validity', { configurable: true, value: { badInput: true } });
+    await fill('temperature', '');
+    await act(async () => {
+      temperature.focus();
+      temperature.blur();
+    });
+    expect(temperature.value).toBe('');
     await click('model-defaults-save-btn');
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
   });
@@ -220,6 +322,20 @@ describe('ModelDefaultsDialog', () => {
     await render(QWEN);
     expect(byTestId('model-defaults-error')?.textContent).toBe(
       "Desktop could not read this model's settings: EACCES: denied"
+    );
+  });
+
+  it('drops the error name Electron puts before a named error, so the file and its fix read plainly', async () => {
+    const message =
+      'The model settings file /data/model-settings.json is not valid JSON. Fix it, or delete it to clear the saved settings of every model.';
+    (window as unknown as { b4m: { chat: { getModelSettings: unknown } } }).b4m.chat.getModelSettings = vi.fn(
+      async () => {
+        throw new Error(`Error invoking remote method 'chat:get-model-settings': ModelSettingsFileError: ${message}`);
+      }
+    );
+    await render(QWEN);
+    expect(byTestId('model-defaults-error')?.textContent).toBe(
+      `Desktop could not read this model's settings: ${message}`
     );
   });
 
@@ -261,6 +377,433 @@ describe('ModelDefaultsDialog', () => {
   it('renders nothing without a model', async () => {
     await render(null);
     expect(byTestId('model-defaults-dialog')).toBeNull();
+  });
+});
+
+async function pick(select: string, option: string) {
+  await click(`model-defaults-${select}-select`);
+  await click(`model-defaults-${select}-option-${option}`);
+}
+
+describe('ModelDefaultsDialog load options', () => {
+  it('draws no load options when main offers none', async () => {
+    await render(QWEN);
+    expect(byTestId('model-defaults-load-section')).toBeNull();
+    expect(byTestId('model-defaults-context-select')).toBeNull();
+  });
+
+  it("draws context, draft and keep-alive for an Ollama model, rating each size and stating Auto's pick", async () => {
+    offer = OLLAMA_OFFER;
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Same as Settings');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 64K tokens.');
+    expect(byTestId('model-defaults-draft-note')?.textContent).toMatch(/^Model default: 0\. 0 turns drafting off/);
+    expect(byTestId('model-defaults-keep-alive-select')?.textContent).toBe('Server default');
+    await click('model-defaults-context-select');
+    expect(byTestId('model-defaults-context-option-262144-note')?.textContent).toMatch(/May not load/);
+    expect(byTestId('model-defaults-context-option-131072-note')).toBeNull();
+    await click('model-defaults-context-option-auto-131072');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 64K tokens.');
+  });
+
+  it('shows the KV cache type as a server-wide value, with no per-model choice to save', async () => {
+    offer = { ...OLLAMA_OFFER, kvCache: { type: 'q8_0' } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-kv-cache-value')?.textContent).toBe('q8_0');
+    expect(byTestId('model-defaults-kv-cache-note')?.textContent).toBe(
+      'Set for the whole server with OLLAMA_KV_CACHE_TYPE, which this Ollama runs with.'
+    );
+    expect(byTestId('model-defaults-kv-cache-select')).toBeNull();
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+
+    offer = { kvCache: { type: 'f16' } };
+    await render(GEMMA);
+    expect(byTestId('model-defaults-load-section')).not.toBeNull();
+    expect(byTestId('model-defaults-kv-cache-value')?.textContent).toBe('f16');
+    expect(byTestId('model-defaults-kv-cache-note')?.textContent).toMatch(/^Ollama's default, .*Launch settings/);
+  });
+
+  it('offers only a smaller context, as a budget, on a server that fixes its own', async () => {
+    offer = { context: { kind: 'budget', server: 65536, sizes: [16384, 32768] } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe("Server's 64K tokens");
+    expect(byTestId('model-defaults-draft-input')).toBeNull();
+    expect(byTestId('model-defaults-keep-alive-select')).toBeNull();
+    await click('model-defaults-context-select');
+    expect(byTestId('model-defaults-context-option-auto')).toBeNull();
+    expect(byTestId('model-defaults-context-option-65536')).toBeNull();
+    await click('model-defaults-context-option-32768');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { context: { mode: 'fixed', tokens: 32768 } });
+  });
+
+  it('shows the stored load options and saves each pick beside the sampling', async () => {
+    offer = OLLAMA_OFFER;
+    stored = { generation: { temperature: 0.6 }, context: { mode: 'auto', maxTokens: 32768 }, draftTokens: 3 };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Auto, up to 32K tokens');
+    expect(input('draft').value).toBe('3');
+    await pick('context', '131072');
+    await pick('keep-alive', '-1');
+    await fill('draft', '16');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {
+      generation: { temperature: 0.6 },
+      context: { mode: 'fixed', tokens: 131072 },
+      draftTokens: 16,
+      keepAlive: -1,
+    });
+  });
+
+  it.each(['40', '1.5', '-1'])('marks a draft count of %s invalid and does not save it', async text => {
+    offer = OLLAMA_OFFER;
+    await render(QWEN);
+    await fill('draft', text);
+    expect(input('draft').getAttribute('aria-invalid')).toBe('true');
+    expect(byTestId('model-defaults-draft-note')?.textContent).toBe('Enter a whole number from 0 to 16.');
+    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(true);
+    await fill('draft', '2');
+    expect(input('draft').getAttribute('aria-invalid')).toBe('false');
+    expect(byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled).toBe(false);
+  });
+
+  it('offers the trained length as a size and stores it, with no Auto cap that repeats Auto', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        auto: 40960,
+        ceiling: 40960,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+          { size: 32768, tokens: 32768, autoTokens: 32768, loads: true },
+          { size: 65536, tokens: 40960, autoTokens: 40960, loads: true },
+        ],
+      },
+    };
+    await render(QWEN);
+    await click('model-defaults-context-select');
+    expect(byTestId('model-defaults-context-option-65536')?.textContent).toBe('40K tokens');
+    expect(byTestId('model-defaults-context-option-auto-32768')?.textContent).toBe('Auto, up to 32K tokens');
+    expect(byTestId('model-defaults-context-option-auto-65536')).toBeNull();
+    await click('model-defaults-context-option-65536');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { context: { mode: 'fixed', tokens: 40960 } });
+  });
+
+  it('shows a stored trained length as its choice', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        sizes: [{ size: 65536, tokens: 40960, autoTokens: 40960 }],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 40960 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('40K tokens');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
+  });
+
+  it('shows a stored size past the trained length as the clamped size chat sends', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 40960,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384 },
+          { size: 65536, tokens: 40960, autoTokens: 40960 },
+        ],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 131072 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
+    expect(contextSent(offer, { mode: 'fixed', tokens: 131072 })).toBe(40960);
+  });
+
+  it('validates the draft text itself: whole numbers 0 to the maximum, blank for unset', async () => {
+    offer = OLLAMA_OFFER;
+    await render(QWEN);
+    const field = input('draft');
+    const saveDisabled = () => byTestId<HTMLButtonElement>('model-defaults-save-btn')?.disabled;
+    for (const [text, invalid] of [
+      ['-', true],
+      ['1e', true],
+      ['17', true],
+      ['1.5', true],
+      ['4', false],
+      ['0', false],
+      ['16', false],
+    ] as const) {
+      await fill('draft', text);
+      expect(field.getAttribute('aria-invalid'), text).toBe(String(invalid));
+      if (invalid) expect(saveDisabled(), text).toBe(true);
+    }
+    await fill('draft', '-');
+    await fill('draft', '');
+    expect(field.getAttribute('aria-invalid')).toBe('false');
+    expect(field.type).toBe('text');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
+  it('accepts leading zeros and surrounding spaces in the draft text and saves the number', async () => {
+    offer = OLLAMA_OFFER;
+    await render(QWEN);
+    for (const text of ['04', ' 4 ']) {
+      await fill('draft', text);
+      expect(input('draft').getAttribute('aria-invalid'), text).toBe('false');
+      await click('model-defaults-save-btn');
+      expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, { draftTokens: 4 });
+    }
+  });
+
+  it('saves a cleared stored draft count as unset', async () => {
+    offer = OLLAMA_OFFER;
+    stored = { draftTokens: 6 };
+    await render(QWEN);
+    expect(input('draft').value).toBe('6');
+    await fill('draft', '');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
+  it('loads a stored Auto cap and a bare Auto into the context choice', async () => {
+    offer = OLLAMA_OFFER;
+    stored = { context: { mode: 'auto', maxTokens: 32768 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Auto, up to 32K tokens');
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    offer = {
+      context: { kind: 'ollama', settings: 16384, sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384 }] },
+    };
+    stored = { context: { mode: 'auto' } };
+    await render(GEMMA);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Auto');
+  });
+
+  it('warns when a stored size no option lists runs at a listed size that may not load', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 32768,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+          { size: 32768, tokens: 32768, autoTokens: 32768, loads: false },
+        ],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 131072 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe(
+      "Runs at 32K tokens. May not load in this computer's memory."
+    );
+  });
+
+  it('warns about memory for a stored unlisted size that runs at a size that may not load', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 65536,
+        sizes: [{ size: 262144, tokens: 65536, autoTokens: 65536, loads: false }],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 262144 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toContain('May not load');
+  });
+
+  const autoOffer = (loads16: boolean): ModelLoadOffer => ({
+    context: {
+      kind: 'ollama',
+      settings: 16384,
+      auto: 16384,
+      ceiling: 32768,
+      sizes: [
+        { size: 16384, tokens: 16384, autoTokens: 16384, loads: loads16 },
+        { size: 32768, tokens: 32768, autoTokens: 16384, loads: false },
+      ],
+    },
+  });
+
+  it('warns when Auto falls back to a floor size that may not load', async () => {
+    offer = autoOffer(false);
+    stored = { context: { mode: 'auto' } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe(
+      "Runs at 16K tokens. May not load in this computer's memory."
+    );
+  });
+
+  it('does not warn when Auto runs at a size that loads', async () => {
+    offer = autoOffer(true);
+    stored = { context: { mode: 'auto' } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 16K tokens.');
+  });
+
+  it('warns under Same as Settings when Settings is a size that may not load', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 32768,
+        ceiling: 32768,
+        sizes: [
+          { size: 16384, tokens: 16384, autoTokens: 16384, loads: true },
+          { size: 32768, tokens: 32768, autoTokens: 32768, loads: false },
+        ],
+      },
+    };
+    stored = {};
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe(
+      "Runs at 32K tokens. May not load in this computer's memory."
+    );
+  });
+
+  it('shows a stored size a budget server no longer lists, and labels sizes that are not whole K exactly', async () => {
+    offer = { context: { kind: 'budget', server: 65536, sizes: [16384] } };
+    stored = { context: { mode: 'fixed', tokens: 512 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('512 tokens');
+    expect(contextSizeLabel(1536)).toBe('1.5K tokens');
+    expect(contextSizeLabel(40000)).toBe('40000 tokens');
+    expect(contextSizeLabel(2048)).toBe('2K tokens');
+  });
+
+  it('offers a model trained at 4096 its own size and keeps the choice', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 4096,
+        sizes: [{ size: 16384, tokens: 4096, autoTokens: 4096, loads: true }],
+      },
+    };
+    await render(QWEN);
+    await click('model-defaults-context-select');
+    expect(byTestId('model-defaults-context-option-16384')?.textContent).toBe('4K tokens');
+    await click('model-defaults-context-option-16384');
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('4K tokens');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { context: { mode: 'fixed', tokens: 4096 } });
+  });
+
+  it('shows a stored size no option lists as its own choice, with its note', async () => {
+    offer = {
+      context: {
+        kind: 'ollama',
+        settings: 16384,
+        ceiling: 65536,
+        sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384, loads: true }],
+      },
+    };
+    stored = { context: { mode: 'fixed', tokens: 40960 } };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('40K tokens');
+    expect(byTestId('model-defaults-context-note')?.textContent).toBe('Runs at 40K tokens.');
+  });
+
+  it('labels the default of a saved Ollama server by the context it gets, not the Settings choice', async () => {
+    offer = {
+      context: { kind: 'ollama', settings: 16384, sizes: [{ size: 16384, tokens: 16384, autoTokens: 16384 }] },
+    };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')?.textContent).toBe('Default (16K tokens)');
+  });
+
+  it('calls onSaved after a successful save, and not after a failed one', async () => {
+    await render(QWEN);
+    await fill('temperature', '0.5');
+    await click('model-defaults-save-btn');
+    expect(onSaved).toHaveBeenCalledOnce();
+    expect(onClose).toHaveBeenCalledOnce();
+
+    setModelSettings.mockResolvedValueOnce(null);
+    await click('model-defaults-save-btn');
+    expect(onSaved).toHaveBeenCalledOnce();
+  });
+
+  it('rates the sizes again for the draft count typed', async () => {
+    offer = OLLAMA_OFFER;
+    await render(QWEN);
+    expect(getModelLoadOffer).toHaveBeenLastCalledWith(QWEN.id, undefined);
+    const before = getModelLoadOffer.mock.calls.length;
+    await fill('draft', '1');
+    await fill('draft', '12');
+    await fill('draft', '3');
+    expect(getModelLoadOffer).toHaveBeenCalledTimes(before);
+    await act(() => new Promise(resolve => setTimeout(resolve, 300)));
+    expect(getModelLoadOffer).toHaveBeenCalledTimes(before + 1);
+    expect(getModelLoadOffer).toHaveBeenLastCalledWith(QWEN.id, 3);
+  });
+
+  it('says a pick reloads the model only when it changes the num_ctx the model is loaded with', async () => {
+    offer = OLLAMA_OFFER;
+    loadedState = { kind: 'loaded', expiresAt: null, contextLength: 131072 };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-reload')).toBeNull();
+    await pick('context', '32768');
+    expect(byTestId('model-defaults-context-reload')?.textContent).toBe(
+      ' Reloads the model, which is loaded at 128K tokens now.'
+    );
+    await pick('context', '131072');
+    expect(byTestId('model-defaults-context-reload')).toBeNull();
+  });
+
+  it('keeps the stored load options on save when the offer cannot be read, and clears them with Clear all', async () => {
+    getModelLoadOffer.mockRejectedValue(new Error('offline'));
+    stored = { context: { mode: 'fixed', tokens: 65536 }, draftTokens: 2, keepAlive: 3600 };
+    await render(QWEN);
+    expect(byTestId('model-defaults-context-select')).toBeNull();
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, stored);
+
+    await render(QWEN);
+    await click('model-defaults-clear-btn');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, {});
+  });
+
+  it('saves the stored values typed or picked again after Clear all', async () => {
+    offer = OLLAMA_OFFER;
+    stored = {
+      generation: { temperature: 0.7 },
+      effort: 'high',
+      context: { mode: 'fixed', tokens: 65536 },
+      draftTokens: 2,
+      keepAlive: 3600,
+    };
+    await render(GPT_OSS);
+    await click('model-defaults-clear-btn');
+    await fill('temperature', '0.7');
+    await pick('effort', 'high');
+    await pick('context', '65536');
+    await fill('draft', '2');
+    await pick('keep-alive', '3600');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenLastCalledWith(GPT_OSS.id, stored);
+  });
+});
+
+describe('contextSent', () => {
+  it('reads the num_ctx each choice sends from the offer', () => {
+    expect(contextSent(OLLAMA_OFFER, null)).toBe(65536);
+    expect(contextSent(OLLAMA_OFFER, { mode: 'auto' })).toBe(65536);
+    expect(contextSent(OLLAMA_OFFER, { mode: 'auto', maxTokens: 32768 })).toBe(32768);
+    expect(contextSent(OLLAMA_OFFER, { mode: 'fixed', tokens: 262144 })).toBe(262144);
+    const trained: ModelLoadOffer = {
+      context: { kind: 'ollama', settings: 16384, sizes: [{ size: 65536, tokens: 40960, autoTokens: 40960 }] },
+    };
+    expect(contextSent(trained, { mode: 'fixed', tokens: 40960 })).toBe(40960);
+    expect(contextSent(trained, { mode: 'fixed', tokens: 65536 })).toBe(40960);
+    expect(contextSent({ context: { kind: 'budget', server: 65536, sizes: [16384] } }, null)).toBeUndefined();
   });
 });
 

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { AttentionNotice, AttentionOpenEvent } from '@shared/attention';
 import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
@@ -27,6 +28,7 @@ import type { ModelSettings } from '@shared/modelSettings';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import type {
   ModelServerAddInput,
+  ModelServerLaunchAction,
   ModelServerProbeInput,
   ModelServerUpdateInput,
   ModelServerView,
@@ -180,10 +182,16 @@ const api: DesktopApi = {
     setSessionGeneration: (sessionId: string, generation: GenerationSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionGeneration, sessionId, generation),
     getModelSettings: (modelId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetModelSettings, modelId),
+    getUnsupportedModelSettings: (modelId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatGetUnsupportedModelSettings, modelId),
     setModelSettings: (modelId: string, settings: ModelSettings) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetModelSettings, modelId, settings),
+    getModelLoadOffer: (modelId: string, draftTokens?: number) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatGetModelLoadOffer, modelId, draftTokens),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
+    setSessionOrchestrate: (sessionId: string, orchestrate: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionOrchestrate, sessionId, orchestrate),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetApprovalMode, sessionId, mode),
     setSessionArchived: (sessionId: string, archived: boolean) =>
@@ -226,6 +234,9 @@ const api: DesktopApi = {
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
+    getHeldRelays: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetHeldRelays, sessionId),
+    resolveHeldRelay: (sessionId: string, heldId: string, deliver: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatResolveHeldRelay, sessionId, heldId, deliver === true),
     sendQueuedMessageNow: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSendQueuedNow, sessionId, queuedId),
     startSpawnSuggestion: (request: StartSpawnSuggestionRequest) =>
@@ -404,6 +415,8 @@ const api: DesktopApi = {
     remove: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersRemove, id),
     check: (id?: string) => ipcRenderer.invoke(IPC_CHANNELS.modelServersCheck, id),
     probedHardware: () => ipcRenderer.invoke(IPC_CHANNELS.modelServersProbedHardware),
+    launch: (id: string, action: ModelServerLaunchAction) =>
+      ipcRenderer.invoke(IPC_CHANNELS.modelServersLaunch, id, action),
     onChanged: listener => {
       const handler = (_event: unknown, servers: ModelServerView[]) => listener(servers);
       ipcRenderer.on(IPC_CHANNELS.modelServersChanged, handler);
@@ -486,6 +499,16 @@ const api: DesktopApi = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),
+  },
+  attention: {
+    notify: (notice: AttentionNotice) => ipcRenderer.invoke(IPC_CHANNELS.attentionNotify, notice),
+    claim: (sessionIds: string[]) => ipcRenderer.invoke(IPC_CHANNELS.attentionClaim, sessionIds),
+    setBadgeCount: (count: number) => ipcRenderer.invoke(IPC_CHANNELS.attentionSetBadge, count),
+    onOpen: listener => {
+      const handler = (_event: unknown, event: AttentionOpenEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.attentionOpen, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
+    },
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

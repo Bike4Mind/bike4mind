@@ -374,7 +374,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
               activePlans: activePlanResolver,
             }));
         } catch (err) {
-          logger.warn(`[fabFileVectorize] billing check failed for ${fabFileId}; indexing unbilled: ${err}`);
+          logger.warn('embedding-billing-check-retry', {
+            fabFileId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw new Error('File indexing is temporarily unavailable. Re-index the file to try again.', { cause: err });
         }
         if (billable) {
           creditReservation = await reserveRequestCredits({

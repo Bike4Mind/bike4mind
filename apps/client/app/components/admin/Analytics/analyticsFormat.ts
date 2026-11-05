@@ -56,3 +56,26 @@ export function sparklineValues(values: readonly (number | null)[], points = 28)
     return chunk.reduce((total, value) => total + value, 0) / chunk.length;
   });
 }
+
+/** "12.3%" for a 0-100 share; under 0.1% reads "<0.1%" rather than a misleading zero. */
+export const formatShare = (share: number) => (share > 0 && share < 0.1 ? '<0.1%' : `${share.toFixed(1)}%`);
+
+/** A UsageEvent feature for display: `image_generation` -> "Image generation". */
+const MODEL_AXIS_CHARS = 24;
+// Dotted all-letter segments before the name, such as `global.anthropic.`; `gpt-4.1` has none.
+const MODEL_PREFIX = /^(?:[a-z]+\.)+(?=[a-z])/i;
+
+/**
+ * Fits a model id on the chart axis: drops a region or provider prefix, then keeps the end of what is
+ * still too long. The ellipsis marks a shortened id; the tooltip and table show it in full.
+ */
+export const modelAxisLabel = (model: string) => {
+  const name = model.replace(MODEL_PREFIX, '');
+  if (name.length > MODEL_AXIS_CHARS - 1) return `\u2026${name.slice(-(MODEL_AXIS_CHARS - 1))}`;
+  return name === model ? model : `\u2026${name}`;
+};
+
+export const featureLabel = (feature: string) => {
+  const words = feature.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};

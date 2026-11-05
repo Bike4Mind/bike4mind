@@ -7,11 +7,19 @@ import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import type { AttentionOpenEvent } from '@shared/attention';
 import type { AuthState } from '@shared/auth';
 import { DEFAULT_PROMPT_CACHE_TTL, type PromptCacheTtl } from '@bike4mind/common';
 import type { ChatArtifact, ChatModelOption, ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import type { SkillMarketListingRef } from '@shared/skillMarket';
-import { findModelOption, isLocalBackend, isLocalModel, SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
+import {
+  canSpawnDeeper,
+  findModelOption,
+  isLocalBackend,
+  isLocalModel,
+  modelSupportsTools,
+  SESSION_TITLE_MAX_LENGTH,
+} from '@shared/chat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
@@ -61,7 +69,10 @@ import {
   writeTerminalOpenSessions,
 } from './terminalPanelState';
 import { TodoPanel } from './TodoPanel';
+import { HeldRelayCard } from './HeldRelayCard';
+import { SessionOpenerContext } from './SessionLink';
 import { SpawnSuggestionTray } from './SpawnSuggestionTray';
+import { useHeldRelays } from './useHeldRelays';
 import { useSpawnSuggestions } from './useSpawnSuggestions';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
@@ -80,7 +91,7 @@ import { useBackgroundProcesses } from './useBackgroundProcesses';
 import { useVideoJobs, VideoJobsContext } from './useVideoJobs';
 import { ArtifactBrowserContext, openArtifactInSessionBrowser } from './ArtifactCard';
 import { WebLinkContext } from './WebResults';
-import { useConversation, useModelCatalog, useSessionStatuses, useSessions, type SessionPlacement } from './useChat';
+import { useConversation, useModelCatalog, useSessionStatusFeed, useSessions, type SessionPlacement } from './useChat';
 import { useSidebarSections } from './useSidebarSections';
 import { usePromptSuggestion } from './usePromptSuggestion';
 import { useFileDrop } from './useFileDrop';
@@ -88,6 +99,28 @@ import { useSkills } from './useSkills';
 import { useSessionStartTiming } from './useSessionStartTiming';
 import { SpawnFailureToast } from './SpawnFailureToast';
 import { useCreationTools } from './useCreationTools';
+import { BoardView } from './orchestrator/BoardView';
+import { OrchestratePill } from './orchestrator/OrchestratePill';
+import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
+import type { AgentActions, OrchestratorViewProps } from './orchestrator/OrchestratorStage';
+import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
+import { readIntroSeen, writeIntroSeen, writeSurface, type OrchestratorViewId } from './orchestrator/orchestratorPrefs';
+import { TableView } from './orchestrator/TableView';
+import { TavernView } from './orchestrator/tavern/TavernView';
+import { latestQuestReport } from './orchestrator/finale';
+import { agentStates } from './orchestrator/roster';
+import { prefersReducedMotion } from './orchestrator/motion';
+import { ThreadDock, type ThreadDockMode } from './orchestrator/ThreadDock';
+import { useOrchestratorPrefs } from './orchestrator/useOrchestrator';
+import { useNeedsYouAlerts } from './orchestrator/useNeedsYouAlerts';
+
+/** How long the orchestrator's "Read the report" keeps the summary highlighted (ms). */
+const REPORT_HIGHLIGHT_MS = 2400;
+
+function reportReply(thread: HTMLElement | null, reportId: string): HTMLElement | undefined {
+  const replies = thread?.querySelectorAll<HTMLElement>('[data-assistant-reply]') ?? [];
+  return [...replies].find(reply => reply.dataset.messageId === reportId);
+}
 
 function SessionHeader({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [editing, setEditing] = useState(false);
@@ -168,6 +201,26 @@ type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'skill-market' | 
  * row. Handing the finished dot down keeps both where they belong - see TurnDot.
  */
 export type AccountStrip = (status: ReactNode) => ReactNode;
+
+/** How long the first-run tavern intro plays before it is marked seen (ms). */
+const ORCHESTRATOR_INTRO_MS = 1500;
+
+/**
+ * 'playing' while the first-run intro runs, then 'shown' until the user picks a view: the intro is
+ * staged in the tavern, so that view is forced for the whole first entry without touching the pref.
+ */
+type IntroPhase = 'off' | 'playing' | 'shown';
+
+function renderOrchestratorView(view: OrchestratorViewId, props: OrchestratorViewProps): ReactNode {
+  switch (view) {
+    case 'tavern':
+      return <TavernView {...props} />;
+    case 'board':
+      return <BoardView {...props} />;
+    case 'table':
+      return <TableView {...props} />;
+  }
+}
 
 /** Key of the Add folder alert for a failure before any chat existed. */
 const NO_CHAT = '';
@@ -266,6 +319,7 @@ export function ChatShell({
   // transcript under this one's id until the read lands.
   const opening = settling || (!!activeId && conversation.session?.id !== activeId);
   const spawnSuggestions = useSpawnSuggestions(conversation.session);
+  const heldRelays = useHeldRelays(activeId);
   const markSessionStart = useSessionStartTiming(sessions);
   const startSuggestion = spawnSuggestions.start;
   const onStartSuggestion = useCallback(
@@ -283,7 +337,7 @@ export function ChatShell({
   const noLocal = localMode ? noLocalModels(catalog) : null;
   const modelServers = useModelServers();
   const savedServers = useMemo(() => modelServers?.filter(server => !server.local), [modelServers]);
-  const statuses = useSessionStatuses();
+  const { statuses, preparing, loaded: statusesLoaded } = useSessionStatusFeed();
   const prSummaries = usePrSummaries();
   const [collapsed, setCollapsed] = useState(false);
   const [screen, setScreen] = useState<ChatScreen>('conversation');
@@ -319,6 +373,7 @@ export function ChatShell({
   const fillSeq = useRef(0);
   const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
+  const [composerFocus, setComposerFocus] = useState(0);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
   const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
   // What the browser pane trades width with; see BrowserPane.
@@ -443,26 +498,69 @@ export function ChatShell({
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = findModelOption(catalog.models, conversation.session?.model);
-  const [storedDefaults, setStoredDefaults] = useState<{ modelId: string; settings: ModelSettings | null } | null>(
-    null
+  // The last good read per model, so a failed re-read leaves the defaults it had rather than none.
+  const [storedDefaults, setStoredDefaults] = useState<ReadonlyMap<string, ModelSettings | null>>(() => new Map());
+  // A failed read, under the conversation whose model it was for.
+  const [defaultsReadFailures, setDefaultsReadFailures] = useState<
+    ReadonlyMap<string, { modelId: string; error: unknown }>
+  >(() => new Map());
+  const clearDefaultsReadFailure = useCallback(
+    (sessionId: string) =>
+      setDefaultsReadFailures(current => {
+        if (!current.has(sessionId)) return current;
+        const next = new Map(current);
+        next.delete(sessionId);
+        return next;
+      }),
+    []
   );
   const defaultsModelId = modelOption && isLocalModel(modelOption.id) ? modelOption.id : null;
-  const modelDefaults = storedDefaults && storedDefaults.modelId === defaultsModelId ? storedDefaults.settings : null;
+  const defaultsSessionId = conversation.session?.id ?? null;
+  const modelDefaults = defaultsModelId ? (storedDefaults.get(defaultsModelId) ?? null) : null;
   const defaultEffort = modelDefaults?.effort ?? null;
-  // Re-read on returning from the Models screen, where the defaults are edited.
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  // Re-read on opening a chat and on returning from the Models screen, where the defaults are edited.
   useEffect(() => {
-    if (!defaultsModelId || screen !== 'conversation') return;
+    if (!defaultsModelId || !defaultsSessionId || screen !== 'conversation') return;
     let live = true;
+    const current = () => live && activeIdRef.current === defaultsSessionId;
     void Promise.resolve()
       .then(() => window.b4m.chat.getModelSettings(defaultsModelId))
       .then(
-        settings => live && setStoredDefaults({ modelId: defaultsModelId, settings: settings ?? null }),
-        () => undefined
+        settings => {
+          if (!current()) return;
+          setStoredDefaults(stored => new Map(stored).set(defaultsModelId, settings ?? null));
+          clearDefaultsReadFailure(defaultsSessionId);
+          // Also drop this model's failures stored for other chats: the read they report has since succeeded.
+          setDefaultsReadFailures(failures => {
+            const next = new Map(failures);
+            for (const [id, failure] of failures) if (failure.modelId === defaultsModelId) next.delete(id);
+            return next.size === failures.size ? failures : next;
+          });
+        },
+        error => {
+          if (!current()) return;
+          setDefaultsReadFailures(failures =>
+            new Map(failures).set(defaultsSessionId, { modelId: defaultsModelId, error })
+          );
+        }
       );
     return () => {
       live = false;
     };
-  }, [defaultsModelId, screen]);
+  }, [defaultsModelId, defaultsSessionId, screen, clearDefaultsReadFailure]);
+  const defaultsReadFailure =
+    defaultsSessionId && defaultsSessionId === activeId ? defaultsReadFailures.get(defaultsSessionId) : undefined;
+  const defaultsReadError =
+    defaultsReadFailure && defaultsReadFailure.modelId === defaultsModelId
+      ? failure(
+          storedDefaults.has(defaultsReadFailure.modelId)
+            ? "Desktop could not re-read this model's defaults from the Models screen, so Params and effort show the last ones it read, which may be out of date"
+            : "Desktop could not read this model's defaults from the Models screen, so Params and effort show the built-in ones, which may not match what this chat sends",
+          defaultsReadFailure.error
+        ).text
+      : null;
   const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
   // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
   const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
@@ -544,6 +642,110 @@ export function ChatShell({
   const hasPullRequest =
     !!pullRequest?.binding || !!pullRequest?.dismissed || (!!activeId && prSummaries.has(activeId));
   const spawned = useMemo(() => spawnedSessions(sessions, statuses, activeId), [sessions, statuses, activeId]);
+  // States only: the activity stream is subscribed inside OrchestratorSurface, while orchestrating.
+  const spawnedStates = useMemo(() => agentStates(sessions, statuses, activeId), [sessions, statuses, activeId]);
+  const orchestratorPrefs = useOrchestratorPrefs(activeId);
+  const { setDockOpen, setView: setOrchestratorView, setSurface: setOrchestratorSurface } = orchestratorPrefs;
+  // A Code session can orchestrate before it has any agents; a Chat session only shows its agents.
+  // One at the depth cap, or on a model sent no tools, could start none: main ignores its flag
+  // there (orchestratesAgents, toolsSupported) and so does this.
+  const orchestrateCapable =
+    !!activeSummary?.project &&
+    canSpawnDeeper(activeSummary) &&
+    modelSupportsTools(activeSummary.model, findModelOption(catalog.models, activeSummary.model));
+  const delegating = activeSummary?.orchestrate === true;
+  // Showing the stage never changes the behaviour: an agentless Code session gets the empty stage,
+  // which offers to turn Orchestrate on. A Chat session with no agents has no stage at all.
+  const orchestrating = orchestratorPrefs.surface === 'orchestrate' && (spawnedStates.length > 0 || orchestrateCapable);
+  const { setOrchestrate } = conversation;
+
+  // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
+  // already true when it mounts, which is the same commit that enters orchestrate mode. Held back
+  // while the stage is empty, so the intro plays as the first agent walks in.
+  const orchestrateEntry = orchestrating && spawnedStates.length > 0 ? activeId : null;
+  const [introEntry, setIntroEntry] = useState<string | null>(null);
+  const [introPhase, setIntroPhase] = useState<IntroPhase>('off');
+  if (orchestrateEntry !== introEntry) {
+    setIntroEntry(orchestrateEntry);
+    setIntroPhase(orchestrateEntry !== null && !readIntroSeen() ? 'playing' : 'off');
+  }
+  useEffect(() => {
+    if (introPhase !== 'playing') return;
+    const timer = window.setTimeout(() => {
+      writeIntroSeen();
+      setIntroPhase('shown');
+    }, ORCHESTRATOR_INTRO_MS);
+    return () => window.clearTimeout(timer);
+    // introEntry too: a switch between two orchestrating sessions keeps the phase 'playing', and the
+    // new session's intro still needs its full run.
+  }, [introPhase, introEntry]);
+  const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
+  const threadHost = useRef<HTMLDivElement | null>(null);
+  const parentReport = useMemo(
+    () => (conversation.session?.id === activeId ? latestQuestReport(conversation.messages) : undefined),
+    [conversation.session?.id, activeId, conversation.messages]
+  );
+  const readParentReport = useCallback(
+    (reportId: string) => {
+      setDockOpen(true);
+      // After the dock is shown again, or a hidden dock would scroll nothing into view.
+      window.requestAnimationFrame(() => {
+        const reply = reportReply(threadHost.current, reportId);
+        if (!reply) return;
+        reply.scrollIntoView({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+        reply.setAttribute('data-report-highlight', '');
+        window.setTimeout(() => reply.removeAttribute('data-report-highlight'), REPORT_HIGHLIGHT_MS);
+      });
+    },
+    [setDockOpen]
+  );
+  const focusParentChat = useCallback(() => {
+    setDockOpen(true);
+    setComposerFocus(request => request + 1);
+  }, [setDockOpen]);
+  // The agent a clicked needs-you notice asked for; handed to its parent's stage once that is open.
+  const [noticeFocus, setNoticeFocus] = useState<{ rootId: string; agentId: string } | null>(null);
+  const openNotice = ({ sessionId, rootId }: AttentionOpenEvent) => {
+    // A notice outlives its session in the OS notification centre; a deleted one has nothing to open.
+    if (!sessions.some(session => session.id === rootId)) return;
+    // The session itself asking keeps whichever view it was on; only an agent's notice opens the stage.
+    if (sessionId !== rootId) {
+      if (rootId === activeId) setOrchestratorSurface('orchestrate');
+      else writeSurface(rootId, 'orchestrate');
+    }
+    selectSession(rootId);
+    if (sessionId === rootId) setDockOpen(true);
+    else setNoticeFocus({ rootId, agentId: sessionId });
+  };
+  useNeedsYouAlerts(sessions, statuses, statusesLoaded, openNotice);
+  const clearNoticeFocus = useCallback(() => setNoticeFocus(null), []);
+  const pickExampleQuest = useCallback(
+    (prompt: string) => {
+      // The conversation the quest starts plays out in the dock, so a collapsed one would hide the reply.
+      setDockOpen(true);
+      fillComposer(prompt);
+    },
+    [setDockOpen, fillComposer]
+  );
+  const changeOrchestratorView = useCallback(
+    (view: OrchestratorViewId) => {
+      setIntroPhase('off');
+      setOrchestratorView(view);
+    },
+    [setOrchestratorView]
+  );
+
+  const agentActions = useMemo<AgentActions>(
+    () => ({
+      open: selectSession,
+      stop: sessionId => void window.b4m.chat.stopReply(sessionId),
+      archive: sessionId => {
+        const session = sessions.find(candidate => candidate.id === sessionId);
+        if (session) void toggleArchived(session);
+      },
+    }),
+    [selectSession, sessions, toggleArchived]
+  );
   const initialCodeSetup = conversation.session?.mode === 'code' && conversation.messages.length === 0;
 
   /**
@@ -1000,10 +1202,126 @@ export function ChatShell({
       await remove(sessionId, removeWorktree);
       deletedChats.current.add(sessionId);
       clearAddFolderAlert(sessionId);
+      clearDefaultsReadFailure(sessionId);
       setActiveId(current => (current === sessionId ? null : current));
     },
-    [remove, clearAddFolderAlert]
+    [remove, clearAddFolderAlert, clearDefaultsReadFailure]
   );
+
+  const thread = opening ? (
+    <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
+  ) : (
+    <VideoJobsContext.Provider value={videoJobs}>
+      <WebLinkContext.Provider value={openInBrowserPane}>
+        <ArtifactBrowserContext.Provider value={openArtifactInBrowserPane}>
+          <SessionOpenerContext.Provider value={selectSession}>
+            {/* Keyed so an open menu can never carry an image into another conversation,
+            should a switch ever skip the `opening` gate that unmounts this today. */}
+            <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
+              <MessageThread
+                // Remounted per conversation, so its window and scroll start over and nothing it
+                // set going outlives the conversation it was for. Prefixed, as the session panel
+                // beside it is: two siblings sharing a key leave one of them mounted in the DOM
+                // after React drops it.
+                key={`thread-${activeId ?? 'none'}`}
+                messages={conversation.messages}
+                sessionId={activeId}
+                // What stands in for the transcript when there is no session to have one. It is the
+                // only control on screen that starts one from here, so it is a button and not a
+                // sentence pointing at the sidebar: the header above says what the state is, this
+                // says what to do about it, and the composer's placeholder names the same step.
+                noSession={
+                  mode === 'code' ? (
+                    <Stack spacing={1.5} alignItems="center">
+                      <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                        Start a Code session to run a task here.
+                      </Typography>
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        loading={creatingCode}
+                        onClick={() => void onCreate()}
+                        data-testid="chat-start-session-btn"
+                      >
+                        New Code session
+                      </Button>
+                    </Stack>
+                  ) : (
+                    <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        loading={creatingCode}
+                        onClick={() => void onCreate()}
+                        sx={{ mt: 2.5 }}
+                        data-testid="chat-start-session-btn"
+                      >
+                        New conversation
+                      </Button>
+                    </BlankChatGreeting>
+                  )
+                }
+                emptySession={
+                  initialCodeSetup ? (
+                    <Box sx={{ width: '100%', maxWidth: 420, minWidth: 0 }} data-testid="chat-code-workspace-setup">
+                      <Typography level="title-sm" sx={{ mb: 1.5 }}>
+                        Set up this workspace
+                      </Typography>
+                      <SessionChips
+                        layout="embedded"
+                        project={conversation.session?.project ?? null}
+                        {...(conversation.session?.grantedDirectories
+                          ? { grantedDirectories: conversation.session.grantedDirectories }
+                          : {})}
+                        binding={conversation.project}
+                        settledTurns={conversation.settledTurns}
+                        preparing={conversation.preparing !== null}
+                      />
+                    </Box>
+                  ) : blankChatId ? (
+                    <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
+                  ) : undefined
+                }
+                // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+                // one parked at the approval gate - is still running, and Continue must not be
+                // offered on top of it.
+                streaming={turnOpen}
+                onRespond={conversation.respondToApproval}
+                onMove={background.moveToBackground}
+                onContinue={() => void conversation.continueReply()}
+                status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+                // At the foot of the thread rather than above the composer: a background command is
+                // something this conversation started, so it reads as the last thing that happened
+                // in it. It scrolls with the transcript, which is the trade - the panel is reached
+                // from the bottom of the thread, not from a bar that is always on screen.
+                footer={
+                  <>
+                    {/* The turn line's own slot only exists once a reply does, and the worktree is
+              cut before there is one; this sits where that line will appear. */}
+                    {!conversation.turn && conversation.preparing && (
+                      <Box data-testid="chat-workspace-status">
+                        <TurnStatus
+                          turn={{ startedAt: conversation.preparing.since, tokens: null }}
+                          activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
+                        />
+                      </Box>
+                    )}
+                    {/* The panel lists these itself while it is on screen. */}
+                    {!panelShown && (
+                      <BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />
+                    )}
+                  </>
+                }
+              />
+            </ImageMenuProvider>
+          </SessionOpenerContext.Provider>
+        </ArtifactBrowserContext.Provider>
+      </WebLinkContext.Provider>
+    </VideoJobsContext.Provider>
+  );
+
+  const orchestratorShown = orchestrating && activeId !== null;
+  const threadDockMode: ThreadDockMode = !orchestratorShown ? 'chat' : orchestratorPrefs.dockOpen ? 'docked' : 'hidden';
 
   return (
     <Box sx={chatShellRootSx} {...drop.handlers} data-testid="chat-shell">
@@ -1117,6 +1435,13 @@ export function ChatShell({
                   </Typography>
                 )}
               </Box>
+              <OrchestrateToggle
+                states={spawnedStates}
+                // The surface shown, which is Chat when a stored 'orchestrate' has nothing to show.
+                surface={orchestrating ? 'orchestrate' : 'chat'}
+                onSurfaceChange={orchestratorPrefs.setSurface}
+                canStart={orchestrateCapable}
+              />
               {!opening && conversation.session?.historyEnabled === true && (
                 <Tooltip
                   size="sm"
@@ -1243,125 +1568,56 @@ export function ChatShell({
             ref={threadRegion}
             sx={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
           >
-            {opening ? (
-              <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
-            ) : (
-              <VideoJobsContext.Provider value={videoJobs}>
-                <WebLinkContext.Provider value={openInBrowserPane}>
-                  <ArtifactBrowserContext.Provider value={openArtifactInBrowserPane}>
-                    {/* Keyed so an open menu can never carry an image into another conversation,
-                      should a switch ever skip the `opening` gate that unmounts this today. */}
-                    <ImageMenuProvider key={activeId ?? 'none'} onAttach={activeId ? draft.attachImage : undefined}>
-                      <MessageThread
-                        // Remounted per conversation, so its window and scroll start over and nothing it
-                        // set going outlives the conversation it was for. Prefixed, as the session panel
-                        // beside it is: two siblings sharing a key leave one of them mounted in the DOM
-                        // after React drops it.
-                        key={`thread-${activeId ?? 'none'}`}
-                        messages={conversation.messages}
-                        sessionId={activeId}
-                        // What stands in for the transcript when there is no session to have one. It is the
-                        // only control on screen that starts one from here, so it is a button and not a
-                        // sentence pointing at the sidebar: the header above says what the state is, this
-                        // says what to do about it, and the composer's placeholder names the same step.
-                        noSession={
-                          mode === 'code' ? (
-                            <Stack spacing={1.5} alignItems="center">
-                              <Typography
-                                level="body-sm"
-                                textColor="text.tertiary"
-                                data-testid="chat-thread-no-session"
-                              >
-                                Start a Code session to run a task here.
-                              </Typography>
-                              <Button
-                                size="sm"
-                                variant="soft"
-                                loading={creatingCode}
-                                onClick={() => void onCreate()}
-                                data-testid="chat-start-session-btn"
-                              >
-                                New Code session
-                              </Button>
-                            </Stack>
-                          ) : (
-                            <BlankChatGreeting line="Start a conversation to chat, write, or create something new.">
-                              <Button
-                                size="sm"
-                                variant="soft"
-                                loading={creatingCode}
-                                onClick={() => void onCreate()}
-                                sx={{ mt: 2.5 }}
-                                data-testid="chat-start-session-btn"
-                              >
-                                New conversation
-                              </Button>
-                            </BlankChatGreeting>
-                          )
-                        }
-                        emptySession={
-                          initialCodeSetup ? (
-                            <Box
-                              sx={{ width: '100%', maxWidth: 420, minWidth: 0 }}
-                              data-testid="chat-code-workspace-setup"
-                            >
-                              <Typography level="title-sm" sx={{ mb: 1.5 }}>
-                                Set up this workspace
-                              </Typography>
-                              <SessionChips
-                                layout="embedded"
-                                project={conversation.session?.project ?? null}
-                                {...(conversation.session?.grantedDirectories
-                                  ? { grantedDirectories: conversation.session.grantedDirectories }
-                                  : {})}
-                                binding={conversation.project}
-                                settledTurns={conversation.settledTurns}
-                                preparing={conversation.preparing !== null}
-                              />
-                            </Box>
-                          ) : blankChatId ? (
-                            <BlankChat sessionId={blankChatId} tools={creationTools} onPick={fillComposer} />
-                          ) : undefined
-                        }
-                        // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-                        // one parked at the approval gate - is still running, and Continue must not be
-                        // offered on top of it.
-                        streaming={turnOpen}
-                        onRespond={conversation.respondToApproval}
-                        onMove={background.moveToBackground}
-                        onContinue={() => void conversation.continueReply()}
-                        status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-                        // At the foot of the thread rather than above the composer: a background command is
-                        // something this conversation started, so it reads as the last thing that happened
-                        // in it. It scrolls with the transcript, which is the trade - the panel is reached
-                        // from the bottom of the thread, not from a bar that is always on screen.
-                        footer={
-                          <>
-                            {/* The turn line's own slot only exists once a reply does, and the worktree is
-                      cut before there is one; this sits where that line will appear. */}
-                            {!conversation.turn && conversation.preparing && (
-                              <Box data-testid="chat-workspace-status">
-                                <TurnStatus
-                                  turn={{ startedAt: conversation.preparing.since, tokens: null }}
-                                  activity={{ kind: 'tool', label: workspacePhrase(conversation.preparing) }}
-                                />
-                              </Box>
-                            )}
-                            {/* The panel lists these itself while it is on screen. */}
-                            {!panelShown && (
-                              <BackgroundTaskChip
-                                running={background.running}
-                                onClick={() => setTasksPanelOpen(true)}
-                              />
-                            )}
-                          </>
-                        }
-                      />
-                    </ImageMenuProvider>
-                  </ArtifactBrowserContext.Provider>
-                </WebLinkContext.Provider>
-              </VideoJobsContext.Provider>
-            )}
+            {/* One tree for both surfaces, so entering or leaving orchestrate, or toggling the dock,
+                never remounts the thread and loses the reader's place in it. */}
+            <Box sx={{ position: 'relative', display: 'flex', flex: 1, minHeight: 0 }}>
+              {orchestratorShown && (
+                <OrchestratorSurface
+                  // Keyed so a switch between orchestrating parents resets selection and sort, and never reuses sprites.
+                  key={activeId}
+                  rootId={activeId}
+                  sessions={sessions}
+                  statuses={statuses}
+                  preparing={preparing}
+                  prSummaries={prSummaries}
+                  view={orchestratorView}
+                  onViewChange={changeOrchestratorView}
+                  actions={agentActions}
+                  introPlaying={introPhase === 'playing'}
+                  renderView={renderOrchestratorView}
+                  onParentFocus={focusParentChat}
+                  report={parentReport}
+                  onReadReport={readParentReport}
+                  focusAgent={noticeFocus?.rootId === activeId ? noticeFocus.agentId : null}
+                  onFocusAgentConsumed={clearNoticeFocus}
+                  onExampleQuest={pickExampleQuest}
+                  onTurnOn={orchestrateCapable && !delegating ? () => void setOrchestrate(true) : undefined}
+                  dockControl={
+                    <Tooltip
+                      size="sm"
+                      variant="soft"
+                      placement="bottom-end"
+                      title={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
+                    >
+                      <IconButton
+                        size="sm"
+                        variant={orchestratorPrefs.dockOpen ? 'soft' : 'plain'}
+                        color="neutral"
+                        aria-pressed={orchestratorPrefs.dockOpen}
+                        aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
+                        onClick={() => setDockOpen(!orchestratorPrefs.dockOpen)}
+                        data-testid="orchestrator-dock-toggle-btn"
+                      >
+                        <PanelRightIcon />
+                      </IconButton>
+                    </Tooltip>
+                  }
+                />
+              )}
+              <ThreadDock mode={threadDockMode} hostRef={threadHost}>
+                {thread}
+              </ThreadDock>
+            </Box>
 
             {panelShown && panelProject && conversation.session && (
               <SessionPanel
@@ -1442,7 +1698,7 @@ export function ChatShell({
                 size="sm"
                 color="warning"
                 variant="soft"
-                sx={{ cursor: 'pointer' }}
+                sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
                 onClick={conversation.dismissNotice}
                 data-testid="chat-notice"
               >
@@ -1466,6 +1722,21 @@ export function ChatShell({
             </Box>
           )}
 
+          {defaultsReadError && defaultsSessionId && (
+            <Box sx={contentColumnSx}>
+              <Alert
+                size="sm"
+                color="warning"
+                variant="soft"
+                sx={{ cursor: 'pointer' }}
+                onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
+                data-testid="chat-model-defaults-error"
+              >
+                {defaultsReadError}
+              </Alert>
+            </Box>
+          )}
+
           {codeError && (
             <Box sx={contentColumnSx}>
               <Alert
@@ -1480,6 +1751,8 @@ export function ChatShell({
               </Alert>
             </Box>
           )}
+
+          <HeldRelayCard held={heldRelays.held} onResolve={heldRelays.resolve} onOpenSession={selectSession} />
 
           <SpawnSuggestionTray
             suggestions={spawnSuggestions.suggestions}
@@ -1570,13 +1843,20 @@ export function ChatShell({
             onReturnedConsumed={conversation.clearReturned}
             fill={composerFill}
             onFillConsumed={clearComposerFill}
+            focusRequest={composerFocus}
             skills={skills}
+            mentionSessions={sessions}
             leading={
-              <ApprovalModePill
-                mode={conversation.session?.approvalMode ?? 'ask'}
-                disabled={!activeId}
-                onSelect={mode => void conversation.setApprovalMode(mode)}
-              />
+              <>
+                <ApprovalModePill
+                  mode={conversation.session?.approvalMode ?? 'ask'}
+                  disabled={!activeId}
+                  onSelect={mode => void conversation.setApprovalMode(mode)}
+                />
+                {orchestrateCapable && (
+                  <OrchestratePill on={delegating} disabled={!activeId} onChange={on => void setOrchestrate(on)} />
+                )}
+              </>
             }
             footer={
               <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>

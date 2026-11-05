@@ -57,6 +57,7 @@ vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({
   getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }),
 }));
 vi.mock('@bike4mind/server-utils/s3/moderateUploadedFile', () => ({ moderateUploadedFile: h.moderateUploadedFile }));
+vi.mock('@server/s3/uploadModerationMeter', () => ({ buildUploadModerationMeter: () => ({}) }));
 vi.mock('@bike4mind/server-utils/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@bike4mind/server-utils/s3/uploadSizeGate', () => ({ admitLandedUpload: h.admit }));
 vi.mock('@server/s3/recordRejectedUploadBatch', () => ({ recordRejectedUploadBatch: h.recordRejectedUploadBatch }));
@@ -397,6 +398,36 @@ describe('objectCreated - moderation claim identity', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not release moderation claim'));
   });
 
+  it('skips the record without rethrowing when the object was deleted before the scan read it', async () => {
+    // The uploader deleted the file mid-scan: a retry can only hit the same absence, so throwing
+    // would just burn Lambda's async retries and log an invoke error.
+    h.moderateUploadedFile.mockRejectedValue(
+      Object.assign(new Error('The specified key does not exist.'), { name: 'NoSuchKey' })
+    );
+
+    await expect(run()).resolves.toBeUndefined();
+
+    const claimStamp = h.findOneAndUpdate.mock.calls[0][1].$set.moderationClaimedAt;
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', moderationStatus: 'scanning', moderationClaimedAt: claimStamp },
+      expect.objectContaining({ $set: expect.objectContaining({ moderationStatus: 'pending' }) })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('was removed from storage'));
+    expect(h.recomputeUploaded).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('still rethrows a 404 that is not NoSuchKey, so a bucket misconfig is retried', async () => {
+    h.moderateUploadedFile.mockRejectedValue(
+      Object.assign(new Error('The specified bucket does not exist'), {
+        name: 'NoSuchBucket',
+        $metadata: { httpStatusCode: 404 },
+      })
+    );
+
+    await expect(run()).rejects.toThrow('bucket does not exist');
+  });
+
   it('does not touch a claim it never won when the transaction throws', async () => {
     h.findOneAndUpdate.mockResolvedValue(null);
     h.findById.mockReturnValue({ session: () => ({ moderationStatus: 'scanning' }) });
@@ -450,6 +481,59 @@ describe('objectCreated - moderation claim identity', () => {
   });
 });
 
+describe('objectCreated - scan deferred by the moderation allowance', () => {
+  const deferral = { moderationStatus: 'pending', deferReason: 'moderation_budget', correctedMimeType: 'image/gif' };
+  let file: ReturnType<typeof metadata>;
+  const claimStamp = () => h.findOneAndUpdate.mock.calls[0][1].$set.moderationClaimedAt;
+  const isClaimWrite = (call: unknown[]) => 'moderationClaimedAt' in (call[0] as Record<string, unknown>);
+
+  beforeEach(() => {
+    file = metadata({ status: 'complete', moderationStatus: 'pending', mimeType: 'image/png' });
+    h.findOne.mockResolvedValue(file);
+    h.findOneAndUpdate.mockResolvedValue({ ...file, moderationStatus: 'scanning' });
+    h.moderateUploadedFile.mockResolvedValue(deferral);
+  });
+
+  it('leaves the row pending, hands the claim back without counting an attempt, and does not rethrow', async () => {
+    await expect(run()).resolves.toBeUndefined();
+
+    const claimWrites = h.updateOne.mock.calls.filter(isClaimWrite);
+    expect(claimWrites).toHaveLength(1);
+    const [filter, update] = claimWrites[0];
+    expect(filter).toEqual({ _id: 'ff1', moderationStatus: 'scanning', moderationClaimedAt: claimStamp() });
+    expect(update.$set).toMatchObject({ moderationStatus: 'pending' });
+    expect(update.$inc).toBeUndefined();
+    expect(file.mimeType).toBe('image/gif');
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      'wss://test',
+      expect.objectContaining({ action: 'image_moderation_status', moderationStatus: 'pending' })
+    );
+  });
+
+  it('does not scan again when the transaction retries after a deferral', async () => {
+    h.withTransaction.mockImplementation(async (fn: (session: unknown) => Promise<unknown>) => {
+      await fn(undefined);
+      return fn(undefined);
+    });
+
+    await run();
+
+    expect(h.moderateUploadedFile).toHaveBeenCalledTimes(1);
+    expect(h.updateOne.mock.calls.filter(isClaimWrite)).toHaveLength(1);
+  });
+
+  it('logs and carries on when the deferred claim cannot be handed back', async () => {
+    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) => {
+      if ('moderationClaimedAt' in filter) throw new Error('mongo down');
+      return { matchedCount: 1, modifiedCount: 1 };
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not release deferred moderation claim'));
+  });
+});
+
 describe('objectCreated - storage charge', () => {
   const isStorageClaim = (filter: Record<string, unknown>) => '$or' in filter;
 
@@ -491,7 +575,11 @@ describe('objectCreated - storage charge', () => {
 
     const eventTime = new Date('2026-01-01T00:00:00.000Z');
     expect(h.findOneAndUpdate).toHaveBeenCalledWith(
-      { _id: 'ff1', $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: eventTime } }] },
+      {
+        _id: 'ff1',
+        storageExempt: { $ne: true },
+        $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: eventTime } }],
+      },
       { $set: { storageChargedAt: eventTime, fileSize: 10 } },
       expect.objectContaining({ new: false })
     );

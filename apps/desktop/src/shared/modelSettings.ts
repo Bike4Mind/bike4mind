@@ -1,77 +1,62 @@
 /**
  * Per-model defaults set on the Models screen, stored in userData/model-settings.json by chat model
- * id (main/chat/ModelSettingsStore.ts). Device-side models only: a hosted model's defaults are the
- * server catalog's.
+ * id (main/chat/ModelSettingsStore.ts). The format and its parser live in @bike4mind/local-models,
+ * which the CLI reads the file with too.
  */
 
-import { parseLocalModelId, REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from './chat';
-import { normalizeGeneration, parseGenerationInput, type GenerationSettings } from './generation';
+import type { LocalContextSize } from './localContextSetting';
+import type { QuantizedKvCacheType } from './modelServers';
 
-export type ModelEffort = Exclude<ReasoningEffortSetting, 'default'>;
+export {
+  changedJsonPath,
+  emptyStoredModelSettings,
+  isDraftTokens,
+  isEmptyModelSettings,
+  isModelSettingsId,
+  KEEP_ALIVE_CHOICES,
+  MAX_DRAFT_TOKENS,
+  MODEL_SETTINGS_FILE_NAME,
+  parseModelSettingsFile,
+  parseModelSettingsInput,
+  quotedForMessage,
+  storedModelEntry,
+  type KeepAliveSeconds,
+  type ModelEffort,
+  type ModelLoadSettings,
+  type ModelSettings,
+  type StoredModelSettings,
+  type UnsupportedModelSetting,
+} from '@bike4mind/local-models/model-settings';
 
-/** Per-request options only; load-time ones (context, draft, keep_alive) get keys of their own beside these. */
-export interface ModelSettings {
-  /** Below a conversation's overrides and above the catalog's sampling; see layeredGeneration. */
-  generation?: GenerationSettings;
-  /** Sent while the conversation's effort is `default`, on a model whose controls list effort levels. */
-  effort?: ModelEffort;
+/** One context size the dialog offers, rated for this model. */
+export interface ContextSizeOffer {
+  size: LocalContextSize;
+  /** The num_ctx a fixed `size` sends: the size, or the trained length when that is less. */
+  tokens: number;
+  /** What Auto sends with `size` as its cap. */
+  autoTokens: number;
+  /** Whether the model loads at `tokens` (main/chat/localContext.ts loadsInMemory); absent when unmeasured. */
+  loads?: boolean;
 }
 
-const MAX_ID_LENGTH = 1024;
-
-function isRecord(raw: unknown): raw is Record<string, unknown> {
-  return !!raw && typeof raw === 'object' && !Array.isArray(raw);
-}
-
-function isModelEffort(value: unknown): value is ModelEffort {
-  return value !== 'default' && REASONING_EFFORT_SETTINGS.some(setting => setting === value);
-}
-
-export function isModelSettingsId(id: unknown): id is string {
-  return typeof id === 'string' && id.length <= MAX_ID_LENGTH && parseLocalModelId(id) !== null;
-}
-
-/** What a stored entry still holds that is valid; undefined when nothing is. */
-export function normalizeModelSettings(raw: unknown): ModelSettings | undefined {
-  if (!isRecord(raw)) return undefined;
-  const generation = normalizeGeneration(raw.generation);
-  const settings: ModelSettings = {
-    ...(generation ? { generation } : {}),
-    ...(isModelEffort(raw.effort) ? { effort: raw.effort } : {}),
-  };
-  return Object.keys(settings).length > 0 ? settings : undefined;
-}
-
-/**
- * A replacement set from the renderer, or null when it is not one: a malformed known field rejects
- * the whole set, as does one with keys but no known field, so a bad call never clears what is
- * stored. `{}` clears the model's defaults.
- */
-export function parseModelSettingsInput(raw: unknown): ModelSettings | null {
-  if (!isRecord(raw)) return null;
-  const settings: ModelSettings = {};
-  let known = false;
-  if (raw.generation !== undefined) {
-    const generation = parseGenerationInput(raw.generation);
-    if (!generation) return null;
-    known = true;
-    if (Object.keys(generation).length > 0) settings.generation = generation;
-  }
-  if (raw.effort !== undefined) {
-    if (!isModelEffort(raw.effort)) return null;
-    known = true;
-    settings.effort = raw.effort;
-  }
-  return !known && Object.keys(raw).length > 0 ? null : settings;
-}
-
-/** The file's entries that are still valid, invalid ones dropped; null when it is not a settings file at all. */
-export function parseModelSettingsFile(raw: unknown): Map<string, ModelSettings> | null {
-  if (!isRecord(raw) || !isRecord(raw.models)) return null;
-  const parsed = new Map<string, ModelSettings>();
-  for (const [id, entry] of Object.entries(raw.models)) {
-    const settings = isModelSettingsId(id) ? normalizeModelSettings(entry) : undefined;
-    if (settings) parsed.set(id, settings);
-  }
-  return parsed;
+/** The load-time options a model and its server take; main builds it per backend and the dialog draws only these. */
+export interface ModelLoadOffer {
+  context?:
+    | {
+        kind: 'ollama';
+        /** What the model runs at while it follows the Settings choice. */
+        settings: number;
+        /** What Auto picks for it with no cap; Auto is offered only when Desktop can measure the model. */
+        auto?: number;
+        sizes: ContextSizeOffer[];
+        /** The most a fixed size can send for this model; an Auto cap at or past it is the same as Auto. */
+        ceiling?: number;
+      }
+    /** A context the server fixes: a smaller size here is a client budget that compacts sooner, never a reload. */
+    | { kind: 'budget'; server: number; sizes: LocalContextSize[] };
+  /** For a model with an MTP or draft layer: the draft count Ollama runs it with when none is set. */
+  draft?: { modelDefault: number; max: number };
+  keepAlive?: true;
+  /** Ollama's KV cache type, set server-wide and never per model: the one entered in Settings, else f16. */
+  kvCache?: { type: 'f16' | QuantizedKvCacheType };
 }

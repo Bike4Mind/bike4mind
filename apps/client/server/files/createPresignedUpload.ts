@@ -15,6 +15,7 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
   organizationRepository,
+  userRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
@@ -27,8 +28,9 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { createFabFile } from '@server/managers/fabFileManager';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { admitPendingUploads } from '@server/files/pendingUploads';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@bike4mind/server-utils/utils/maxFileSizeDefault';
 import type { Request } from 'express';
 import mime from 'mime-types';
@@ -79,6 +81,7 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   const maxFileSize = getSettingsValue('MaxFileSize', settings, MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
   if (!data.fileSize) throw new BadRequestError('No file size provided');
+  if (data.fileSize < 0) throw new BadRequestError('File size must be positive');
   if (data.fileSize >= maxFileSize) {
     throw new StorageLimitError('File size exceeds maximum file size', {
       errorCode: 'file_too_large',
@@ -120,8 +123,14 @@ export async function createPresignedUpload<Params, ResBody, ReqBody, Query>(
   // Same owner rule as fabFileService.createFabFile, which this direct create bypasses. Resolved
   // before the quota gate so the bytes are checked against the pool they will be billed to.
   const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
-  await checkStorageLimitForOwner({ user: req.user, organizationId: ownerOrganizationId }, data.fileSize, id =>
-    organizationRepository.findById(id)
+  const pending = await admitPendingUploads(req, 1, [ownerOrganizationId]);
+  // Read the counter after the reservation snapshot so a charge committed since auth is not missed.
+  const quotaUser = ownerOrganizationId ? req.user : await userRepository.findById(userId);
+  if (!quotaUser) throw new UnauthorizedError('Sign in to upload files');
+  await checkStorageLimitForOwner(
+    { user: quotaUser, organizationId: ownerOrganizationId, pendingBytes: pending.bytesFor(ownerOrganizationId) },
+    data.fileSize,
+    id => organizationRepository.findById(id)
   );
 
   // A file joining a lake must also land under that lake's content prefix, or it is

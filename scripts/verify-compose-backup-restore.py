@@ -84,7 +84,9 @@ def main(argv=None):
     base = ['docker', 'compose', '-f', str(ROOT / 'compose.selfhost.yaml'), '--env-file', str(env_file)]
     config = json.loads(sh([*base, 'config', '--format', 'json'], stdout=subprocess.PIPE, text=True).stdout)
     images = {s: config['services'][s].get('image') or f"{config['name']}-{s}" for s in ('minio', 'createbuckets')}
-    bucket = config['services']['createbuckets']['environment']['FAB_FILE_BUCKET']
+    buckets = {k: v for k, v in config['services']['createbuckets']['environment'].items() if k.endswith('_BUCKET')}
+    require(len(buckets) == 7, f'Expected 7 user-data buckets, found {sorted(buckets)}')
+    bucket = buckets['FAB_FILE_BUCKET']
 
     tag = secrets.token_hex(4)
     projects = {'src': 'b4m-backup-drill-src-' + tag, 'dst': 'b4m-backup-drill-dst-' + tag}
@@ -93,8 +95,8 @@ def main(argv=None):
     expected = hashlib.sha256(payload).hexdigest()
     key = f'drill/{tag}.bin'
     password = secrets.token_hex(16)
-    mongo_uri = ('mongodb://root:' + password + '@mongo:27017/bike4mind?replicaSet=rs0&authSource=admin'
-                 if args.auth else 'mongodb://mongo:27017/bike4mind?replicaSet=rs0')
+    netloc = f'root:{password}@mongo:27017' if args.auth else 'mongo:27017'
+    mongo_uri = f'mongodb://{netloc}/bike4mind?replicaSet=rs0' + ('&authSource=admin' if args.auth else '')
 
     print('UTC:', datetime.datetime.now(datetime.timezone.utc).isoformat())
     print('Revision:', sh(['git', 'rev-parse', 'HEAD'], stdout=subprocess.PIPE, text=True).stdout.strip())
@@ -137,6 +139,9 @@ def main(argv=None):
                               f'db.getSiblingDB("bike4mind").users.insertOne({{email: {json.dumps(email)}}}).insertedId.toString()')
             mc(projects['src'], f'mc pipe local/{shlex.quote(bucket)}/{shlex.quote(key)}', input=payload)
             require(file_sha(projects['src']) == expected, 'Seeded file does not read back in the source project')
+            for other in buckets.values():  # one object in every bucket, so each is proven to travel
+                if other != bucket:
+                    mc(projects['src'], f'mc pipe local/{shlex.quote(other)}/{shlex.quote(key)}', input=b'seed-' + other.encode())
 
             cli = [sys.executable, '-I', str(BACKUP), '--env-file', str(env_file),
                    '-f', str(ROOT / 'compose.selfhost.yaml'), '-f', str(override)]
@@ -156,7 +161,8 @@ def main(argv=None):
                 require(owner == os.getuid(), f'{path} is owned by uid {owner}, not the invoking user')
             manifest = json.loads((backup_dir / 'manifest.json').read_text())
             print('Manifest:', json.dumps(manifest))
-            require(manifest['buckets'][bucket]['objects'] >= 1, 'Manifest records no objects for the seeded bucket')
+            empty = [name for name, info in manifest['buckets'].items() if info['objects'] < 1]
+            require(not empty, f'Manifest records no objects for: {empty}')
 
             sh([*compose(projects['src']), 'down', '--volumes', '--remove-orphans'])
 
@@ -171,6 +177,10 @@ def main(argv=None):
                 print(f'PASS file sha256 ({label}):', expected)
 
             check_restored('fresh restore', [])
+            for name in buckets.values():
+                listing = mc(projects['dst'], f'mc ls --recursive local/{shlex.quote(name)}/', stdout=subprocess.PIPE, text=True).stdout
+                require(key.rsplit('/', 1)[1] in listing, f'Bucket {name} lost its seeded object')
+            print('PASS one object per bucket restored (7 of 7)')
 
             # Make dst diverge from the backup, so --yes has a drop and a mirror --remove to prove.
             stray_db, stray_key = f'drill_stray_{tag}', f'drill/stray-{tag}.bin'
@@ -178,6 +188,16 @@ def main(argv=None):
             mongosh(projects['dst'],
                     f'db.getSiblingDB("bike4mind").users.updateOne({{_id: ObjectId({json.dumps(user_id)})}}, {{$set: {{email: "changed@example.invalid"}}}})')
             mc(projects['dst'], f'mc pipe local/{shlex.quote(bucket)}/{shlex.quote(stray_key)}', input=b'stray')
+            refused = subprocess.run([*cli, '-p', projects['dst'], 'restore', '--from', str(backup_dir)],
+                                     cwd=ROOT, stderr=subprocess.PIPE, text=True)
+            print(refused.stderr, end='', file=sys.stderr)
+            require(refused.returncode != 0, 'Restore without --yes overwrote a populated target')
+            require(stray_db in mongosh(projects['dst'], 'db.getMongo().getDBNames().join(",")').split(','),
+                    'Refused restore still dropped the stray database')
+            require(stray_key.rsplit('/', 1)[1] in mc(projects['dst'], f'mc ls local/{shlex.quote(bucket)}/drill/',
+                                                       stdout=subprocess.PIPE, text=True).stdout,
+                    'Refused restore still removed the stray object')
+            print('PASS restore without --yes refused and left the target untouched')
             check_restored('restore --yes over diverged data', ['--yes'])
             dbs = mongosh(projects['dst'], 'db.getMongo().getDBNames().join(",")').split(',')
             require(stray_db not in dbs, f'--yes left the stray database {stray_db} behind: {dbs}')

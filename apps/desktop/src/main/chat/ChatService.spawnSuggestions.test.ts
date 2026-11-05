@@ -10,6 +10,7 @@ import type {
   ChatStreamEvent,
   SpawnSuggestionResult,
 } from '@shared/chat';
+import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService, describeSuggestionOutcome, RUN_HERE_PREAMBLE } from './ChatService';
 import { MessageQueue } from './MessageQueue';
@@ -349,6 +350,81 @@ describe('ChatService spawn suggestions', () => {
     expect(latestSuggestions(parent.id)).toEqual([]);
   });
 
+  it('starts the agent at once in an orchestrating session, with no card and nothing to approve', async () => {
+    const parent = await codeSession();
+    await service.setSessionOrchestrate(parent.id, true);
+    await service.send(parent.id, 'split this up');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    const declared = post.mock.calls[0][1].options.tools as { toolSchema: { name: string; description: string } }[];
+    const tools = declared.map(entry => entry.toolSchema.name);
+    expect(tools).toContain('session_spawn');
+    expect(tools).not.toContain('session_suggestion_update');
+    expect(declared.find(entry => entry.toolSchema.name === 'session_spawn')?.toolSchema.description).toContain(
+      'STARTS it at once'
+    );
+    expect(String(wire(0)[0]?.content)).toContain('you are coordinating agents');
+
+    callTool(streams[0], 'o1', 'session_spawn', { prompt: 'do the first piece', title: 'First piece' });
+    const call = await vi.waitUntil(() => settled('session_spawn')[0], { timeout: 5000, interval: 5 });
+
+    expect(call?.status).toBe('done');
+    expect(call?.preview).toContain('Started session');
+    // Not a repository, so the card's default would be here too.
+    expect(call?.preview).toContain('It shares this working directory');
+    expect(call?.preview).not.toContain('No worktree was made');
+    expect(requested).not.toHaveBeenCalled();
+    expect(latestSuggestions(parent.id)).toEqual([]);
+    const child = (await store.list()).find(session => session.origin?.parentSessionId === parent.id);
+    expect(child).toMatchObject({ title: 'First piece', origin: { seedPrompt: 'do the first piece' } });
+    // The switch is the user's approval for this conversation only, never handed down.
+    expect(child).not.toHaveProperty('orchestrate');
+    expect(await store.get(child?.id ?? '')).not.toHaveProperty('orchestrate');
+  });
+
+  /** A Code child of a fresh parent at `depth`, with Orchestrate switched on. */
+  async function orchestratingChild(depth: number): Promise<string> {
+    const parent = await codeSession();
+    const project = (await store.get(parent.id))?.project;
+    if (!project) throw new Error('No project.');
+    const child = await store.create('test-model', {
+      mode: 'code',
+      project,
+      origin: { parentSessionId: parent.id, depth, seedPrompt: 'seed' },
+    });
+    await service.setSessionOrchestrate(child.id, true);
+    return child.id;
+  }
+
+  it('delegates from a child below the depth cap, which can still start one', async () => {
+    const childId = await orchestratingChild(1);
+    await service.send(childId, 'split this up');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    expect(String(wire(0)[0]?.content)).toContain('you are coordinating agents');
+
+    callTool(streams[0], 'd1', 'session_spawn', { prompt: 'a piece', title: 'Piece' });
+    const call = await vi.waitUntil(() => settled('session_spawn')[0], { timeout: 5000, interval: 5 });
+    expect(call?.preview).toContain('Started session');
+    expect(requested).not.toHaveBeenCalled();
+  });
+
+  it('ignores the flag on a child at the depth cap: no guidance, and the gated start it always had', async () => {
+    const childId = await orchestratingChild(2);
+    await service.send(childId, 'split this up');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 5000, interval: 5 });
+    expect(String(wire(0)[0]?.content)).not.toContain('coordinating agents');
+
+    callTool(streams[0], 'd2', 'session_spawn', { prompt: 'a piece', title: 'Piece' });
+    const card = await vi.waitUntil(
+      () =>
+        events
+          .map(event => (event.type === 'tool-start' ? event.call : null))
+          .find(call => call?.name === 'session_spawn' && call.status === 'awaiting-approval'),
+      { timeout: 5000, interval: 5 }
+    );
+    expect(card).toBeDefined();
+    expect(requested).toHaveBeenCalledWith(childId);
+  });
+
   it('keeps the approval-gated start in a spawned session, which has no card to show', async () => {
     const { parent, suggestion } = await suggestedBy('do the child work');
     const result = await service.startSpawnSuggestion({
@@ -423,6 +499,31 @@ describe('ChatService spawn suggestions', () => {
       true
     );
     expect(queueEvents.some(event => event.sent?.message.content.startsWith(RUN_HERE_PREAMBLE))).toBe(true);
+  });
+
+  it('does not let a session mention in a suggestion run here open another project to session_read', async () => {
+    const elsewhere = await service.createCodeSession({
+      directory: await realpath(await mkdtemp(join(tmpdir(), 'b4m-suggest-other-'))),
+      branch: '',
+      workspace: false,
+    });
+    if (!elsewhere.ok) throw new Error(elsewhere.error);
+    const { parent, suggestion } = await suggestedBy(
+      `summarise ${formatSessionMention(elsewhere.session.id, 'Elsewhere')}`
+    );
+
+    const result = await service.startSpawnSuggestion({
+      sessionId: parent.id,
+      suggestionId: suggestion.id,
+      placement: 'here',
+      prompt: suggestion.prompt,
+      title: suggestion.title,
+    });
+    expect(result.ok).toBe(true);
+    const index = await awaitRequestEndingWith(RUN_HERE_PREAMBLE);
+    callTool(streams[index], 'r1', 'session_read', { session_id: elsewhere.session.id });
+    const read = await vi.waitUntil(() => settled('session_read')[0], { timeout: 5000, interval: 5 });
+    expect(read?.error).toMatch(/another project/);
   });
 
   it('queues a run-here message when another turn starts while the send reads the session', async () => {

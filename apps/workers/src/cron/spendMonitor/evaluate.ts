@@ -1,9 +1,12 @@
 import {
   SPEND_BUCKET_MS,
+  spendAlertOpenKey,
   type ISpendAlertRepository,
   type ISpendRollup,
   type ISpendRollupRepository,
   type SpendAlertRecord,
+  type SpendRuleId,
+  type SpendSeriesPoint,
 } from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
 import { platformBaseline, scopeBaseline, SPEND_WINDOW_MS, windowSums } from './baselines';
@@ -11,12 +14,13 @@ import { decideIncidents, type IncidentDecision } from './incidents';
 import {
   evaluatePlatform,
   evaluateScope,
-  type ScopeObservation,
+  type PlatformObservation,
   type SpendBreach,
   type SpendThresholds,
 } from './rules';
 import { resolveScopes, scopeMapKey, type ResolvedScope, type ResolveScopeDeps, type ScopeKey } from './resolveScope';
 import { buildSpendAlertMessage, type SpendAlertMessageInput } from './slackMessage';
+import { resolveTrustedScopes, type SpendTrustConfig } from './trust';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOWS_PER_DAY = DAY_MS / SPEND_WINDOW_MS;
@@ -31,7 +35,7 @@ const MONGO_DUPLICATE_KEY = 11000;
 type SpendLogger = { log: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
 
 export type EvaluateDeps = {
-  rollups: Pick<ISpendRollupRepository, 'sumWindow' | 'windowSeries' | 'latestBucketStart'>;
+  rollups: Pick<ISpendRollupRepository, 'sumWindow' | 'windowSeries' | 'latestBucketStart' | 'sourceMix'>;
   alerts: Pick<ISpendAlertRepository, 'findActive' | 'create' | 'update' | 'applyEvaluation'>;
   resolveScopeDeps: ResolveScopeDeps;
   /** Posting is best effort; a disabled Slack integration passes a no-op, which counts as success. */
@@ -53,9 +57,71 @@ const isDuplicateKeyError = (error: unknown): boolean =>
 
 const creditsOf = (rollup: ISpendRollup | undefined): number => rollup?.credits ?? 0;
 
+/** Owner scopes split the ledger between them (each usage row has one owner), so their sums never overlap. */
+const OWNER_SCOPE_TYPES: ReadonlySet<AccountScopeType> = new Set(['User', 'Organization', 'Agent']);
+const PLATFORM_HISTORY_DAYS = SAME_SLOT_DAYS[SAME_SLOT_DAYS.length - 1] + 1;
+
+/** Credits spent by the trusted owner scopes found this window, now and over the platform history range. */
+type TrustedSpend = { current: number; series: SpendSeriesPoint[] };
+
+/**
+ * Only trusted scopes that are candidates this window are counted: a trusted account active in the history
+ * but quiet now stays in the baseline, which the baseline's median absorbs.
+ */
+async function trustedOwnerSpend(
+  perType: ScopeCandidates[],
+  trustedKeys: ReadonlySet<string>,
+  windowEnd: Date,
+  deps: EvaluateDeps
+): Promise<TrustedSpend> {
+  const spend: TrustedSpend = { current: 0, series: [] };
+  for (const { scopeType, totals, candidates } of perType) {
+    if (!OWNER_SCOPE_TYPES.has(scopeType)) continue;
+    const trustedIds = candidates.filter(scopeId => trustedKeys.has(scopeMapKey(scopeType, scopeId)));
+    if (trustedIds.length === 0) continue;
+    for (const scopeId of trustedIds) spend.current += creditsOf(totals.get(scopeId));
+    const history = await deps.rollups.windowSeries(
+      scopeType,
+      trustedIds,
+      new Date(windowEnd.getTime() - PLATFORM_HISTORY_DAYS * DAY_MS),
+      windowEnd
+    );
+    for (const points of history.values()) spend.series.push(...points);
+  }
+  return spend;
+}
+
+/** Fraction of a window's credits that is standard-tier; 1 for an empty window. */
+const standardShare = (totalCredits: number, standardCredits: number): number =>
+  totalCredits > 0 ? standardCredits / totalCredits : 1;
+
+/**
+ * Standard-tier share of each window's spend, newest window first. Owner rollups carry no provider
+ * cost, so trusted cost is estimated at the platform's own cost per credit in that window.
+ */
+function standardWindowSums(
+  platformSeries: SpendSeriesPoint[],
+  trustedSeries: SpendSeriesPoint[],
+  windowEnd: Date
+): { credits: number[]; costUsd: number[] } {
+  const credits = windowSums(platformSeries, windowEnd, PLATFORM_HISTORY_DAYS, 'credits');
+  const costUsd = windowSums(platformSeries, windowEnd, PLATFORM_HISTORY_DAYS, 'costUsd');
+  const trusted = windowSums(trustedSeries, windowEnd, PLATFORM_HISTORY_DAYS, 'credits');
+  const standardCredits = credits.map((total, i) => Math.max(0, total - trusted[i]));
+  return {
+    credits: standardCredits,
+    costUsd: costUsd.map((total, i) => total * standardShare(credits[i], standardCredits[i])),
+  };
+}
+
+/**
+ * The floors and the ratio are judged on standard-tier spend, so heavy trusted use cannot page the
+ * platform on its own; the reported value stays the full platform total.
+ */
 async function platformBreaches(
   windowStart: Date,
   windowEnd: Date,
+  trusted: TrustedSpend,
   deps: EvaluateDeps,
   thresholds: SpendThresholds
 ): Promise<SpendBreach[]> {
@@ -64,23 +130,29 @@ async function platformBreaches(
     deps.rollups.windowSeries(
       'platform',
       [PLATFORM_SCOPE_ID],
-      new Date(windowEnd.getTime() - (SAME_SLOT_DAYS[SAME_SLOT_DAYS.length - 1] + 1) * DAY_MS),
+      new Date(windowEnd.getTime() - PLATFORM_HISTORY_DAYS * DAY_MS),
       windowEnd
     ),
   ]);
-  const series = history.get(PLATFORM_SCOPE_ID) ?? [];
   const total = current.get(PLATFORM_SCOPE_ID);
+  const totalCredits = total?.credits ?? 0;
+  const totalCost = total?.costUsd ?? 0;
+  const standard = standardWindowSums(history.get(PLATFORM_SCOPE_ID) ?? [], trusted.series, windowEnd);
+  const standardCredits = Math.max(0, totalCredits - trusted.current);
 
-  const observe = (field: 'credits' | 'costUsd'): ScopeObservation => {
+  const observe = (field: 'credits' | 'costUsd'): PlatformObservation => {
     // Index 0 is the current window, so the window ending d days ago is d * WINDOWS_PER_DAY windows back.
-    const everyWindow = windowSums(series, windowEnd, SAME_SLOT_DAYS[SAME_SLOT_DAYS.length - 1] + 1, field);
+    const everyWindow = standard[field];
     // An empty slot is indistinguishable from missing history, so only populated slots count as samples.
     const sameSlot = SAME_SLOT_DAYS.map(days => everyWindow[days * WINDOWS_PER_DAY]).filter(sum => sum > 0);
-    const trailing24h = windowSums(series, windowStart, 1, field);
+    const trailing24h = everyWindow.slice(1, 1 + WINDOWS_PER_DAY);
+    const totalValue = field === 'credits' ? totalCredits : totalCost;
+    const value = field === 'credits' ? standardCredits : totalCost * standardShare(totalCredits, standardCredits);
     return {
       scopeType: 'platform',
       scopeId: PLATFORM_SCOPE_ID,
-      value: total?.[field] ?? 0,
+      value,
+      total: totalValue,
       baseline: platformBaseline(sameSlot, trailing24h),
     };
   };
@@ -88,35 +160,128 @@ async function platformBreaches(
   return evaluatePlatform(observe('credits'), observe('costUsd'), thresholds);
 }
 
-async function scopeBreachesForType(
+type ScopeCandidates = { scopeType: AccountScopeType; totals: AccountTotals; candidates: string[] };
+
+async function scopeCandidatesForType(
   scopeType: AccountScopeType,
   windowStart: Date,
   windowEnd: Date,
   active: SpendAlertRecord[],
   deps: EvaluateDeps,
   thresholds: SpendThresholds
-): Promise<{ breaches: SpendBreach[]; totals: AccountTotals }> {
+): Promise<ScopeCandidates> {
   const totals = await deps.rollups.sumWindow(scopeType, windowStart, windowEnd);
-  const candidateFloor = Math.min(thresholds.accountSpikeFloorCredits, thresholds.accountCeilingCredits);
+  // Trust is not known yet, so the lowest limit of either tier decides who is worth a closer look.
+  const candidateFloor = Math.min(
+    thresholds.accountSpikeFloorCredits,
+    thresholds.accountCeilingCredits,
+    thresholds.trustedAccountSpikeFloorCredits,
+    thresholds.trustedAccountCeilingCredits
+  );
 
   const candidates = new Set<string>();
   for (const [scopeId, rollup] of totals) if (rollup.credits >= candidateFloor) candidates.add(scopeId);
   // An active incident keeps being observed even when its scope fell out of the window, so it can clear.
   for (const alert of active) if (alert.scopeType === scopeType) candidates.add(alert.scopeId);
+  return { scopeType, totals, candidates: [...candidates] };
+}
 
-  if (candidates.size === 0) return { breaches: [], totals };
-
+async function scopeBreaches(
+  { scopeType, totals, candidates }: ScopeCandidates,
+  windowStart: Date,
+  trustedKeys: ReadonlySet<string>,
+  deps: EvaluateDeps,
+  thresholds: SpendThresholds
+): Promise<SpendBreach[]> {
+  if (candidates.length === 0) return [];
   const history = await deps.rollups.windowSeries(
     scopeType,
-    [...candidates],
+    candidates,
     new Date(windowStart.getTime() - SCOPE_BASELINE_DAYS * DAY_MS),
     windowStart
   );
-  const breaches = [...candidates].flatMap(scopeId => {
+  return candidates.flatMap(scopeId => {
     const baseline = scopeBaseline(windowSums(history.get(scopeId) ?? [], windowStart, SCOPE_BASELINE_DAYS, 'credits'));
-    return evaluateScope({ scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline }, thresholds);
+    const tier = trustedKeys.has(scopeMapKey(scopeType, scopeId)) ? 'trusted' : 'standard';
+    return evaluateScope({ scopeType, scopeId, value: creditsOf(totals.get(scopeId)), baseline }, thresholds, tier);
   });
-  return { breaches, totals };
+}
+
+const KEY_RULES: SpendRuleId[] = ['apikey_spike', 'apikey_ceiling'];
+
+/** True while a payer incident that already folded this key (by id) is still active, clearing or not. */
+const payerIncidentFoldedKey = (
+  active: SpendAlertRecord[],
+  payerType: string,
+  payerId: string,
+  keyId: string
+): boolean =>
+  active.some(
+    alert =>
+      alert.scopeType === payerType &&
+      alert.scopeId === payerId &&
+      Array.isArray(alert.context.viaKeyIds) &&
+      (alert.context.viaKeyIds as unknown[]).includes(keyId)
+  );
+
+/**
+ * Drops an api key breach when its paying user or organization breached this run (a scope carries at
+ * most one breach, so the rule kinds need not match), naming the key on the payer's breach instead, or
+ * while a payer incident that already names the key is active. Best effort: a failed lookup leaves the
+ * breaches as they were.
+ */
+async function foldKeyBreaches(
+  breaches: SpendBreach[],
+  active: SpendAlertRecord[],
+  deps: EvaluateDeps
+): Promise<{ breaches: SpendBreach[]; superseded: Set<string> }> {
+  const superseded = new Set<string>();
+  const keyBreaches = breaches.filter(b => b.scopeType === 'apiKey');
+  if (keyBreaches.length === 0) return { breaches, superseded };
+
+  try {
+    const resolved = await resolveScopes(
+      keyBreaches.map(({ scopeType, scopeId }) => ({ scopeType, scopeId })),
+      deps.resolveScopeDeps
+    );
+    const activeKeys = new Set(
+      active.map(alert => alert.openKey ?? spendAlertOpenKey(alert.rule, alert.scopeType, alert.scopeId))
+    );
+    const viaKeys = new Map<SpendBreach, { names: string[]; ids: string[] }>();
+    const folded = new Set<SpendBreach>();
+
+    for (const keyBreach of keyBreaches) {
+      const scope = resolved.get(scopeMapKey(keyBreach.scopeType, keyBreach.scopeId));
+      if (!scope?.payerId || scope.payerType === 'unknown') continue;
+      const payer = breaches.find(b => b.scopeType === scope.payerType && b.scopeId === scope.payerId);
+      if (payer) {
+        const via = viaKeys.get(payer) ?? { names: [], ids: [] };
+        via.names.push(scope.name ?? keyBreach.scopeId);
+        via.ids.push(keyBreach.scopeId);
+        viaKeys.set(payer, via);
+      } else if (!payerIncidentFoldedKey(active, scope.payerType, scope.payerId, keyBreach.scopeId)) {
+        continue;
+      }
+      folded.add(keyBreach);
+      for (const rule of KEY_RULES) {
+        const key = spendAlertOpenKey(rule, keyBreach.scopeType, keyBreach.scopeId);
+        if (activeKeys.has(key)) superseded.add(key);
+      }
+    }
+
+    return {
+      breaches: breaches
+        .filter(b => !folded.has(b))
+        .map(b => {
+          const via = viaKeys.get(b);
+          return via ? { ...b, viaKeys: via.names, viaKeyIds: via.ids } : b;
+        }),
+      superseded,
+    };
+  } catch (error) {
+    deps.logger.error('spend-monitor-fold-failed', { error });
+    return { breaches, superseded: new Set() };
+  }
 }
 
 /** Writes each decision; returns what to announce. A failed write is reported, never silently dropped. */
@@ -170,7 +335,10 @@ async function persistDecision(
     return null;
   }
   // A resolve for an incident the channel never saw announced would be a stray message.
-  if (decision.kind === 'resolve') return existing.lastNotifiedAt ? { kind: 'resolve', alert: merged } : null;
+  if (decision.kind === 'resolve') {
+    if (decision.announce === false) return null;
+    return existing.lastNotifiedAt ? { kind: 'resolve', alert: merged } : null;
+  }
   if (decision.kind === 'update') return null;
   // An incident whose opening post never landed is still announced as an open.
   return { kind: existing.lastNotifiedAt ? 'escalate' : 'open', alert: merged };
@@ -185,10 +353,7 @@ const topEntries = (totals: Map<string, ISpendRollup>, size: number): [string, n
     .sort((a, b) => b[1] - a[1])
     .slice(0, size);
 
-/**
- * Model rollups are platform-wide, so the breakdown is only meaningful for platform incidents.
- * The rollup carries no source dimension, so no source mix is produced.
- */
+/** Model rollups are platform-wide, so the model and account breakdown is only meaningful for platform incidents. */
 async function platformBreakdown(
   { start, end, accountTotals }: EvaluatedWindow,
   deps: EvaluateDeps
@@ -222,6 +387,37 @@ async function platformBreakdown(
   };
 }
 
+type SourceMix = Record<string, number>;
+
+/**
+ * Credits per completion source (web, cli, desktop, ...) for each announced scope. Best effort: a failed
+ * read is logged and the alert still goes out without the mix.
+ */
+async function sourceMixByScope(
+  keys: ScopeKey[],
+  window: EvaluatedWindow,
+  deps: EvaluateDeps
+): Promise<Map<string, SourceMix>> {
+  const mix = new Map<string, SourceMix>();
+  if (keys.length === 0) return mix;
+  try {
+    for (const row of await deps.rollups.sourceMix(window.start, window.end, keys)) {
+      if (row.credits <= 0) continue;
+      const key = scopeMapKey(row.scopeType, row.scopeId);
+      mix.set(key, { ...mix.get(key), [row.source]: row.credits });
+    }
+  } catch (error) {
+    deps.logger.error('spend-monitor-source-mix-failed', { error });
+  }
+  return mix;
+}
+
+/** Platform criticals first, then other criticals, then warnings and resolves. */
+function notificationRank({ kind, alert }: Notification): number {
+  if (kind === 'resolve' || alert.severity !== 'critical') return 2;
+  return alert.scopeType === 'platform' ? 0 : 1;
+}
+
 async function buildMessages(
   notifications: Notification[],
   window: EvaluatedWindow,
@@ -234,13 +430,22 @@ async function buildMessages(
     .filter(n => n.alert.scopeType !== 'platform')
     .map(n => ({ scopeType: n.alert.scopeType, scopeId: n.alert.scopeId }));
   const resolved = await resolveScopes([...accountKeys, ...(platform?.accountKeys ?? [])], deps.resolveScopeDeps);
+  const announcedKeys: ScopeKey[] = notifications
+    .filter(n => n.kind !== 'resolve')
+    .map(n => ({ scopeType: n.alert.scopeType, scopeId: n.alert.scopeId }));
+  const sourceMix = await sourceMixByScope(announcedKeys, window, deps);
 
   const topAccounts = platform?.breakdown.topAccounts?.map(account => ({
     ...account,
     label: resolved.get(account.label)?.label ?? account.label,
   }));
 
-  return notifications.map(notification => {
+  const ordered = notifications
+    .map(notification => ({ notification, rank: notificationRank(notification) }))
+    .sort((a, b) => a.rank - b.rank);
+  const firstCritical = ordered.findIndex(({ rank }) => rank < 2);
+
+  return ordered.map(({ notification }, index) => {
     const { alert } = notification;
     const isPlatform = alert.scopeType === 'platform';
     const scope = isPlatform
@@ -249,10 +454,23 @@ async function buildMessages(
           ...platformScope,
           label: `${alert.scopeType} ${alert.scopeId}`,
         });
-    const breakdown = isPlatform && platform ? { topModels: platform.breakdown.topModels, topAccounts } : undefined;
+    const sources = sourceMix.get(scopeMapKey(alert.scopeType, alert.scopeId));
+    const breakdown =
+      isPlatform && platform
+        ? { topModels: platform.breakdown.topModels, topAccounts, sources }
+        : sources
+          ? { topModels: [], sources }
+          : undefined;
     return {
       notification,
-      message: buildSpendAlertMessage({ kind: notification.kind, alert, scope, breakdown, ...deps.messageContext }),
+      message: buildSpendAlertMessage({
+        kind: notification.kind,
+        alert,
+        scope,
+        breakdown,
+        ...deps.messageContext,
+        mention: index === firstCritical ? deps.messageContext.mention : undefined,
+      }),
     };
   });
 }
@@ -309,7 +527,8 @@ async function announce(
 export async function evaluateSpend(
   now: Date,
   deps: EvaluateDeps,
-  thresholds: SpendThresholds
+  thresholds: SpendThresholds,
+  trust: SpendTrustConfig
 ): Promise<{ breaches: number; posted: number }> {
   const latestBucket = await deps.rollups.latestBucketStart();
   if (!latestBucket) return { breaches: 0, posted: 0 };
@@ -318,16 +537,36 @@ export async function evaluateSpend(
   const windowStart = new Date(windowEnd.getTime() - SPEND_WINDOW_MS);
   const active = await deps.alerts.findActive();
 
-  const breaches = await platformBreaches(windowStart, windowEnd, deps, thresholds);
+  const breaches: SpendBreach[] = [];
   const accountTotals: WindowAccountTotals = new Map();
+  const perType: ScopeCandidates[] = [];
   for (const scopeType of ACCOUNT_SCOPE_TYPES) {
-    const result = await scopeBreachesForType(scopeType, windowStart, windowEnd, active, deps, thresholds);
-    breaches.push(...result.breaches);
-    accountTotals.set(scopeType, result.totals);
+    const candidates = await scopeCandidatesForType(scopeType, windowStart, windowEnd, active, deps, thresholds);
+    perType.push(candidates);
+    accountTotals.set(scopeType, candidates.totals);
+  }
+  // Failing closed: if the lookup fails every account is held to the standard thresholds, so alerts still fire.
+  const trustedKeys = await resolveTrustedScopes(
+    perType.flatMap(({ scopeType, candidates }) => candidates.map(scopeId => ({ scopeType, scopeId }))),
+    trust,
+    deps.resolveScopeDeps
+  ).catch(error => {
+    deps.logger.error('spend-monitor-trust-lookup-failed', { error });
+    return new Set<string>();
+  });
+  // Same fail-closed rule: with no trusted spend subtracted, the platform is judged on its full total.
+  const trustedSpend = await trustedOwnerSpend(perType, trustedKeys, windowEnd, deps).catch(error => {
+    deps.logger.error('spend-monitor-trusted-spend-failed', { error });
+    return { current: 0, series: [] } satisfies TrustedSpend;
+  });
+  breaches.push(...(await platformBreaches(windowStart, windowEnd, trustedSpend, deps, thresholds)));
+  for (const candidates of perType) {
+    breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, deps, thresholds)));
   }
   const window: EvaluatedWindow = { start: windowStart, end: windowEnd, accountTotals };
 
-  const decisions = decideIncidents(active, breaches, now, windowEnd);
+  const folded = await foldKeyBreaches(breaches, active, deps);
+  const decisions = decideIncidents(active, folded.breaches, now, windowEnd, folded.superseded);
   const persisted = await persistDecisions(decisions, active, deps);
   const announced = await announce(persisted.notifications, window, now, deps);
 

@@ -323,6 +323,67 @@ export interface IUserRiskSignal {
   at: Date;
 }
 
+export const ACCOUNT_DELETION_SOURCES = ['self'] as const;
+export type AccountDeletionSource = (typeof ACCOUNT_DELETION_SOURCES)[number];
+
+/** Days between a deletion request and the purge; the user can cancel until then. */
+export const ACCOUNT_DELETION_GRACE_DAYS = 14;
+
+export interface AccountDeletionRetainedRecord {
+  category: string;
+  reason: string;
+  retention: string;
+}
+
+// The full list is owned by the personal-data inventory and must stay in sync with the privacy policy.
+/** What survives a completed deletion, as listed in the deletion-complete email. */
+export const ACCOUNT_DELETION_RETAINED_RECORDS: readonly AccountDeletionRetainedRecord[] = [
+  { category: 'Account security audit log', reason: 'Account security', retention: '12 months' },
+  { category: 'API key security audit log', reason: 'Account security', retention: 'Up to 90 days' },
+  {
+    category: "Hidden annotations on other owners' published pages",
+    reason: 'Existing annotation audit retention; annotations are hidden immediately',
+    retention: '90 days after deletion',
+  },
+  { category: 'Pseudonymized performance telemetry', reason: 'Service reliability', retention: 'Up to 90 days' },
+  {
+    category: 'Organization-owned content and independently owned copies',
+    reason: "Deleting your account does not delete another owner's data",
+    retention: "Their owners' existing retention periods",
+  },
+  {
+    category: 'Files held by moderation, including their contents and related records',
+    reason: 'Existing moderation restrictions preserve these files and their evidence',
+    retention: 'While the moderation restriction remains in place',
+  },
+  {
+    category: 'Minimal deletion markers',
+    reason: 'Preventing removed data from reappearing; the markers contain no deleted memory content',
+    retention: 'Indefinitely',
+  },
+];
+
+/** Error `code` (status 403) for every request a deletion-pending account may not make. */
+export const ACCOUNT_DELETION_PENDING_CODE = 'ACCOUNT_DELETION_PENDING';
+
+/** Error `code` (status 409) when a deletion request is refused because the user owns an organization. */
+export const ACCOUNT_DELETION_ORG_OWNER_CODE = 'ACCOUNT_DELETION_ORG_OWNER';
+
+/**
+ * A pending account deletion. While set the account is locked down to the cancel screen, and the
+ * purge job deletes it once `scheduledFor` passes. Cleared on cancel. Distinct from `deletedAt`,
+ * which existing queries read as "already deleted".
+ */
+export interface IUserDeletion {
+  requestedAt: Date;
+  scheduledFor: Date;
+  source: AccountDeletionSource;
+  /** Set once irreversible cleanup starts; cancellation is no longer allowed. */
+  purgeStartedAt?: Date;
+  purgeLeaseId?: string;
+  purgeLeaseExpiresAt?: Date;
+}
+
 export interface IUser extends ICreditHolder {
   id: string;
   username: string;
@@ -354,8 +415,8 @@ export interface IUser extends ICreditHolder {
    * registration alongside PENDING_FREE_CREDITS_TAG; released (and nulled) by
    * userService.releasePendingFreeCredits on OTC registration, email-link verify, first
    * OTC login, OAuth signup/link, or the backfillPendingFreeCredits script. Null when
-   * nothing is pending - the open-registration path leaves it null and grants
-   * `defaultFreeCredits` instead.
+   * nothing is pending - an enrolled signup leaves it null and is paid by its `signupGrant`;
+   * an older account with neither is paid the signup schedule's initial credits.
    */
   pendingCreditGrant?: number | null;
   /** GrantPackage this account redeemed at signup; its grant claims the inbox like the default grant. */
@@ -394,6 +455,10 @@ export interface IUser extends ICreditHolder {
    * Blocks chat completions and API key access until resolved by an admin.
    */
   disputePending?: boolean;
+  /** Set while a requested deletion is in its grace period (see IUserDeletion). */
+  deletion?: IUserDeletion | null;
+  /** Server-side lease preventing a data export from racing permanent account cleanup. */
+  accountDataExportLease?: { id: string; expiresAt: Date };
   /**
    * Marks a non-human system account (e.g., the Overwatch ingest user).
    * All auth surfaces must call requireNonSystemUser() - system accounts cannot log in.
@@ -544,6 +609,8 @@ export interface IUser extends ICreditHolder {
   regInvites: Array<IRegInviteDocument['id']>;
   /** Sender of the referral invite this account redeemed; unset for accounts that signed up without one. */
   referredByUserId?: string | null;
+  /** The invite this account signed up through; absent for uninvited and pre-existing accounts. */
+  signupInvite?: SignupInvite;
 
   /**
    * This field is used to store the current selected organization ID.
@@ -763,6 +830,12 @@ export interface IUser extends ICreditHolder {
   /** Network metadata of the signup request, written once at account creation. Admin-only PII. */
   signupMeta?: ISignupMeta | null;
 
+  /**
+   * Set at an OAuth signup whose post-login redirect named a notebook another account owns: that
+   * owner. Abuse evidence only (an invite link is a normal reason); written once, admin-only.
+   */
+  signupLanding?: { notebookOwnerId: string; capturedAt: Date } | null;
+
   /** Abuse risk of a new account. Never shown to the user: the signals would say how to avoid them. */
   riskScore?: ISignupRiskScore | null;
 
@@ -844,6 +917,17 @@ export interface IAuthProviders {
 
 export interface IUserDocument extends IUser, IMongoDocument {}
 
+export const SIGNUP_INVITE_SOURCES = ['referral', 'organization'] as const;
+export type SignupInviteSource = (typeof SIGNUP_INVITE_SOURCES)[number];
+
+export interface SignupInvite {
+  source: SignupInviteSource;
+  /** RegistrationInvite id for a referral, organization Invite id for an organization invite. */
+  inviteId: string;
+  organizationId?: string;
+  at: Date;
+}
+
 export interface IUserRepository
   extends IBaseRepository<IUserDocument>, ICreditHolderMethods, ICreditHolderFlooredDebit {
   findByUsernameOrEmail: (username: string, email?: string | null) => Promise<IUserDocument | null>;
@@ -911,6 +995,8 @@ export interface IUserRepository
    * (now or from an earlier attempt), false when another account already does.
    */
   claimFreeCreditGrant: (userId: string) => Promise<boolean>;
+  /** Sets signupGrant.inviteBonusPaid only where it is unset; false when another write set it first. */
+  markInviteBonusPaid: (userId: string, credits: number) => Promise<boolean>;
   /**
    * Enable MFA only while the stored secret is still `totpSecret` and MFA is still disabled.
    * Returns null when a concurrent setup replaced the secret, so a code verified against a
@@ -924,6 +1010,16 @@ export interface IUserRepository
   findByIds: (
     ids: string[]
   ) => Promise<Pick<IUserDocument, 'id' | 'name' | 'email' | 'username' | 'lastActiveAt' | 'isOnline' | 'photoUrl'>[]>;
+  /**
+   * Who each id is for an admin action on it: the admin flags an actor-outranks-target guard reads, plus the
+   * email or username an audit entry shows. Ids that are not ObjectId-shaped are dropped. Never return this
+   * to a client: it carries admin permissions.
+   */
+  findAdminTargetsByIds?: (
+    ids: string[]
+  ) => Promise<
+    Array<{ id: string; email?: string; username?: string; isAdmin?: boolean; adminPermissions?: string[] }>
+  >;
   /** Active (non-soft-deleted), emailed users among `ids` - for a notification addressee resolver. */
   findActiveEmailsByIds: (ids: string[]) => Promise<Array<{ id: string; email: string }>>;
   searchCollections: (

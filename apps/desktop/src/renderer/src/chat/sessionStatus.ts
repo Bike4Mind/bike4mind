@@ -1,4 +1,4 @@
-import type { ChatSessionStatus, ChatSessionStatusEvent } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionStatusEvent, SessionSetupStep } from '@shared/chat';
 
 /** What each state is called, in the one place both the badge and its aria-label read it from. */
 export const STATUS_LABEL: Record<ChatSessionStatus, string> = {
@@ -33,6 +33,30 @@ export function applyStatusEvents(
     next ??= new Map(current);
     if (event.status === 'done') next.delete(event.sessionId);
     else next.set(event.sessionId, event.status);
+  }
+
+  return next ?? current;
+}
+
+/**
+ * Fold the same pushes into the setup step of each session still being prepared (worktree,
+ * dependency install, held first turn). Kept apart from the status map because it is orthogonal
+ * to it: a preparing agent is 'processing' either way. Returns the map it was given when nothing
+ * changed.
+ */
+export function applyPreparingEvents(
+  current: ReadonlyMap<string, SessionSetupStep>,
+  events: readonly ChatSessionStatusEvent[]
+): ReadonlyMap<string, SessionSetupStep> {
+  let next: Map<string, SessionSetupStep> | null = null;
+
+  for (const event of events) {
+    const soFar = next ?? current;
+    if (soFar.get(event.sessionId) === event.preparing) continue;
+
+    next ??= new Map(current);
+    if (event.preparing) next.set(event.sessionId, event.preparing);
+    else next.delete(event.sessionId);
   }
 
   return next ?? current;

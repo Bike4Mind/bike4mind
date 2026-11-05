@@ -189,6 +189,31 @@ describe('readable git errors', () => {
     );
   });
 
+  it('drops the progress lines a killed checkout leaves, keeping the reason', () => {
+    const progress = Array.from({ length: 200 }, (_unused, index) => `Updating files:  ${index % 5}% (${index}/15405)`);
+    const stderr = `Preparing worktree (new branch 'agent/x')\n${progress.join('\r')}\rfatal: could not write index\n`;
+
+    expect(readableGitMessage(stderr)).toBe("Preparing worktree (new branch 'agent/x') could not write index");
+  });
+
+  it('caps a long message so it stays one readable line', () => {
+    const message = readableGitMessage(`fatal: ${'x'.repeat(1000)}`);
+
+    expect(message.length).toBe(300);
+    expect(message.endsWith('...')).toBe(true);
+  });
+
+  it('says a git call that ran past its timeout timed out, not what it printed', async () => {
+    const directory = await repository();
+
+    // Waits on stdin, which nothing ever writes or closes.
+    const failure = await git(directory, ['hash-object', '--stdin'], { timeoutMs: 50 }).catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(GitError);
+    expect((failure as GitError).message).toBe('git hash-object --stdin timed out after 50 ms.');
+    expect((failure as GitError).timedOutAfterMs).toBe(50);
+  });
+
   it('carries no fatal: tag on a GitError from a real refusal', async () => {
     const directory = await repository();
 

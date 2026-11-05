@@ -1,10 +1,11 @@
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { PathAccessDenied } from './paths';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PathAccessDenied, physicalTarget, resolveWithinRoots, withRealPath } from './paths';
 import type { ToolContext } from './types';
-import { fileEdit, fileWrite } from './writeTools';
+import { fileEdit, fileWrite, resolveWritablePath } from './writeTools';
 
 describe('write tools', () => {
   let root: string;
@@ -92,6 +93,97 @@ describe('write tools', () => {
       const input = { path: join(root, 'vault', 'tokens.json'), content: '{}' };
       await expect(fileWrite.run(input, context)).rejects.toThrow(/protected location/);
     });
+
+    it('refuses the real path of a protected folder whose own path runs through a symlink', async () => {
+      await mkdir(join(root, 'config', 'App'), { recursive: true });
+      await symlink(join(root, 'config'), join(root, 'cfg-link'));
+      const guarded = { ...context, protectedPaths: withRealPath(join(root, 'cfg-link', 'App')) };
+      const input = { path: join(root, 'config', 'App', 'tokens.json'), content: '{}' };
+
+      await expect(fileWrite.run(input, guarded)).rejects.toThrow(/protected location/);
+      await expect(readFile(input.path, 'utf8')).rejects.toThrow();
+    });
+
+    it('refuses a link inside a protected folder reached through an alias, though its target is granted', async () => {
+      await mkdir(join(outside, 'prot'));
+      await writeFile(join(root, 'payload'), 'kept\n', 'utf8');
+      await symlink(outside, join(root, 'alias'));
+      await symlink(join(root, 'payload'), join(outside, 'prot', 'lnk'));
+      const guarded = { ...context, protectedPaths: [join(outside, 'prot')] };
+
+      await expect(resolveWritablePath(join(root, 'alias', 'prot', 'lnk'), guarded)).rejects.toThrow(
+        /protected location/
+      );
+      await expect(resolveWritablePath(join(root, 'payload'), guarded)).resolves.toBe(join(root, 'payload'));
+    });
+
+    it('refuses a path whose parent cannot be resolved', async () => {
+      await mkdir(join(root, 'locked'));
+      await writeFile(join(root, 'locked', 'file.txt'), 'x', 'utf8');
+      const native = realpathSync.native;
+      const spy = vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path) === join(root, 'locked')) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return native(path, options);
+      });
+      try {
+        await expect(resolveWritablePath(join(root, 'locked', 'file.txt'), context)).rejects.toThrow(
+          /cannot be written to/
+        );
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('refuses a path that cannot be resolved itself, though its parent can', async () => {
+      const target = join(root, 'notes.md');
+      const native = realpathSync.native;
+      const spy = vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path) === target) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return native(path, options);
+      });
+      try {
+        await expect(resolveWritablePath(target, context)).rejects.toThrow(/cannot be written to/);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('refuses every write while a protected folder cannot be resolved', async () => {
+      const pending = { ...context, unresolvedProtectedPaths: [join(outside, 'App')] };
+      const input = { path: join(root, 'notes.md'), content: 'changed\n' };
+
+      await expect(fileWrite.run(input, pending)).rejects.toThrow(
+        `while Desktop cannot resolve the protected folder ${join(outside, 'App')}`
+      );
+      await expect(readFile(input.path, 'utf8')).resolves.toBe('alpha\nbeta\ngamma\n');
+      await expect(resolveWritablePath(input.path, context)).resolves.toBe(input.path);
+    });
+
+    // Past PATH_MAX readlink fails with ENAMETOOLONG, which must not read as "not a link".
+    it.skipIf(process.platform !== 'linux')(
+      'refuses a link reached through a short alias whose physical path exceeds PATH_MAX',
+      async () => {
+        let deep = join(root, 'deep');
+        for (let left = 4093 - Buffer.byteLength(deep); left > 0; left = 4093 - Buffer.byteLength(deep)) {
+          deep = join(deep, 'd'.repeat(left > 256 ? 200 : left - 1));
+        }
+        await mkdir(deep, { recursive: true });
+        await symlink(deep, join(root, 's'));
+        await writeFile(join(outside, 'x'), 'protected\n', 'utf8');
+        await symlink(join(outside, 'x'), join(root, 's', 'lnk'));
+        const guarded = { ...context, protectedPaths: [outside] };
+        const input = { path: join(root, 's', 'lnk'), content: 'overwritten\n' };
+        try {
+          await expect(physicalTarget(input.path)).rejects.toThrow(PathAccessDenied);
+          await expect(resolveWithinRoots(input.path, [root])).rejects.toThrow(PathAccessDenied);
+          await expect(resolveWritablePath(input.path, guarded)).rejects.toThrow(PathAccessDenied);
+          await expect(fileWrite.run(input, guarded)).rejects.toThrow();
+          await expect(readFile(join(outside, 'x'), 'utf8')).resolves.toBe('protected\n');
+        } finally {
+          await rm(input.path, { force: true });
+        }
+      }
+    );
 
     // The containment check runs again in `run`, against the resolved real path: the prompt the
     // user answered was about a plain file, and a symlink swapped in behind it must not be followed.

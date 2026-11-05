@@ -1,8 +1,15 @@
 import { useState, type ReactNode } from 'react';
 import { Alert, Box, Button, Input, Skeleton, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
+import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
-import type { AnalyticsOverview, AnalyticsOverviewQuery, AnalyticsRange } from '@client/app/utils/analyticsOverview';
+import type {
+  AnalyticsAccounts,
+  AnalyticsOverview,
+  AnalyticsOverviewQuery,
+  AnalyticsRange,
+  TopAccountRow,
+} from '@client/app/utils/analyticsOverview';
 import {
   AdminPageHeader,
   SegmentedControl,
@@ -12,9 +19,17 @@ import {
   StatusChip,
   useAdminListUrlState,
 } from '../shared';
-import { adminSearchForTab, type AdminSearch } from '../adminTabParams';
+import { ADMIN_ORGANIZATIONS_TAB_SLUG, adminSearchForTab, type AdminSearch } from '../adminTabParams';
+import { adminTabToSlug } from '../adminTabSlugs';
+import { AdminTab } from '../adminSidebarConfig';
+import { ORGS_ORG_ID_PARAM } from '../organizationsTabSearch';
 import { ActiveUsersSection } from './ActiveUsersSection';
+import { CohortsSection } from './CohortsSection';
 import { SignupsSection } from './SignupsSection';
+import { CreditsSection, FeatureUsageSection, ModelUsageSection } from './UsageSections';
+import { TopAccountsSection } from './TopAccountsSection';
+import { downloadAnalyticsExport } from './analyticsExport';
+import { useAnalyticsTopAccounts } from './useAnalyticsTopAccounts';
 import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
 import { useAnalyticsOverview } from './useAnalyticsOverview';
@@ -35,6 +50,17 @@ const SIGNUPS_OPTIONS = [
   { value: 'legit', label: 'Legit only' },
   { value: 'all', label: 'All' },
 ] as const;
+const ACCOUNTS_OPTIONS = [
+  { value: 'external', label: 'External only' },
+  { value: 'internal', label: 'Internal only' },
+  { value: 'all', label: 'All' },
+] as const;
+const FOOTERS: Record<AnalyticsAccounts, string> = {
+  external: 'Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.',
+  internal:
+    'Active users count only admin, system, flagged test and staff-domain accounts; signups, usage and top accounts always exclude them. Days are UTC.',
+  all: 'Active users include admin, system, flagged test and staff-domain accounts; signups, usage and top accounts always exclude them. Days are UTC.',
+};
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 const shiftUtc = (day: string, days: number) =>
@@ -132,7 +158,10 @@ const AnalyticsTab = () => {
 
   const customIncomplete = query.range === 'custom' && (!query.from || !query.to);
   const customInverted = query.range === 'custom' && !!query.from && !!query.to && query.from > query.to;
-  const { data, isPending, isError, refetch } = useAnalyticsOverview(query, !customIncomplete && !customInverted);
+  const queryReady = !customIncomplete && !customInverted;
+  const { data, isPending, isError, isPlaceholderData, refetch } = useAnalyticsOverview(query, queryReady);
+  const topAccounts = useAnalyticsTopAccounts(query, queryReady);
+  const [exporting, setExporting] = useState(false);
 
   const setQuery = (patch: Partial<AnalyticsOverviewQuery>) =>
     updateUrl({ filters: writeAnalyticsFilters({ ...query, ...patch }) });
@@ -149,6 +178,31 @@ const AnalyticsTab = () => {
       search: (previous: AdminSearch) => ({ ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG), ...window }),
     });
 
+  const openTab = (tab: AdminTab) => {
+    const slug = adminTabToSlug(tab);
+    if (slug) void navigate({ to: '/admin', search: (previous: AdminSearch) => adminSearchForTab(previous, slug) });
+  };
+  const openUser = (row: TopAccountRow) => void navigate({ to: '/admin/users/$userId', params: { userId: row.id } });
+  const openOrg = (row: TopAccountRow) =>
+    void navigate({
+      to: '/admin',
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_ORGANIZATIONS_TAB_SLUG),
+        [ORGS_ORG_ID_PARAM]: row.id,
+      }),
+    });
+  const exportCsv = async () => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      await downloadAnalyticsExport(data, topAccounts.data);
+    } catch {
+      toast.error("Couldn't export the analytics. Try again.");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Pending also covers a custom range still waiting for its dates.
   const loading = isPending && !isError;
   const sectionProps = {
@@ -159,13 +213,38 @@ const AnalyticsTab = () => {
     onShowDefaultRange: showDefaultRange,
   };
   const missing = data?.missingDays ?? [];
+  const internalMissing = data?.internalMissingDays ?? [];
+  const dayCount = (count: number) => `${count} ${count === 1 ? 'day' : 'days'}`;
 
   return (
     <Stack gap={2.5} sx={{ p: { xs: 2, md: 4 }, minWidth: 0 }} data-testid="analytics-page">
       <AdminPageHeader
         title="Analytics"
         description="Who uses Bike4Mind, how often, and whether they come back. UTC."
-        actions={<ContextHelpButton helpId="admin/analytics" tooltipText="Analytics help" />}
+        actions={
+          <Stack direction="row" gap={1} alignItems="center">
+            <Button
+              variant="outlined"
+              color="neutral"
+              size="sm"
+              // Placeholder data is the previous range's, so either side could put another range in the zip.
+              disabled={
+                !data ||
+                isError ||
+                isPlaceholderData ||
+                topAccounts.isPending ||
+                topAccounts.isError ||
+                topAccounts.isPlaceholderData
+              }
+              loading={exporting}
+              onClick={() => void exportCsv()}
+              data-testid="analytics-export-btn"
+            >
+              Export CSV
+            </Button>
+            <ContextHelpButton helpId="admin/analytics" tooltipText="Analytics help" />
+          </Stack>
+        }
       />
 
       <Stack
@@ -225,6 +304,15 @@ const AnalyticsTab = () => {
             data-testid="analytics-signups-mode"
           />
         </ToolbarGroup>
+        <ToolbarGroup label="Accounts">
+          <SegmentedControl
+            options={ACCOUNTS_OPTIONS}
+            value={query.accounts}
+            onChange={accounts => setQuery({ accounts })}
+            aria-label="Accounts counted"
+            data-testid="analytics-accounts-mode"
+          />
+        </ToolbarGroup>
         {data && (
           <Stack direction="row" alignItems="center" gap={1} sx={{ ml: { md: 'auto' } }}>
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-last-updated">
@@ -243,7 +331,7 @@ const AnalyticsTab = () => {
         </Typography>
       )}
 
-      {missing.length > 0 && (
+      {(missing.length > 0 || internalMissing.length > 0) && (
         <Alert
           color="warning"
           variant="soft"
@@ -261,12 +349,19 @@ const AnalyticsTab = () => {
           }
         >
           <Box>
-            <Typography level="body-sm">
-              {`Rollup is missing for ${missing.length} ${missing.length === 1 ? 'day' : 'days'}; those days show as gaps.`}
-            </Typography>
+            {missing.length > 0 && (
+              <Typography level="body-sm" data-testid="analytics-missing-rollup">
+                {`Rollup is missing for ${dayCount(missing.length)}; those days show as gaps.`}
+              </Typography>
+            )}
+            {internalMissing.length > 0 && (
+              <Typography level="body-sm" data-testid="analytics-missing-internal">
+                {`Internal counts are missing or incomplete for ${dayCount(internalMissing.length)}; those days show as gaps until the rollup is re-run for them.`}
+              </Typography>
+            )}
             {showMissing && (
               <Typography level="body-xs" sx={{ mt: 0.5 }} data-testid="analytics-missing-days">
-                {missing.join(', ')}
+                {[...missing, ...internalMissing].sort().join(', ')}
               </Typography>
             )}
           </Box>
@@ -289,10 +384,27 @@ const AnalyticsTab = () => {
       >
         <ActiveUsersSection {...sectionProps} />
         <SignupsSection {...sectionProps} onSelectWindow={openSignupWindow} />
+        <FeatureUsageSection {...sectionProps} />
+        <ModelUsageSection {...sectionProps} onOpenModels={() => openTab(AdminTab.ModelMetrics)} />
+        <CreditsSection {...sectionProps} onOpenCredits={() => openTab(AdminTab.CreditAnalytics)} />
+        {(['users', 'orgs'] as const).map(kind => (
+          <TopAccountsSection
+            key={kind}
+            kind={kind}
+            data={topAccounts.data}
+            loading={topAccounts.isPending && !topAccounts.isError}
+            error={topAccounts.isError}
+            onRetry={() => void topAccounts.refetch()}
+            onShowDefaultRange={showDefaultRange}
+            onOpen={kind === 'users' ? openUser : openOrg}
+          />
+        ))}
       </Box>
 
+      <CohortsSection signups={query.signups} />
+
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
-        Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.
+        {FOOTERS[data?.accounts ?? query.accounts]}
       </Typography>
     </Stack>
   );

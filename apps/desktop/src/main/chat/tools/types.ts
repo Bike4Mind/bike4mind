@@ -21,6 +21,7 @@ import type { CompletionRequest } from '../completions';
 import type { CompletionStreamEvent } from '../streamEvents';
 
 import type { MemoryStore } from '../project/memory';
+import type { BranchReservation } from '../project/workspace';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import type { MediaStore } from '../media/MediaStore';
 import type { VideoJobScheduler } from '../media/VideoJobScheduler';
@@ -361,6 +362,8 @@ export interface ToolContext {
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
    */
   protectedPaths?: readonly string[];
+  /** Protected folders not yet resolved: where a write lands relative to them is unknown, so every write is refused. */
+  unresolvedProtectedPaths?: readonly string[];
   /**
    * The conversation this call belongs to. Background processes are scoped by it, so one
    * conversation cannot read or stop another's just by naming a handle.
@@ -462,6 +465,8 @@ export interface HostSessionView {
   spawnedBy?: string;
   /** Present-tense state, the same one the sidebar row draws. */
   status: 'processing' | 'needs-action' | 'done';
+  /** The project folder's name; absent for a conversation with no project. */
+  project?: string;
 }
 
 /** A spawn that did not happen, and which of the caps or preconditions stopped it. */
@@ -482,7 +487,15 @@ export type SpawnOutcome = { ok: true; session: ChatSessionSummary } | SpawnReje
  * checkout back and be isolated in name only. `base` is what that branch is cut from - the
  * parent's own branch, never the parent's checkout - see HostContext.spawnBase.
  */
-export type SpawnPlacement = { kind: 'local' } | { kind: 'worktree'; branch: string; base: string };
+export type SpawnPlacement =
+  | { kind: 'local' }
+  | {
+      kind: 'worktree';
+      branch: string;
+      base: string;
+      /** Set when the app picked `branch` and already holds it; the spawn then owns releasing it. */
+      reservation?: BranchReservation | null;
+    };
 
 /**
  * A delivered message, and whether the target took it up straight away.
@@ -496,6 +509,11 @@ export interface RelayAccepted {
   sessionId: string;
   title: string;
   queued: boolean;
+  /**
+   * Waiting for the receiver's user to let it in rather than delivered; see relayHoldReason.
+   * Nothing runs there until they do, and they may decline.
+   */
+  held: boolean;
 }
 
 export interface RelayRejected {
@@ -537,18 +555,31 @@ export interface HostContext {
    * is the base the child gets.
    */
   spawnBase(): Promise<string>;
-  /** Sessions in this one's project, newest first. Includes archived ones, flagged as such. */
-  listSessions(options: { includeArchived: boolean }): Promise<HostSessionView[]>;
-  /** One session's transcript as plain text, or null when it is gone or not in this project. */
-  readSession(sessionId: string): Promise<string | null>;
+  /**
+   * Sessions newest first, flagging archived ones. 'project' is this one's project; 'all' is every
+   * conversation of the signed-in account, which is as far as the session store reaches.
+   */
+  listSessions(options: { includeArchived: boolean; scope: 'project' | 'all' }): Promise<HostSessionView[]>;
+  /**
+   * One session's transcript as plain text. `ref` is an id, a unique id prefix or an exact title.
+   * Outside this project only for a session the user mentioned here or that messaged this one:
+   * listing shows every conversation exists, reading one has to trace back to something the user
+   * did. Throws with the reason when it cannot be read.
+   */
+  readSession(ref: string): Promise<string>;
   /** Reversible; the row moves to the sidebar's Archived section. Null when not addressable. */
   setArchived(sessionId: string, archived: boolean): Promise<HostSessionView | null>;
   /** Irreversible. False when the id names nothing this session may address. */
   deleteSession(sessionId: string): Promise<boolean>;
-  /** How a session is described in an approval prompt, so the user reads a title not a uuid. */
-  describeSession(sessionId: string): Promise<string | null>;
   /**
-   * Deliver `message` to an existing session in this project and let it run as a turn there.
+   * How a session is described in an approval prompt, so the user reads a title not a uuid. Scope
+   * 'project' (default) matches what archive/delete can act on; 'all' matches what sendTo reaches.
+   */
+  describeSession(ref: string, options?: { scope: 'project' | 'all' }): Promise<string | null>;
+  /**
+   * Deliver `message` to an existing session - any of this account's, addressed as readSession
+   * is - and let it run as a turn there. A delivery that could widen what the sender reaches is
+   * held for the receiver's user instead; see RelayAccepted.held.
    *
    * Fire and forget, like `spawn`: it resolves once the message is accepted, never when the
    * target has answered. Waiting would deadlock the moment the target parks at the approval
@@ -557,13 +588,33 @@ export interface HostContext {
    * Bounded by the hop count on the relay and by the sends this turn has already made; see
    * ChatRelayOrigin. A refusal here is the bound working, not a transient failure.
    */
-  sendTo(sessionId: string, message: string): Promise<RelayOutcome>;
+  sendTo(ref: string, message: string, options: { notify: boolean }): Promise<RelayOutcome>;
   /**
    * Present only when a user is in this conversation to act on a suggestion. session_spawn then
    * proposes rather than starts, and the turn is never held on the answer. Absent in a spawned
    * session, which keeps the approval-gated start.
    */
   suggestions?: SpawnSuggestionHost;
+  /**
+   * Set when Orchestrate is in effect for this conversation (orchestratesAgents): session_spawn
+   * then starts the child at once with no card. The spawn caps still apply. Never set together
+   * with `suggestions`.
+   */
+  delegates?: DelegationHost;
+  /** Set with `delegates`: whether the orchestrated job may be declared complete (quest_complete). */
+  quest?: QuestHost;
+}
+
+export interface QuestHost {
+  /** Whether the job can be declared complete now; both texts are for the model. */
+  readiness(): Promise<QuestReadiness>;
+}
+
+export type QuestReadiness = { ready: false; reason: string } | { ready: true; note?: string };
+
+export interface DelegationHost {
+  /** Where a delegated child goes: the card's default choice, with the branch it would prefill. */
+  placement(title: string | undefined, prompt: string): Promise<SpawnPlacement>;
 }
 
 export interface SpawnSuggestionTask {

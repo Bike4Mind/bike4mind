@@ -586,6 +586,10 @@ Self-host can embed and search your uploaded files fully offline, using a local 
 4. **Upload a file**, then watch its chunk/vector counts climb (the file card shows progress). Behind the scenes: MinIO notifies the app on upload -> the file is chunked -> chunks are embedded by the `worker` service.
 5. **Ask a knowledge-base question** in chat, or use file search - retrieval now runs against the local embeddings.
 
+### Verify the knowledge pipeline
+
+With the stack running, `B4M_API_KEY=b4m_... python3 scripts/verify_selfhost_chunk_pipeline.py` uploads a file and checks that it is chunked, embedded and found by search, that a file whose upload webhook was withheld is recovered by the rescue sweep, and that replaying a chunk message leaves the chunk count unchanged. It needs the admin settings **Enable Auto Chunk** and **Enable Data Lakes** on (Data Lakes is off by default; search only reaches data-lake files), and archives a throwaway `verify-*` lake each run. It asserts the default Mongo vector path (not OpenSearch); `--help` lists the prerequisites and the `--only` / `--timeout` flags.
+
 ### Choosing an embedder (quality vs hardware)
 
 `qwen3-embedding` leads retrieval benchmarks; the `0.6b` default fits any GPU or CPU. On a bigger card the `4b`/`8b` variants score higher. `nomic-embed-text` is the smallest, cheapest option. A self-host box often runs a chat model, an image model, and the embedder on ONE GPU, so size matters - see the embedder table in `.env.selfhost.example` for downloads, dimensions, and VRAM.
@@ -782,7 +786,7 @@ The drill derives its broker image, configuration mount, and storage mounts from
 
 `scripts/selfhost_backup.py` backs up the durable user state of the Compose stack while it is running, and restores it into a fresh project. Python 3 and Docker Compose are required; run it from the repository root with the same `-f`, `--env-file`, and `--profile` flags you use to run the stack.
 
-**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless); the reverse is rare and needs an object deleted or expired during the backup window. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup that does not match it.
+**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless); the reverse is rare and needs an object deleted or expired during the backup window. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup whose archive checksum or per-bucket file counts do not match it. The counts come from the backup copy, so they prove the copy is intact, not that every source object was captured. After restoring, the tool re-counts each target bucket and fails if it differs from the manifest.
 
 **Requirements:**
 
@@ -821,7 +825,7 @@ Before you restore:
 - If the original stack is still running on this host, set `MONGO_HOST_PORT`, `MINIO_HOST_PORT` and `MINIO_CONSOLE_HOST_PORT` in `.env.selfhost` to free ports.
 - With MongoDB authentication, the fresh project's `mongo` needs the same root user and replica-set bootstrap as the original (and a healthcheck that authenticates) before you run restore. `scripts/verify-compose-backup-restore.py --auth` shows a working override.
 
-Restore starts `mongo` and `minio`, runs `mongorestore --oplogReplay`, runs the `createbuckets` job (buckets, upload webhooks, lifecycle rules), then mirrors the objects back. It refuses a target Mongo that already holds data unless you pass `--yes`.
+Restore starts `mongo` and `minio`, runs `mongorestore --oplogReplay`, runs the `createbuckets` job (buckets, upload webhooks, lifecycle rules), then mirrors the objects back. It refuses a target that already holds data, in Mongo or in any bucket, unless you pass `--yes`.
 
 Then bring up the rest of the stack with the same `-p`.
 
@@ -839,7 +843,7 @@ To restore over the original project, stop every service except `mongo` and `min
 python3 scripts/verify-compose-backup-restore.py          # add --auth for a Mongo with a root user and keyFile
 ```
 
-With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user and one 64 KiB file, keeps writing to Mongo so the dump has an oplog slice, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
+With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user, one 64 KiB file and one object in each of the seven buckets, keeps writing to Mongo so the dump has an oplog slice, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It also checks that a restore without `--yes` refuses a populated target and leaves it untouched. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
 
 ## Troubleshooting
 
@@ -898,6 +902,14 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio a
 Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
 
 The FabFile safety-net filter in `apps/workers/src/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
+
+To run that proof as one command, mint an API key (`b4m_live_...`) with the `notebooks:read` scope and run the history-import check. It uploads a small Claude-format export through the app's upload proxy, so MinIO's webhook starts the import exactly as a UI upload does. It then waits for the new import job to reach `completed` and reads the conversations back through `GET /api/v1/sessions` and `GET /api/v1/sessions/{id}/quests`. It passes only when the conversation count and every prompt and reply match the export:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-history-import
+```
+
+Set `BROKEN_EXPORT=bad-json` or `BROKEN_EXPORT=invalid-conversation` to upload a deliberately broken export; the check must then fail. `invalid-conversation` is the case a job status alone misses: the importer skips conversations that do not match the export schema and still marks the job `completed`. The check refuses to start while another import of the key owner is pending or processing, because the webhook drops a second upload. A timeout with no job means the upload landed but the webhook never reached the app; use the checks above. Optional: `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). Exit code 0 is pass, 1 is fail, 2 is bad configuration. Each passing run leaves two small conversations named after its run token in the key owner's history.
 
 ## Security notes
 
@@ -1173,6 +1185,14 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
+To verify the executor end to end, mint an API key (`b4m_live_...`) in the app with the `ai:generate` scope, or `ai:chat` plus `notebooks:write`, and run the check against your deployment. It starts an agent run, polls `GET /api/v1/agent-executions/{id}` for that execution ID, and passes only when the run reaches `completed` and its answer echoes a per-run token. A `failed` or `aborted` run fails the check and prints the run's `error`, even though a failed run also saves an error reply into the session:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-agent-run
+```
+
+It needs a working model provider credential (or local model) in `.env.selfhost`. Optional: `MODEL`, `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). `RUN_TIMEOUT_MS` bounds the whole check, including each request, and a failure after the run started prints its execution ID. Exit code 0 is pass, 1 is fail, 2 is bad configuration.
+
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
 
 ### Daily credit-lot expiry
@@ -1343,6 +1363,12 @@ Startup verifies that the source queue redrives to the configured DLQ after thre
 Plain export artifacts use the requesting user, plan and export job ID as their stable identity. A replay rechecks plan access and reuses an existing ZIP even after midnight or a goal edit. A metadata lookup failure emits the existing failed progress status even when the queue will retry; a later successful attempt can still deliver the download. Only a definitive missing-object response allows generation; metadata permission/network failures and failed download notification remain retryable. The hosted dispatcher shares this new key scheme. Already-created legacy date/goal-named artifacts are not migrated: replay after an upgrade may generate a new scoped artifact and leave the legacy object. There is no durable plain-export receipt or concurrent exactly-once guarantee: a failure before artifact upload, or competing workers, can repeat model work. Organization summaries retain their existing persisted completion, active-window release and completed-replay behavior.
 
 Docker-independent verification: `VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/queueHandlers/questExport.recovery.e2e.test.ts` uses disposable Mongo, actual ZIP serialization and access filtering, with storage, websocket and inference edges controlled. It checks permitted markdown/image bytes, excluded data, upload/notification recovery and organization-summary completion/replay. Unit tests cover enqueue rejection, metadata failures, midnight replay, redrive admission and ACK retention. Current live ElasticMQ/MinIO, selected Kubernetes deployment and external provider execution are not verified by these tests.
+
+### Account data exports
+
+`ACCOUNT_DATA_EXPORT_QUEUE` and `ACCOUNT_DATA_EXPORT_QUEUE_DLQ` enable the self-service "download your data" export offered in Settings. The worker writes a zip under the FabFile bucket's `exports/` prefix, so the same one-day MinIO lifecycle rule that expires notebook exports removes it, and emails the user a link to `APP_URL/account-data-export/<id>`. That page asks the API for a five-minute download link and refuses exports older than 24 hours. Without the queue variables the request endpoint answers 500 and nothing is queued; outgoing email must be configured for the link to arrive.
+
+The consumer uses the same redrive admission, one-at-a-time receive, 900-second visibility renewal and ten-minute cooperative budget as quest exports. The worker reads the generated-images bucket as well as the FabFile bucket, copying images generated in notebooks under `images/`. It stops building notebooks once two thirds of the time before the last five minutes is used, and file bytes, generated images and artifacts five minutes before it ends, listing what is left in `notebooks/index.json`, `files/index.json` and `artifacts/index.json` as omitted, so a very large account can receive a partial export. A redelivery after the upload only re-sends the email.
 
 ## Kubernetes evaluation package
 

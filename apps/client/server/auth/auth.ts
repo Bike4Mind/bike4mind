@@ -1,7 +1,7 @@
 import passport from 'passport';
 // TODO Bring back after we fix facebook secrets
 // import { Strategy as FacebookStrategy } from 'passport-facebook';
-import { AuthStrategy, type IUserDocument } from '@bike4mind/common';
+import { ACCOUNT_DELETION_PENDING_CODE, AuthStrategy, type IUserDocument } from '@bike4mind/common';
 import ability from '@server/auth/ability';
 import { User } from '@bike4mind/database';
 import { selfServeVerifyCallback, verifyCallback } from '@server/utils/auth/verifyCallback';
@@ -27,6 +27,11 @@ import { registerAppleStrategy } from './appleStrategy';
 import { getAppleConfig } from '@bike4mind/server-utils/auth/appleConfig';
 import { isPolicyConsentRequired, type ConsentGateUser } from '@bike4mind/server-utils/auth/consentGate';
 import { samlRequestCache } from './samlRequestCache';
+import {
+  ACCOUNT_DELETION_PENDING_MESSAGE,
+  isBlockedByPendingDeletion,
+  type DeletionGateUser,
+} from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
 
 passport.use(
@@ -69,6 +74,8 @@ const MFA_ENROLLMENT_ALLOWED_PATHS = new Set([
 function isMfaEnrollmentAllowedRoute(req: Request, userId: string): boolean {
   const path = req.url.split('?')[0];
   if (MFA_ENROLLMENT_ALLOWED_PATHS.has(path)) return true;
+  // A deletion-pending account owing enrollment must still be able to cancel the deletion.
+  if (req.method === 'DELETE' && path === '/api/account/deletion') return true;
   // auth/success bootstraps the current user from its own profile after a sign-in.
   return req.method === 'GET' && path === `/api/users/${userId}`;
 }
@@ -162,6 +169,18 @@ export const auth = handler
         // shows an accurate message instead of a misleading fallback. See issue #369.
         error_description: 'Accept the Terms of Service and Acceptable Use Policy to continue.',
         policyAcceptanceRequired: true,
+      });
+    }
+
+    // A deletion-pending account is confined to the cancel screen until it cancels or is purged.
+    // 403, not 401, for the same reason as the consent gate above.
+    const deletionUser = req.user as (DeletionGateUser & { mfaPending?: boolean }) | undefined;
+    if (!deletionUser?.mfaPending && isBlockedByPendingDeletion(deletionUser, req.url, req.method)) {
+      return res.status(403).json({
+        error: ACCOUNT_DELETION_PENDING_MESSAGE,
+        code: ACCOUNT_DELETION_PENDING_CODE,
+        scheduledFor: deletionUser!.deletion!.scheduledFor,
+        request_id: req.requestId,
       });
     }
 

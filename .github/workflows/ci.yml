@@ -225,6 +225,9 @@ jobs:
       - name: Test self-host backup and restore tool
         run: python3 -m unittest discover -s scripts -p 'test_selfhost_backup.py' -v
 
+      - name: Run self-host chunk pipeline verifier tests
+        run: python3 -m unittest discover -s scripts -p 'test_verify_selfhost_chunk_pipeline.py' -v
+
       - name: Test Playwright install recovery
         run: python3 -m unittest discover -s scripts -p 'test_install_playwright_chromium.py' -v
 
@@ -1233,7 +1236,7 @@ jobs:
           echo "::error::No docs/sensitive-scan result after 16 minutes. Ask a maintainer to re-run the scan, then re-run this job once it reports success."
           exit 1
 
-  # ============================================================
+  # =====================================================
   # CI gate aggregation. The main branch ruleset (main-protection)
   # requires a single status check named exactly "CI Complete". Deploy moved out
   # of this repo to the internal deployer, so there is no deploy to gate; this
@@ -1259,7 +1262,7 @@ jobs:
   # NOTE: this job name IS the required-check context. Renaming it must happen
   # in lockstep with editing both rulesets, or a required check with no matching
   # job hangs every PR.
-  # ============================================================
+  # =====================================================
   ci-complete:
     name: CI Complete
     needs:

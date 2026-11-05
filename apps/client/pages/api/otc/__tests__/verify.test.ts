@@ -1,3 +1,6 @@
+vi.mock('@server/auth/withAccountNotPurging', () => ({
+  withAccountNotPurging: async (_id: string, write: () => Promise<unknown>) => write(),
+}));
 import { signupProtection } from '@server/auth/signupProtection';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh: vi.fn(async () => 'queued') }));
@@ -175,6 +178,8 @@ vi.mock('@bike4mind/database', () => ({
     // The domain grant claims the one-grant-per-inbox entitlement before crediting; these tests
     // are about the handler, so the inbox is always free here.
     claimFreeCreditGrant: (...a: unknown[]) => mockClaimFreeCreditGrant(...a),
+    // The domain grant also checks the account has not been blocked from grants; none is blocked here.
+    findById: async () => null,
   },
   pendingOtcTokenRepository: {
     validateAndRotateNonce: (...a: any[]) => mockValidateNonce(...a),
@@ -1202,6 +1207,30 @@ describe('/api/otc/verify - existing user verification and pending free credits'
     expect(mockValidateNonce).toHaveBeenNthCalledWith(2, NON_DOMAIN_EMAIL, 'jti-1', expect.any(String));
   });
 
+  it('refuses a payment-hold account with the hold notice instead of issuing a session', async () => {
+    mockFindByEmail.mockResolvedValue(pendingUser({ emailVerified: true, tags: ['Customer'], disputePending: true }));
+
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toMatch(/on hold pending a payment review/);
+    expect(authSessionService.issueSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses a moderation-suspended account with its notice', async () => {
+    mockFindByEmail.mockResolvedValue(
+      pendingUser({ emailVerified: true, tags: ['Customer'], moderation: { status: 'suspended' } })
+    );
+
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toMatch(/content-policy violations/);
+    expect(authSessionService.issueSession).not.toHaveBeenCalled();
+  });
+
   it('strips secrets and undeclared fields from the flat login body', async () => {
     // Deliberately not `pendingUser`: a loosened schema has to fail on a leaked secret, and a
     // toJSON on the seeded doc would instead serialize the login body without the accessToken.
@@ -1440,6 +1469,40 @@ describe('/api/otc/verify - partner-domain invite bypass', () => {
       pendingCreditGrant: 3000,
     });
     expect(releasedAfterCommit).toBe(true);
+  });
+
+  it('releases the staged default grant of a no-amount invite code after the invite transaction', async () => {
+    mockReleasePending.mockResolvedValue({
+      released: true,
+      creditsGranted: 10,
+      currentCredits: 10,
+      patch: { tags: [] },
+    });
+    mockClearPending.mockResolvedValue({ tags: [] });
+    mockFindUserById.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 10 });
+    mockRegisterViaOTC.mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+      currentCredits: 0,
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: null,
+    });
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    req.body.inviteCode = 'BULK123';
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRegisterViaOTC).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ deferFreeCreditRelease: true })
+    );
+    expect(mockReleasePending).toHaveBeenCalledTimes(1);
+    expect(mockReleasePending.mock.calls[0][0]).toEqual({
+      id: 'user-1',
+      tags: ['Customer', PENDING_FREE_CREDITS_TAG],
+      pendingCreditGrant: null,
+    });
   });
 
   it('leaves the credit release to registerViaOTC when there is no invite transaction', async () => {

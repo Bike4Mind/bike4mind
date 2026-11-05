@@ -2,6 +2,7 @@ import {
   CreditHolderType,
   hasPaidSignupDrip,
   isPaymentUnlockReason,
+  isSignupGrantBlocked,
   PENDING_FREE_CREDITS_TAG,
   resolveSignupGrantSchedule,
   signupGrantDripOpen,
@@ -28,6 +29,8 @@ import {
 } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
+import { payInviteBonus } from './inviteBonus';
+import { callerTransactionSession, inCallerTransaction } from './callerTransaction';
 import {
   queueHeadBlocks,
   reserveSignupGrantBudget,
@@ -50,6 +53,15 @@ export type SignupGrantValidator = (
 type DripEvidence = { drip: { day: string; dailyCredits: number; dripCap: number; period?: string } };
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
+
+/**
+ * The tranche is paid right after its caller read the account, so a missing one is a transaction that cannot
+ * see it (or a deleted account): fail loudly so releasePendingFreeCredits keeps the pending tag for a retry.
+ */
+function assertTrancheAccountVisible<U>(user: U | null | undefined, expected: SignupGrant['stage']) {
+  if (!user && expected === 'pending_email') throw new Error('Signup grant account not found');
+  return user;
+}
 
 /** The ledger description of an unlock tranche; the row's `reason` carries the machine label. */
 const SIGNUP_UNLOCK_DESCRIPTIONS: Readonly<Record<SignupGrantUnlockReason, string>> = {
@@ -88,9 +100,23 @@ function isReleaseEligible(
   expected: SignupGrant['stage']
 ): user is IUserDocument & { signupGrant: SignupGrant } {
   if (!user?.signupGrant || accountBlockReasons(user).length || isAiAccessRevoked(user)) return false;
+  if (isSignupGrantBlocked(user)) return false;
   if (expected === 'pending_email') return user.signupGrant.stage === expected;
   // An unpaid tranche blocks every unlock; unlockSignupGrant pays a held tranche first on a card or payment unlock.
   return user.signupGrant.stage !== 'pending_email';
+}
+
+/**
+ * A blocked account's pending tranche is withheld rather than a plain zero: releasePendingFreeCredits
+ * strips PENDING_FREE_CREDITS_TAG on a non-withheld zero, which would strand the tranche after an unblock.
+ */
+function ineligibleResult(
+  user: IUserDocument | null | undefined,
+  expected: SignupGrant['stage']
+): GrantFreeCreditsResult {
+  return expected === 'pending_email' && user && isSignupGrantBlocked(user)
+    ? { ...noGrant(), withheld: true }
+    : noGrant();
 }
 
 /** A refunded, disputed or fraud-warned payment closes every signup release except an admin's. */
@@ -120,8 +146,9 @@ async function releaseStage(
 ): Promise<GrantFreeCreditsResult> {
   const { db, audit } = adapters;
   if (db.signupProtection) {
-    const user = await db.users.findById(userId);
-    if (!isReleaseEligible(user, expected) || isForfeitedRelease(user.signupGrant, reason)) return noGrant();
+    const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
+    if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
+    if (isForfeitedRelease(user.signupGrant, reason)) return noGrant();
     if (!user.emailVerified) {
       if (expected === 'pending_email') throw new Error('Email verification required for signup grant');
       return noGrant();
@@ -137,9 +164,10 @@ async function releaseStage(
   const reservations: SignupGrantBudgetReservation[] = [];
   const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
   try {
-    const result = await withTransaction<AssessedGrantResult>(async () => {
-      const user = await db.users.findById(userId);
-      if (!isReleaseEligible(user, expected) || isForfeitedRelease(user.signupGrant, reason)) return noGrant();
+    const result = await inCallerTransaction<AssessedGrantResult>(async () => {
+      const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
+      if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
+      if (isForfeitedRelease(user.signupGrant, reason)) return noGrant();
       const grant = user.signupGrant;
       const evidence = await validate(user);
       if (!evidence) return noGrant();
@@ -351,6 +379,13 @@ async function releaseStage(
         console.warn('[signup-risk] Band telemetry failed after grant commit');
       }
     }
+    // A later paying release retries a bonus an exhausted pool or a failure left unpaid. Inside a caller's
+    // transaction a failed bonus write would abort the caller's commit, so it waits for that later release.
+    if ((expected === 'pending_email' || grantResult.creditsGranted > 0) && !callerTransactionSession()) {
+      await payInviteBonus(userId, adapters).catch(() => {
+        console.warn('[signup-grant] Invite bonus payout failed; a later release retries it');
+      });
+    }
     return grantResult;
   } catch (error) {
     // The counter sits outside the payout transaction, so an aborted payout must hand its draw back.
@@ -400,6 +435,7 @@ export async function hasSignupBacklog(users: FreeCreditAdapters['db']['users'],
     isModerated: { $ne: true },
     disputePending: { $ne: true },
     'moderation.status': { $ne: 'suspended' },
+    'signupGrant.blocked': { $exists: false },
     deletedAt: { $exists: false },
     signupGrantHeldAt: { $lt: new Date(`${day}T00:00:00.000Z`) },
   });

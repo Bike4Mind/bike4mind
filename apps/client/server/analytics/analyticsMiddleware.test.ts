@@ -68,6 +68,20 @@ describe('analyticsMiddleware — gating', () => {
     expect(emitActiveEvent).not.toHaveBeenCalled();
   });
 
+  it('calls next() and skips emit for an account scheduled for deletion', () => {
+    const mw = analyticsMiddleware();
+    const user = {
+      id: 'u-del',
+      isSystem: false,
+      level: 'DemoUser',
+      subscribedUntil: null,
+      deletion: { scheduledFor: new Date() },
+    };
+    mw(makeReq({ user: user as never }), res, next);
+    expect(emitActiveEvent).not.toHaveBeenCalled();
+    expect(next).toHaveBeenCalled();
+  });
+
   it('calls next() and skips emit when not configured', () => {
     (isAnalyticsConfigured as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const mw = analyticsMiddleware();

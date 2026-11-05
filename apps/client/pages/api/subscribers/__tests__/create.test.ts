@@ -302,6 +302,29 @@ describe('/api/subscribers/create - signup source', () => {
     expect(text).not.toContain('<!channel>');
   });
 
+  it('breaks bare broadcast words in names so they cannot page the channel', async () => {
+    await submit({ firstName: '@channel', lastName: 'hi @here', email: 'x@example.com' });
+
+    const text = mocks.postMessageToSlack.mock.calls[0][0] as string;
+    expect(text).toContain('@\u200Bchannel hi @\u200Bhere');
+    expect(text).not.toMatch(/@(channel|here)\b/);
+  });
+
+  it('breaks links and domains in names so Slack does not auto-link them', async () => {
+    await submit({ firstName: 'https://evil.example', lastName: 'go evil.com', email: 'x@example.com' });
+
+    const text = mocks.postMessageToSlack.mock.calls[0][0] as string;
+    expect(text).toContain('https:\u200B//evil.\u200Bexample go evil.\u200Bcom');
+    expect(text).not.toContain('evil.com');
+    expect(text).not.toContain('https://');
+  });
+
+  it('leaves the subscriber email intact in the alert', async () => {
+    await submit({ ...person, email: 'ada.l@example.com' });
+
+    expect(mocks.postMessageToSlack.mock.calls[0][0]).toContain('(ada.l@example.com)');
+  });
+
   it('rejects a source outside the known set rather than storing caller-chosen text', async () => {
     await expect(submit({ ...person, source: 'anything-goes' })).rejects.toBeInstanceOf(ZodError);
     expect(mocks.create).not.toHaveBeenCalled();

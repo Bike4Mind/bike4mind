@@ -2,7 +2,8 @@
 import { estimateFit, isCpuOnly, type FitInput, type HardwareProfile, type ModelArch } from '@bike4mind/common';
 import { OUTPUT_RESERVE_TOKENS, replyRoom } from '@bike4mind/local-models/servers';
 import { estimateTextTokens } from '@shared/contextLimit';
-import { LOCAL_CONTEXT_SIZES, type LocalContextSetting } from '@shared/localContextSetting';
+import { LOCAL_CONTEXT_SIZES, type ModelContextSetting } from '@shared/localContextSetting';
+import type { FlashAttention, QuantizedKvCacheType } from '@shared/modelServers';
 
 export interface OllamaMessage {
   role: string;
@@ -55,10 +56,17 @@ export interface LocalModelFootprint {
   /** The projector's part of weightsBytes, when known. */
   projectorBytes?: number;
   hardware: HardwareProfile | null;
+  /** Draft tokens per step while Ollama speculates (MTP or a draft layer); absent or 0 when it does not. */
+  draftMax?: number;
+  /** The OLLAMA_KV_CACHE_TYPE the daemon runs with (see ModelServerRegistry.kvCacheType); absent is f16. */
+  kvCacheType?: QuantizedKvCacheType;
+  /** The daemon's OLLAMA_FLASH_ATTENTION when Desktop knows it (see ModelServerRegistry.flashAttention); absent is auto. */
+  flashAttention?: FlashAttention;
 }
 
 export interface ChatContextInput {
-  setting: LocalContextSetting;
+  /** The Settings choice, or the model's own from the Models screen, which may cap Auto. */
+  setting: ModelContextSetting;
   footprint: LocalModelFootprint;
   /** The trained length Ollama reports, for a model whose arch Desktop cannot read. */
   modelLimit?: number;
@@ -68,16 +76,29 @@ export interface ChatContextInput {
 
 type SizedInput = Omit<FitInput, 'context'>;
 
-function fitInput({ arch, weightsBytes, projectorBytes = 0, hardware }: LocalModelFootprint): SizedInput | null {
+function fitInput({
+  arch,
+  weightsBytes,
+  projectorBytes = 0,
+  hardware,
+  draftMax = 0,
+  kvCacheType,
+  flashAttention,
+}: LocalModelFootprint): SizedInput | null {
   if (!arch || !weightsBytes || !hardware?.totalMemoryBytes) return null;
   const mmprojBytes = projectorBytes < weightsBytes ? projectorBytes : 0;
-  // Ollama's cache type, flash attention and num_parallel are daemon settings its API does not report, so
-  // this assumes the defaults; flash attention off or num_parallel above 1 makes the real footprint larger.
+  // Ollama's API reports none of its daemon settings, so these are what Desktop started it with or read from its
+  // process; num_parallel above 1 still makes the real footprint larger.
   return {
     model: { arch, weightsBytes: weightsBytes - mmprojBytes, mmprojBytes },
     hardware,
     mode: 'chat',
-    runtime: { kind: 'ollama' },
+    runtime: {
+      kind: 'ollama',
+      ...(flashAttention ? { flashAttn: flashAttention } : {}),
+      ...(draftMax > 0 ? { draftMax, speculative: true } : {}),
+      ...(kvCacheType ? { kv: { k: kvCacheType, v: kvCacheType } } : {}),
+    },
   };
 }
 
@@ -97,13 +118,24 @@ function resident(input: SizedInput, context: number): boolean {
   return !!requested?.fits && (requested.placement === 'gpu' || requested.placement === 'cpu');
 }
 
+/** The trained length, lowered to an Auto cap the model's own setting sets. */
+export function autoLimit(
+  setting: ModelContextSetting,
+  footprint: LocalModelFootprint,
+  modelLimit: number | undefined
+): number | undefined {
+  const trained = trainedLimit(footprint, modelLimit);
+  const cap = setting.mode === 'auto' ? setting.maxTokens : undefined;
+  return cap === undefined ? trained : Math.min(trained ?? cap, cap);
+}
+
 /**
  * Auto: the trained length or the largest Settings size that stays resident, at most 32K without a GPU,
- * else (or unmeasured) 16K; a larger resident Modelfile num_ctx within those bounds wins.
- * Fixed: the Settings size. Never past the trained length.
+ * else (or unmeasured) 16K; a larger resident Modelfile num_ctx within those bounds wins. A cap lowers
+ * the trained length. Fixed: the Settings size. Never past the trained length.
  */
 export function chatContextTokens({ setting, footprint, modelLimit, configured }: ChatContextInput): number {
-  const limit = trainedLimit(footprint, modelLimit);
+  const limit = autoLimit(setting, footprint, modelLimit);
   const cap = (tokens: number) => (limit === undefined ? tokens : Math.min(tokens, limit));
   if (setting.mode === 'fixed') return cap(setting.tokens);
   const floor = cap(LOCAL_CONTEXT_TARGET_TOKENS);
@@ -182,8 +214,8 @@ const MIN_REPLY_TOKENS = 256;
 
 /**
  * The max_tokens to send on a context the server fixes, which refuses (vLLM) a prompt plus
- * max_tokens past it: the limit when it fits, the room left when it does not, and none when that
- * room is too small, so the server answers in whatever is left. The margin covers the estimate.
+ * max_tokens past it: the limit when it fits, the room left when it does not, and undefined when that
+ * room is too small; the caller then sends the turn's cap and sizes a retry from the refusal. The margin covers the estimate.
  */
 export function replyLimit(
   context: number | undefined,

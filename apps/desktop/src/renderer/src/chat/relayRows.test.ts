@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { automaticSummary, displayText, relaySummary } from './relayRows';
+import { automaticSummary, displayText, relaySummary, relaySummaryParts } from './relayRows';
 
 const from = { fromSessionId: 'abc', fromTitle: 'Docs pass', hops: 1 };
 
@@ -41,6 +41,37 @@ describe('relaySummary', () => {
   });
 });
 
+describe('relaySummary variants', () => {
+  it('names the sender project when the message came from another one', () => {
+    expect(relaySummary({ content: 'hi', relay: { ...from, fromProject: 'docs' } })).toBe(
+      'Received message from Docs pass (docs): hi'
+    );
+    expect(relaySummary({ content: '  ', relay: { ...from, fromProject: 'docs' } })).toBe(
+      'Received message from Docs pass (docs)'
+    );
+  });
+
+  it('reads a done notice as the sender finishing, without the received-message prefix', () => {
+    const relay = { ...from, kind: 'done' as const, fromProject: 'docs' };
+    expect(relaySummary({ content: 'model-facing text', relay })).toBe(
+      'Docs pass finished the turn your message started'
+    );
+  });
+
+  it('splits around the sender so the name can be a link', () => {
+    expect(relaySummaryParts({ content: 'hi', relay: from })).toEqual({
+      lead: 'Received message from ',
+      sender: 'Docs pass',
+      tail: ': hi',
+    });
+    expect(relaySummaryParts({ content: 'x', relay: { ...from, kind: 'done' } })).toEqual({
+      lead: '',
+      sender: 'Docs pass',
+      tail: ' finished the turn your message started',
+    });
+  });
+});
+
 describe('displayText', () => {
   it('prefers the user-facing wording when there is one', () => {
     expect(displayText({ content: 'read it with session_read (abc)', display: 'It has finished.' })).toBe(
@@ -70,5 +101,10 @@ describe('automaticSummary', () => {
   it('says a background command finished rather than crediting auto-fix', () => {
     const automatic = { kind: 'background-exit' as const, processIds: ['a1b2c3d4'], summary: '[a1b2c3d4] exited 0' };
     expect(automaticSummary({ automatic })).toBe('Background command finished: [a1b2c3d4] exited 0');
+  });
+
+  it('says the agents finished rather than crediting auto-fix', () => {
+    const automatic = { kind: 'agents-settled' as const, sessionIds: ['s1', 's2'], summary: '2 agents: 2 done' };
+    expect(automaticSummary({ automatic })).toBe('Agents finished: 2 agents: 2 done');
   });
 });

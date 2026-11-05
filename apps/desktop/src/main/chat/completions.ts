@@ -13,6 +13,15 @@ import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
 
 /**
+ * How long the completion POST waits for response headers (ms), overriding the shared client's
+ * 30 s. The server holds its headers until auth, model resolution and the credit hold are done,
+ * so a cold start or a queued request can take well past 30 s before any byte arrives. It does
+ * not cap total reply length, but axios also keeps it as a socket idle limit after headers, so a
+ * silent gap this long mid-reply still aborts the stream.
+ */
+export const COMPLETION_HEADER_TIMEOUT_MS = 120_000;
+
+/**
  * `content` is a string for an ordinary turn, or an array of provider-shaped blocks
  * (`tool_use`, `tool_result`, reasoning) when a turn carries tool traffic. The endpoint
  * accepts both - see CompletionMessageSchema in @bike4mind/common.
@@ -120,6 +129,8 @@ export interface CompletionRequest {
   sessionId?: string;
   /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
   toolPromptTokens?: number;
+  /** Set when the tools were left out because the listed model reports no tool support. */
+  toolsUnsupported?: true;
 }
 
 /**
@@ -129,6 +140,9 @@ export interface CompletionRequest {
  * an abort is a normal outcome here, since stopping a reply is a user action, not a failure.
  * Rejects on a pre-stream HTTP failure or a mid-stream socket error.
  *
+ * A dropped connection is never retried: the server keeps generating after the client goes
+ * away, so a second request could bill a second completion or replay a server-side tool.
+ *
  * Callback-based rather than an async iterable because every consumer forwards straight to an
  * IPC push, which cannot exert backpressure anyway.
  */
@@ -137,7 +151,53 @@ export async function streamCompletion(
   endpoint: string,
   request: CompletionRequest,
   onEvent: (event: CompletionStreamEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: StreamOptions = {}
+): Promise<void> {
+  try {
+    await streamOnce(axiosInstance, endpoint, request, onEvent, signal, options);
+  } catch (err) {
+    if (!isConnectionDrop(err)) throw err;
+    if (signal?.aborted) return;
+    throw new Error(`The connection to the server dropped before the reply finished (${err.message}).`);
+  }
+}
+
+export interface StreamOptions {
+  /** How long the open stream may go without a byte before it is treated as dropped. In ms. */
+  idleTimeoutMs?: number;
+}
+
+/**
+ * The server writes a keepalive every 10s (HEARTBEAT_INTERVAL_MS in the client app's sseRoute),
+ * so this much silence is a dead connection. Generous on purpose: a busy machine can hold the
+ * event loop long enough that bytes already received look late.
+ */
+export const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+class StreamIdleError extends Error {
+  readonly code = 'ESTREAMIDLE';
+  constructor(ms: number) {
+    super(`no data for ${Math.round(ms / 1000)}s`);
+  }
+}
+
+const DROP_CODES = new Set(['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ESTREAMIDLE']);
+
+/** A transport failure of an open stream, as opposed to anything the server said. */
+function isConnectionDrop(err: unknown): err is Error {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  return typeof code === 'string' && DROP_CODES.has(code);
+}
+
+async function streamOnce(
+  axiosInstance: AxiosInstance,
+  endpoint: string,
+  request: CompletionRequest,
+  onEvent: (event: CompletionStreamEvent) => void,
+  signal: AbortSignal | undefined,
+  options: StreamOptions
 ): Promise<void> {
   if (signal?.aborted) return;
 
@@ -170,20 +230,45 @@ export async function streamCompletion(
           ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
-      { responseType: 'stream', signal }
+      { responseType: 'stream', signal, timeout: COMPLETION_HEADER_TIMEOUT_MS }
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
     throw toRequestError(err, await readErrorBody(err));
   }
 
-  await readSseStream(response, onEvent, signal, { model: request.model, sessionId: request.sessionId });
+  releaseRequestTimeout(response);
+  await readSseStream(response, onEvent, signal, {
+    model: request.model,
+    sessionId: request.sessionId,
+    idleTimeoutMs: options.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS,
+  });
+}
+
+/**
+ * Lift the client's request timeout off the socket once the stream is open.
+ *
+ * axios hands its `timeout` to follow-redirects, which sets it as the SOCKET's idle timeout with
+ * `socket.destroy` as the handler, and clears only its own wall-clock timer when the response
+ * arrives. Left alone, any gap that long between bytes of a reply - or an event loop held that
+ * long - destroys the socket, and the stream fails with Node's bare "aborted". readSseStream's
+ * idle guard bounds the stream instead.
+ */
+function releaseRequestTimeout(response: AxiosResponse): void {
+  const request: unknown = response.request;
+  if (!request || typeof request !== 'object' || !('socket' in request)) return;
+  const socket: unknown = request.socket;
+  if (socket && typeof socket === 'object' && 'setTimeout' in socket && typeof socket.setTimeout === 'function') {
+    socket.setTimeout(0);
+  }
 }
 
 /** What the dev log tags this request's frames with. See logUpstream. */
 interface StreamContext {
   model: string;
   sessionId?: string;
+  /** See STREAM_IDLE_TIMEOUT_MS. In ms. */
+  idleTimeoutMs: number;
 }
 
 /**
@@ -231,7 +316,24 @@ function readSseStream(
     const stream = response.data as NodeJS.ReadableStream & { destroy(): void };
     let settled = false;
 
+    let lastByteAt = Date.now();
+    let idleTimer: NodeJS.Timeout | undefined;
+    // Checked from setImmediate, after the poll phase: bytes that arrived while the event loop
+    // was busy are read (and refresh lastByteAt) before the stream is judged idle.
+    const armIdle = (delay: number) => {
+      idleTimer = setTimeout(
+        () =>
+          setImmediate(() => {
+            if (settled) return;
+            const quiet = Date.now() - lastByteAt;
+            if (quiet >= context.idleTimeoutMs) fail(new StreamIdleError(quiet));
+            else armIdle(context.idleTimeoutMs - quiet);
+          }),
+        delay
+      );
+    };
     const cleanup = () => {
+      clearTimeout(idleTimer);
       signal?.removeEventListener('abort', onAbort);
       stream.off('data', onData);
       stream.off('end', onEnd);
@@ -280,6 +382,7 @@ function readSseStream(
     // turn both halves into U+FFFD.
     const decoder = new StringDecoder('utf8');
     const onData = (chunk: Buffer) => {
+      lastByteAt = Date.now();
       if (signal?.aborted) return;
       parser.feed(decoder.write(chunk));
     };
@@ -292,6 +395,7 @@ function readSseStream(
     stream.on('data', onData);
     stream.on('end', onEnd);
     stream.on('error', onError);
+    armIdle(context.idleTimeoutMs);
     if (signal) {
       if (signal.aborted) onAbort();
       else signal.addEventListener('abort', onAbort, { once: true });
@@ -320,6 +424,13 @@ function toRequestError(error: unknown, body?: string): Error {
     }
     if (error.code === 'ECONNREFUSED') {
       return new Error('Cannot reach the Bike4Mind server. Check the environment and your connection.');
+    }
+    // Not retried here: the server does not cancel on disconnect, so the abandoned request may
+    // still run and bill, and a silent resend could charge the turn twice.
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      return new Error(
+        'The Bike4Mind server took too long to start replying, so this turn stopped. Send your message again to continue.'
+      );
     }
   }
   return error instanceof Error ? error : new Error(String(error));

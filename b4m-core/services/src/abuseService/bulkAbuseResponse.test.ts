@@ -8,6 +8,7 @@ import {
   userIdUpperBound,
   previewBulkAbuseCounts,
   resolveBulkAbuseCohort,
+  SIGNUP_GRANT_TRANSACTION_ID,
   type BulkAbuseCohortAdapters,
   type BulkAbuseExecuteAdapters,
 } from './bulkAbuseResponse';
@@ -52,6 +53,7 @@ function matches(row: Record<string, unknown>, filter: Record<string, unknown>):
     if (condition && typeof condition === 'object' && !Array.isArray(condition)) {
       const ops = condition as Record<string, unknown>;
       if ('$in' in ops) return (ops.$in as unknown[]).includes(value);
+      if ('$regex' in ops) return typeof value === 'string' && (ops.$regex as RegExp).test(value);
       if ('$ne' in ops) return value !== ops.$ne;
     }
     return value === condition;
@@ -301,6 +303,22 @@ describe('clawbackAmount', () => {
   });
 });
 
+describe('SIGNUP_GRANT_TRANSACTION_ID', () => {
+  it('matches every free signup credit ledger id and nothing else', () => {
+    for (const txId of [
+      `verify-grant:${id(7)}`,
+      `otc-register-grant:${id(7)}`,
+      `unlock-grant:${id(7)}`,
+      `unlock-grant:${id(7)}:500`,
+      `unlock-grant:activity:${id(7)}:2026-11-05`,
+      `invite-bonus:${id(7)}`,
+    ])
+      expect(SIGNUP_GRANT_TRANSACTION_ID.test(txId)).toBe(true);
+    for (const txId of [`referral:${id(7)}`, `stripe:${id(7)}`, `x-verify-grant:${id(7)}`])
+      expect(SIGNUP_GRANT_TRANSACTION_ID.test(txId)).toBe(false);
+  });
+});
+
 describe('previewBulkAbuseCounts', () => {
   it('totals keys, banned users and unspent grant credits, skipping users already clawed back', async () => {
     const users = [makeUser(1, { currentCredits: 30 }), makeUser(2, { isBanned: true }), makeUser(3)];
@@ -325,6 +343,29 @@ describe('previewBulkAbuseCounts', () => {
     expect(counts.sample.map(user => user.id)).toEqual([id(1), id(2), id(3)]);
     // The same keys execute's deactivateAllByUserId disables: anything not already disabled.
     expect(count).toHaveBeenCalledWith({ userId: { $in: [id(1), id(2), id(3)] }, status: { $ne: 'disabled' } });
+  });
+
+  it('counts staged unlocks, drips and the invite bonus on top of the signup tranche', async () => {
+    const users = [makeUser(1, { currentCredits: 1000 })];
+    const credits: CreditRow[] = [
+      { ownerId: id(1), credits: 50, type: 'generic_add', transactionId: `verify-grant:${id(1)}` },
+      { ownerId: id(1), credits: 100, type: 'generic_add', transactionId: `unlock-grant:${id(1)}:150` },
+      { ownerId: id(1), credits: 20, type: 'generic_add', transactionId: `unlock-grant:activity:${id(1)}:2026-11-05` },
+      { ownerId: id(1), credits: 30, type: 'generic_add', transactionId: `invite-bonus:${id(1)}` },
+      { ownerId: id(1), credits: 500, type: 'generic_add', transactionId: `stripe:${id(1)}` },
+      { ownerId: id(2), credits: 70, type: 'generic_add', transactionId: `unlock-grant:${id(1)}` },
+    ];
+    const counts = await previewBulkAbuseCounts(users, {
+      db: {
+        userApiKeys: { count: vi.fn(async () => 0) },
+        creditTransactions: {
+          find: async (filter: Record<string, unknown>) =>
+            credits.filter(row => matches(row as unknown as Record<string, unknown>, filter)),
+        } as unknown as BulkAbuseExecuteAdapters['db']['creditTransactions'],
+      },
+    });
+
+    expect(counts.clawbackCredits).toBe(50 + 100 + 20 + 30);
   });
 });
 
@@ -396,6 +437,44 @@ describe('executeBulkAbuse', () => {
       'abuse.bulk.ban',
       'abuse.bulk.revoke_keys',
     ]);
+  });
+
+  it('settles a signup risk review as banned, keeping its score', async () => {
+    const riskScore = { score: 60, signals: [], computedAt: new Date('2026-10-20'), reviewState: 'pending' as const };
+    const user = makeUser(1, { riskScore });
+    const { adapters, store, audit } = executeAdapters([user], []);
+
+    await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore).toEqual({ ...riskScore, reviewState: 'banned' });
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'abuse.bulk.ban',
+        changes: [
+          { field: 'isBanned', before: false, after: true },
+          { field: 'riskScore.reviewState', before: 'pending', after: 'banned' },
+        ],
+      })
+    );
+  });
+
+  it('bans an unscored account without inventing a risk score', async () => {
+    const user = makeUser(1);
+    const { adapters, store } = executeAdapters([user], []);
+
+    await executeBulkAbuse([user], ONLY('ban'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore).toBeUndefined();
+  });
+
+  it('leaves the risk review alone when only revoking keys', async () => {
+    const riskScore = { score: 60, signals: [], computedAt: new Date('2026-10-20'), reviewState: 'pending' as const };
+    const user = makeUser(1, { riskScore });
+    const { adapters, store } = executeAdapters([user], [], { [id(1)]: 1 });
+
+    await executeBulkAbuse([user], ONLY('revokeApiKeys'), ACTOR_ID, adapters);
+
+    expect(store.get(id(1))?.riskScore?.reviewState).toBe('pending');
   });
 
   it('still bumps tokenVersion but skips the audit row and sockets when nothing was left to revoke', async () => {

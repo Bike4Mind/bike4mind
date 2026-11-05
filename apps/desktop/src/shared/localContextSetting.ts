@@ -1,6 +1,11 @@
-/** The context sizes Settings offers for local models; Desktop's own instructions alone run past 8K. */
-export const LOCAL_CONTEXT_SIZES = [16384, 32768, 65536, 131072, 262144] as const;
-export type LocalContextSize = (typeof LOCAL_CONTEXT_SIZES)[number];
+import { LOCAL_CONTEXT_SIZES, type LocalContextSize } from '@bike4mind/local-models/model-settings';
+
+export {
+  LOCAL_CONTEXT_SIZES,
+  parseModelContextSetting,
+  type LocalContextSize,
+  type ModelContextSetting,
+} from '@bike4mind/local-models/model-settings';
 
 /** How local models size their context: from this computer's memory, or one size for every model. */
 export type LocalContextSetting = { mode: 'auto' } | { mode: 'fixed'; tokens: LocalContextSize };
@@ -20,5 +25,6 @@ export function parseLocalContextSetting(value: unknown): LocalContextSetting {
 }
 
 export function contextSizeLabel(tokens: number): string {
-  return `${Math.round(tokens / 1024)}K tokens`;
+  const k = tokens / 1024;
+  return tokens >= 1024 && Number.isInteger(k * 10) ? `${k}K tokens` : `${tokens} tokens`;
 }

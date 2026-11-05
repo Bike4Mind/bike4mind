@@ -1,9 +1,9 @@
 import React, { useId, useState } from 'react';
 import { Checkbox, FormControl, FormHelperText, FormLabel, Input, Stack } from '@mui/joy';
 import { useUpdateSubscriptionCredits } from '@client/app/hooks/data/subscriptions';
-import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, useUndoToast } from '../../../shared';
+import { ActionDialog, ADMIN_REASON_PRESETS, undoAdminReason, ChangePreview, useUndoToast } from '../../../shared';
 import { formatCreditDelta, formatCredits } from '../../../Users/Profile/actions/creditAdjustment';
-import { ownerDisplayName, undoReason, type SubscriptionDialogProps } from '../subscriptionDetailModel';
+import { ownerDisplayName, type SubscriptionDialogProps } from '../subscriptionDetailModel';
 
 /** A positive whole number, thousands separators allowed; `null` for anything else. */
 export const parseCreditsPerCycle = (raw: string): number | null => {
@@ -67,7 +67,7 @@ export const EditCreditsPerCycleDialog: React.FC<SubscriptionDialogProps> = ({ d
           ? 'Credits per cycle reset to the plan default'
           : `Credits per cycle set to ${formatCredits(nextOverride)}`,
       onUndo: async () => {
-        await submit(previous, undoReason(reason));
+        await submit(previous, undoAdminReason(reason));
       },
       onViewAudit: onAudit,
     });
