@@ -47,6 +47,7 @@ export class ModelLiveView {
   private lastReport: ModelBuildReport | null = null;
   private lastGlb: string | null = null;
   private waiters: Waiter[] = [];
+  private readSeq = 0;
   private captures = new Map<string, PendingCapture>();
   private readonly debounceMs: number;
   private readonly buildTimeoutMs: number;
@@ -96,7 +97,9 @@ export class ModelLiveView {
   async refresh(): Promise<void> {
     const { path, kind } = this.state;
     if (!path || !kind) return;
+    const seq = ++this.readSeq;
     const { source, missing } = await this.read(path, kind === 'model');
+    if (seq !== this.readSeq || this.state.path !== path) return;
     // Binary assets read as null both times; their content changes arrive via refreshFromWatch.
     if (source === this.state.source && missing === this.state.missing) return;
     this.lastGlb = null;

@@ -75,6 +75,42 @@ describe('ModelLiveView', () => {
     await expect(pending).resolves.toMatchObject({ generation: 2 });
   });
 
+  type ReadResult = { source: string | null; missing: boolean };
+
+  function holdNextRead(): (result: ReadResult) => void {
+    let release: (result: ReadResult) => void = () => undefined;
+    const held = new Promise<ReadResult>(resolve => {
+      release = resolve;
+    });
+    vi.spyOn(view as unknown as { read: () => Promise<ReadResult> }, 'read').mockImplementationOnce(() => held);
+    return release;
+  }
+
+  it('drops a refresh that finishes after another file was opened', async () => {
+    await view.open(file);
+    const other = join(dir, 'other.model.js');
+    writeFileSync(other, SOURCE.replace('60', '99'));
+    const release = holdNextRead();
+    const refreshing = view.refresh();
+    await view.open(other);
+    release({ source: 'stale', missing: false });
+    await refreshing;
+    expect(view.current()).toMatchObject({ path: other, source: SOURCE.replace('60', '99') });
+  });
+
+  it('drops a refresh that finishes after a newer one', async () => {
+    await view.open(file);
+    const releaseOld = holdNextRead();
+    const older = view.refresh();
+    const releaseNew = holdNextRead();
+    const newer = view.refresh();
+    releaseNew({ source: 'newer', missing: false });
+    await newer;
+    releaseOld({ source: 'older', missing: false });
+    await older;
+    expect(view.current().source).toBe('newer');
+  });
+
   it('waitForBuild times out when no window builds', async () => {
     await view.open(file);
     await expect(view.waitForBuild()).rejects.toThrow(/did not finish building/);
