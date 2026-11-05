@@ -184,8 +184,7 @@ const AUTHORING_FORBIDDEN =
   `${WRITE_FORBIDDEN} The same status also answers a caller whose account has AI access revoked; that body ` +
   'carries only `error`, with no `required_scopes`.';
 
-const AUTHORING_400 =
-  'The assistant cannot run: the feature is disabled or not configured on this deployment.';
+const AUTHORING_400 = 'The assistant cannot run: the feature is disabled or not configured on this deployment.';
 
 const BILLING_400 =
   'The billing user or organization could not be resolved, or the API key bills an organization ' +
