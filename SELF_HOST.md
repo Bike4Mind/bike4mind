@@ -131,7 +131,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost build minio cre
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d minio createbuckets
 ```
 
-For updates, record the current checkout commit with `git rev-parse HEAD`, back up the `minio-data` volume, update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
+For updates, record the current checkout commit with `git rev-parse HEAD`, take a [backup](#backup-and-restore), update the checkout, and repeat those commands. The bucket initializer runs again and preserves existing buckets and objects. A new source pin takes effect only after rebuilding and recreating the services. Upstream MinIO and `mc` are archived and these pins are their final releases, so expect no further upstream pin bumps.
 
 To roll back the container code, restore the previous checkout commit and repeat the same build and start commands. Keep the data volume. Before downgrading across MinIO versions, check upstream storage-format compatibility; restoring the corresponding backup may be necessary. Do not use `docker compose down -v` for an update or rollback.
 
@@ -778,6 +778,52 @@ python3 scripts/verify-compose-queue-durability.py
 
 The drill derives its broker image, configuration mount, and storage mounts from the actual `sqs` service. It uses random project names and loopback ports, starts no application or worker, and reads no `.env.selfhost`. Replacement renews anonymous volumes so a missing named-volume mount cannot accidentally pass. It proves that the same pending message ID and body survive replacement, then deletes that message and proves it stays absent after another replacement and its visibility timeout. A second project overrides only `messages-storage.enabled = false` and must lose its pending message after replacement. The script prints the UTC date, source revision, configuration hashes, image ID, commands, and outcomes, and removes only its disposable projects and volumes on exit. Run it again after changing the broker image or storage configuration.
 
+## Backup and restore
+
+`scripts/selfhost_backup.py` backs up the durable user state of the Compose stack while it is running, and restores it into a fresh project. Python 3 and Docker Compose are required; run it from the repository root with the same `-f`, `--env-file`, and `--profile` flags you use to run the stack.
+
+**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless) but never the reverse. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup that does not match it.
+
+**What is not backed up:**
+
+- `.env.selfhost`. Keep a copy somewhere separate, encrypted, and off the host. `SECRET_ENCRYPTION_KEY` (and `SECRET_ENCRYPTION_KEY_PREVIOUS` if set) encrypts admin settings, API keys, and OAuth tokens stored in Mongo; a restore without the original key cannot decrypt them.
+- `sqs-data`: restoring stale pending messages can replay old work. See [Queue storage and container replacement](#queue-storage-and-container-replacement).
+- `opensearch-data`: an optional, rebuildable index; the app falls back to a scan while it is rebuilt.
+- `ollama-data`, `imagegen-*` and other model volumes: re-pullable.
+- MinIO user metadata and object tags (only object bytes are mirrored; content types are re-derived from file extensions on restore) and bucket versions.
+
+### Back up
+
+```bash
+python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.selfhost \
+  backup --dest /srv/backups/b4m-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+`--dest` must be empty or absent. The archive is not encrypted: protect it like the database, and encrypt any off-host copy.
+
+### Restore into a fresh project
+
+```bash
+python3 scripts/selfhost_backup.py -f compose.selfhost.yaml --env-file .env.selfhost \
+  -p b4m-restored restore --from /srv/backups/b4m-20260101T000000Z
+```
+
+Put the original `.env.selfhost` in place first. Restore starts `mongo` and `minio`, runs `mongorestore --drop --oplogReplay`, runs the `createbuckets` job (buckets, upload webhooks, lifecycle rules), then mirrors the objects back. It refuses a target Mongo that already holds data unless you pass `--yes`. Then bring up the rest of the stack with the same `-p`. To restore over the original project, stop the app services first and pass `--yes`.
+
+### Recovery point and retention
+
+- **Recovery point:** the time the last backup finished. Mongo is consistent as of the end of its dump; objects are a slightly later, non-atomic view. Anything after that is lost.
+- **Retention:** the tool does no scheduling or rotation. Assumed policy: run it daily from cron, keep 7 daily and 4 weekly copies, and copy each off the host. If you need a tighter recovery point, use a managed MongoDB with point-in-time recovery and an S3-compatible store with versioning.
+- **Alternative:** operators who already snapshot volumes can stop the stack and snapshot `mongo-data` and `minio-data` together. That copy is tied to the exact MongoDB and MinIO on-disk format and needs downtime.
+
+### Prove it restores
+
+```bash
+python3 scripts/verify-compose-backup-restore.py
+```
+
+With built `minio` and `createbuckets` images (see the storage build steps above) and `.env.selfhost`, the drill starts disposable `mongo` and `minio` projects, seeds one user and one 64 KiB file, runs a backup, deletes the source project, restores into a second fresh project, and prints `PASS user` and `PASS file sha256` only if the same user `_id` and the same file bytes come back. It starts no application, publishes no ports, and removes only its own projects and volumes. Run your own restore of a real backup before relying on it: the drill proves the tool, not your data.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
@@ -895,7 +941,7 @@ Whichever path you choose, do the checklist first.
 
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the account matching `B4M_BOOTSTRAP_ADMIN_EMAIL` becomes admin, or the first account created if it is unset). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
-- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`** (see [Backup and restore](#backup-and-restore)). It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
 ### Read-only production configuration preflight
 
@@ -909,7 +955,7 @@ python3 scripts/selfhost_production_preflight.py \
 
 The checks cover selected services: browser HTTPS/WSS URLs, missing/template secrets, encryption-key format, internal shared secrets, development mail catchers and SMTP settings, local Mongo auth flags and client credentials, local MinIO defaults, and non-loopback internal port publishes. External databases do not require a local Mongo service, but an active local Mongo is still checked. Non-root MinIO client accounts and SMTP relays without authentication are supported; their permissions and delivery are not tested. Custom Mongo entrypoints/config files and non-password local authentication require separate verification and fail this bounded check.
 
-The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth/restore not proven`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
+The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
 
 Run the checks' tests, including real Compose config/profile resolution against disposable example configuration, with:
 
