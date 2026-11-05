@@ -26,6 +26,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {},
   // The personal quota check re-reads the uploader before the hourly allowance is spent.
   User: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
+  userRepository: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({
