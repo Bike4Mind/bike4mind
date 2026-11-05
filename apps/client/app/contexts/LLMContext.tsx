@@ -342,13 +342,14 @@ export const useLLM = create(
     }),
     {
       name: 'llm-settings',
-      version: 7,
+      version: 8,
       migrate: (persistedState: any, version: number) => {
         // Nothing to migrate in a missing or corrupt entry; the store keeps its defaults.
         if (!persistedState || typeof persistedState !== 'object' || Array.isArray(persistedState)) return {};
         // Remap any persisted image-model ids that are now legacy/removed (e.g. dall-e-3, flux-dev).
         const remapLegacyImageModels = (state: Record<string, unknown>) => {
-          for (const key of ['imageModel', 'lastUsedImageModel'] as const) {
+          // `model` too: picking an image model as primary writes its id there (see setLLM).
+          for (const key of ['model', 'imageModel', 'lastUsedImageModel'] as const) {
             const value = state[key];
             if (typeof value === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_MAP, value)) {
               state[key] = LEGACY_IMAGE_MODEL_MAP[value];
@@ -401,6 +402,10 @@ export const useLLM = create(
           if (persistedState.max_tokens === DEFAULTS.max_tokens && !persistedState.defaultTextModel) {
             persistedState.max_tokens = 0;
           }
+        }
+        // Migration v7->v8: re-run the remap for gpt-image-1, retired by OpenAI and aliased to gpt-image-2.
+        if (version < 8) {
+          remapLegacyImageModels(persistedState);
         }
         return persistedState;
       },
