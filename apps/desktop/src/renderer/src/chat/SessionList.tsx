@@ -12,6 +12,7 @@ import {
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Chip from '@mui/joy/Chip';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
@@ -38,6 +39,8 @@ import {
   type ChatSessionSummary,
 } from '@shared/chat';
 import { useLocalHistory } from './localHistory';
+import { refLabel } from '@shared/githubRefs';
+import { findSessionsByRef } from './sessionRefSearch';
 import type { PrSummary } from '@shared/pullRequest';
 import { sectionOf, type SidebarSection, type SidebarSectionsState } from '@shared/sidebarSections';
 import { capRows, raisedRows, setGroupLimit, useGroupLimit } from './groupCap';
@@ -329,6 +332,8 @@ interface RowProps extends NestProps {
   userSections: readonly SidebarSection[];
   sectionId: string | undefined;
   actions: RowActions;
+  /** Set on a search result found by issue or PR number: what it matched, e.g. `PR #1234`. */
+  refChip?: string;
 }
 
 /** Shown in place of the main menu items, not as a flyout: Joy has no nested menu. */
@@ -492,6 +497,7 @@ const SessionRow = memo(function SessionRow({
   subActivity,
   subFolded = false,
   subFoldable = true,
+  refChip,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
@@ -689,6 +695,13 @@ const SessionRow = memo(function SessionRow({
             </Typography>
           )}
           {!editing && session.importOrigin && <ImportedBadge origin={session.importOrigin} />}
+          {refChip && !editing && (
+            <Box sx={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+              <Chip size="sm" variant="soft" color="primary" sx={{ flexShrink: 0 }} data-testid="chat-session-ref-chip">
+                {refChip}
+              </Chip>
+            </Box>
+          )}
           {preparing && !editing && (
             <Typography
               level="body-xs"
@@ -1033,11 +1046,27 @@ export function SessionList({
   const [width, setWidth] = useState(readSidebarWidth);
   const [dragging, setDragging] = useState(false);
 
+  // Sessions the query names by issue or PR number. They head the results, so they are left out
+  // of the title matches below rather than listed twice.
+  const refHits = useMemo(
+    () =>
+      findSessionsByRef(
+        query,
+        sessions.filter(session => session.mode === mode),
+        prSummaries
+      ),
+    [sessions, mode, query, prSummaries]
+  );
+
   const matching = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return sessions;
-    return sessions.filter(session => session.title.toLowerCase().includes(needle));
-  }, [sessions, query]);
+    const hitIds = new Set(refHits.map(hit => hit.session.id));
+    return sessions.filter(session => !hitIds.has(session.id) && session.title.toLowerCase().includes(needle));
+  }, [sessions, query, refHits]);
+
+  const searchInput = useRef<HTMLInputElement>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
 
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [importedOpen, setImportedOpen] = useState(false);
@@ -1096,6 +1125,7 @@ export function SessionList({
   // meanwhile, since a toggle could not show.
   const isFolded = useCallback((sessionId: string) => foldedIds.has(sessionId) && !searching, [foldedIds, searching]);
   const empty =
+    refHits.length === 0 &&
     sections.pinned.length === 0 &&
     sections.custom.length === 0 &&
     sections.projects.length === 0 &&
@@ -1106,8 +1136,11 @@ export function SessionList({
   // Also open while it holds the open session, so clearing a search does not hide the selection.
   const importedShown = importedOpen || searching || sections.imported.some(session => session.id === activeId);
   const ordered = useMemo(
-    () => orderedSessions(sections, { isOpen: sessionId => !isFolded(sessionId), includeImported: importedShown }),
-    [sections, importedShown, isFolded]
+    () => [
+      ...refHits.map(hit => hit.session),
+      ...orderedSessions(sections, { isOpen: sessionId => !isFolded(sessionId), includeImported: importedShown }),
+    ],
+    [refHits, sections, importedShown, isFolded]
   );
 
   // Read inside the key handler so the listener is bound once rather than rebuilt on every
@@ -1116,6 +1149,7 @@ export function SessionList({
   // the rows would redraw all of them each time.
   const target = useRef({
     ordered,
+    collapsed,
     onSelect,
     onToggleCollapsed,
     onDelete,
@@ -1127,6 +1161,7 @@ export function SessionList({
   });
   target.current = {
     ordered,
+    collapsed,
     onSelect,
     onToggleCollapsed,
     onDelete,
@@ -1189,6 +1224,15 @@ export function SessionList({
         return;
       }
 
+      // Focus the search, opening the sidebar first if it is collapsed; the effect below focuses
+      // once the input exists.
+      if (event.key === 'k' || event.key === 'K') {
+        event.preventDefault();
+        if (target.current.collapsed) target.current.onToggleCollapsed();
+        setFocusRequest(request => request + 1);
+        return;
+      }
+
       // `event.code` rather than `event.key`: on several non-US layouts the digit row only
       // produces a digit with a modifier already applied, and `key` is then a symbol.
       const digit = /^Digit([1-9])$/.exec(event.code)?.[1];
@@ -1203,6 +1247,12 @@ export function SessionList({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (focusRequest === 0 || collapsed) return;
+    searchInput.current?.focus();
+    searchInput.current?.select();
+  }, [focusRequest, collapsed]);
 
   /**
    * A row, then - unless it is folded - every session it spawned beneath it, recursively. One
@@ -1247,6 +1297,20 @@ export function SessionList({
     ];
   };
   const row = (session: ChatSessionSummary) => tree(session, 0, false, false, '');
+  const refRow = ({ session, match }: (typeof refHits)[number]) => (
+    <SessionRow
+      key={session.id}
+      session={session}
+      selected={session.id === activeId}
+      status={statuses.get(session.id) ?? 'done'}
+      pr={prSummaries.get(session.id)}
+      userSections={userSections.sections}
+      sectionId={sectionOf(userSections, session.id)}
+      actions={actions}
+      subFoldable={false}
+      refChip={refLabel(match.ref)}
+    />
+  );
 
   const draggingSectionId = draggedSession ? sectionOf(userSections, draggedSession) : undefined;
 
@@ -1454,9 +1518,18 @@ export function SessionList({
             size="sm"
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder="Search conversations"
+            onKeyDown={event => {
+              if (event.key === 'Enter' && ordered[0]) {
+                event.preventDefault();
+                onSelect(ordered[0].id);
+              } else if (event.key === 'Escape' && query) {
+                event.preventDefault();
+                setQuery('');
+              }
+            }}
+            placeholder="Search, or an issue / PR number"
             startDecorator={<SearchIcon />}
-            slotProps={{ input: { 'data-testid': 'chat-search-input' } }}
+            slotProps={{ input: { ref: searchInput, 'data-testid': 'chat-search-input' } }}
           />
           {historyError && (
             <Alert size="sm" color="danger" data-testid="local-history-error">
@@ -1565,6 +1638,15 @@ export function SessionList({
           </Typography>
         ) : (
           <>
+            {refHits.length > 0 && (
+              <Box data-testid="sidebar-ref-matches">
+                <SectionLabel>Issues and pull requests</SectionLabel>
+                <List size="sm" sx={SESSION_LIST_SX}>
+                  {refHits.map(refRow)}
+                </List>
+              </Box>
+            )}
+
             {sections.pinned.length > 0 && (
               <Box data-testid="sidebar-pinned">
                 <SectionLabel>Pinned</SectionLabel>
@@ -1597,7 +1679,10 @@ export function SessionList({
               <Box>
                 {/* In Code mode these are the sessions with no project yet, and they sit under
                     the project groups - unlabelled they read as belonging to the last one. */}
-                {(sections.pinned.length > 0 || sections.custom.length > 0 || sections.projects.length > 0) && (
+                {(refHits.length > 0 ||
+                  sections.pinned.length > 0 ||
+                  sections.custom.length > 0 ||
+                  sections.projects.length > 0) && (
                   <SectionLabel>{mode === 'code' ? 'No project' : 'Conversations'}</SectionLabel>
                 )}
                 <List size="sm" sx={SESSION_LIST_SX}>
