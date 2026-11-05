@@ -95,7 +95,7 @@ function curatedSource(onChange: () => void): CuratedListSource {
  */
 export function registerModels(
   servers: Pick<ModelServerRegistry, 'hubServer' | 'onServerSaved' | 'specs'>,
-  { localContext }: Pick<ModelHubServiceDeps, 'localContext'>,
+  { localContext, modelSettings }: Pick<ModelHubServiceDeps, 'localContext' | 'modelSettings'>,
   capabilityLedger: ConstructorParameters<typeof PullLedger>[0]
 ): ModelHubService {
   const send = (channel: string, payload?: ModelPull[] | string) => {
@@ -121,6 +121,7 @@ export function registerModels(
     hardware: () => localHardware.probed().then(profile => profile ?? probeHardware()),
     specs: id => servers.specs(id),
     localContext,
+    modelSettings,
     curated: () => source.current(),
     onPullsChanged: pulls => {
       send(IPC_CHANNELS.modelsPullsChanged, pulls);

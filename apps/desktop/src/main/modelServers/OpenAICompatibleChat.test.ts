@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike, OpenAICompatibleProduct } from '@bike4mind/local-models';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
+import type { ModelLoadSettings } from '@shared/modelSettings';
 import { ServerCredentialsError, ServerForbiddenError } from './errors';
 import type { LearnedThinker } from './ModelServerStore';
 import { OpenAICompatibleChat, toOpenAIMessages } from './OpenAICompatibleChat';
@@ -674,6 +675,86 @@ describe('OpenAICompatibleChat on a server that fronts several models', () => {
     await client.contextTokens(MODEL_A);
     await client.contextTokens(MODEL_A);
     expect(server.listings()).toBe(1);
+  });
+
+  describe("with a model's own context from the Models screen", () => {
+    const budgeted = (fetch: FetchLike) =>
+      new OpenAICompatibleChat({
+        runtimeId: 'srv-abc123',
+        baseUrl: BASE,
+        label: 'vllm box',
+        product: 'vllm',
+        fetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        loadSettings: async modelId =>
+          modelId === MODEL_A ? { context: { mode: 'fixed', tokens: 32768 }, draftTokens: 3, keepAlive: -1 } : {},
+      });
+
+    it('compacts against a smaller size as a budget, lists it, and sends no Ollama-only field', async () => {
+      const server = proxy(65536);
+      const client = budgeted(server.fetch);
+      expect((await client.listModels()).map(model => [model.name, model.contextWindow, model.contextFixed])).toEqual([
+        ['a', 32768, true],
+        ['b', 65536, true],
+      ]);
+      expect(await client.contextTokens(MODEL_A)).toBe(32768);
+      expect(await client.contextTokens(MODEL_B)).toBe(65536);
+      await collect(client, { model: MODEL_A, messages: [{ role: 'user', content: 'hi' }] });
+      expect(server.bodies.at(-1)).not.toHaveProperty('keep_alive');
+      expect(JSON.stringify(server.bodies.at(-1))).not.toContain('draft');
+    });
+
+    it('applies a model budget to a request that names it by an alias', async () => {
+      const entry = (id: string) => ({ id, object: 'model', root: '/models/a', max_model_len: 65536 });
+      const fetch: FetchLike = async () =>
+        new Response(JSON.stringify({ object: 'list', data: [entry('a'), entry('a-alias')] }), { status: 200 });
+      const client = budgeted(fetch);
+      await client.listModels();
+      expect(await client.contextTokens('local:srv-abc123:a-alias')).toBe(32768);
+    });
+
+    it('forgets an alias mapping when that name becomes a separately listed model', async () => {
+      const entry = (id: string, root: string) => ({ id, root, object: 'model', max_model_len: 65536 });
+      const fetch = vi
+        .fn<FetchLike>()
+        .mockResolvedValueOnce(
+          Response.json({ object: 'list', data: [entry('a', '/models/a'), entry('b', '/models/a')] })
+        )
+        .mockResolvedValueOnce(Response.json({ object: 'list', data: [entry('b', '/models/b')] }));
+      const client = budgeted(fetch);
+      await client.listModels();
+      expect(await client.contextTokens(MODEL_B)).toBe(32768);
+      expect((await client.listModels())[0]?.contextWindow).toBe(65536);
+      expect(await client.contextTokens(MODEL_B)).toBe(65536);
+    });
+
+    it('rejects an unreadable budget and retries instead of treating it as unset', async () => {
+      const read = vi
+        .fn<() => Promise<ModelLoadSettings>>()
+        .mockRejectedValueOnce(new Error('settings unavailable'))
+        .mockResolvedValue({ context: { mode: 'fixed', tokens: 32768 } });
+      const client = new OpenAICompatibleChat({
+        runtimeId: 'srv-abc123',
+        baseUrl: BASE,
+        label: 'vllm box',
+        product: 'vllm',
+        fetch: proxy(65536).fetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        loadSettings: read,
+      });
+      await expect(client.contextTokens(MODEL_A)).rejects.toThrow('settings unavailable');
+      expect(await client.contextTokens(MODEL_A)).toBe(32768);
+    });
+
+    it('offers only sizes below what the server runs, and nothing when it does not say', async () => {
+      expect(await budgeted(proxy(65536).fetch).loadOffer(MODEL_A)).toEqual({
+        context: { kind: 'budget', server: 65536, sizes: [16384, 32768] },
+      });
+      expect(await budgeted(proxy(16384).fetch).loadOffer(MODEL_A)).toEqual({});
+      expect(await budgeted(proxy().fetch).loadOffer(MODEL_A)).toEqual({});
+    });
   });
 });
 

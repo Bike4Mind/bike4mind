@@ -289,6 +289,35 @@ describe('ModelServerStore', () => {
     expect(await reopened.localSpecs()).toBeNull();
   });
 
+  it('keeps an entered KV cache type, on its own for this computer and with the RAM for a server', async () => {
+    const file = memoryFile();
+    const store = new ModelServerStore(cipher(), file, logger);
+    const record = await store.add(base, { type: 'none' });
+    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    expect(await store.setLocalSpecs({ ...blank, kvCacheType: 'q8_0' })).toEqual({ ...blank, kvCacheType: 'q8_0' });
+    await expect(store.update(record.id, { specs: { ...blank, kvCacheType: 'q8_0' } })).rejects.toThrow(
+      'Enter the RAM'
+    );
+    const server = { ...blank, ramGiB: 64, kvCacheType: 'q4_0' as const };
+    expect((await store.update(record.id, { specs: server })).specs).toEqual(server);
+
+    const reopened = new ModelServerStore(cipher(), file, logger);
+    expect(await reopened.localSpecs()).toEqual({ ...blank, kvCacheType: 'q8_0' });
+    expect((await reopened.get(record.id))?.specs).toEqual(server);
+    await reopened.setLocalSpecs(blank);
+    expect(JSON.parse(file.contents!).localSpecs).toBeUndefined();
+  });
+
+  it('drops a saved KV cache type when the server stops being Ollama', async () => {
+    const store = new ModelServerStore(cipher(), memoryFile(), logger);
+    const record = await store.add(base, { type: 'none' });
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q8_0' as const };
+    await store.update(record.id, { specs });
+    const switched = await store.update(record.id, { kind: 'openai-compatible' });
+    expect(switched.specs).toEqual({ ...specs, kvCacheType: undefined });
+    expect(switched.specs).not.toHaveProperty('kvCacheType');
+  });
+
   it('remembers the models a server found thinking across a restart, and forgets them with the server', async () => {
     const file = memoryFile();
     const store = new ModelServerStore(cipher(), file, logger);
