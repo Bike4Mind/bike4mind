@@ -65,6 +65,10 @@ overrides:
   "undici@>=6.0.0 <7.0.0": "^6.29.1"
   "undici@>=7.0.0 <8.0.0": "^7.30.1"
   "smol-toml@<1.9.0": "^1.9.0"
+  # Deliberately crosses a major: zod 3 has no patched release for GHSA-mrhx-c7xc-m3w5. The zod 3
+  # dependents (jimp's plugins, firecrawl-js 1.x, zod-to-json-schema) were checked against zod 4;
+  # re-check any new zod 3 dependent before relying on this.
+  "zod@<4.0.0": "^4.6.6"
   "zod@>=4.0.0 <4.6.6": "^4.6.6"
   "follow-redirects@<1.16.2": "^1.16.2"
   "markdown-it@<14.3.3": "^14.3.3"
