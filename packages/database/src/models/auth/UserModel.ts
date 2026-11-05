@@ -913,7 +913,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     return rows.map(row => String(row._id));
   }
 
-  // Unindexed on purpose: only the self-host help-lake bootstrap calls it, once per install.
+  // Unindexed on purpose: only the self-host help-lake bootstrap calls it, and only until that lake exists.
   // `_id` order is creation order and, unlike createdAt, is never null.
   async findOldestActiveAdminId(): Promise<string | null> {
     const row = await this.model
