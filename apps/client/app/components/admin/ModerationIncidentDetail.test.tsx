@@ -223,13 +223,16 @@ describe('ModerationIncidentDetail', () => {
     );
   });
 
-  it('shows the alert time, or says none went out', () => {
+  it('says no alert went out when none was delivered', () => {
     renderDetail();
     expect(screen.getByTestId('moderation-incident-alerted').textContent).toContain('No alert delivered yet');
     expect(screen.queryByTestId('moderation-incident-reminded')).toBeNull();
+  });
+
+  it('shows the alert time once one was delivered', () => {
     m.view.mockReturnValue(loaded(view({ alertedAt: '2026-10-30T10:01:00.000Z' })));
     renderDetail();
-    expect(screen.getAllByTestId('moderation-incident-alerted')[1].textContent).toMatch(/30 Oct 2026/);
+    expect(screen.getByTestId('moderation-incident-alerted').textContent).toMatch(/30 Oct 2026/);
   });
 
   it('shows when a reminder went out and when a verdict was recorded', () => {
