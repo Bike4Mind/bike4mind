@@ -11,7 +11,13 @@ import {
 } from '@bike4mind/database';
 import { ACTIVE_SOURCES, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 import { classifyRealSignups } from './realSignup';
-import { classifySignupWindow, isActiveEligible, loadCountingContext, loadUserFlags } from './signupCohort';
+import {
+  classifySignupWindow,
+  isActiveEligible,
+  isCountedUser,
+  loadCountingContext,
+  loadUserFlags,
+} from './signupCohort';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;

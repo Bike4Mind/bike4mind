@@ -48,7 +48,7 @@ const ACCOUNTS_OPTIONS = [
 ] as const;
 const FOOTERS: Record<AnalyticsAccounts, string> = {
   external:
-    'Active users: an AI request that UTC day from the web app, CLI, Desktop or an agent run; internal, Developer-tagged, test, banned and AI-held accounts are not counted. A signup is real when the email is verified, the account is not banned or held, and it made an AI request within 7 days; every other signup is suspected. API users are shown separately and not counted. Days are UTC.',
+    'Active users: an AI request that UTC day from the web app, CLI, Desktop or an agent run; internal, Developer-tagged, test, banned and AI-held accounts are not counted. A signup is real when the email is verified, the account is not banned or held, and it made an AI request within 7 days; every other signup, banned or held ones included, is suspected. API users are shown separately and not counted. Days are UTC.',
   internal:
     'Active users count only admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
   all: 'Active users include admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
