@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import type { ReadStream } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   LocalRuntimeError,
   ModelNotFoundError,
@@ -24,6 +25,19 @@ import {
   showFor,
   tags,
 } from './__test__/ollamaFixtures';
+
+const openedStreams = vi.hoisted((): ReadStream[] => []);
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    createReadStream: (...args: Parameters<typeof actual.createReadStream>) => {
+      const stream = actual.createReadStream(...args);
+      openedStreams.push(stream);
+      return stream;
+    },
+  };
+});
 
 let server: FakeServer | undefined;
 
@@ -932,6 +946,21 @@ describe('OllamaRuntime blobs and create', () => {
       expect(failure).toBeInstanceOf(RuntimeStorageError);
       expect(failure).not.toBeInstanceOf(RuntimeConnectionError);
       expect(failure).toMatchObject({ operation: 'read', code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('closes the staged file when the upload never reaches Ollama', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      const file = join(dir, 'part.gguf');
+      await writeFile(file, 'x');
+      const runtime = new OllamaRuntime({ baseUrl: `http://127.0.0.1:${await closedPort()}` });
+      openedStreams.length = 0;
+      await expect(runtime.uploadBlob(digest, file)).rejects.toBeInstanceOf(RuntimeConnectionError);
+      expect(openedStreams).toHaveLength(1);
+      expect(openedStreams[0]?.destroyed).toBe(true);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

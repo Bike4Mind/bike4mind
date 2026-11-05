@@ -463,6 +463,7 @@ export class OllamaRuntime implements LocalRuntime, ModelImportRuntime {
       throw error;
     } finally {
       clearTimeout(timer);
+      source.destroy();
     }
   }
 
