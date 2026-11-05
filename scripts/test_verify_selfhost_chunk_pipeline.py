@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import verify_selfhost_chunk_pipeline as v  # noqa: E402
@@ -57,6 +58,9 @@ class SearchHitTests(unittest.TestCase):
         self.assertFalse(v.search_hit({'results': [{'file_id': 'x'}]}, 'f1'))
         self.assertFalse(v.search_hit(None, 'f1'))
 
+    def test_coerces_non_string_file_id(self):
+        self.assertTrue(v.search_hit({'results': [{'file_id': 123}]}, '123'))
+
 
 class ReplayVerdictTests(unittest.TestCase):
     def test_equal_passes(self):
@@ -69,7 +73,9 @@ class ReplayVerdictTests(unittest.TestCase):
         self.assertIn('duplicated', message)
 
     def test_shrink_fails(self):
-        self.assertFalse(v.replay_verdict(4, 2)[0])
+        ok, message = v.replay_verdict(4, 2)
+        self.assertFalse(ok)
+        self.assertIn('replay lost chunks', message)
 
 
 class CountsMatchTests(unittest.TestCase):
@@ -101,6 +107,85 @@ class SqsParamsTests(unittest.TestCase):
         self.assertEqual(params['Action'], 'SendMessage')
         self.assertEqual(params['QueueUrl'], 'http://q/queue/x')
         self.assertEqual(json.loads(params['MessageBody']), {'fabFileId': 'f', 'userId': 'u'})
+
+
+class EnvTests(unittest.TestCase):
+    def test_parse_env(self):
+        env = v.parse_env('# c\n\nA=1\nB="two"\nC = x=y \nnoequals\n')
+        self.assertEqual(env, {'A': '1', 'B': 'two', 'C': 'x=y'})
+
+    def test_db_name_from_uri(self):
+        self.assertEqual(v.db_name_from_uri('mongodb://mongo:27017/custom?replicaSet=rs0'), 'custom')
+        self.assertEqual(v.db_name_from_uri('mongodb://mongo:27017/?replicaSet=rs0'), 'bike4mind')
+        self.assertEqual(v.db_name_from_uri(None), 'bike4mind')
+
+    def test_setting_on(self):
+        self.assertTrue(v.setting_on(None, True))
+        self.assertFalse(v.setting_on(None, False))
+        self.assertFalse(v.setting_on(False, True))
+        self.assertTrue(v.setting_on(True, False))
+        self.assertTrue(v.setting_on('true', False))
+
+
+class SentinelTests(unittest.TestCase):
+    def test_equal_length_bodies(self):
+        a, b = v.new_sentinel(), v.new_sentinel()
+        self.assertNotEqual(a, b)
+        self.assertEqual(len(v.sentinel_text(a)), len(v.sentinel_text(b)))
+
+
+class ReplaySettledTests(unittest.TestCase):
+    def state(self, **kw):
+        return {'isChunking': False, 'claimedAt': 200, 'ids': ['a', 'b'], **kw}
+
+    def test_first_poll_never_settles(self):
+        self.assertFalse(v.replay_settled(100, None, self.state()))
+
+    def test_settles_when_claim_advanced_and_ids_stable(self):
+        self.assertTrue(v.replay_settled(100, ['a', 'b'], self.state()))
+        self.assertTrue(v.replay_settled(None, ['a', 'b'], self.state()))
+
+    def test_unadvanced_claim_does_not_settle(self):
+        self.assertFalse(v.replay_settled(200, ['a', 'b'], self.state()))
+        self.assertFalse(v.replay_settled(100, ['a', 'b'], self.state(claimedAt=None)))
+
+    def test_changed_ids_or_busy_does_not_settle(self):
+        self.assertFalse(v.replay_settled(100, ['a'], self.state()))
+        self.assertFalse(v.replay_settled(100, ['a', 'b'], self.state(isChunking=True)))
+
+    def test_zero_ids_settle_and_verdict_catches_them(self):
+        self.assertTrue(v.replay_settled(100, [], self.state(ids=[])))
+        self.assertFalse(v.replay_verdict(4, 0)[0])
+
+
+class SearchPacingTests(unittest.TestCase):
+    def test_interval_under_rate_limit(self):
+        self.assertGreaterEqual(v.SEARCH_POLL_INTERVAL, 6)
+
+
+class MainSetupFailureTests(unittest.TestCase):
+    def test_lake_creation_failure_is_a_fail_line_not_a_traceback(self):
+        stack = mock.Mock()
+        stack.create_lake.side_effect = AssertionError('POST /api/data-lakes -> 403: FEATURE_DISABLED')
+        with mock.patch.dict('os.environ', {'B4M_API_KEY': 'k'}), \
+                mock.patch.object(v, 'load_env', return_value={}), \
+                mock.patch.object(v, 'setting_value', return_value=True), \
+                mock.patch.object(v, 'Stack', return_value=stack), \
+                mock.patch.object(v, 'Run') as run_cls, \
+                mock.patch('builtins.print') as printed:
+            code = v.main([])
+        self.assertEqual(code, 1)
+        self.assertTrue(any(str(c.args[0]).startswith('FAIL setup:') for c in printed.call_args_list))
+        run_cls.return_value.cleanup.assert_called_once_with(None)
+
+    def test_data_lakes_off_exits_with_message(self):
+        values = {'enableAutoChunk': None, 'EnableDataLakes': None}
+        with mock.patch.dict('os.environ', {'B4M_API_KEY': 'k'}), \
+                mock.patch.object(v, 'load_env', return_value={}), \
+                mock.patch.object(v, 'setting_value', side_effect=values.get):
+            with self.assertRaises(SystemExit) as caught:
+                v.main([])
+        self.assertIn('Enable Data Lakes', str(caught.exception))
 
 
 if __name__ == '__main__':

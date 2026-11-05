@@ -588,7 +588,7 @@ Self-host can embed and search your uploaded files fully offline, using a local 
 
 ### Verify the knowledge pipeline
 
-With the stack running, `B4M_API_KEY=b4m_... python3 scripts/verify_selfhost_chunk_pipeline.py` uploads a file and checks that it is chunked, embedded and found by search, that a file whose upload webhook was withheld is recovered by the rescue sweep, and that replaying a chunk message adds no chunks. It asserts the default Mongo vector path (not OpenSearch); `--help` lists the prerequisites and the `--only` / `--timeout` flags.
+With the stack running, `B4M_API_KEY=b4m_... python3 scripts/verify_selfhost_chunk_pipeline.py` uploads a file and checks that it is chunked, embedded and found by search, that a file whose upload webhook was withheld is recovered by the rescue sweep, and that replaying a chunk message leaves the chunk count unchanged. It needs the admin settings **Enable Auto Chunk** and **Enable Data Lakes** on (Data Lakes is off by default; search only reaches data-lake files), and archives a throwaway `verify-*` lake each run. It asserts the default Mongo vector path (not OpenSearch); `--help` lists the prerequisites and the `--only` / `--timeout` flags.
 
 ### Choosing an embedder (quality vs hardware)
 

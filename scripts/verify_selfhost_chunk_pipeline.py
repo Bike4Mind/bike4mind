@@ -10,14 +10,18 @@ Backend asserted: the default self-host retrieval path, vectors stored in Mongo 
 vector backend). The opt-in OpenSearch profile is not asserted.
 
 Prerequisites: stack up from compose.selfhost.yaml with .env.selfhost, an embedding provider
-configured (see SELF_HOST.md "Offline RAG"), Enable Auto Chunk on, and an API key in
-B4M_API_KEY with the files:write and data-lake write/query scopes. The base URL defaults to
-http://127.0.0.1:3000 (B4M_BASE_URL); ElasticMQ is read from 127.0.0.1:$SQS_HOST_PORT (9324).
+configured (see SELF_HOST.md "Offline RAG"), the admin settings Enable Auto Chunk AND Enable
+Data Lakes on (Data Lakes is off by default; search only reaches lake files, so the run needs
+it), and an API key in B4M_API_KEY with the files:write and data-lake write/query scopes. The
+base URL defaults to http://127.0.0.1:3000 (B4M_BASE_URL); ElasticMQ is read from
+127.0.0.1:$SQS_HOST_PORT (shell, then .env.selfhost, then 9324); the Mongo database name comes
+from MONGODB_URI in .env.selfhost (default bike4mind).
 
 The rescue scenario removes the FabFile bucket's put webhook for a few minutes and restores it
 in a finally block; uploads by other users in that window rely on the sweep too. Use --only to
-skip it. The script creates one throwaway data lake (search only reaches lake files) and deletes
-it and its files at the end, best effort.
+skip it. The script creates one throwaway data lake (search only reaches lake files); at the end it
+deletes the files and archives the lake (the API archives rather than deletes, so an archived
+verify-* lake is left behind each run). Best effort.
 
 Python stdlib only.
 """
@@ -37,9 +41,12 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE = ['docker', 'compose', '-f', str(ROOT / 'compose.selfhost.yaml'), '--env-file', str(ROOT / '.env.selfhost')]
-DB_NAME = 'bike4mind'
+DEFAULT_DB = 'bike4mind'
+DB_NAME = DEFAULT_DB  # set from MONGODB_URI in main()
 CHUNK_QUEUE = 'fabFileChunkQueue'
 SCENARIOS = ('happy', 'rescue', 'replay')
+# Semantic search is limited to 10 requests/min; stay under it so a slow index is a timeout, not a 429.
+SEARCH_POLL_INTERVAL = 7.0
 
 
 def require(condition, message):
@@ -81,6 +88,49 @@ def chunk_state_ok(state):
         and state.get('embedded') == state.get('chunks')
         and len(state.get('models', [])) == 1
     )
+
+
+def parse_env(text):
+    """Minimal KEY=VALUE parse of an env file: skips blanks and comments, strips matching quotes."""
+    env = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+            value = value[1:-1]
+        env[key.strip()] = value
+    return env
+
+
+def db_name_from_uri(uri):
+    return urllib.parse.urlparse(uri or '').path.strip('/') or DEFAULT_DB
+
+
+def setting_on(value, default):
+    """Interpret an adminsettings settingValue; a missing setting (None) takes the setting's default."""
+    if value is None:
+        return default
+    return value is True or str(value).lower() == 'true'
+
+
+def new_sentinel():
+    # Fixed length (prefix + 12 hex) so every scenario's file body, and so chunk count, is identical.
+    return f'zebra-{uuid.uuid4().hex[:12]}'
+
+
+def replay_settled(claimed_before, previous_ids, current):
+    """True once the replayed message was consumed (claim stamp advanced) and chunk ids stopped moving.
+
+    claimed_before/current['claimedAt'] are chunkClaimedAt in ms (None when never claimed);
+    previous_ids is the id list from the prior poll, None on the first poll.
+    """
+    claimed = current.get('claimedAt')
+    if claimed is None or (claimed_before is not None and claimed <= claimed_before):
+        return False
+    return not current.get('isChunking') and previous_ids is not None and current.get('ids') == previous_ids
 
 
 def search_hit(response, file_id):
@@ -164,6 +214,13 @@ class Stack:
         self.sqs_call(**params)
 
 
+def load_env():
+    path = ROOT / '.env.selfhost'
+    if not path.is_file():
+        raise SystemExit('Configure .env.selfhost and start the stack before running this check')
+    return parse_env(path.read_text())
+
+
 def mongo_eval(js):
     out = subprocess.run(
         [*COMPOSE, 'exec', '-T', 'mongo', 'mongosh', '--quiet', DB_NAME, '--eval', js],
@@ -176,11 +233,12 @@ def chunk_state(file_id):
     """FabFile status plus chunk/vector counts, read straight from Mongo (the public API hides them)."""
     return mongo_eval(f"""
         const id = {json.dumps(file_id)};
-        const f = db.fabfiles.findOne({{ _id: ObjectId(id) }}, {{ status: 1, userId: 1, isChunking: 1, chunkCount: 1 }});
+        const f = db.fabfiles.findOne({{ _id: ObjectId(id) }}, {{ status: 1, userId: 1, isChunking: 1, chunkClaimedAt: 1 }});
         const c = db.fabfilechunks;
         const q = {{ fabFileId: id }};
         print(JSON.stringify({{
           status: f && f.status, userId: f && f.userId, isChunking: !!(f && f.isChunking),
+          claimedAt: f && f.chunkClaimedAt ? new Date(f.chunkClaimedAt).getTime() : null,
           chunks: c.countDocuments(q),
           embedded: c.countDocuments({{ fabFileId: id, 'vector.0': {{ $exists: true }}, embeddingModel: {{ $nin: [null, ''] }} }}),
           models: c.distinct('embeddingModel', {{ fabFileId: id, embeddingModel: {{ $nin: [null, ''] }} }}),
@@ -189,11 +247,11 @@ def chunk_state(file_id):
     """)
 
 
-def auto_chunk_enabled():
-    # The setting defaults to on; only an explicit false disables it.
+def setting_value(name):
+    """Stored adminsettings value, or None when the setting was never saved (callers apply the default)."""
     return mongo_eval(
-        "const s = db.adminsettings.findOne({ settingName: 'enableAutoChunk' });"
-        "print(JSON.stringify(!(s && s.settingValue === false)));"
+        f"const s = db.adminsettings.findOne({{ settingName: {json.dumps(name)} }});"
+        "print(JSON.stringify(s && s.settingValue !== undefined ? s.settingValue : null));"
     )
 
 
@@ -224,7 +282,7 @@ class Run:
         self.happy = None
 
     def new_file(self, label):
-        sentinel = f'zebra-{uuid.uuid4().hex[:12]}'
+        sentinel = new_sentinel()
         name = f'verify-{label}-{uuid.uuid4().hex[:6]}.txt'
         file_id = self.stack.upload_text(name, sentinel_text(sentinel), self.prefix + label)
         self.files.append(file_id)
@@ -237,7 +295,7 @@ class Run:
         file_id, sentinel = self.new_file('happy')
         state = self.wait_chunked(file_id, self.timeout)
         hit = poll(lambda: self.stack.search(sentinel), lambda r: search_hit(r, file_id), self.timeout,
-                   what='semantic search to return the file')
+                   SEARCH_POLL_INTERVAL, what='semantic search to return the file')
         require(search_hit(hit, file_id), 'search did not return the uploaded file')
         self.happy = (file_id, state)
         return f'{state["chunks"]} chunks, all embedded with {state["models"][0]}, found by search'
@@ -271,20 +329,23 @@ class Run:
             file_id = self.happy[0]
         before = chunk_state(file_id)
         self.stack.send_chunk_message(file_id, before['userId'])
-        # Settle: not chunking and unchanged across two polls, after giving the worker time to pick it up.
-        time.sleep(10)
-        previous = []
+        # Settled = the worker claimed the file again (chunkClaimedAt advanced, so the message was
+        # consumed) and chunk ids held still across two polls.
+        previous = None
         def read():
             nonlocal previous
             current = chunk_state(file_id)
-            stable = not current['isChunking'] and current['ids'] == previous
+            settled = replay_settled(before['claimedAt'], previous, current)
             previous = current['ids']
-            return {**current, 'stable': stable}
-        after = poll(read, lambda s: s['stable'], self.timeout, what='replayed message to settle')
+            return {**current, 'settled': settled}
+        after = poll(read, lambda s: s['settled'], self.timeout, what='replayed message to be consumed and settle')
         ok, message = replay_verdict(before['chunks'], after['chunks'])
         require(ok, message)
-        path = 'chunk ids unchanged (guard)' if after['ids'] == before['ids'] else 'chunk ids changed (delete and recreate)'
-        return f'{message}; {path}'
+        # A recreate (changed ids) leaves fresh chunks unembedded until vectorize runs; they must end embedded.
+        recreated = after['ids'] != before['ids']
+        final = self.wait_chunked(file_id, self.timeout)
+        path = 'chunk ids changed (delete and recreate), re-embedded' if recreated else 'chunk ids unchanged (guard)'
+        return f'{message}; {path}; {final["embedded"]} embedded'
 
     def cleanup(self, lake_id):
         for file_id in self.files:
@@ -296,7 +357,7 @@ class Run:
             try:
                 self.stack.api('DELETE', f'/api/data-lakes/{lake_id}')
             except Exception as error:
-                print(f'cleanup: could not delete lake {lake_id}: {error}', file=sys.stderr)
+                print(f'cleanup: could not archive lake {lake_id}: {error}', file=sys.stderr)
 
 
 def main(argv=None):
@@ -305,23 +366,32 @@ def main(argv=None):
     parser.add_argument('--timeout', type=int, default=180, help='seconds to wait per step (default 180)')
     args = parser.parse_args(argv)
 
+    global DB_NAME
     api_key = os.environ.get('B4M_API_KEY')
     if not api_key:
         raise SystemExit('Set B4M_API_KEY to an API key with files:write and data-lake scopes (see --help)')
-    if not (ROOT / '.env.selfhost').is_file():
-        raise SystemExit('Configure .env.selfhost and start the stack before running this check')
+    env = load_env()
+    DB_NAME = db_name_from_uri(env.get('MONGODB_URI'))
 
     stack = Stack(os.environ.get('B4M_BASE_URL', 'http://127.0.0.1:3000'), api_key,
-                  os.environ.get('SQS_HOST_PORT', '9324'))
-    if not auto_chunk_enabled():
+                  os.environ.get('SQS_HOST_PORT') or env.get('SQS_HOST_PORT') or '9324')
+    if not setting_on(setting_value('enableAutoChunk'), True):
         raise SystemExit('Enable Auto Chunk is off; turn it on in admin settings and re-run')
+    if not setting_on(setting_value('EnableDataLakes'), False):
+        raise SystemExit('Enable Data Lakes is off (the default); turn it on in admin settings and re-run. '
+                         'Search only reaches data-lake files, so this check needs it.')
 
     prefix = f'verify{uuid.uuid4().hex[:8]}:'
     run = Run(stack, prefix, args.timeout)
-    lake_id = stack.create_lake(prefix)
+    lake_id = None
     wanted = [args.only] if args.only else list(SCENARIOS)
     failed = False
     try:
+        try:
+            lake_id = stack.create_lake(prefix)
+        except Exception as error:
+            print(f'FAIL setup: {error}', flush=True)
+            return 1
         for name in wanted:
             try:
                 print(f'PASS {name}: {getattr(run, "happy_path" if name == "happy" else name)()}', flush=True)
