@@ -186,19 +186,29 @@ describe('buildRoster', () => {
     expect(roster.find(agent => agent.id === 'b')?.branch).toBe('main');
   });
 
-  it('attaches activity only to a working agent', () => {
+  it('attaches activity only to a working or needs-you agent', () => {
     const activity = new Map<string, AgentActivity>([
       ['busy', { kind: 'phase', phase: 'thinking' }],
       ['calm', { kind: 'phase', phase: 'thinking' }],
+      ['asking', { kind: 'phase', phase: 'thinking' }],
     ]);
     const roster = buildRoster({
-      sessions: [summary('root', undefined), summary('busy', 'root'), summary('calm', 'root')],
+      sessions: [
+        summary('root', undefined),
+        summary('busy', 'root'),
+        summary('calm', 'root'),
+        summary('asking', 'root'),
+      ],
       rootId: 'root',
-      statuses: new Map<string, ChatSessionStatus>([['busy', 'processing']]),
+      statuses: new Map<string, ChatSessionStatus>([
+        ['busy', 'processing'],
+        ['asking', 'needs-action'],
+      ]),
       activity,
       prSummaries: new Map(),
     });
     expect(roster.find(agent => agent.id === 'busy')?.activity).toEqual({ kind: 'phase', phase: 'thinking' });
+    expect(roster.find(agent => agent.id === 'asking')?.activity).toEqual({ kind: 'phase', phase: 'thinking' });
     expect(roster.find(agent => agent.id === 'calm')?.activity).toBeUndefined();
   });
 
