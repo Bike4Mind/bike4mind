@@ -626,6 +626,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
     <>
       <ReplyContainer
         completed={messageData.status === 'done'}
+        settled={messageData.status === 'done' || messageData.status === 'stopped'}
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
@@ -1233,6 +1234,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   search,
   isExpandable = false,
   completed = false,
+  settled = completed,
   errorCode,
   questMasterPlanId,
   onSendMessage,
@@ -1649,7 +1651,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               completedSteps={deepResearchState.completedSteps}
               totalExpectedSteps={deepResearchState.totalExpectedSteps}
               researchCompleted={deepResearchState.completed}
-              turnDone={completed}
+              turnDone={settled}
               startTime={deepResearchState.startTime}
               endTime={deepResearchState.endTime}
             />
