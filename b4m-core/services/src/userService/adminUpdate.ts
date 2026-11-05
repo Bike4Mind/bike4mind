@@ -20,6 +20,7 @@ import {
   IFriendshipModelAdapter,
   IUserApiKeyRepository,
   IRealtimeConnectionRepository,
+  type SignupRiskReviewState,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
@@ -112,6 +113,8 @@ export type AdminCreditAdjustment = {
 export type AdminUpdateUserResult = {
   user: Awaited<ReturnType<IUserRepository['findById']>>;
   creditAdjustment: AdminCreditAdjustment | null;
+  /** The signup risk review state the ban moved to 'banned', for the route's audit entry. */
+  bannedRiskReviewFrom: SignupRiskReviewState | null;
 };
 
 async function sendFriendRequestsToOrgMembers(
@@ -331,6 +334,14 @@ export async function adminUpdateUser(
 
   await writeUserUpdate(db.users, writeData);
 
+  // Settles a signup risk review the way the bulk ban does (bulkAbuseResponse banStep). Unbanning
+  // leaves it 'banned'.
+  let bannedRiskReviewFrom: SignupRiskReviewState | null = null;
+  const reviewState = user.riskScore?.reviewState;
+  if (params.isBanned && !user.isBanned && reviewState && reviewState !== 'banned') {
+    if (await db.users.setRiskReviewState(params.id, reviewState, 'banned')) bannedRiskReviewFrom = reviewState;
+  }
+
   // Apply the moderation escalation transition last so it authoritatively sets
   // `moderation.status` and `throttledUntil`. It leaves `isModerated` as written above.
   if (moderationStatus) {
@@ -348,5 +359,5 @@ export async function adminUpdateUser(
 
   const finalUser = await db.users.findById(params.id);
 
-  return { user: finalUser, creditAdjustment };
+  return { user: finalUser, creditAdjustment, bannedRiskReviewFrom };
 }
