@@ -11,6 +11,11 @@ const unfurl = keyframes`
   to { opacity: 1; transform: translate(-50%, 0) scale(1); }
 `;
 
+const unfurlInline = keyframes`
+  from { opacity: 0; transform: translateY(-16px) scale(0.94); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+`;
+
 // Fixed colours rather than theme tokens: the card sits on the tavern art, which is dark in either app theme.
 const INK = '#3b2412';
 const INK_SOFT = '#6b4a2b';
@@ -52,15 +57,20 @@ function StatChip({ label, alert = false, testId }: { label: string; alert?: boo
   );
 }
 
-/** The finale card: a parchment notice pinned over the top of the scene, muted when not every agent finished done. */
+/**
+ * The finale card, muted when not every agent finished done. `scene` pins it over the top of the Tavern art;
+ * `inline` sets it in the flow above a Board or Table so it never covers their rows.
+ */
 export function FinaleBanner({
   agents,
   onRead,
   onDismiss,
+  placement = 'scene',
 }: {
   agents: readonly AgentView[];
   onRead(): void;
   onDismiss(): void;
+  placement?: 'scene' | 'inline';
 }) {
   const stats = finaleStats(agents);
   const succeeded = questSucceeded(stats);
@@ -85,13 +95,18 @@ export function FinaleBanner({
       aria-label={title}
       data-testid="orchestrator-finale"
       data-outcome={succeeded ? 'complete' : 'ended'}
+      data-placement={placement}
       sx={{
-        position: 'absolute',
-        top: 'clamp(8px, 2.5%, 24px)',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        // Above the tavern's sprites and door chip.
-        zIndex: 200,
+        ...(placement === 'scene'
+          ? {
+              position: 'absolute',
+              top: 'clamp(8px, 2.5%, 24px)',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              // Above the tavern's sprites and door chip.
+              zIndex: 200,
+            }
+          : { position: 'relative', alignSelf: 'center', flexShrink: 0, mt: 1.5, mb: 0.5 }),
         width: 'max-content',
         maxWidth: 'calc(100% - 32px)',
         display: 'flex',
@@ -106,7 +121,7 @@ export function FinaleBanner({
         // A double rule: the gold border plus an inset brown line just inside it.
         border: `4px double ${rule}`,
         boxShadow: `inset 0 0 0 1px rgba(107, 74, 43, 0.35), inset 0 0 24px rgba(160, 110, 40, 0.25), 0 10px 28px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4)`,
-        animation: `${unfurl} 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.2)`,
+        animation: `${placement === 'scene' ? unfurl : unfurlInline} 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.2)`,
         '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
       }}
     >

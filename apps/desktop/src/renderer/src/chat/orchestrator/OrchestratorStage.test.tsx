@@ -271,7 +271,7 @@ describe('OrchestratorStage', () => {
         vi.advanceTimersByTime(5000);
       });
 
-    it('shows a banner with the run stats once the run completes, over any view', async () => {
+    it('shows a banner with the run stats once the run completes, in the flow above any view', async () => {
       await renderRun([agentFixture('a', 'working'), agentFixture('b', 'working')], { status: 'processing' });
       await renderRun(finished, { status: 'done' });
       expect(query('orchestrator-finale')).toBeNull();
@@ -283,6 +283,8 @@ describe('OrchestratorStage', () => {
       const chips = [...el('orchestrator-finale-stats').querySelectorAll('li')].map(chip => chip.textContent);
       expect(chips).toEqual(['2 agents', '3m 12s', '$1.75', '1 done', '1 failed']);
       expect(query('orchestrator-table')).not.toBeNull();
+      // Off the Tavern it sits above the rows instead of floating over (and blocking) them.
+      expect(banner.getAttribute('data-placement')).toBe('inline');
     });
 
     it('says "Quest complete" only when every agent finished done', async () => {
@@ -377,6 +379,7 @@ describe('OrchestratorStage', () => {
       await renderTavern(finished);
       await settle();
       expect(el('orchestrator-tavern').contains(el('orchestrator-finale'))).toBe(true);
+      expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
     });
 
     it('waits for the parent to write its summary', async () => {

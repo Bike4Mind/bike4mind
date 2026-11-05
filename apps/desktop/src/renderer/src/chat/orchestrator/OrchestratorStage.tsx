@@ -140,9 +140,12 @@ export function OrchestratorStage({
     if (finale.shown) playChime();
   }, [finale.shown]);
 
+  // The Tavern seats the banner on its scene rather than in the letterbox above it.
+  const bannerInScene = view === 'tavern' && renderView !== undefined && agents.length > 0;
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
+      placement={bannerInScene ? 'scene' : 'inline'}
       onRead={() => {
         finale.dismiss();
         onReadReport?.(report.id);
@@ -150,8 +153,6 @@ export function OrchestratorStage({
       onDismiss={finale.dismiss}
     />
   );
-  // The Tavern seats the banner on its scene rather than in the letterbox above it.
-  const bannerInScene = view === 'tavern' && renderView !== undefined && agents.length > 0;
 
   const viewProps: OrchestratorViewProps = {
     agents,
