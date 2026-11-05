@@ -340,6 +340,17 @@ describe('sweepAbuseAssessments', () => {
       expect(result).toMatchObject({ status: 'success', considered: 2, errors: 1, assessed: 1 });
     });
 
+    it('hands every judgment, cached included, to afterAssessment and survives its failure', async () => {
+      mocks.settings.config = sweepConfig(5);
+      mocks.findByCacheKey.mockResolvedValueOnce({ result: 'abuse', attempts: 1 } as AbuseAssessmentItem);
+      const afterAssessment = vi.fn().mockRejectedValueOnce(new Error('contain failed')).mockResolvedValue(undefined);
+
+      const result = await sweepAbuseAssessments({ logger, deps: { afterAssessment } });
+
+      expect(afterAssessment).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ status: 'success', considered: 2, cached: 1, assessed: 1, errors: 1 });
+    });
+
     it('stops when settings reloaded after a fresh assessment show the feature off', async () => {
       mocks.settings.config = sweepConfig(5);
       mocks.providerDecide.mockImplementation(async () => {

@@ -1,6 +1,7 @@
 import { addBlockedEmailDomains } from '@server/admin/blockedEmailDomains';
+import { requestAuditWriter } from '@server/utils/adminAudit';
 
-type AuditRequest = Parameters<typeof addBlockedEmailDomains>[0];
+type AuditRequest = Parameters<typeof requestAuditWriter>[0];
 
 /**
  * Adds a domain to the blockedEmailDomains setting so the registration gate refuses new signups on
@@ -8,7 +9,7 @@ type AuditRequest = Parameters<typeof addBlockedEmailDomains>[0];
  */
 export async function addBlockedEmailDomain(req: AuditRequest, rawDomain: string): Promise<boolean> {
   const added = await addBlockedEmailDomains(
-    req,
+    requestAuditWriter(req),
     [rawDomain],
     ([domain]) => `blocked signups from ${domain} in a bulk abuse response`
   );

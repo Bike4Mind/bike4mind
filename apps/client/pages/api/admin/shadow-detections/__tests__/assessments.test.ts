@@ -49,6 +49,9 @@ vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({
   loadAbuseAssessmentSettings: h.loadSettings,
   summarizeDetection: h.summarize,
 }));
+vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({
+  linkedAccountGroupEvidence: vi.fn(),
+}));
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: h.record,
@@ -199,6 +202,7 @@ describe('POST /api/admin/shadow-detections/assessments', () => {
       trigger: 'admin',
       requestedBy: ADMIN_ID,
       logger: (req as unknown as { logger: unknown }).logger,
+      deps: { groupEvidence: expect.any(Function) },
     });
   });
 

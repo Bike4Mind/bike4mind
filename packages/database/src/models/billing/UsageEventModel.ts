@@ -7,6 +7,7 @@ import {
   IFundingCohortCost,
   ILakeUsageSummary,
   IModelDayMargin,
+  ISettlementOverHold,
   IUserUsageActivity,
   IOwnerSpendDay,
   IOwnerSpendFeature,
@@ -82,6 +83,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     costUsd: { type: Number, required: true },
     creditsCharged: { type: Number, required: true },
     writtenOffCredits: { type: Number, required: false },
+    reservedCredits: { type: Number, required: false },
 
     status: { type: String, required: true, enum: [...USAGE_EVENT_STATUSES], default: 'ok' },
     latencyMs: { type: Number, required: false },
@@ -300,6 +302,37 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       },
     ]);
     return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
+  }
+
+  async largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>> {
+    if (userIds.length === 0) return {};
+    // The {userId, createdAt} index serves the match for a bounded id list and window.
+    const rows = await this.model.aggregate<{ _id: string } & ISettlementOverHold>([
+      { $match: { userId: { $in: userIds }, createdAt: { $gte: since }, reservedCredits: { $gt: 0 } } },
+      {
+        $project: {
+          userId: 1,
+          reservedCredits: 1,
+          settledCredits: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] },
+        },
+      },
+      { $addFields: { ratio: { $divide: ['$settledCredits', '$reservedCredits'] } } },
+      { $sort: { ratio: -1 } },
+      {
+        $group: {
+          _id: '$userId',
+          reservedCredits: { $first: '$reservedCredits' },
+          settledCredits: { $first: '$settledCredits' },
+          ratio: { $first: '$ratio' },
+        },
+      },
+    ]);
+    return Object.fromEntries(
+      rows.map(({ _id, reservedCredits, settledCredits, ratio }) => [
+        String(_id),
+        { reservedCredits, settledCredits, ratio },
+      ])
+    );
   }
 
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {

@@ -2,10 +2,9 @@ import { isDomainInDomains, partitionDomainList, settingsMap } from '@bike4mind/
 import { withTransaction } from '@bike4mind/database';
 import { AdminSettings } from '@bike4mind/database/infra';
 import { invalidateSettingsCache } from '@bike4mind/utils';
-import { recordAdminSettingChange } from '@server/utils/adminSettingsAudit';
+import type { AdminAuditWriter } from '@server/utils/adminAudit';
+import { recordAdminSettingChangeWith } from '@server/utils/adminSettingsAudit';
 import { assertOwnedDomain } from './bulkAbuse/assertOwnedDomain';
-
-type AuditRequest = Parameters<typeof recordAdminSettingChange>[0];
 
 const SETTING = 'blockedEmailDomains';
 
@@ -26,7 +25,7 @@ export async function readBlockedEmailDomains(): Promise<Set<string>> {
  * they keep the same normalization and audit. Returns the domains actually added or removed.
  */
 async function rewriteBlockedEmailDomains(
-  req: AuditRequest,
+  write: AdminAuditWriter,
   change: (current: string[]) => { next: string[]; changed: string[] },
   summaryFor: (changed: string[]) => string
 ): Promise<string[]> {
@@ -36,7 +35,7 @@ async function rewriteBlockedEmailDomains(
     if (changed.length === 0) return changed;
 
     await AdminSettings.findOneAndUpdate({ settingName: SETTING }, { $set: { settingValue: next } }, { upsert: true });
-    await recordAdminSettingChange(req, {
+    await recordAdminSettingChangeWith(write, {
       settingName: SETTING,
       before: existing?.settingValue ?? null,
       after: next,
@@ -55,13 +54,13 @@ async function rewriteBlockedEmailDomains(
  * covered by the list, itself or through a parent, is skipped. Returns the domains added.
  */
 export async function addBlockedEmailDomains(
-  req: AuditRequest,
+  write: AdminAuditWriter,
   rawDomains: readonly string[],
   summaryFor: (added: string[]) => string
 ): Promise<string[]> {
   const domains = [...new Set(rawDomains.map(assertOwnedDomain))];
   return rewriteBlockedEmailDomains(
-    req,
+    write,
     current => {
       const listed = new Set(current);
       // The registration gate matches subdomains, so a listed parent already blocks the domain.
@@ -74,13 +73,13 @@ export async function addBlockedEmailDomains(
 
 /** Removes exactly these domains (never a parent that covers them). Returns the domains removed. */
 export async function removeBlockedEmailDomains(
-  req: AuditRequest,
+  write: AdminAuditWriter,
   domains: readonly string[],
   summaryFor: (removed: string[]) => string
 ): Promise<string[]> {
   const toRemove = new Set(domains);
   return rewriteBlockedEmailDomains(
-    req,
+    write,
     current => ({
       next: current.filter(domain => !toRemove.has(domain)),
       changed: current.filter(domain => toRemove.has(domain)),

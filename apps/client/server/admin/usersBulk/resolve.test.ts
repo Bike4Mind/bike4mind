@@ -98,6 +98,8 @@ describe('creditDeltaFor', () => {
     expect(creditDeltaFor(adjust('set', 200), 120)).toBe(80);
     expect(creditDeltaFor({ type: 'contain' }, 75)).toBe(-75);
     expect(Object.is(creditDeltaFor({ type: 'contain' }, 0), 0)).toBe(true);
+    // Debt is kept, never written off.
+    expect(Object.is(creditDeltaFor({ type: 'contain' }, -1_200), 0)).toBe(true);
   });
 });
 

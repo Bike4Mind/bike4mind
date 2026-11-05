@@ -151,6 +151,11 @@ export const UsageEvent = z.object({
    */
   writtenOffCredits: z.number().optional(),
   /**
+   * The credit hold the settled turn reserved before it ran (chat settlement events only). Set so a
+   * turn that settled far above its hold can be found per account; absent on other events.
+   */
+  reservedCredits: z.number().optional(),
+  /**
    * creditsCharged split by what funded it, stamped by UsageEventRepository.record() from
    * the holder's credit lots (see attributeChargeToFundingSources). Absent on zero-credit
    * rows and on rows written before stamping existed.
@@ -682,6 +687,14 @@ export interface ISessionUsageResponse {
   executions: ISessionAgentExecution[];
 }
 
+/** The settlement that most exceeded its hold, from largestSettlementOverHold. */
+export interface ISettlementOverHold {
+  reservedCredits: number;
+  settledCredits: number;
+  /** settledCredits / reservedCredits. */
+  ratio: number;
+}
+
 export interface IUserUsageActivity {
   events: number;
   completed: number;
@@ -709,6 +722,13 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Credits each user has spent in total, charged plus written off; users with none are absent. */
   creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
+
+  /**
+   * Per user, the chat settlement since `since` that settled furthest above its hold: settled credits
+   * (charged plus written off) over reservedCredits. Only events that recorded a hold count; users
+   * with none are absent.
+   */
+  largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>>;
 
   /** Margin buckets per user over the trailing N days (default 30), worst margin first. */
   marginByUser(days?: number): Promise<IUserMargin[]>;
