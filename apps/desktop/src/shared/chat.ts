@@ -10,6 +10,7 @@
  */
 
 import type { GenerationJobState, PromptCacheTtl, ValidationViolation } from '@bike4mind/common';
+import type { ChildOutcome } from './agentOutcome';
 import type { ChatImportOrigin } from './claudeImport';
 import type { CatalogSampling, GenerationSettings, ModelControls } from './generation';
 import type { ChatQuestionAnswer } from './questions';
@@ -661,6 +662,8 @@ export type ChatRelayHoldReason = 'other-project' | 'looser-mode';
  * 'auto-fix' runs on the user's standing instruction for a pull request (see main/pr/autoFix.ts),
  * and a guard holds it to the rules they agreed to (no force-push, no merge). 'background-exit'
  * tells the model a background command it started has ended (see main/chat/backgroundWake.ts).
+ * 'agents-settled' tells an Orchestrate parent that every agent it started has stopped running
+ * (see main/chat/agentWake.ts).
  */
 export type ChatAutomaticOrigin =
   | {
@@ -674,6 +677,13 @@ export type ChatAutomaticOrigin =
       kind: 'background-exit';
       processIds: string[];
       /** One line for the thread's collapsed row, e.g. "[a1b2c3d4] exited 0". */
+      summary: string;
+    }
+  | {
+      kind: 'agents-settled';
+      /** The agents whose turns ended since the parent was last woken. */
+      sessionIds: string[];
+      /** One line for the thread's collapsed row, e.g. "3 agents: 2 done, 1 failed". */
       summary: string;
     };
 
@@ -717,6 +727,11 @@ export interface ChatMessage {
   stopReason?: string;
   /** Set instead of a reply when the turn failed; the message is kept so the thread shows why. */
   error?: string;
+  /**
+   * On an orchestrating parent's reply that called quest_complete successfully: this reply is the
+   * job's final summary, and the finale points at it. Absent on every other message.
+   */
+  questComplete?: true;
   /** Files the user attached to this turn. Only ever on a user message. */
   attachments?: ChatAttachment[];
   /**
@@ -907,9 +922,44 @@ export function parseLocalModelId(id: string): { runtimeId: string; model: strin
   }
 }
 
+/**
+ * How deep the spawn chain may go. A session the user made is depth 0, so this admits a child
+ * and a grandchild and refuses the next one.
+ *
+ * Read off the child's stored `origin.depth` rather than walked back up the parent chain,
+ * because a parent can be deleted mid-run and a cap that stops being enforceable when a row
+ * disappears is not a cap.
+ */
+export const MAX_SPAWN_DEPTH = 2;
+
+/** Whether this session may still start one under MAX_SPAWN_DEPTH. */
+export function canSpawnDeeper(session: { origin?: Pick<ChatSessionOrigin, 'depth'> }): boolean {
+  return (session.origin?.depth ?? 0) < MAX_SPAWN_DEPTH;
+}
+
+/**
+ * Orchestrate in effect, not merely switched on: a session at the depth cap could start no
+ * agent, so it keeps its ordinary prompt and gated start whatever the flag says.
+ */
+export function orchestratesAgents(session: Pick<ChatSessionMeta, 'orchestrate' | 'origin'>): boolean {
+  return session.orchestrate === true && canSpawnDeeper(session);
+}
+
 /** Fails closed: a malformed `local:` id still counts as local so it never falls onto the hosted path. */
 export function isLocalModel(id: string): boolean {
   return id.startsWith('local:');
+}
+
+/**
+ * Whether a turn on this model is sent any tools. A device-local model needs its catalog entry
+ * to know; a hosted one is assumed able unless the catalog says otherwise. Main decides the
+ * turn's tools by this, and the renderer hides controls that only work through them.
+ */
+export function modelSupportsTools(
+  modelId: string,
+  option: Pick<ChatModelOption, 'supportsTools'> | undefined
+): boolean {
+  return option?.supportsTools !== false && (!isLocalModel(modelId) || !!option);
 }
 
 export function isLocalBackend(model: { backend?: string }): boolean {
@@ -1297,6 +1347,12 @@ interface ChatSessionMeta {
   grantedDirectories?: string[];
   /** Pinned to the top of the sidebar, above both the groups and the loose conversations. */
   pinned?: boolean;
+  /**
+   * The user turned on Orchestrate: the model is steered to split work across agents, and the
+   * agents it asks for start without a card, the switch being the approval. Never inherited by
+   * a session it spawns, and like 'full' approval it lasts one run of the app (SessionStore).
+   */
+  orchestrate?: boolean;
   /** Set when the agent spawned this session rather than the user starting it. */
   origin?: ChatSessionOrigin;
   /** Set on a session imported from Claude; see ChatImportOrigin. */
@@ -1325,6 +1381,14 @@ export function normalizeSessionTitle(text: string): string {
 
 export interface ChatSessionSummary extends ChatSessionMeta {
   messageCount: number;
+  /** How the last assistant turn ended; absent when the session has no assistant message. */
+  lastOutcome?: ChildOutcome;
+  /** One-line excerpt of the last assistant message; absent when it has no text. */
+  lastSnippet?: string;
+  /** Sum of usage.usdCost over all messages; absent when none reported it. */
+  totalUsdCost?: number;
+  /** Sum of usage.creditsUsed over all messages; absent when none reported it. */
+  totalCredits?: number;
 }
 
 export interface ChatSession extends ChatSessionMeta {
@@ -1437,6 +1501,8 @@ export type ChatStreamEvent =
       /** `content` has had their markup removed, so these ride with it rather than following it. */
       artifacts?: ChatArtifact[];
       promptCache?: ChatPromptCacheStamp;
+      /** See ChatMessage.questComplete. */
+      questComplete?: true;
     }
   | {
       type: 'error';
@@ -1514,6 +1580,8 @@ export type ChatSessionStatus = 'processing' | 'needs-action' | 'done';
 export interface ChatSessionStatusEvent {
   sessionId: string;
   status: ChatSessionStatus;
+  /** A 'processing' session that is still being prepared (worktree, held first turn), not yet replying. */
+  preparing?: true;
 }
 
 export interface SendMessageRequest {
@@ -1829,6 +1897,14 @@ export interface ChatSpawnSuggestion {
 
 /** 'here' runs the task as the user's own next message in the suggesting conversation. */
 export type SpawnSuggestionPlacement = 'worktree' | 'local' | 'here';
+
+/**
+ * Where a started task goes when nobody picked otherwise: the suggestion card's first choice
+ * and a delegated spawn's placement (ChatService.delegatedPlacement), kept as one rule.
+ */
+export function defaultSpawnPlacement(repository: boolean): 'worktree' | 'local' {
+  return repository ? 'worktree' : 'local';
+}
 
 interface SpawnSuggestionStartBase {
   title: string;

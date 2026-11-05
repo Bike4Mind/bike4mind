@@ -10,6 +10,8 @@ import {
   sessionList,
   sessionRead,
   sessionSend,
+  delegatedSpawnSchema,
+  questComplete,
   sessionSpawn,
   sessionSuggestionDismiss,
   sessionSuggestionUpdate,
@@ -143,6 +145,7 @@ const BY_NAME = new Map(
     generateVideoTool,
     ...HOST_TOOLS,
     ...SUGGESTION_TOOLS,
+    questComplete,
     ...BROWSER_TOOLS,
     screenCapture,
     ...SIMULATOR_TOOLS,
@@ -238,6 +241,8 @@ export function toolsForRequest(options: {
    * when the user is typing in it. Defaults to `ask`.
    */
   suggestions?: boolean;
+  /** Orchestrate is in effect, so session_spawn starts rather than suggests; see HostContext.delegates. */
+  delegates?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -262,6 +267,7 @@ export function toolsForRequest(options: {
     ...(options.media ? MEDIA_TOOLS : []),
     ...(options.host ? HOST_TOOLS : []),
     ...(options.host && (options.suggestions ?? options.ask) ? SUGGESTION_TOOLS : []),
+    ...(options.host && options.delegates ? [questComplete] : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.screen ? [screenCapture] : []),
     ...(options.simulator ? SIMULATOR_TOOLS : []),
@@ -274,7 +280,9 @@ export function toolsForRequest(options: {
     ...(options.mcpServers ? (options.ask ? MCP_TOOLS : MCP_READ_TOOLS) : []),
   ];
   return [
-    ...available.map(tool => ({ toolSchema: tool.schema })),
+    ...available.map(tool => ({
+      toolSchema: options.delegates && tool === sessionSpawn ? delegatedSpawnSchema : tool.schema,
+    })),
     ...(options.media && options.video?.length ? [{ toolSchema: generateVideoSchema(options.video) }] : []),
     ...(options.mcp ?? []).map(toolSchema => ({ toolSchema })),
   ];

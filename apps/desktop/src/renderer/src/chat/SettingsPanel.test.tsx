@@ -82,6 +82,10 @@ describe('the Settings screen', () => {
     expect(html).toContain('data-testid="settings-worktree-default-switch"');
   });
 
+  it('offers the orchestrator sound preference', () => {
+    expect(html).toContain('data-testid="settings-orchestrator-sound-switch"');
+  });
+
   it('offers the self-hosted model speed preference', () => {
     expect(html).toContain('data-testid="settings-token-rate-switch"');
   });

@@ -37,5 +37,6 @@ export function applyReplyDone(message: ChatMessage, event: ReplyDoneEvent): Cha
     usage: event.usage ?? message.usage,
     promptCache: event.promptCache ?? message.promptCache,
     contextSnapshot: event.contextSnapshot,
+    ...(event.questComplete ? { questComplete: true as const } : {}),
   };
 }

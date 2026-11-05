@@ -62,7 +62,8 @@ vi.mock('../../wsl/wslPath', async importOriginal => {
 });
 
 const { wslUncPath } = await import('../../wsl/wslPath');
-const { branchCheckouts, git } = await import('./git');
+const projectGit = await import('./git');
+const { branchCheckouts, git } = projectGit;
 const { SpareWorktrees, inspectWorktreeRemoval, removeSessionWorktree, resolveWorkspace, worktreeFolderName } =
   await import('./workspace');
 
@@ -138,6 +139,35 @@ describe.skipIf(process.platform === 'win32')('worktrees of a WSL project', () =
     expect(await exists(firstLinux)).toBe(false);
 
     expect((await readdir(repo)).filter(name => name.includes('\\'))).toEqual([]);
+  });
+
+  it('cleans up a failed worktree add with Linux paths for git and the share path for the folder', async () => {
+    const { repo } = await repository();
+    const project = share(repo);
+    const branch = 'agent/slow';
+    const linuxPath = posix.join(repo, '.b4m', 'worktrees', worktreeFolderName(branch));
+    const originalGit = projectGit.git;
+    const cleanupArgs: string[][] = [];
+    const spy = vi.spyOn(projectGit, 'git').mockImplementation(async (directory, args, options) => {
+      if (args[0] === 'worktree' && (args[1] === 'unlock' || args[1] === 'remove')) cleanupArgs.push([...args]);
+      if (args[0] !== 'worktree' || args[1] !== 'add') return originalGit(directory, args, options);
+      // Runs the real add, then fails it the way a timeout kill does, after it made things.
+      await originalGit(directory, args, options);
+      throw new projectGit.GitError(args, 'Updating files:  4% (616/15405)\r', options?.timeoutMs);
+    });
+    try {
+      await expect(resolveWorkspace(project, { base: 'main', branch })).rejects.toThrow(/timed out/);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(cleanupArgs).toEqual([
+      ['worktree', 'unlock', linuxPath],
+      ['worktree', 'remove', '--force', '--force', linuxPath],
+    ]);
+    expect(await exists(linuxPath)).toBe(false);
+    expect(await git(repo, ['branch', '--list', branch])).toBe('');
+    expect(await git(repo, ['worktree', 'list', '--porcelain'])).not.toContain(linuxPath);
   });
 
   it('follows a Linux symlink to the project inside the distro', async () => {
