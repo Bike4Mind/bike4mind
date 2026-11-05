@@ -1,3 +1,4 @@
+import type { ModelLoadOffer } from '@shared/modelSettings';
 import type { CompletionRequest } from './completions';
 import type { CompletionStreamEvent } from './streamEvents';
 
@@ -14,4 +15,6 @@ export interface LocalChat {
   contextTokens(modelId: string, signal?: AbortSignal): Promise<number>;
   /** A larger context so `tokens` fit, or undefined when it cannot grow. */
   growFor(modelId: string, tokens: number): Promise<number | undefined>;
+  /** The load-time options the model takes, for its Models screen dialog; see ModelLoadOffer. */
+  loadOffer?(modelId: string, draftTokens?: number): Promise<ModelLoadOffer>;
 }

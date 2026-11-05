@@ -70,8 +70,11 @@ const OLLAMA_SINGLE_SLOT_ARCHS = new Set([
   'nemotron_h_moe',
   'nemotron_h_omni',
 ]);
-// Ollama 0.40.11 passes --spec-draft-n-max 2 for a model that ships a draft unless the Modelfile sets one.
-const OLLAMA_DEFAULT_DRAFT_MAX = 2;
+/**
+ * Ollama's draft count for a DRAFT layer unless the Modelfile or a request sets one; an embedded MTP head is off.
+ * Per ollama/ollama docs/modelfile.mdx (draft_num_predict) and the unset-option handling in server/routes.go.
+ */
+export const OLLAMA_DRAFT_LAYER_DEFAULT = 4;
 
 const ROLE_MODE: Record<HubRole, FitMode> = { chat: 'chat', code: 'code', vision: 'chat', embeddings: 'embeddings' };
 const VERDICT_RANK: Record<FitResult['verdict'], number> = { fast: 0, tight: 1, slow: 2, 'too-large': 3 };
@@ -126,6 +129,21 @@ export function ollamaBuildBytes(build: HubBuild): { weightsBytes: number; mmpro
   return { weightsBytes: build.weights.reduce((sum, w) => sum + w.sizeBytes, 0), mmprojBytes };
 }
 
+/** The draft count Ollama runs a build at untouched: its pinned num predict, else 4 for a DRAFT layer, else 0. */
+export function ollamaBuildDraftMax(entry: Pick<HubEntry, 'arch'>, build: HubBuild): number {
+  const source = build.ollama;
+  const layers = source && source.kind !== 'create' ? source.layers : undefined;
+  // A pull installs no sidecar file and ignores a Modelfile count; only the served layers and the MTP head count.
+  const pulled = source?.kind === 'library' || source?.kind === 'hf-pull';
+  const sidecar = build.draft !== undefined && build.draft.kind !== 'mtp-embedded';
+  const hasDraft = (build.draft !== undefined && !(pulled && sidecar)) || entry.arch.mtpLayers > 0 || !!layers?.draft;
+  const draftLayer = pulled ? !!layers?.draft : sidecar || !!layers?.draft;
+  const draftNumPredict = pulled
+    ? layers?.draftNumPredict
+    : (layers?.draftNumPredict ?? source?.modelfile.draftNumPredict);
+  return hasDraft ? (draftNumPredict ?? (draftLayer ? OLLAMA_DRAFT_LAYER_DEFAULT : 0)) : 0;
+}
+
 function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, options: PickOptions) {
   const weights = build.weights.reduce((sum, w) => sum + w.sizeBytes, 0);
   const expertBytesPerLayer = build.tensorStats?.expertBytesPerLayer;
@@ -135,15 +153,13 @@ function fitInputs(entry: HubEntry, build: HubBuild, runtime: HubRuntime, option
     const ollama = options.runtimes.ollama;
     const family = options.manifest.families[entry.family];
     const source = build.ollama;
-    const library = source?.kind === 'library';
-    const hasDraft = build.draft !== undefined || entry.arch.mtpLayers > 0;
-    const draftNumPredict = source && source.kind !== 'library' ? source.modelfile.draftNumPredict : undefined;
-    const draftMax = hasDraft ? (draftNumPredict ?? OLLAMA_DEFAULT_DRAFT_MAX) : 0;
+    const pulled = source?.kind === 'library' || source?.kind === 'hf-pull';
+    const draftMax = ollamaBuildDraftMax(entry, build);
     // Ollama loads a model's projector whenever it has one.
     const model: FitModel = {
       arch: entry.arch,
       ...ollamaBuildBytes(build),
-      draftBytes: library ? 0 : (draftFile?.sizeBytes ?? 0),
+      draftBytes: pulled ? 0 : (draftFile?.sizeBytes ?? 0),
       expertBytesPerLayer,
       activeParamsFraction: activeShare,
     };

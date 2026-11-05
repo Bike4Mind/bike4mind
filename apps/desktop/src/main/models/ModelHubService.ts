@@ -56,6 +56,7 @@ import {
   fitMarginBytes,
   memoryBudgets,
   ollamaBuildBytes,
+  ollamaBuildDraftMax,
   type HubBuild,
   type HubEntry,
   type HubManifest,
@@ -92,10 +93,21 @@ import {
   type ModelServerManagement,
   type ModelStoreLocation,
 } from '@shared/models';
-import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
-import { LOCAL_SERVER_ID, LOCAL_SERVER_NAME, specsRate, type ModelServerSpecs } from '@shared/modelServers';
+import { localModelId } from '@shared/chat';
+import { AUTO_LOCAL_CONTEXT, type LocalContextSetting, type ModelContextSetting } from '@shared/localContextSetting';
+import type { ModelLoadSettings } from '@shared/modelSettings';
+import {
+  LOCAL_SERVER_ID,
+  LOCAL_SERVER_NAME,
+  serverRuntimeId,
+  specsRate,
+  type ModelServerSpecs,
+  type QuantizedKvCacheType,
+} from '@shared/modelServers';
+import { draftTokensOf } from '../chat/loadOptions';
 import { chatContextTokens, type LocalModelFootprint } from '../chat/localContext';
 import { configuredNumCtx } from '../chat/localChatContext';
+import { OLLAMA_RUNTIME_ID } from '../chat/OllamaLocal';
 import { ServerCredentialsError, ServerUnreachableError } from '../modelServers/errors';
 import { ServerRedirectError, ServerTransportError } from '@bike4mind/local-models/servers';
 import { serverHardware, withEnteredSpecs } from './enteredHardware';
@@ -173,6 +185,8 @@ export interface ModelHubServiceDeps {
   specs?: (serverId: string) => ModelServerSpecs | null;
   /** The Settings choice local chat sizes its context with; fit badges plan for that same context. */
   localContext: () => Promise<LocalContextSetting>;
+  /** A model's load settings by chat model id; its own context and draft count replace the above in its badge. */
+  modelSettings?: (modelId: string) => Promise<ModelLoadSettings>;
   /**
    * The Curated tab's current list, which can change while the app runs. Each call here reads it once and uses
    * that snapshot throughout, so a list update during a download never changes the pins it is checked against.
@@ -633,25 +647,27 @@ function phaseOf(status: string): ModelPull['phase'] {
 
 interface Sizing {
   hardware: HardwareProfile;
-  setting: LocalContextSetting;
+  setting: ModelContextSetting;
   /** What chat sizes num_ctx from: this computer's hardware, or null on a saved server, which chat never measures. */
   chatHardware: HardwareProfile | null;
   rating: 'probe' | 'entered';
   /** Whose memory `hardware` is, for the verdict's wording. */
   where: FitWhere;
+  /** The server's OLLAMA_KV_CACHE_TYPE as entered in Settings; absent is f16. */
+  kvCacheType?: QuantizedKvCacheType;
 }
 
 /** The num_ctx OllamaLocal would send this model with, so a badge rates the load chat makes. */
 function chatContext(
-  { chatHardware, setting }: Sizing,
+  { chatHardware, setting, kvCacheType }: Sizing,
   arch: LocalModelFootprint['arch'],
   weightsBytes: number,
-  bounds: { modelLimit?: number; configured?: number; projectorBytes?: number }
+  bounds: { modelLimit?: number; configured?: number; projectorBytes?: number; draftMax?: number }
 ): number {
-  const { projectorBytes, ...limits } = bounds;
+  const { projectorBytes, draftMax, ...limits } = bounds;
   return chatContextTokens({
     setting,
-    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware },
+    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware, draftMax, kvCacheType },
     ...limits,
   });
 }
@@ -659,12 +675,16 @@ function chatContext(
 /** A reviewed build's fit from its layer shapes, pinned projector and num_ctx; its row and its pull dialog share it. */
 function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit {
   const { weightsBytes, mmprojBytes } = ollamaBuildBytes(build);
+  const draftMax = ollamaBuildDraftMax(entry, build);
   const context = chatContext(sizing, entry.arch, weightsBytes + mmprojBytes, {
     configured: pinsOf(build)?.numCtx ?? undefined,
     projectorBytes: mmprojBytes,
+    draftMax,
   });
   return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, {
     mmprojBytes,
+    draftMax,
+    kvCacheType: sizing.kvCacheType,
     where: sizing.where,
     expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
     activeParamsFraction: activeParamsFraction(entry.params),
@@ -695,6 +715,7 @@ export class ModelHubService {
       contextLength: number | null;
       projectorBytes: number;
       expertBytesPerLayer: number | undefined;
+      draftLayer: boolean;
     } | null>
   >();
   /** Model folders read from a runtime, by server id; a guessed default is never kept. */
@@ -737,6 +758,7 @@ export class ModelHubService {
       chatHardware: hardware,
       rating: specsRate(specs) ? 'entered' : 'probe',
       where: 'local',
+      kvCacheType: specs?.kvCacheType,
     };
   }
 
@@ -798,11 +820,25 @@ export class ModelHubService {
   /** Null for a saved server without entered hardware: its models are not rated. */
   async #sizing(target: Target): Promise<Sizing | null> {
     if (target.local) return this.#localSizing();
-    const hardware = serverHardware(this.#deps.specs?.(target.id) ?? null);
+    const specs = this.#deps.specs?.(target.id) ?? null;
+    const hardware = serverHardware(specs);
     // Chat sends a saved server the Auto floor whatever the Settings choice, having no measure of it.
     return hardware
-      ? { hardware, setting: AUTO_LOCAL_CONTEXT, chatHardware: null, rating: 'entered', where: 'server' }
+      ? {
+          hardware,
+          setting: AUTO_LOCAL_CONTEXT,
+          chatHardware: null,
+          rating: 'entered',
+          where: 'server',
+          kvCacheType: specs?.kvCacheType,
+        }
       : null;
+  }
+
+  /** The load settings chat keeps for this installed model; none when they cannot be read. */
+  async #modelSettings(target: Target, name: string): Promise<ModelLoadSettings> {
+    const runtimeId = target.local ? OLLAMA_RUNTIME_ID : serverRuntimeId(target.id);
+    return (await this.#deps.modelSettings?.(localModelId(runtimeId, name)).catch(() => ({}))) ?? {};
   }
 
   async #installedFit(
@@ -830,6 +866,7 @@ export class ModelHubService {
             onThisComputer: target.local,
           }),
           expertBytesPerLayer: inspection.tensorStats?.expertBytesPerLayer,
+          draftLayer: (inspection.contents?.draftBlobs?.length ?? 0) > 0,
         }))
         .catch(() => {
           // A busy daemon can time out once; read it again next time instead of rating by size for the session.
@@ -838,21 +875,30 @@ export class ModelHubService {
         });
       this.#archs.set(key, shown);
     }
-    const inspection = await shown;
+    const [inspection, load] = await Promise.all([shown, this.#modelSettings(target, model.name)]);
     const arch = inspection?.arch ?? null;
     const limit = arch?.contextMax ?? inspection?.contextLength ?? undefined;
     // Ollama's tag size already includes any projector, as it does for chat's own sizing.
     const projector = inspection && inspection.projectorBytes < model.sizeBytes ? inspection.projectorBytes : 0;
-    const context = chatContext(sizing, arch, model.sizeBytes, {
+    // As OllamaLocal sizes it: the draft count the model runs at, under its own context setting if it has one.
+    const draftMax = draftTokensOf(load, {
+      mtpLayers: arch?.mtpLayers ?? 0,
+      draftLayer: inspection?.draftLayer ?? false,
+      parameters: inspection?.parameters,
+    });
+    const context = chatContext({ ...sizing, setting: load.context ?? sizing.setting }, arch, model.sizeBytes, {
       modelLimit: inspection?.contextLength ?? undefined,
       configured: configuredNumCtx(inspection?.parameters),
       projectorBytes: projector,
+      draftMax,
     });
     const { where } = sizing;
     return arch
       ? fitFromArch(arch, model.sizeBytes - projector, hardware, context, {
           mmprojBytes: projector,
           expertBytesPerLayer: inspection?.expertBytesPerLayer,
+          draftMax,
+          kvCacheType: sizing.kvCacheType,
           where,
         })
       : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where });
