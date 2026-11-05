@@ -54,6 +54,7 @@ import {
 import {
   activeParamsFraction,
   fitMarginBytes,
+  hubLicenseLabel,
   memoryBudgets,
   ollamaBuildBytes,
   ollamaBuildDraftMax,
@@ -1150,7 +1151,7 @@ export class ModelHubService {
         name: entry.name,
         why: entry.why,
         params: paramsLabel(entry),
-        licenseName: entry.license.id,
+        licenseName: hubLicenseLabel(entry.license),
         licenseUrl: entry.license.source,
         licenseKind: permissive(entry) ? 'permissive' : 'restricted',
         thinking: entry.capabilities.thinking,

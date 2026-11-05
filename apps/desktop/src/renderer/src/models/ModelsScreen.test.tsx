@@ -188,7 +188,7 @@ function curatedEntry(extra: Partial<CuratedEntryView> & Pick<CuratedEntryView, 
     name: extra.id,
     why: 'On the list for its size.',
     params: '27B',
-    licenseName: 'apache-2.0',
+    licenseName: 'Apache 2.0',
     licenseUrl: 'https://www.apache.org/licenses/LICENSE-2.0',
     licenseKind: 'permissive',
     thinking: true,
@@ -590,6 +590,11 @@ describe('ModelsScreen curated', () => {
     expect(recommended).toHaveLength(1);
     expect(recommended[0].closest<HTMLElement>('[data-testid="models-curated-pick"]')?.dataset.slot).toBe('fast');
     expect(picks.every(pick => pick.querySelector('[data-testid="models-curated-vision-chip"]'))).toBe(true);
+    expect(picks.map(pick => pick.querySelector('[data-testid="models-curated-license-chip"]')?.textContent)).toEqual([
+      'Apache 2.0',
+      'Apache 2.0',
+      'Apache 2.0',
+    ]);
     expect(
       picks.map(pick => pick.querySelector<HTMLElement>('[data-testid="models-fit-badge"]')?.dataset.level)
     ).toEqual(['too-large', 'fits', 'fits']);
@@ -672,11 +677,19 @@ describe('ModelsScreen curated', () => {
   });
 
   it('labels a restricted license', async () => {
-    bridge.curated.entries[0] = { ...bridge.curated.entries[0], licenseName: 'other', licenseKind: 'restricted' };
+    bridge.curated.entries[0] = {
+      ...bridge.curated.entries[0],
+      licenseName: 'Gemma Terms of Use',
+      licenseKind: 'restricted',
+    };
     await mount(undefined, 'curated');
     const chip = inside('models-curated-all', 'models-curated-license-chip')[0];
-    expect(chip?.textContent).toBe('Restricted license: other');
+    expect(chip?.textContent).toBe('Restricted license: Gemma Terms of Use');
     expect(chip?.dataset.kind).toBe('restricted');
+    const pick = inside('models-curated-picks', 'models-curated-pick').find(row => row.dataset.entry === 'gemma-4-e4b');
+    expect(pick?.querySelector('[data-testid="models-curated-license-chip"]')?.textContent).toBe(
+      'Restricted license: Gemma Terms of Use'
+    );
   });
 
   it('says when the list could not load, and loads it on retry', async () => {

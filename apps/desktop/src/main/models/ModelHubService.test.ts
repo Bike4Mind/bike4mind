@@ -1798,7 +1798,7 @@ describe('ModelHubService curated list', () => {
     expect(list.entries.every(entry => entry.vision && entry.thinking && entry.tools)).toBe(true);
     expect(list.entries.find(entry => entry.id === 'gemma-4-26b')).toMatchObject({
       params: '25.2B, 3.8B active',
-      licenseName: 'apache-2.0',
+      licenseName: 'Apache 2.0',
       licenseKind: 'permissive',
       sourceName: 'Ollama',
       sourceUrl: 'https://ollama.com/library/gemma4',

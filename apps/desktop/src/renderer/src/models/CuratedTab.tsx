@@ -412,6 +412,7 @@ function PickRow({
         <Typography level="body-xs" textColor="text.tertiary">
           {entry.params}
         </Typography>
+        <LicenseChip entry={entry} />
         <VisionChip entry={entry} />
       </Stack>
       <CuratedBuild where={`pick:${pick.slot}`} entry={entry} build={build} context={context} />

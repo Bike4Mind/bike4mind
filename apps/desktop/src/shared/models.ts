@@ -233,6 +233,7 @@ export interface CuratedEntryView {
   why: string;
   /** e.g. `11.9B` or `25.2B, 3.8B active`. */
   params: string;
+  /** The license's display label, e.g. `Apache 2.0`. */
   licenseName: string;
   licenseUrl: string;
   /** Permissive only when both the model's and its base model's licenses are. */
