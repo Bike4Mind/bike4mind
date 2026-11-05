@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-vi.mock('@server/middlewares/adminApi', () => ({
-  adminApi: (config?: unknown) => {
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: (config?: unknown) => {
     const handlers: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => handlers[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -44,8 +44,13 @@ describe('GET /api/admin/subscriptions/[id]/stripe', () => {
     expect((handler as unknown as { _config: unknown })._config).toEqual({
       auth: 'jwtOnly',
       requiredScopes: [ApiKeyScope.ADMIN],
-      adminPermissions: { GET: 'support:read' },
     });
+  });
+
+  it('403s a delegated admin without reading, matching the detail route', async () => {
+    const delegate = { id: 'c'.repeat(24), isAdmin: false, adminPermissions: ['support:read'] };
+    await expect(call({ id: ID }, delegate)).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockRead).not.toHaveBeenCalled();
   });
 
   it('404s a malformed id without reading', async () => {
