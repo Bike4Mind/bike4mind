@@ -146,12 +146,17 @@ export class ModelLiveView {
     const target = siblingGlbPath(path);
     if (!target) return null;
     const temporary = `${target}.${randomUUID()}.tmp`;
-    await writeFile(temporary, bytes);
-    if (generation !== this.state.generation) {
-      await rm(temporary, { force: true });
-      return null;
+    try {
+      await writeFile(temporary, bytes);
+      if (generation !== this.state.generation) {
+        await rm(temporary, { force: true });
+        return null;
+      }
+      await rename(temporary, target);
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
     }
-    await rename(temporary, target);
     this.lastGlb = target;
     return target;
   }

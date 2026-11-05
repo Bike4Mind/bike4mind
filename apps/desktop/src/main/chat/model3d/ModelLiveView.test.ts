@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -130,6 +130,14 @@ describe('ModelLiveView', () => {
     expect(target).toBe(join(dir, 'chest.glb'));
     expect(readFileSync(join(dir, 'chest.glb')).toString()).toBe('glTF');
     expect(view.glbPath()).toBe(target);
+  });
+
+  it('removes its temporary file when the GLB cannot be moved into place', async () => {
+    await view.open(file);
+    mkdirSync(join(dir, 'chest.glb', 'occupied'), { recursive: true });
+    await expect(view.writeGlb(1, new Uint8Array([1]))).rejects.toThrow();
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    expect(view.glbPath()).toBeNull();
   });
 
   it('never writes over an opened .glb', async () => {
