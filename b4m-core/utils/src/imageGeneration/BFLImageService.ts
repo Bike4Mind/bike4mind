@@ -36,7 +36,7 @@ const flux2InputImageFields = (images: string[]): Record<string, string> =>
   Object.fromEntries(images.map((image, index) => [index === 0 ? 'input_image' : `input_image_${index + 1}`, image]));
 
 /** FLUX.2 (except flex) inverts upsampling into `disable_pup`; other models that support it take `prompt_upsampling`. */
-const promptUpsamplingBodyFields = (model: BFLImageModel, promptUpsampling: boolean) =>
+const promptUpsamplingBodyFields = (model: string, promptUpsampling: boolean) =>
   !supportsPromptUpsampling(model)
     ? {}
     : isFlux2ImageModel(model) && model !== ImageModels.FLUX_2_FLEX

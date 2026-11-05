@@ -377,6 +377,7 @@ describe('ImageEditService.process model dispatch', () => {
       userId: 'user1',
       body: {
         sessionId: 'session1',
+        questId: 'quest1',
         prompt: 'make it blue',
         model: ImageModels.FLUX_2_PRO,
         image: 'https://example.invalid/source.png',

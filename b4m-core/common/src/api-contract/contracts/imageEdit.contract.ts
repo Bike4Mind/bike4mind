@@ -32,7 +32,7 @@ export const editImageContract = defineEndpoint({
     'first is the inpainting mask, except on FLUX.2 models, which edit from the prompt with no mask and ' +
     'reject `fabFileIds` with a 400. `referenceImageFabFileIds` adds reference images after the ' +
     'source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 ' +
-    'pro, max and flex, and 3 on FLUX.2 klein (the source takes one of FLUX.2\'s slots). Sending any ' +
+    "pro, max and flex, and 3 on FLUX.2 klein (the source takes one of FLUX.2's slots). Sending any " +
     'with another model, or more than the limit, is rejected with a 400 rather than ignored. Both id fields take ids ' +
     'from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` ' +
     'is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. ' +

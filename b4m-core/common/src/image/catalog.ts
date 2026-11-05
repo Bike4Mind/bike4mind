@@ -1,7 +1,12 @@
 import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { MAX_IMAGES_PER_REQUEST, type ImageOutputFormat, type OpenAIImageQuality } from '../schemas/openai';
 import type { ImageSizing } from '../utils/imageCapabilities';
-import { getMaxEditReferenceImages, getMaxReferenceImages, IMAGES_PER_EDIT_REQUEST, MAX_REFERENCE_IMAGES } from '../utils/modelHelpers';
+import {
+  getMaxEditReferenceImages,
+  getMaxReferenceImages,
+  IMAGES_PER_EDIT_REQUEST,
+  MAX_REFERENCE_IMAGES,
+} from '../utils/modelHelpers';
 import type { AspectRatioCapability, ImageModeCapabilities, ImageModelCatalogEntry } from './types';
 
 const GPT_IMAGE_QUALITIES = ['low', 'medium', 'high', 'auto'] as const satisfies readonly OpenAIImageQuality[];

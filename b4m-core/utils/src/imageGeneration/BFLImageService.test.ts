@@ -435,9 +435,9 @@ describe('BFLImageService - edit()', () => {
     expect(submittedBody()[`input_image_${limit + 1}`]).toBe(`ref-${limit - 1}`);
     postSpy.mockClear();
 
-    await expect(service.edit('source', 'too many', { model, referenceImages: [...referenceImages, 'extra'] })).rejects.toThrow(
-      `at most ${limit + 1} reference images`
-    );
+    await expect(
+      service.edit('source', 'too many', { model, referenceImages: [...referenceImages, 'extra'] })
+    ).rejects.toThrow(`at most ${limit + 1} reference images`);
     expect(postSpy).not.toHaveBeenCalled();
   });
 
