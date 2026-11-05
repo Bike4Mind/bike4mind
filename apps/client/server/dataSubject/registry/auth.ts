@@ -84,7 +84,6 @@ export const authHolders = {
   DisposableDomain: { kind: 'noUserData', note: 'Catalogue of throwaway email domains.' },
   DisposableDomainSource: { kind: 'noUserData', note: 'Sync status of the disposable-domain feeds.' },
   DomainIntelligence: { kind: 'noUserData', note: 'Cached DNS/MX lookups keyed by email domain, not by person.' },
-  // The claim is what stops one GitHub account unlocking credits twice; deleting it would re-open that.
   IdentityProvider: {
     kind: 'holder',
     references: [{ path: 'createdBy', matchBy: 'userId', action: 'anonymize' }],
