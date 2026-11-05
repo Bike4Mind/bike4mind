@@ -422,6 +422,31 @@ describe('runSplitImport', () => {
     expect(runtime.create).toHaveBeenCalled();
   });
 
+  it('rejects as aborted when the abort lands in an upload even if Ollama now holds the part', async () => {
+    const { hub, runtime } = fakes();
+    const controller = new AbortController();
+    const first = `sha256:${hex('1')}`;
+    let held = false;
+    runtime.hasBlob.mockImplementation(async (digest: string) => digest === first && held);
+    runtime.uploadBlob.mockImplementation(async () => {
+      held = true;
+      controller.abort();
+      throw new DOMException('aborted', 'AbortError');
+    });
+    const reported: number[] = [];
+    await expect(
+      runSplitImport(plan(), {
+        hub,
+        runtime,
+        dir: join(root, 'run'),
+        signal: controller.signal,
+        onProgress: update => reported.push(update.completedBytes),
+      })
+    ).rejects.toThrow('aborted');
+    expect(runtime.create).not.toHaveBeenCalled();
+    expect(Math.max(...reported)).toBeLessThan(300);
+  });
+
   it('stops waiting for a busy part when the run is aborted', async () => {
     const { hub, runtime } = fakes();
     const controller = new AbortController();
