@@ -36,7 +36,11 @@ export interface DeviceFlowClientOptions {
    * app are separate registrations), so this is an input rather than a constant.
    */
   clientId: string;
+  /** Bound on the token refresh request, in ms. A refresh that times out is unknown, not rejected. */
+  refreshTimeoutMs?: number;
 }
+
+export const DEFAULT_REFRESH_TIMEOUT_MS = 25_000;
 
 /**
  * OAuth 2.0 Device Authorization Flow client
@@ -45,9 +49,11 @@ export interface DeviceFlowClientOptions {
 export class DeviceFlowClient {
   private apiClient: AxiosInstance;
   private readonly clientId: string;
+  private readonly refreshTimeoutMs: number;
 
   constructor(options: DeviceFlowClientOptions) {
     this.clientId = options.clientId;
+    this.refreshTimeoutMs = options.refreshTimeoutMs ?? DEFAULT_REFRESH_TIMEOUT_MS;
     this.apiClient = axios.create({
       baseURL: options.baseUrl,
       headers: {
@@ -169,11 +175,15 @@ export class DeviceFlowClient {
    * Refresh an expired access token
    */
   async refreshToken(refreshToken: string): Promise<RefreshTokenResponse> {
-    const response = await this.apiClient.post<RefreshTokenResponse>('/api/oauth/refresh', {
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: this.clientId,
-    });
+    const response = await this.apiClient.post<RefreshTokenResponse>(
+      '/api/oauth/refresh',
+      {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: this.clientId,
+      },
+      { timeout: this.refreshTimeoutMs }
+    );
 
     return response.data;
   }

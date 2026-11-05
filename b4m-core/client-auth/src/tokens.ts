@@ -27,6 +27,12 @@ export interface TokenStore {
    * presents a refresh token that process has already rotated.
    */
   reloadAuthTokens?(): Promise<AuthTokens | null>;
+  /**
+   * Run `work` while holding a lock that other processes sharing this storage also take, so
+   * only one of them exchanges a refresh token at a time. Optional, for a store whose storage
+   * is shared across processes. Rejects, without running `work`, if the lock stays held too long.
+   */
+  withRefreshLock?<T>(work: () => Promise<T>): Promise<T>;
 }
 
 /**

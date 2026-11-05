@@ -313,18 +313,31 @@ export class AuthenticatedApiClient {
    */
   refreshSession(rejectedAccessToken?: string): Promise<AuthTokens> {
     if (!this.inFlightRefresh) {
-      this.inFlightRefresh = this.exchangeRefreshToken(rejectedAccessToken).finally(() => {
+      this.inFlightRefresh = this.lockedExchange(rejectedAccessToken).finally(() => {
         this.inFlightRefresh = null;
       });
     }
     return this.inFlightRefresh;
   }
 
-  private async exchangeRefreshToken(rejectedAccessToken: string | undefined): Promise<AuthTokens> {
+  private async lockedExchange(rejectedAccessToken: string | undefined): Promise<AuthTokens> {
+    const store = this.tokenStore;
+    if (!store.withRefreshLock) return this.exchangeRefreshToken(rejectedAccessToken, undefined);
+    const seen = await this.readStoredTokens();
+    return store.withRefreshLock(() => this.exchangeRefreshToken(rejectedAccessToken, seen?.refreshToken));
+  }
+
+  /** `seenRefreshToken`: the refresh token stored before waiting on the refresh lock, if one was taken. */
+  private async exchangeRefreshToken(
+    rejectedAccessToken: string | undefined,
+    seenRefreshToken: string | undefined
+  ): Promise<AuthTokens> {
     const presented = await this.readStoredTokens();
     if (!presented) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
 
-    if (rejectedAccessToken !== undefined && presented.accessToken !== rejectedAccessToken && !isExpired(presented)) {
+    const rotatedWhileWaiting = seenRefreshToken !== undefined && presented.refreshToken !== seenRefreshToken;
+    const rejectedWasReplaced = rejectedAccessToken !== undefined && presented.accessToken !== rejectedAccessToken;
+    if ((rotatedWhileWaiting || rejectedWasReplaced) && !isExpired(presented)) {
       this.logger.debug('AUTH: Stored tokens were already refreshed elsewhere, adopting them');
       return presented;
     }

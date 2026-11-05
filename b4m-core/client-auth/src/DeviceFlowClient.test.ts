@@ -49,6 +49,25 @@ describe('DeviceFlowClient client_id', () => {
   });
 });
 
+describe('DeviceFlowClient.refreshToken', () => {
+  async function refreshTimeout(
+    options: ConstructorParameters<typeof DeviceFlowClient>[0]
+  ): Promise<number | undefined> {
+    let timeout: number | undefined;
+    axios.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      timeout = config.timeout;
+      return Promise.resolve({ data: {}, status: 200, statusText: 'OK', headers: {}, config } as AxiosResponse);
+    }) as AxiosAdapter;
+    await new DeviceFlowClient(options).refreshToken('rt');
+    return timeout;
+  }
+
+  it('bounds the refresh request, by default and when configured', async () => {
+    expect(await refreshTimeout(BASE)).toBe(25_000);
+    expect(await refreshTimeout({ ...BASE, refreshTimeoutMs: 5_000 })).toBe(5_000);
+  });
+});
+
 describe('DeviceFlowClient.pollForToken', () => {
   it('surfaces an OAuth error payload as an Error carrying the error code', async () => {
     respondWith({ error: 'authorization_pending', error_description: 'pending' });

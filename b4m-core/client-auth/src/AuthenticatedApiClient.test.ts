@@ -312,6 +312,55 @@ describe('AuthenticatedApiClient cross-process refresh', () => {
     expect(refreshToken).not.toHaveBeenCalled();
     expect(memory.store.reloadAuthTokens).toHaveBeenCalled();
   });
+
+  function lockedStore(memory: ReturnType<typeof memoryStore>, whileWaiting: () => void = () => {}) {
+    const lock = { held: false };
+    const store: TokenStore = {
+      ...memory.store,
+      async withRefreshLock<T>(work: () => Promise<T>): Promise<T> {
+        whileWaiting();
+        lock.held = true;
+        try {
+          return await work();
+        } finally {
+          lock.held = false;
+        }
+      },
+    };
+    return { store, lock };
+  }
+
+  it('exchanges and saves while holding the store refresh lock', async () => {
+    const memory = memoryStore(tokens());
+    const { store, lock } = lockedStore(memory);
+    const heldDuring: boolean[] = [];
+    memory.store.setAuthTokens.mockImplementationOnce(async (next: AuthTokens) => {
+      heldDuring.push(lock.held);
+      memory.writeBehind(next);
+    });
+    const refreshToken = vi.fn(async () => {
+      heldDuring.push(lock.held);
+      return grant(1);
+    });
+
+    await build(store, refreshToken).client.refreshSession();
+
+    expect(heldDuring).toEqual([true, true]);
+  });
+
+  it('adopts the tokens the previous lock holder rotated in instead of exchanging', async () => {
+    const memory = memoryStore(tokens());
+    const rotated = tokens({
+      accessToken: 'access-1',
+      refreshToken: 'refresh-1',
+      expiresAt: new Date(Date.now() + 1_800_000).toISOString(),
+    });
+    const { store } = lockedStore(memory, () => memory.writeBehind(rotated));
+    const refreshToken = vi.fn().mockResolvedValue(grant(2));
+
+    expect(await build(store, refreshToken).client.refreshSession()).toEqual(rotated);
+    expect(refreshToken).not.toHaveBeenCalled();
+  });
 });
 
 describe('AuthenticatedApiClient refreshUnexpiredOn401', () => {
