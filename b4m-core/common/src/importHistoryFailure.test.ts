@@ -39,6 +39,10 @@ describe('describeImportFailure', () => {
     'file data overflows file bounds: 30 + 0 + 5000 > 120',
     'multi-disk zip files are not supported: found disk number: 1',
     'invalid stored block lengths',
+    'invalid distance too far back',
+    'invalid code lengths set',
+    'too many length or distance symbols',
+    'unexpected end of file',
     'Unable to read conversations.json from archive',
   ])('treats %s as a damaged file', message => {
     expect(describeImportFailure(message, 'OpenAI')).toEqual({
@@ -66,6 +70,7 @@ describe('describeImportFailure', () => {
     'Unexpected end of JSON input',
     'Unexpected token } in JSON at position 12',
     `Unexpected token 'o', "not json" is not valid JSON`,
+    `Unexpected token 'u', "unexpected EOF in central directory" is not valid JSON`,
   ])('treats %s as invalid JSON', message => {
     expect(describeImportFailure(message)).toEqual({
       reason: 'conversations.json in this file is not valid JSON.',

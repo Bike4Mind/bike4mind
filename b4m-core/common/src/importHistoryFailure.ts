@@ -21,7 +21,7 @@ const ARCHIVE_ERROR = /central directory|local file header|Unable to open archiv
 // yauzl and zlib errors raised while inflating an entry of a zip that opened fine: truncated,
 // encrypted or otherwise unreadable by us, so the same file fails the same way on retry.
 const DAMAGED_ERROR =
-  /unexpected EOF|unsupported compression method|entry is encrypted|strong encryption is not supported|file data overflows file bounds|multi-disk zip files are not supported|Unable to read conversations\.json from archive|incorrect header check|invalid (stored block lengths|block type|distance)/i;
+  /unexpected EOF|unsupported compression method|entry is encrypted|strong encryption is not supported|file data overflows file bounds|multi-disk zip files are not supported|Unable to read conversations\.json from archive|unexpected end of file|incorrect (header|data) check|invalid (stored block lengths|block type|distance|code|literal|bit length)|too many length or distance symbols/i;
 const JSON_ERROR = /Unexpected (token|end of JSON|non-whitespace)|is not valid JSON|in JSON at position/i;
 
 const GENERIC_FAILURE: ImportHistoryFailure = {
@@ -46,14 +46,16 @@ export const describeImportFailure = (
       retryable: false,
     };
   }
+  // JSON first: a SyntaxError quotes a snippet of the user's conversations.json, which could
+  // contain any of the archive phrases below.
+  if (JSON_ERROR.test(message)) {
+    return { reason: 'conversations.json in this file is not valid JSON.', retryable: false };
+  }
   if (DAMAGED_ERROR.test(message)) {
     return { reason: 'This file is damaged or is not a usable export.', retryable: false };
   }
   if (ARCHIVE_ERROR.test(message)) {
     return { reason: 'This file is not a valid .zip archive.', retryable: false };
-  }
-  if (JSON_ERROR.test(message)) {
-    return { reason: 'conversations.json in this file is not valid JSON.', retryable: false };
   }
   return { ...GENERIC_FAILURE };
 };
