@@ -2,6 +2,7 @@ import { adminSettingsRepository, dataLakeBatchRepository, FabFile, User, withTr
 import { isMediaOnlyMimeType, isStorageCharged } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@bike4mind/server-utils/s3/utils';
 import { isUntrackedFabFileKey } from '@bike4mind/server-utils/s3/untrackedFabFileKey';
+import { isNoSuchKeyError } from '@bike4mind/server-utils/s3/noSuchKeyError';
 import {
   claimModerationScan,
   recordLandedObject,
@@ -139,6 +140,7 @@ export const func = withContext(async (event, context, logger) => {
       return landed;
     };
 
+    let objectGone = false;
     const user = await withTransaction(async session => {
       const user = await User.findById(metadata.userId).session(session);
       if (!user) {
@@ -222,8 +224,19 @@ export const func = withContext(async (event, context, logger) => {
           logger.warn(`[Q2b] could not release moderation claim for ${objectKey}: ${String(releaseErr)}`)
         );
       }
+      if (isNoSuchKeyError(err)) {
+        objectGone = true;
+        return null;
+      }
       throw err;
     });
+    // The bytes were removed between the event and the scan's read (typically the uploader deleted
+    // the file right after uploading it). A retry can only find the same absence, so skip the record
+    // rather than throw into Lambda's async retries; nothing below has anything left to process.
+    if (objectGone) {
+      logger.warn(`Object ${objectKey} was removed from storage before its upload was processed; skipping`);
+      continue;
+    }
     if (deferred) {
       await releaseModerationClaim(metadata._id, claimedAt, { countAttempt: false }).catch((releaseErr: unknown) =>
         logger.warn(`[Q2b] could not release deferred moderation claim for ${objectKey}: ${String(releaseErr)}`)
