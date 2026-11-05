@@ -299,16 +299,20 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> },
     memory?: LoopRunMemory
   ): Promise<boolean> {
-    const result = await this.loopModel.updateOne(
-      { _id: id, activeExecutionIds: executionId },
-      { ...update, $pull: { activeExecutionIds: executionId } }
-    );
-    if (result.modifiedCount === 0) return false;
-    // A second write, so the classic $inc/$unset above need no pipeline form. A lane just freed, so the loop-lane
-    // hold goes; another lane's long_run alarm stays.
-    await this.loopModel.updateOne({ _id: id }, [
+    // One pipeline write, so a crash can never fold the lane without its memory: run values are $literal, and the
+    // classic $inc/$unset map to $add/$$REMOVE. A lane just freed, so the loop-lane hold goes; another lane's
+    // long_run alarm stays.
+    const set: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(update.$set ?? {})) set[key] = { $literal: value };
+    for (const [key, by] of Object.entries(update.$inc ?? {})) set[key] = { $add: [{ $ifNull: [`$${key}`, 0] }, by] };
+    for (const key of Object.keys(update.$unset ?? {})) set[key] = '$$REMOVE';
+    const result = await this.loopModel.updateOne({ _id: id, activeExecutionIds: executionId }, [
       {
         $set: {
+          ...set,
+          activeExecutionIds: {
+            $filter: { input: '$activeExecutionIds', cond: { $ne: ['$$this', { $literal: executionId }] } },
+          },
           alarm: {
             $cond: [
               { $and: [{ $eq: ['$alarm.kind', 'long_run'] }, { $eq: ['$alarm.executionId', executionId] }] },
@@ -327,7 +331,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         },
       },
     ]);
-    return true;
+    return result.modifiedCount > 0;
   }
 
   /** Also ends an idle back-off: something changed, so the loop has work worth a run again. */
