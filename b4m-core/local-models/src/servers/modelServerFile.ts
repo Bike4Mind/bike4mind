@@ -219,19 +219,7 @@ export function serverRuntimeId(serverId: string): string {
   return `srv-${serverId}`;
 }
 
-export function localModelId(runtimeId: string, model: string): string {
-  return `local:${encodeURIComponent(runtimeId)}:${model}`;
-}
-
-export function parseLocalModelId(id: string): { runtimeId: string; model: string } | null {
-  const match = /^local:([^:]+):(.+)$/s.exec(id);
-  if (!match) return null;
-  try {
-    return { runtimeId: decodeURIComponent(match[1]), model: match[2] };
-  } catch {
-    return null;
-  }
-}
+export { localModelId, parseLocalModelId } from '../modelSettings/fields';
 
 export interface DesktopDirsOptions {
   platform?: NodeJS.Platform;
