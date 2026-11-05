@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { IMPORT_FAILED_STEP } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { softDeletePlugin } from '../../utils/mongo';
 
@@ -246,8 +247,7 @@ class ImportHistoryJobRepository extends BaseRepository<IImportHistoryJob> {
       {
         $set: {
           status: 'failed',
-          // Same literal the live WS failure payload sends (server-utils importHistoryProgress.ts)
-          currentStep: 'Import failed',
+          currentStep: IMPORT_FAILED_STEP,
           errorMessage: error.message,
           errorStack: error.stack,
           failedAt: new Date(),

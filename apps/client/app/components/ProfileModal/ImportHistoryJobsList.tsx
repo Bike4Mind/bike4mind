@@ -24,7 +24,7 @@ import {
   useImportHistoryJobWebSocket,
 } from '@client/app/hooks/data/importHistoryJobs';
 import { IImportHistoryJob } from '@bike4mind/database/content';
-import { describeImportFailure } from '@bike4mind/common';
+import { describeImportFailure, IMPORT_FAILED_STEP } from '@bike4mind/common';
 
 const formatRelativeTime = (date: Date): string => {
   const now = new Date();
@@ -55,7 +55,7 @@ const ImportHistoryJobRow: FC<{ job: IImportHistoryJob }> = ({ job }) => {
   const failure =
     status === 'failed' ? describeImportFailure(liveProgress?.errorMessage ?? job.errorMessage, job.source) : null;
   // Rows that failed before markFailed recorded the step still carry the step they died on.
-  const currentStep = failure ? 'Import failed' : liveProgress?.currentStep || job.currentStep;
+  const currentStep = failure ? IMPORT_FAILED_STEP : liveProgress?.currentStep || job.currentStep;
 
   const getStatusColor = (status: string) => {
     switch (status) {

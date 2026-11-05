@@ -6,6 +6,9 @@ export interface ImportHistoryFailure {
   retryable: boolean;
 }
 
+/** currentStep for a failed import: stored by markFailed, sent on the WS failure payload, shown by the list. */
+export const IMPORT_FAILED_STEP = 'Import failed';
+
 /** User-facing product name for an import source; the enum value 'OpenAI' is shown as ChatGPT. */
 export const importSourceDisplayName = (source: ImportHistoryFailureSource): string =>
   source === 'OpenAI' ? 'ChatGPT' : source;

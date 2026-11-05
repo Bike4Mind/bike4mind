@@ -108,12 +108,22 @@ describe('ImportHistoryJobsList failed rows', () => {
     expect(screen.queryByText('Downloading and extracting file...')).not.toBeInTheDocument();
   });
 
-  it('uses the live failed payload for a row still stored as processing, including progress 0', () => {
-    hooks.jobs = [makeJob({ status: 'processing', progress: 40, currentStep: 'Parsing conversations...' })];
+  it('uses the live failed payload for a row still stored as processing, including zero counts', () => {
+    hooks.jobs = [
+      makeJob({
+        status: 'processing',
+        progress: 40,
+        processedItems: 5,
+        totalItems: 10,
+        currentStep: 'Parsing conversations...',
+      }),
+    ];
     hooks.live = {
       'job-1': {
         status: 'failed',
         progress: 0,
+        processedItems: 0,
+        totalItems: 4,
         currentStep: 'Import failed',
         errorMessage: 'end of central directory record signature not found',
       },
@@ -124,6 +134,7 @@ describe('ImportHistoryJobsList failed rows', () => {
       'This file is not a valid .zip archive.'
     );
     expect(screen.getByText('0%')).toBeInTheDocument();
+    expect(screen.getByText('0/4 items')).toBeInTheDocument();
     expect(screen.queryByTestId('retry-import-job-1')).not.toBeInTheDocument();
   });
 

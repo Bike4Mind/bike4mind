@@ -1,4 +1,5 @@
 import { Resource } from 'sst';
+import { IMPORT_FAILED_STEP } from '@bike4mind/common';
 import { sendToClient } from '../websocket/utils';
 import { importHistoryJobRepository, IImportHistoryJob } from '@bike4mind/database/content';
 
@@ -75,7 +76,7 @@ export async function markImportFailed(
     importHistoryJobId,
     status: 'failed',
     progress: 0,
-    currentStep: 'Import failed',
+    currentStep: IMPORT_FAILED_STEP,
     errorMessage: error.message,
   });
 }
