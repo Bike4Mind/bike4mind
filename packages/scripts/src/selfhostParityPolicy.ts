@@ -895,9 +895,16 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       fingerprint: '28fa72e17231df491e249d4e4d5fd0d19023022e7e4e52fde5f9f16e1781cecd',
     }
   ),
-  gap('schedule:infra/cron.ts:helpDatalakeIngest', '730ccd34ff9f62c9a9d40425c834c4a409a0710624664f18d2b27e97faac0a7e', [
-    'bedrock:InvokeModel',
-  ]),
+  wired(
+    'schedule:infra/cron.ts:helpDatalakeIngest',
+    '730ccd34ff9f62c9a9d40425c834c4a409a0710624664f18d2b27e97faac0a7e',
+    {
+      source: 'apps/workers/src/selfhost/helpDatalakeIngest.ts',
+      symbol: 'registerHelpDatalakeIngest',
+      fingerprint: 'ca737f233283cb1a64a2bddd0baad7bc5b2f47b6eb1cdd1e5f0cee226e01c2dc',
+    },
+    ['bedrock:InvokeModel']
+  ),
   wired(
     'schedule:infra/cron.ts:integrationHealthCheck',
     'e32811bfe25a37db6f804d58dca89956b809c85ba1cd48b8ad8ae057f520bb54',

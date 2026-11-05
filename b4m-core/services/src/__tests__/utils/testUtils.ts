@@ -307,6 +307,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     setCurrentStorageIfUnchanged: vi.fn(),
     findCurrentStorageSize: vi.fn(),
     listUserIdsAfter: vi.fn(),
+    findOldestActiveAdminId: vi.fn(),
     incrementTokenVersion: vi.fn(),
     findBySlackUserId: vi.fn(),
     findByIdWithNotionToken: vi.fn(),

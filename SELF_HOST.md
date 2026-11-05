@@ -658,13 +658,22 @@ Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQU
 
 This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
 
+### Help in any chat (the `system-help` data lake)
+
+Separately from the Help panel, the public help articles are mirrored into a data lake named `system-help`, so any chat can search them through the knowledge base. The `worker` keeps it in sync: it runs on startup and every 6 hours, using the help corpus built into the worker image and your **Default Embedding Model**.
+
+- **First run.** On an install where the lake has never existed, the worker creates it, owned by the oldest admin account. Until an admin exists, each run logs that it is waiting and does nothing. The lake owner's keys (or your instance-wide keys) pay for the embeddings.
+- **Steady state.** Re-runs are differential: an unchanged corpus writes nothing and embeds nothing. Rebuilding the image after a docs change re-embeds only the articles that changed.
+- **Turning it off.** Delete the `system-help` lake. The worker never recreates a lake that was deleted.
+
 ## Background worker
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:
 
 - **consumes queues** - research tasks, image generation and image edit, the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`), and the Google Drive and GitHub data-lake syncs (`driveLakeIngestQueue`, `githubLakeIngestQueue`, `githubLakeRevokeQueue`, `driveDisconnectPurgeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
-- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
+- **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started;
+- **keeps the help lake in sync** - see [Help in any chat](#help-in-any-chat-the-system-help-data-lake).
 
 It comes up automatically with the stack. To watch it:
 
