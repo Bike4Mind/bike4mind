@@ -56,8 +56,13 @@ const handler = baseApi().post(
     }
 
     const okCount = results.filter(r => r.ok).length;
+    // The writes above are committed; a failed refetch must not turn them into an error the client retries.
     if (okCount > 0) {
-      await notifyInvitesRefetch(user.id, action === 'accept' ? 'Accepted invites' : 'Refused invites');
+      try {
+        await notifyInvitesRefetch(user.id, action === 'accept' ? 'Accepted invites' : 'Refused invites');
+      } catch (error) {
+        req.logger.warn('[invites/bulk] invites refetch notification failed', { action, error });
+      }
     }
 
     return res.json({ results, okCount });

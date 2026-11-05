@@ -136,6 +136,18 @@ describe('POST /api/invites/bulk', () => {
     expect(body.okCount).toBe(1);
   });
 
+  it('still returns the committed results when the refetch notification throws', async () => {
+    mocks.sendToClient.mockRejectedValueOnce(new Error('Missing WEBSOCKET_MANAGEMENT_ENDPOINT'));
+
+    const res = await call({ action: 'accept', ids: [ID_A, ID_B] });
+
+    expect(res._getStatusCode()).toBe(200);
+    const body = res._getJSONData();
+    expect(body.okCount).toBe(2);
+    expect(body.results.every((r: any) => r.ok)).toBe(true);
+    expect(mocks.sendToClient).toHaveBeenCalledTimes(1);
+  });
+
   it('skips the refetch when nothing succeeded', async () => {
     mocks.acceptInvite.mockRejectedValue(new Error('boom'));
 
