@@ -135,6 +135,8 @@ export interface CompletionRequest {
    * against the loop's daily budget. Set only in a loop runner session.
    */
   loopRunId?: string;
+  /** Set when the tools were left out because the listed model reports no tool support. */
+  toolsUnsupported?: true;
 }
 
 /** The contract's header; the server adds the call's credits to that loop run. */

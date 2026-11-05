@@ -199,7 +199,7 @@ const ModelfileOverrideSchema = z.object({
   // A hub-bundled template id, never inline template text.
   templateRef: SlugSchema.optional(),
   dropStops: z.array(z.string().min(1).max(32)).max(8).default([]),
-  draftNumPredict: z.number().int().min(1).max(16).optional(),
+  draftNumPredict: z.number().int().min(0).max(16).optional(),
 });
 
 // Every layer the registry serves beside the weights; a client pulls only while it serves exactly these. numCtx is
@@ -214,9 +214,14 @@ const OllamaLayersSchema = z
     // The served projector's size, which Hugging Face weight sizes leave out.
     projectorBytes: ByteCountSchema.optional(),
     draft: Sha256Schema.nullable().default(null),
+    // The params layer's draft_num_predict, which Ollama speculates with unless a request sets one.
+    draftNumPredict: z.number().int().min(0).max(16).optional(),
     installedTemplate: Sha256Schema.optional(),
   })
   .refine(layers => layers.params !== null || layers.numCtx === null, { message: 'numCtx needs a params layer' })
+  .refine(layers => layers.params !== null || layers.draftNumPredict === undefined, {
+    message: 'draftNumPredict needs a params layer',
+  })
   .refine(layers => layers.projector !== null || layers.projectorBytes === undefined, {
     message: 'projectorBytes needs a projector layer',
   });

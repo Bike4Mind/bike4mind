@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -8,10 +8,15 @@ import { IOrganizationDocument, Permission } from '@bike4mind/common';
 import OrganizationMembers from './Member';
 
 const mocks = vi.hoisted(() => ({
+  share: vi.fn(),
+  search: vi.fn(),
+  cancel: vi.fn(),
+  invitations: [] as { id: string; recipients: { pending: string[] } }[],
   viewerId: 'viewer',
   viewer: undefined as { id: string; isAdmin: boolean } | null | undefined,
   members: [] as { id: string; name: string }[],
   pending: [] as { id: string; name: string }[],
+  searchUsers: [] as { id: string; name: string; username?: string; pendingInvite?: boolean }[],
   seats: { maxSeats: 0, currentSeats: 0, availableSeats: 0 },
 }));
 
@@ -23,11 +28,18 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 vi.mock('@client/app/hooks/data/user', () => ({
   useGetOrganizationUsers: () => ({ data: mocks.members }),
   useGetPendingOrganizationUsers: () => ({ data: mocks.pending }),
-  useGetUsers: () => ({ data: undefined, isFetching: false }),
+  useGetUsers: (parameters: unknown) => {
+    mocks.search(parameters);
+    return { data: { users: mocks.searchUsers }, isFetching: false };
+  },
 }));
-vi.mock('@client/app/hooks/data/invites', () => ({ useShareDocument: () => ({ mutate: vi.fn() }) }));
+vi.mock('@client/app/hooks/data/invites', () => ({
+  useShareDocument: () => ({ mutate: mocks.share, isPending: false }),
+  useCancelInvite: () => ({ mutate: mocks.cancel, isPending: false }),
+}));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useOrganizationSeats: () => mocks.seats,
+  useOrganizationInvites: () => ({ data: mocks.invitations, isError: false }),
   useSetMemberCreditDefault: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -41,9 +53,47 @@ vi.mock('./UserCard', () => ({
   ),
 }));
 vi.mock('@client/app/components/common/GenericAddItemsModal', () => ({
-  default: () => <div data-testid="member-add-modal" />,
+  default: (props: {
+    onSearch: (term: string) => void;
+    renderNoResults?: (term: string) => ReactNode;
+    items: { id: string; name: string; username: string }[];
+    selectedIds: string[];
+    onSelectIds: (ids: string[]) => void;
+    onAdd: (ids: string[]) => void;
+    renderItem: (
+      user: { id: string; name: string; username: string },
+      selected: boolean,
+      onSelect: () => void
+    ) => ReactNode;
+  }) => (
+    <div data-testid="member-add-modal">
+      <button data-testid="search-email" onClick={() => props.onSearch('new@example.test')}>
+        Search
+      </button>
+      {props.items.map(user => (
+        <div key={user.id}>
+          {props.renderItem(user, props.selectedIds.includes(user.id), () => props.onSelectIds([user.id]))}
+        </div>
+      ))}
+      <button data-testid="add-selected" onClick={() => props.onAdd(props.selectedIds)}>
+        Add selected
+      </button>
+      {props.renderNoResults?.('new@example.test')}
+    </div>
+  ),
 }));
-vi.mock('@client/app/components/common/UserCard', () => ({ default: () => null }));
+vi.mock('@client/app/components/common/UserCard', () => ({
+  default: (props: { user: { id: string }; inviteStatus?: string; onClick?: () => void }) => (
+    <button
+      data-testid={`candidate-${props.user.id}`}
+      data-invite-status={props.inviteStatus ?? 'none'}
+      disabled={!props.onClick}
+      onClick={props.onClick}
+    >
+      Candidate
+    </button>
+  ),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -74,6 +124,8 @@ describe('OrganizationMembers credit budget control', () => {
     mocks.viewer = undefined;
     mocks.members = [];
     mocks.pending = [];
+    mocks.searchUsers = [];
+    mocks.invitations = [];
     mocks.seats = { maxSeats: 0, currentSeats: 0, availableSeats: 0 };
   });
 
@@ -112,6 +164,8 @@ describe('OrganizationMembers roster controls', () => {
     mocks.viewer = { id: 'viewer', isAdmin: false };
     mocks.members = [{ id: 'm1', name: 'Member One' }];
     mocks.pending = [{ id: 'p1', name: 'Pending One' }];
+    mocks.searchUsers = [];
+    mocks.invitations = [{ id: 'invite-p1', recipients: { pending: ['p1'] } }];
     mocks.seats = { maxSeats: 0, currentSeats: 0, availableSeats: 0 };
   });
 
@@ -218,5 +272,98 @@ describe('OrganizationMembers roster controls', () => {
     expect(screen.getByTestId('organization-members-add-no-seats-btn')).toBeTruthy();
     expect(screen.getByTestId('organization-members-seats-card')).toBeTruthy();
     expect(screen.queryByTestId('member-add-modal')).toBeNull();
+  });
+});
+
+describe('OrganizationMembers email invitations', () => {
+  beforeEach(() => {
+    mocks.viewer = { id: 'owner1', isAdmin: false };
+    mocks.members = [];
+    mocks.pending = [];
+    mocks.searchUsers = [];
+    mocks.invitations = [];
+    mocks.seats = { maxSeats: 3, currentSeats: 1, availableSeats: 2 };
+    mocks.share.mockClear();
+    mocks.search.mockClear();
+    mocks.cancel.mockClear();
+  });
+
+  it('invites the exact email after its completed search returns no account', async () => {
+    renderMembers(buildOrg({}));
+    expect(screen.queryByTestId('organization-invite-by-email-btn')).toBeNull();
+    fireEvent.click(screen.getByTestId('search-email'));
+    await waitFor(() => expect(screen.getByTestId('organization-invite-by-email-btn')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('organization-invite-by-email-btn'));
+    expect(mocks.share).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'org1',
+        type: 'Organization',
+        recipients: ['new@example.test'],
+      })
+    );
+  });
+
+  it('shows and cancels pending email invitations', () => {
+    mocks.invitations = [{ id: 'invite1', recipients: { pending: ['new@example.test'] } }];
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-pending-email-invites')).toHaveTextContent('new@example.test');
+    fireEvent.click(screen.getByTestId('organization-cancel-email-invite-btn'));
+    expect(mocks.cancel).toHaveBeenCalledWith({ id: 'org1', type: 'Organization', email: 'new@example.test' });
+  });
+
+  it('does not offer cancellation with another inviter masked address', () => {
+    mocks.invitations = [{ id: 'invite1', recipients: { pending: ['n***@example.test'] } }];
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-pending-email-invites')).toHaveTextContent('n***@example.test');
+    expect(screen.queryByTestId('organization-cancel-email-invite-btn')).toBeNull();
+  });
+
+  it('shows a typed email invite once even after the account appears in pending users', () => {
+    mocks.pending = [{ id: 'new-user', name: 'New User' }];
+    mocks.invitations = [{ id: 'invite1', recipients: { pending: ['new@example.test'] } }];
+    renderMembers(buildOrg({}));
+    expect(screen.getByTestId('organization-pending-email-invites')).toHaveTextContent('new@example.test');
+    expect(screen.queryByTestId('member-card-new-user')).toBeNull();
+  });
+
+  it('lets an existing user with only an expired legacy pending row be invited again', () => {
+    mocks.pending = [{ id: 'expired-user', name: 'Expired User' }];
+    mocks.searchUsers = [{ id: 'expired-user', name: 'Expired User', username: 'expired-user' }];
+    renderMembers(buildOrg({}));
+    const candidate = screen.getByTestId('candidate-expired-user');
+    expect(candidate).toHaveAttribute('data-invite-status', 'none');
+    expect(candidate).not.toBeDisabled();
+    fireEvent.click(candidate);
+    fireEvent.click(screen.getByTestId('add-selected'));
+    expect(mocks.share).toHaveBeenCalledWith(expect.objectContaining({ recipients: ['expired-user'] }));
+  });
+
+  it('keeps an active invitation to a registered user pending without exposing their email', () => {
+    mocks.searchUsers = [{ id: 'active-user', name: 'Active User', pendingInvite: true }];
+    mocks.invitations = [{ id: 'active', recipients: { pending: ['ACTIVE@EXAMPLE.TEST'] } }];
+    renderMembers(buildOrg({}));
+    const candidate = screen.getByTestId('candidate-active-user');
+    expect(candidate).toHaveAttribute('data-invite-status', 'pending');
+    expect(candidate).toBeDisabled();
+  });
+
+  it('does not offer another invitation to an already pending email', async () => {
+    mocks.invitations = [{ id: 'pending', recipients: { pending: ['NEW@EXAMPLE.TEST'] } }];
+    renderMembers(buildOrg({}));
+    fireEvent.click(screen.getByTestId('search-email'));
+    await waitFor(() => {
+      expect(mocks.search).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: 'new@example.test', pendingInviteOrganizationId: 'org1' })
+      );
+    });
+    expect(screen.queryByTestId('organization-invite-by-email-btn')).toBeNull();
+    expect(mocks.share).not.toHaveBeenCalled();
+  });
+
+  it('offers no email invitation when all seats are reserved', () => {
+    mocks.seats = { maxSeats: 3, currentSeats: 3, availableSeats: 0 };
+    renderMembers(buildOrg({}));
+    expect(screen.queryByTestId('member-add-modal')).toBeNull();
+    expect(screen.queryByTestId('organization-invite-by-email-btn')).toBeNull();
   });
 });

@@ -63,7 +63,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { GenerationSettings } from './generation';
-import type { ModelSettings } from './modelSettings';
+import type { ModelLoadOffer, ModelSettings } from './modelSettings';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
@@ -175,6 +175,7 @@ export const IPC_CHANNELS = {
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
   chatSetModelSettings: 'chat:set-model-settings',
+  chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
   chatSetSessionOrchestrate: 'chat:set-session-orchestrate',
   /**
@@ -786,6 +787,11 @@ export interface DesktopApi {
     getModelSettings(modelId: string): Promise<ModelSettings | null>;
     /** Replace a device-side model's defaults; `{}` clears them. Null when the id or set is not valid. */
     setModelSettings(modelId: string, settings: ModelSettings): Promise<ModelSettings | null>;
+    /**
+     * The load-time options a device-side model takes, its context sizes rated for `draftTokens` (undefined: the
+     * model's own draft count). Null for an id that is not one.
+     */
+    getModelLoadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     setSessionOrchestrate(sessionId: string, orchestrate: boolean): Promise<ChatSessionSummary | null>;

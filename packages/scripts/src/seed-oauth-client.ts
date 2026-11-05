@@ -40,8 +40,8 @@
  * REDIRECT_URIS and FEDERATED_* are not read in this mode. Rerunning is idempotent:
  *   MONGODB_URI=<uri> TARGET_CLIENT_ID="b4m_..." OPT_IN_SCOPES="federated:admin-status" \
  *     pnpm --filter @bike4mind/scripts exec tsx src/seed-oauth-client.ts
- * There is no revoke option; remove a scope by hand:
- *   db.oauthclients.updateOne({ clientId: 'b4m_...' }, { $pull: { allowedScopes: 'federated:admin-status' } })
+ * There is no revoke option here; remove an opt-in scope by editing the client in the admin
+ * console (OAuth clients > edit).
  *
  * REDIRECT_URIS is comma-separated. Each URI must be an absolute https URL; http is
  * allowed only for localhost, 127.0.0.1 and [::1]. No fragment, userinfo or whitespace.

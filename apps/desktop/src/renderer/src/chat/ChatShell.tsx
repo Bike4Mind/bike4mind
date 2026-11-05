@@ -500,26 +500,63 @@ export function ChatShell({
    * that handle them - the same reasoning the model picker applies to an unreadable list.
    */
   const modelOption = findModelOption(catalog.models, conversation.session?.model);
-  const [storedDefaults, setStoredDefaults] = useState<{ modelId: string; settings: ModelSettings | null } | null>(
-    null
+  // The last good read per model, so a failed re-read leaves the defaults it had rather than none.
+  const [storedDefaults, setStoredDefaults] = useState<ReadonlyMap<string, ModelSettings | null>>(() => new Map());
+  // A failed read, under the conversation whose model it was for.
+  const [defaultsReadFailures, setDefaultsReadFailures] = useState<
+    ReadonlyMap<string, { modelId: string; error: unknown }>
+  >(() => new Map());
+  const clearDefaultsReadFailure = useCallback(
+    (sessionId: string) =>
+      setDefaultsReadFailures(current => {
+        if (!current.has(sessionId)) return current;
+        const next = new Map(current);
+        next.delete(sessionId);
+        return next;
+      }),
+    []
   );
   const defaultsModelId = modelOption && isLocalModel(modelOption.id) ? modelOption.id : null;
-  const modelDefaults = storedDefaults && storedDefaults.modelId === defaultsModelId ? storedDefaults.settings : null;
+  const defaultsSessionId = conversation.session?.id ?? null;
+  const modelDefaults = defaultsModelId ? (storedDefaults.get(defaultsModelId) ?? null) : null;
   const defaultEffort = modelDefaults?.effort ?? null;
-  // Re-read on returning from the Models screen, where the defaults are edited.
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
+  // Re-read on opening a chat and on returning from the Models screen, where the defaults are edited.
   useEffect(() => {
-    if (!defaultsModelId || screen !== 'conversation') return;
+    if (!defaultsModelId || !defaultsSessionId || screen !== 'conversation') return;
     let live = true;
+    const current = () => live && activeIdRef.current === defaultsSessionId;
     void Promise.resolve()
       .then(() => window.b4m.chat.getModelSettings(defaultsModelId))
       .then(
-        settings => live && setStoredDefaults({ modelId: defaultsModelId, settings: settings ?? null }),
-        () => undefined
+        settings => {
+          if (!current()) return;
+          setStoredDefaults(stored => new Map(stored).set(defaultsModelId, settings ?? null));
+          clearDefaultsReadFailure(defaultsSessionId);
+        },
+        error => {
+          if (!current()) return;
+          setDefaultsReadFailures(failures =>
+            new Map(failures).set(defaultsSessionId, { modelId: defaultsModelId, error })
+          );
+        }
       );
     return () => {
       live = false;
     };
-  }, [defaultsModelId, screen]);
+  }, [defaultsModelId, defaultsSessionId, screen, clearDefaultsReadFailure]);
+  const defaultsReadFailure =
+    defaultsSessionId && defaultsSessionId === activeId ? defaultsReadFailures.get(defaultsSessionId) : undefined;
+  const defaultsReadError =
+    defaultsReadFailure && defaultsReadFailure.modelId === defaultsModelId
+      ? failure(
+          storedDefaults.has(defaultsReadFailure.modelId)
+            ? "Desktop could not re-read this model's defaults from the Models screen, so Params and effort show the last ones it read, which may be out of date"
+            : "Desktop could not read this model's defaults from the Models screen, so Params and effort show the built-in ones, which may not match what this chat sends",
+          defaultsReadFailure.error
+        ).text
+      : null;
   const sessionCacheTtl = conversation.session?.promptCacheTtl ?? DEFAULT_PROMPT_CACHE_TTL;
   // Main sends the hour only to a model that takes it; see ChatService cacheTtlField.
   const cacheTtlFor = (model: ChatModelOption | undefined): PromptCacheTtl =>
@@ -1161,9 +1198,10 @@ export function ChatShell({
       await remove(sessionId, removeWorktree);
       deletedChats.current.add(sessionId);
       clearAddFolderAlert(sessionId);
+      clearDefaultsReadFailure(sessionId);
       setActiveId(current => (current === sessionId ? null : current));
     },
-    [remove, clearAddFolderAlert]
+    [remove, clearAddFolderAlert, clearDefaultsReadFailure]
   );
 
   const thread = opening ? (
@@ -1674,7 +1712,7 @@ export function ChatShell({
                 size="sm"
                 color="warning"
                 variant="soft"
-                sx={{ cursor: 'pointer' }}
+                sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
                 onClick={conversation.dismissNotice}
                 data-testid="chat-notice"
               >
@@ -1694,6 +1732,21 @@ export function ChatShell({
                 data-testid={addFolderAlert.color === 'danger' ? 'chat-add-folder-error' : 'chat-add-folder-notice'}
               >
                 {addFolderAlert.text}
+              </Alert>
+            </Box>
+          )}
+
+          {defaultsReadError && defaultsSessionId && (
+            <Box sx={contentColumnSx}>
+              <Alert
+                size="sm"
+                color="warning"
+                variant="soft"
+                sx={{ cursor: 'pointer' }}
+                onClick={() => clearDefaultsReadFailure(defaultsSessionId)}
+                data-testid="chat-model-defaults-error"
+              >
+                {defaultsReadError}
               </Alert>
             </Box>
           )}
