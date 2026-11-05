@@ -86,6 +86,9 @@ const OBSERVE_TTL_MS = 5 * 60_000;
 /** How often an Ollama Desktop could start is looked for on this computer, and how long a check waits on it. */
 const PROGRAM_TTL_MS = 30_000;
 const PROGRAM_WAIT_MS = 2_000;
+/** A user check looks again only this long after the last look began, so a click loop cannot spawn a shell per call. */
+const LOOK_AGAIN_MIN_MS = 2_000;
+const MAX_LOOKS_OUTSTANDING = 2;
 /** `dns.lookup` has no timeout of its own and can hang on a slow resolver. */
 const RESOLVE_TIMEOUT_MS = 5_000;
 /** How long a picker load waits on a down server's check before listing its last models. */
@@ -211,6 +214,8 @@ interface LaunchState {
   programLook: number;
   /** When the look still running started; null when none runs. */
   lookingSince: number | null;
+  /** Looks not settled yet, given-up ones included. */
+  looksOutstanding: number;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -589,13 +594,16 @@ export class ModelServerRegistry {
     return this.views();
   }
 
-  /** Rechecks one server, or every server and this computer when `id` is omitted. */
-  /** `lookAgain`: a user asked, so look for the Ollama program now rather than waiting out PROGRAM_TTL_MS. */
+  /**
+   * Rechecks one server, or every server and this computer when `id` is omitted. `lookAgain`: a user asked, so look for
+   * the Ollama program now rather than waiting out PROGRAM_TTL_MS, unless a look began within LOOK_AGAIN_MIN_MS.
+   */
   async check(id?: string, options: { lookAgain?: boolean } = {}): Promise<ModelServerView[]> {
     await this.load();
     if (id === undefined) return this.checkAll();
     if (id === LOCAL_SERVER_ID) {
-      if (options.lookAgain) this.launchState(id).programAt = 0;
+      const state = this.launchState(id);
+      if (options.lookAgain && Date.now() - state.programAt >= LOOK_AGAIN_MIN_MS) state.programAt = 0;
       await this.checkLocal();
     } else {
       const entry = this.entries.get(id);
@@ -993,6 +1001,7 @@ export class ModelServerRegistry {
             ? portHeldMessage(target.port)
             : (this.supervisor.problem(id) ?? settingsProblem),
       ...(missingOllama ? { programMissing: missingOllama } : {}),
+      ...(missingOllama === undefined && target.health.state === 'unreachable' ? { programPending: true } : {}),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
@@ -1059,15 +1068,17 @@ export class ModelServerRegistry {
 
   /**
    * Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS and one look at a time; a look stuck
-   * past PROGRAM_TTL_MS is given up on. The check emits what a look finds in time; a slower look emits once when it
-   * settles, unless a newer look has started since.
+   * past PROGRAM_TTL_MS is given up on, but never more than MAX_LOOKS_OUTSTANDING run at once. The check emits what a
+   * look finds in time; a slower look emits once when it settles, unless a newer look has started since.
    */
   private async findOllama(id: string, state: LaunchState): Promise<void> {
     const now = Date.now();
+    if (state.looksOutstanding >= MAX_LOOKS_OUTSTANDING) return;
     if (state.lookingSince !== null && now - state.lookingSince < PROGRAM_TTL_MS) return;
     if (now - state.programAt < PROGRAM_TTL_MS) return;
     state.programAt = now;
     state.lookingSince = now;
+    state.looksOutstanding += 1;
     const look = ++state.programLook;
     const settled = this.supervisor
       .program('ollama', this.launchSettings(id))
@@ -1076,6 +1087,7 @@ export class ModelServerRegistry {
         (error: unknown) => (error instanceof Error ? error.message : String(error))
       )
       .then(missing => {
+        state.looksOutstanding -= 1;
         if (look === state.programLook) state.lookingSince = null;
         if (look !== state.programLook || state.missingOllama === missing) return false;
         state.missingOllama = missing;
@@ -1099,6 +1111,7 @@ export class ModelServerRegistry {
         programAt: 0,
         programLook: 0,
         lookingSince: null,
+        looksOutstanding: 0,
       };
       this.launchStates.set(id, state);
     }

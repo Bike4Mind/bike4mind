@@ -512,9 +512,11 @@ describe('ModelServerRegistry launching servers', () => {
 
       await registry.check('local');
       expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
       await registry.check('local', { lookAgain: true });
       expect(launchers.program).toHaveBeenCalledTimes(2);
       expect((await local(registry)).launch).toMatchObject({ canStart: true });
+      await vi.advanceTimersByTimeAsync(2_000);
 
       let found: (value: { path: string }) => void = () => {};
       vi.mocked(launchers.program).mockReturnValueOnce(new Promise(resolve => (found = resolve)));
@@ -528,6 +530,38 @@ describe('ModelServerRegistry launching servers', () => {
       await vi.advanceTimersByTimeAsync(0);
       await registry.check('local', { lookAgain: true });
       expect(launchers.program).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('looks again on a user check only two seconds after the last look began', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+      await registry.check('local');
+      for (let click = 0; click < 10; click++) await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts no new look while two abandoned looks are still outstanding', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockReturnValue(new Promise(() => {}));
+      for (let round = 0; round < 4; round++) {
+        const checked = registry.check('local');
+        await vi.advanceTimersByTimeAsync(31_000);
+        await checked;
+      }
+      expect(launchers.program).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -551,7 +585,7 @@ describe('ModelServerRegistry launching servers', () => {
       const checked = registry.check('local');
       await vi.advanceTimersByTimeAsync(2_000);
       await checked;
-      expect((await local(registry)).launch).toMatchObject({ canStart: false, problem: null });
+      expect((await local(registry)).launch).toMatchObject({ canStart: false, problem: null, programPending: true });
 
       await vi.advanceTimersByTimeAsync(0);
       changed.mockClear();
@@ -560,6 +594,7 @@ describe('ModelServerRegistry launching servers', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(changed).toHaveBeenCalledTimes(1);
       expect(changed.mock.calls[0][0][0].launch).toMatchObject({ canStart: true });
+      expect(changed.mock.calls[0][0][0].launch.programPending).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
