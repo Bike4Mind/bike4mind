@@ -247,7 +247,9 @@ export class BFLImageService extends AIImageService {
     try {
       const flux2 = isFlux2ImageModel(model);
       if (flux2 && 1 + referenceImages.length > getMaxReferenceImages(model)) {
-        throw new Error(`Model ${model} accepts at most ${getMaxReferenceImages(model)} reference images`);
+        throw new Error(
+          `Model ${model} accepts at most ${getMaxReferenceImages(model)} input images (the source plus references)`
+        );
       }
       // FLUX.2 edits on its generation endpoint: no mask, steps or guidance, and the source rides as input_image.
       const flux2Body = flux2

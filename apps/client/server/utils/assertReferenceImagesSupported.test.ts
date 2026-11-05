@@ -26,7 +26,11 @@ describe('assertReferenceImagesSupported (edit)', () => {
     expect(() => assertReferenceImagesSupported(ImageModels.FLUX_PRO_FILL, [])).not.toThrow();
   });
 
-  it('keeps the generate limit on getMaxReferenceImages', () => {
-    expect(() => assertReferenceImagesSupported(ImageModels.FLUX_2_PRO, ids(8), 'generate')).not.toThrow();
+  it.each([
+    [ImageModels.FLUX_2_PRO, 8],
+    [ImageModels.FLUX_2_KLEIN_4B, 4],
+  ])('keeps the generate limit for %s at %s', (model, limit) => {
+    expect(() => assertReferenceImagesSupported(model, ids(limit), 'generate')).not.toThrow();
+    expect(() => assertReferenceImagesSupported(model, ids(limit + 1), 'generate')).toThrow(`at most ${limit} images`);
   });
 });

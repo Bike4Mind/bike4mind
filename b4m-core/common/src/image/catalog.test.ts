@@ -44,13 +44,6 @@ describe.each(IMAGE_MODELS)('IMAGE_MODEL_CATALOG[%s]', model => {
     expect(edit !== undefined).toBe(supportsImageEditEndpoint(model) || isKontextModel(model));
   });
 
-  it('edits FLUX.2 with no mask and one fewer reference than it generates with', () => {
-    if (!isFlux2ImageModel(model)) return;
-    expect(edit?.inputs.edit_source).toEqual({ max: 1 });
-    expect(edit?.inputs.mask).toBeUndefined();
-    expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
-  });
-
   it('takes an edit_source in edit and never in generate', () => {
     if (edit) expect(edit.inputs.edit_source).toEqual({ max: 1 });
     expect(generate?.inputs.edit_source).toBeUndefined();
@@ -96,5 +89,20 @@ describe('transparent background', () => {
     expect(steppedDown).toContain(ImageModels.GPT_IMAGE_2);
     for (const model of steppedDown) expect(getImageModelCatalogEntry(model).transparentBackground).toBe(false);
     expect(getImageModelCatalogEntry(ImageModels.GPT_IMAGE_2_5_FLARE).transparentBackground).toBe(true);
+  });
+});
+
+const FLUX2_MODELS = IMAGE_MODELS.filter(isFlux2ImageModel);
+
+describe('FLUX.2 edit mode', () => {
+  it('covers at least one model', () => {
+    expect(FLUX2_MODELS.length).toBeGreaterThan(0);
+  });
+
+  it.each(FLUX2_MODELS)('%s edits with no mask and one fewer reference than it generates with', model => {
+    const { edit, generate } = getImageModelCatalogEntry(model).modes;
+    expect(edit?.inputs.edit_source).toEqual({ max: 1 });
+    expect(edit?.inputs.mask).toBeUndefined();
+    expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
   });
 });

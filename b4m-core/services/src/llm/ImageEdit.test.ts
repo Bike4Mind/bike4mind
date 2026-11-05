@@ -13,7 +13,7 @@ import {
 } from '@bike4mind/common';
 import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiImageService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { aiImageService, downloadImageAsBuffer, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
 import { ImageEditService, type ImageEditBody } from './ImageEdit';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
@@ -180,7 +180,6 @@ describe('ImageEditService.process model dispatch', () => {
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
         organizations: { findById: vi.fn(async () => null) },
-        ...dbExtra,
         fabFiles: {
           findAccessibleInIds: vi.fn(async () => [
             {
@@ -192,6 +191,7 @@ describe('ImageEditService.process model dispatch', () => {
             },
           ]),
         },
+        ...dbExtra,
       },
       startImageEditProcess,
       deleteFabFile: vi.fn(),
@@ -386,6 +386,9 @@ describe('ImageEditService.process model dispatch', () => {
     });
 
     expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ model: ImageModels.FLUX_2_PRO, fabFileIds: [], questId: 'quest1' })
+    );
   });
 
   it('carries the authenticating API key from invoke() onto the queued job body', async () => {
@@ -550,6 +553,40 @@ describe('ImageEditService.process model dispatch', () => {
       expect(editSpy).not.toHaveBeenCalled();
       expect(creditHolds.release).not.toHaveBeenCalled();
       expect(creditHolds.settle).not.toHaveBeenCalled();
+    });
+
+    it('holds and settles a FLUX.2 edit with references at the flat single-image rate', async () => {
+      const flux2 = makeModelInfo(ImageModels.FLUX_2_PRO);
+      vi.mocked(getAvailableModels).mockResolvedValue([flux2]);
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+      const clean = (id: string) => ({
+        id,
+        fileName: `${id}.png`,
+        mimeType: 'image/png',
+        filePath: `fab/${id}.png`,
+        moderationStatus: 'clean',
+      });
+      const fabFiles = { findAccessibleInIds: vi.fn(async (ids: string[]) => ids.map(clean)) };
+
+      const quest = await run(
+        ImageModels.FLUX_2_PRO,
+        { fabFileIds: [], referenceImageFabFileIds: ['a', 'b'] },
+        { creditTransactions: { create: vi.fn() }, fabFiles }
+      );
+
+      const generation = estimateImageCredits(flux2, 1, { model: flux2.id });
+      const withRefs = estimateImageCredits(flux2, IMAGES_PER_EDIT_REQUEST, { model: flux2.id, inputImageCount: 3 });
+      expect(withRefs).toEqual(generation);
+      expect(quest.creditHolds.hold).toHaveBeenCalledWith(
+        expect.objectContaining({ requiredCredits: generation.requiredCredits })
+      );
+      expect(quest.status).toBe('done');
+      expect(quest.creditHolds.settle).toHaveBeenCalledWith(
+        expect.anything(),
+        settledAtHalf(generation.usdCost),
+        expect.anything(),
+        expect.anything()
+      );
     });
 
     it('releases the hold and never settles when the provider call rejects after the hold', async () => {
@@ -803,7 +840,14 @@ describe('ImageEditService.process reference images (#2744)', () => {
     vi.mocked(aiImageService).mockClear();
     vi.mocked(aiImageService).mockReturnValue({ edit: editSpy } as never);
     vi.mocked(getAvailableModels).mockResolvedValue([]);
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (url: string) => Buffer.from(url));
   });
+
+  afterEach(() => {
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async () => Buffer.from('image-bytes'));
+  });
+
+  const b64 = (url: string) => Buffer.from(url).toString('base64');
 
   it('forwards signed anchor URLs in the caller-supplied order', async () => {
     await run({ referenceImageFabFileIds: ['b', 'a'] });
@@ -842,10 +886,70 @@ describe('ImageEditService.process reference images (#2744)', () => {
     await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
 
     expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('bfl');
-    const options = editSpy.mock.calls[0][2];
-    const inline = Buffer.from('image-bytes').toString('base64');
-    expect(options.referenceImages).toEqual([inline, inline]);
+    const [source, , options] = editSpy.mock.calls[0];
+    expect(source).toBe(b64('https://example.invalid/source.png'));
+    expect(options.referenceImages).toEqual([
+      b64('https://example.invalid/fab/b.png'),
+      b64('https://example.invalid/fab/a.png'),
+    ]);
+    expect(options.model).toBe(ImageModels.FLUX_2_PRO);
     expect(options).not.toHaveProperty('mask');
+  });
+
+  it.each([
+    [ImageModels.FLUX_2_PRO, 8, 'At most 7'],
+    [ImageModels.FLUX_2_PRO, 7, undefined],
+    [ImageModels.FLUX_2_KLEIN_4B, 3, undefined],
+  ])('%s with %s unique references: %s', async (model, count, rejection) => {
+    const ids = Array.from({ length: count }, (_, index) => `r${index}`);
+    const accessible = Object.fromEntries(ids.map(id => [id, cleanImage(id)]));
+
+    const { quest } = await run({ referenceImageFabFileIds: ids }, { model, accessible });
+
+    if (rejection) {
+      expect(editSpy).not.toHaveBeenCalled();
+      expect(quest.reply).toContain(rejection);
+    } else {
+      expect(editSpy.mock.calls[0][2].referenceImages).toHaveLength(count);
+    }
+  });
+
+  it('keeps Fill on its mask and sends it no references', async () => {
+    const accessible = { mask1: cleanImage('mask1'), a: cleanImage('a'), b: cleanImage('b') };
+
+    await run(
+      { fabFileIds: ['mask1'], referenceImageFabFileIds: ['a', 'b'] },
+      { model: ImageModels.FLUX_PRO_FILL, accessible }
+    );
+
+    const [source, , options] = editSpy.mock.calls[0];
+    expect(source).toBe(b64('https://example.invalid/source.png'));
+    expect(options.mask).toBe(b64('https://example.invalid/fab/mask1.png'));
+    expect(options).not.toHaveProperty('referenceImages');
+  });
+
+  it('fails the quest and never calls BFL when a FLUX.2 reference cannot be downloaded', async () => {
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (url: string) => {
+      if (url.endsWith('/a.png')) throw new Error('download failed');
+      return Buffer.from(url);
+    });
+
+    const { quest } = await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+  });
+
+  it('fails the quest when a FLUX.2 reference downloads empty', async () => {
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (url: string) =>
+      Buffer.from(url.endsWith('/a.png') ? '' : url)
+    );
+
+    const { quest } = await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('Reference image not found');
   });
 
   it('refuses more unique references than Klein accepts, naming the limit', async () => {

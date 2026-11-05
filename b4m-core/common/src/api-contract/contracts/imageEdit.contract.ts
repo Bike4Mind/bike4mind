@@ -28,12 +28,13 @@ export const editImageContract = defineEndpoint({
   description:
     'Queues an edit of an existing image and returns the quest that will carry the result, before the ' +
     'render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` ' +
-    'schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the ' +
-    'first is the inpainting mask, except on FLUX.2 models, which edit from the prompt with no mask and ' +
-    'reject `fabFileIds` with a 400. `referenceImageFabFileIds` adds reference images after the ' +
+    'schema). `image` is the URL of the source image; `fabFileIds` must name at least one file except on FLUX.2 models, ' +
+    'which edit from the prompt with no mask and reject `fabFileIds` with a 400; elsewhere the first is ' +
+    'the inpainting mask. `referenceImageFabFileIds` adds reference images after the ' +
     'source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 ' +
-    "pro, max and flex, and 3 on FLUX.2 klein (the source takes one of FLUX.2's slots). Sending any " +
-    'with another model, or more than the limit, is rejected with a 400 rather than ignored. Both id fields take ids ' +
+    "models other than klein, and 3 on FLUX.2 klein (the source takes one of FLUX.2's slots). Sending any " +
+    "with another model, or more than the model's limit, is rejected with a 400 rather than ignored; more " +
+    'than 15 ids fails schema validation with a 422. Both id fields take ids ' +
     'from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` ' +
     'is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. ' +
     '`image` takes a URL rather than an id, so a source uploaded the same way is passed as its ' +

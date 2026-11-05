@@ -239,9 +239,10 @@ export function filterRunnableModels(
  * (Kontext models are image-to-image transforms dispatched through ImageGeneration's
  * transform path, not edit), and XAI exposes no edit endpoint at all.
  *
- * Must stay the single source of truth for both edit dispatchers - the image-edit queue
- * handler (services/llm/ImageEdit.ts) and the chat edit_image tool - so neither silently
- * substitutes a model the user did not pick and was not billed for.
+ * This is the list the chat edit-model picker and the chat edit_image tool offer, so
+ * neither silently substitutes a model the user did not pick and was not billed for. The
+ * image-edit queue handler (services/llm/ImageEdit.ts) gates on the wider
+ * supportsImageEditEndpoint, which adds FLUX.2.
  */
 export const EDIT_SUPPORTED_IMAGE_MODELS = [
   ...OPENAI_IMAGE_MODELS,
@@ -249,7 +250,7 @@ export const EDIT_SUPPORTED_IMAGE_MODELS = [
   ...GEMINI_IMAGE_MODELS,
 ] as const;
 
-/** Returns true for image models that support editing; gates both edit dispatch paths. */
+/** Returns true for image models the chat picker and edit_image tool offer for editing. */
 export function supportsImageEdit(model?: string | null): boolean {
   if (!model) return false;
   return (EDIT_SUPPORTED_IMAGE_MODELS as readonly string[]).includes(model);

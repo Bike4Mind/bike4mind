@@ -437,8 +437,25 @@ describe('BFLImageService - edit()', () => {
 
     await expect(
       service.edit('source', 'too many', { model, referenceImages: [...referenceImages, 'extra'] })
-    ).rejects.toThrow(`at most ${limit + 1} reference images`);
+    ).rejects.toThrow(`at most ${limit + 1} input images`);
     expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs no source or reference base64 for an edit', async () => {
+    const logged: string[] = [];
+    const capture = (...args: unknown[]) => logged.push(args.map(arg => JSON.stringify(arg)).join(' '));
+    vi.spyOn(Logger.globalInstance, 'debug').mockImplementation(capture);
+
+    await service.edit('secret-source-bytes', 'blend them', {
+      model: ImageModels.FLUX_2_PRO,
+      referenceImages: ['secret-reference-bytes'],
+    });
+
+    const output = logged.join('\n');
+    expect(output).toContain('BFL Image edit request body');
+    expect(output).toContain('[BASE64_DATA_');
+    expect(output).not.toContain('secret-source-bytes');
+    expect(output).not.toContain('secret-reference-bytes');
   });
 
   it('keeps the Fill request on image + mask, with no input_image', async () => {
