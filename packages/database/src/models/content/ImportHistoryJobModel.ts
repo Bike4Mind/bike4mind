@@ -245,6 +245,8 @@ class ImportHistoryJobRepository extends BaseRepository<IImportHistoryJob> {
       {
         $set: {
           status: 'failed',
+          // Same literal the live WS failure payload sends (server-utils importHistoryProgress.ts)
+          currentStep: 'Import failed',
           errorMessage: error.message,
           errorStack: error.stack,
           failedAt: new Date(),
