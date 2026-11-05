@@ -100,9 +100,9 @@ describe('partialLoad', () => {
 describe.each([24, 64, 96])('clearsCap after a %i GiB cap', capGib => {
   const capped = { model: 'big:q8', sizeBytes: capGib * 1.5 * GIB, gpuBytes: capGib * GIB };
 
-  it('clears once a model larger than the capped GPU part runs fully on the GPU', () => {
+  it('clears once a model as large as the capped one runs fully on the GPU', () => {
     expect(clearsCap([model('big:q8', capGib * 1.5, capGib * 1.5)], capped)).toBe(true);
-    expect(clearsCap([model('other', capGib + 1, capGib + 1)], capped)).toBe(true);
+    expect(clearsCap([model('other', capGib * 2, capGib * 2)], capped)).toBe(true);
   });
 
   it('clears for a load short of the GPU only by rounding, as partialLoad tolerates', () => {
@@ -111,6 +111,7 @@ describe.each([24, 64, 96])('clearsCap after a %i GiB cap', capGib => {
 
   it('keeps it for a model the capped Ollama could hold anyway, or one still short', () => {
     expect(clearsCap([model('small', capGib * 0.5, capGib * 0.5)], capped)).toBe(false);
+    expect(clearsCap([model('other', capGib + 1, capGib + 1)], capped)).toBe(false);
     expect(clearsCap([model('big:q8', capGib * 1.5, capGib)], capped)).toBe(false);
     expect(clearsCap([], capped)).toBe(false);
   });

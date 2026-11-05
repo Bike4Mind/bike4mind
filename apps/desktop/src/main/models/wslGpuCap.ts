@@ -68,7 +68,7 @@ export function partialLoad(loaded: readonly LoadedModel[], usableGpuBytes: numb
   return found ? { model: found.name, sizeBytes: found.sizeBytes, gpuBytes: found.vramBytes } : null;
 }
 
-/** A model larger than the GPU part `cap` was held to now runs on the GPU, so the limit no longer applies. */
+/** A model at least as large as the one `cap` was seen on now runs on the GPU, so the limit no longer applies. */
 export function clearsCap(loaded: readonly LoadedModel[], cap: GpuMemoryCap): boolean {
-  return loaded.some(model => onGpu(model) && model.sizeBytes > cap.gpuBytes);
+  return loaded.some(model => onGpu(model) && model.sizeBytes >= cap.sizeBytes);
 }

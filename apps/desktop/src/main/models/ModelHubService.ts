@@ -755,16 +755,14 @@ export class ModelHubService {
   }
 
   async #checkGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
-    if (this.#gpuCap && clearsCap(loaded, this.#gpuCap)) {
-      this.#gpuCap = null;
-      return;
-    }
-    if (this.#capCandidate && clearsCap(loaded, this.#capCandidate)) this.#capCandidate = null;
     const { hardware } = await this.#localSizing();
     const budgets = memoryBudgets(hardware);
-    if (budgets.cpuOnly) return;
-    const found = partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
-    if (!found) return;
+    const found = budgets.cpuOnly ? null : partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
+    if (!found) {
+      if (this.#gpuCap && clearsCap(loaded, this.#gpuCap)) this.#gpuCap = null;
+      if (this.#capCandidate && clearsCap(loaded, this.#capCandidate)) this.#capCandidate = null;
+      return;
+    }
     if (this.#gpuCap) {
       this.#gpuCap = found;
       return;
@@ -790,7 +788,10 @@ export class ModelHubService {
       return;
     }
     const store = this.#integrated === true ? await this.storeLocation(target.id) : null;
-    if (store && store.source !== 'default' && isLinuxStoreDir(store.path)) this.#gpuCap = this.#capCandidate;
+    if (store && store.source !== 'default' && isLinuxStoreDir(store.path)) {
+      this.#gpuCap = this.#capCandidate;
+      this.#deps.onInstalledChanged(target.id);
+    }
     this.#capCandidate = null;
   }
 

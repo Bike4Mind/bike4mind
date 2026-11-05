@@ -1045,6 +1045,7 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
       storeDir?: string;
       specs?: ModelServerSpecs;
       probed?: HardwareProfile;
+      defaultStoreDir?: () => string | null;
     } = {}
   ) {
     const integratedGpu = vi.fn(async () => (options.integrated === undefined ? true : options.integrated));
@@ -1055,6 +1056,7 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
         integratedGpu,
         pathExists: async path => !path.startsWith('/'),
         specs: id => (id === 'local' ? (options.specs ?? null) : null),
+        ...(options.defaultStoreDir && { defaultStoreDir: options.defaultStoreDir }),
       },
     });
     made.runtime.list.mockResolvedValue([installedModel('big:q8_0'), installedModel('small:q4')]);
@@ -1105,6 +1107,47 @@ describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB 
     expect(await capOf(service)).toEqual(capView);
     runtime.loaded.mockResolvedValue([loadedModel('small:q4', gpuGib * 0.2, gpuGib * 0.2)]);
     expect(await capOf(service)).toEqual(capView);
+  });
+
+  it('keeps the warning while a small model runs fully on the GPU beside the capped one', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: 0 }, loadedModel('small:q4', 2, 2)]);
+    await flagged(service, { ...capView, gpuBytes: 0 });
+    for (let read = 0; read < 4; read++) expect(await capOf(service)).toMatchObject({ gpuBytes: 0 });
+  });
+
+  it('notifies the renderer when nvidia-smi confirms the limit after the listing returned', async () => {
+    const { service, runtime, installedChanged } = wslHarness();
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await vi.waitFor(() => expect(installedChanged).toHaveBeenCalledWith('local'));
+  });
+
+  it('logs a failed model folder lookup, keeps listing, and flags on a later read', async () => {
+    const defaultStoreDir = vi.fn<() => string | null>(() => {
+      throw new Error('no home directory');
+    });
+    const { service, runtime, warn } = wslHarness({ defaultStoreDir });
+    const inspect = runtime.inspect.getMockImplementation()!;
+    runtime.inspect.mockImplementation(async (name, options) => ({
+      ...(await inspect(name, options)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir: null },
+    }));
+    runtime.loaded.mockResolvedValue([capped]);
+    expect(await capOf(service)).toBeNull();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringMatching(/WSL GPU memory limit/)));
+    runtime.inspect.mockImplementation(inspect);
+    await flagged(service);
+  });
+
+  it('does not warn when nvidia-smi fails outright', async () => {
+    const { service, runtime, integratedGpu } = wslHarness();
+    integratedGpu.mockRejectedValue(new Error('boom'));
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await settle();
+    expect(await capOf(service)).toBeNull();
+    expect(integratedGpu).toHaveBeenCalledTimes(1);
   });
 
   it.each([1, 0.95])(
