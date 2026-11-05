@@ -116,10 +116,10 @@ def mirror_script(buckets, direction):
     head = ('set -eu\nmc alias set local "$LOCAL_OBJECTSTORE_ENDPOINT" '
             '"$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null\n')
     if direction == 'backup':
-        body = ''.join('mc mirror --quiet "local/%s" "/work/%s" >&2\n' % (b, b) for b in buckets)
+        body = ''.join('mkdir -p "/work/%s"\nmc mirror --quiet "local/%s" "/work/%s" >&2\n' % (b, b, b) for b in buckets)
         return head + 'mkdir -p /work\n' + body + 'tar -C /work -cf - .\n'
-    body = ''.join('mc mb --ignore-existing "local/%s" >/dev/null\nmc mirror --quiet "/work/%s" "local/%s" >&2\n'
-                   % (b, b, b) for b in buckets)
+    body = ''.join('mkdir -p "/work/%s"\nmc mb --ignore-existing "local/%s" >/dev/null\nmc mirror --quiet "/work/%s" "local/%s" >&2\n'
+                   % (b, b, b, b) for b in buckets)
     return head + 'mkdir -p /work\ntar -C /work -xf -\n' + body
 
 

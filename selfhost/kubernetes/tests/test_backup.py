@@ -122,6 +122,10 @@ class CommandTests(unittest.TestCase):
         self.assertIn('local/a', script)
         self.assertNotIn('--remove', backup.mirror_script(['a'], 'restore'))
 
+    def test_mirror_script_creates_dir_for_empty_bucket(self):
+        for direction in ('backup', 'restore'):
+            self.assertIn('mkdir -p "/work/empty"', backup.mirror_script(['empty'], direction))
+
     def test_local_s3_detection(self):
         self.assertTrue(backup.is_local_s3('http://rel-minio:9000', 'rel'))
         self.assertFalse(backup.is_local_s3('https://s3.amazonaws.com', 'rel'))

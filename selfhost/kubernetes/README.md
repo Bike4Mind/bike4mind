@@ -7,7 +7,7 @@ The default stack runs app, chatcompletion, background worker, WebSocket gateway
 ## Prerequisites
 
 - Kubernetes 1.27 or newer, Helm 3.19 or newer, and a working default storage class, or `storage.className` explicitly set to an available class.
-- A trusted evaluation namespace. MongoDB and ElasticMQ have no authentication here. ClusterIP services have no public ingress, but other workloads in the cluster can reach them unless the cluster's network policy prevents it. Do not expose backing services publicly. TLS, authenticated database operation, ingress and backup/restore are separate production work.
+- A trusted evaluation namespace. MongoDB and ElasticMQ have no authentication here. ClusterIP services have no public ingress, but other workloads in the cluster can reach them unless the cluster's network policy prevents it. Do not expose backing services publicly. TLS, authenticated database operation and ingress are separate production work. Backup and restore: see [Backup and restore](#backup-and-restore).
 - A registry reachable by every node, including credentials in `imagePullSecrets` if needed. All application images must come from the same source revision. Tagged references and digests are accepted; untagged images and `:latest` are rejected. For repeatable tests and rollback, use digests or immutable tags.
 - Available PVC capacity: 10 GiB MongoDB, 20 GiB object storage and 5 GiB queues by default. Configure sizes before creating PVCs. Single replicas and ReadWriteOnce storage provide no high availability.
 
@@ -93,10 +93,45 @@ For agent execution, set `agentExecutor.enabled: true`, supply the matching sour
 - Upgrade with the same release/namespace and reviewed values. Local mode now ignores a `MONGODB_URI` left in the runtime Secret: an install that used that key to reach an external database must set `externalMongo.enabled: true` (with `config.MONGODB_URI` unset) to keep using it. PVCs retain MongoDB, object and queue data. App deployments use `Recreate`; transient interruption is expected. Changing Secret contents does not restart pods automatically. After a reviewed Secret update, bump `initializationRevision` and run the same upgrade command.
 - The gateway's management endpoint is `<release>-ws-management:3002`. Remove any `config.WEBSOCKET_MANAGEMENT_ENDPOINT` override that points at `<release>-ws:3001` before upgrading, and keep `images.ws` at the same revision as the other images.
 - An upgrade to a release that requires `MEMORY_KEY_SECRET` fails with `CreateContainerConfigError` if the existing runtime Secret has no such key. Add one to the Secret (a new, persistent value; never a value changed on every deploy) before running the upgrade.
-- For a restart proof, record a signed-in user's ID, recreate Mongo and app pods, wait for PRIMARY/readiness and sign in again. Check unchanged PVC identities and the same user. This proves persistence for that case, not full restore or host-loss recovery.
+- For a restart proof, record a signed-in user's ID, recreate Mongo and app pods, wait for PRIMARY/readiness and sign in again. Check unchanged PVC identities and the same user. This proves persistence for that case, not full restore or host-loss recovery; for that, see [Backup and restore](#backup-and-restore).
 - Inspect `kubectl logs -n bike4mind-eval pod/<mongo-pod> -c wait-member-dns` for DNS guard failures. Confirm the advertised member DNS resolves only to its current IP. An existing replica-set configuration mismatch fails closed; investigate it rather than deleting database storage or silently reconfiguring it.
-- Roll back image/config-only releases with `helm history` and `helm rollback b4m <revision> -n bike4mind-eval --wait --timeout 15m`. Rollback does not reverse database migrations, bucket changes or Secret rotation. Keep compatible previous images and backups before upgrades that change persisted data.
+- Roll back image/config-only releases with `helm history` and `helm rollback b4m <revision> -n bike4mind-eval --wait --timeout 15m`. Rollback does not reverse database migrations, bucket changes or Secret rotation. Keep compatible previous images and a [backup](#backup-and-restore) before upgrades that change persisted data.
 - `helm uninstall` leaves the three PVCs because of their retention annotations. Reinstallation requires explicit ownership/adoption of retained claims; do not assume a clean install will adopt them. Delete claims only after independently deciding their data can be discarded.
+
+## Backup and restore
+
+`backup.py` backs up the bundled MongoDB (`bike4mind` replica set) and the seven MinIO buckets from your machine through `kubectl`, and writes them off the cluster. Back up the runtime Secret first: it holds `SECRET_ENCRYPTION_KEY`, `SECRET_ENCRYPTION_KEY_PREVIOUS` (if set) and `MEMORY_KEY_SECRET`. The script never reads or copies it. Without the same values in the restored release, encrypted data cannot be read. Store the env file encrypted, apart from the backup.
+
+Not covered: the ElasticMQ PVC (in-flight messages are transient and replaying stale ones repeats old work), external MongoDB (use the provider's backups) and external S3 (the script refuses a non-MinIO endpoint). The archive itself is not encrypted; encrypt it where you store it. VolumeSnapshots or Velero are an alternative on clusters that already run them, but are not scripted here and are crash-consistent rather than app-consistent for a live `mongod`.
+
+```sh
+python3 selfhost/kubernetes/backup.py backup --namespace bike4mind-eval --release b4m --dest ./b4m-backup-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+This writes `mongo.archive.gz` (`mongodump --oplog`, online), `objects.tar` (a `mc mirror` of the seven buckets, run in a short-lived helper pod cloned from the bucket-init Job, so it uses the same `mc` image and credentials) and `manifest.json` (times, image refs, per-bucket object counts, sha256 per file). Mongo is dumped first: an orphaned object is harmless, a row without its bytes is not.
+
+**Recovery point and retention.** The recovery point is the end of the last completed run. Mongo is consistent as of the end of its dump; objects are a later, non-atomic view. Assumed retention (the script does not rotate): run it daily from a scheduler outside the cluster and keep 7 daily and 4 weekly copies, encrypted, off-cluster. A tighter recovery point needs managed MongoDB with point-in-time recovery.
+
+**Restore into a fresh release:**
+
+1. Create the namespace and recreate the Secret from the backed-up env file (same encryption keys).
+2. `helm install` the chart with the same values and wait for it (`--wait --wait-for-jobs`); the init Job recreates the buckets, webhooks and lifecycle rules.
+3. Run the restore:
+
+   ```sh
+   python3 selfhost/kubernetes/backup.py restore --namespace NEW_NS --release NEW_RELEASE --from ./b4m-backup-DIR
+   ```
+
+   It verifies the manifest checksums, scales the app Deployments to 0, restores Mongo (`--oplogReplay`), mirrors the objects, and scales the Deployments back, also on failure. With the app at 0 the bucket put webhook has no target, so restored files are not re-processed. It refuses a target that already has user databases or objects unless you pass `--yes`, which drops those user databases first.
+4. Sign in as an existing user and open a known file.
+
+To prove the procedure on a disposable local cluster (kind, k3d, minikube or Docker Desktop; it refuses other contexts), build the `selfhost/minio` images, load them into the cluster, and run the drill. It installs two throwaway releases, seeds one user and one file, backs up, deletes the source, restores into the second release, and prints `PASS user` and `PASS file sha256` only if the same user and the same file bytes come back:
+
+```sh
+python3 selfhost/kubernetes/verify-backup-restore.py --images images.yaml
+```
+
+`images.yaml` is a values file with `images.minio` and `images.mc` set to the built images (the app-role images never run in the drill, so any tagged image works for them).
 
 ## Local package checks
 
@@ -115,7 +150,7 @@ Tests render the real chart, reject duplicate YAML keys and unsafe configuration
 
 Local MongoDB remains the default. To prepare an Atlas deployment, combine the normal image values with `external-mongo.example.yaml`. Create the runtime Secret separately with all required runtime keys plus `MONGODB_URI`. The chart requires that key explicitly and rejects a URI in config values when external MongoDB is enabled. No credential belongs in Git, Helm values, or command arguments.
 
-External mode omits the local MongoDB StatefulSet, Service, PVC, default URI, and DNS guard. Its startup check reads the URI from the environment, requires a writable primary, and never initializes or changes the external replica set. Each of 60 attempts is limited to 15 seconds, with a further 5 seconds to force termination, even when the URI specifies unlimited timeouts. Existing timeout options are preserved; defaults are added only for missing options. Connection output is suppressed and failures emit only fixed, credential-free reason names. Use Atlas TLS verification without insecure URI options, a dedicated evaluation database and least-privilege database user, and an Atlas network allowlist matching the cluster's actual outbound addresses. This chart does not manage Atlas access, backups, or migration. Switching an existing local installation does not migrate its data; preserve its retained PVC and migrate separately. Disabling external mode restores the ConfigMap URI even if the Secret still contains an external URI; it does not copy external data into local MongoDB.
+External mode omits the local MongoDB StatefulSet, Service, PVC, default URI, and DNS guard. Its startup check reads the URI from the environment, requires a writable primary, and never initializes or changes the external replica set. Each of 60 attempts is limited to 15 seconds, with a further 5 seconds to force termination, even when the URI specifies unlimited timeouts. Existing timeout options are preserved; defaults are added only for missing options. Connection output is suppressed and failures emit only fixed, credential-free reason names. Use Atlas TLS verification without insecure URI options, a dedicated evaluation database and least-privilege database user, and an Atlas network allowlist matching the cluster's actual outbound addresses. This chart does not manage Atlas access or migration, and `backup.py` refuses external mode: back up Atlas with its own snapshots or PITR. Switching an existing local installation does not migrate its data; preserve its retained PVC and migrate separately. Disabling external mode restores the ConfigMap URI even if the Secret still contains an external URI; it does not copy external data into local MongoDB.
 
 MinIO and ElasticMQ remain local and require persistent storage (20Gi and 5Gi by default). On EKS, install and verify a compatible EBS CSI driver and StorageClass before deployment. External MongoDB does not make the complete stack fit a single small worker: default application/init requests total 2816Mi, plus existing system workloads, and eight steady pods require an additional slot for the bucket initialization Job. Measure capacity and preserve honest requests and limits before deployment; the example does not lower them. The optional executor adds another pod and 512Mi requested memory.
 
