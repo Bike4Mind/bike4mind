@@ -628,8 +628,8 @@ export class OllamaLocal {
       id,
       name,
       backend: localBackend(this.runtimeId),
-      // An adapter changes what the base weights do, so the base blob no longer names the model.
-      ...(modelBlob && !adapterBlobs?.length ? { modelBlob } : {}),
+      ...(modelBlob ? { modelBlob } : {}),
+      ...(adapterBlobs?.length ? { hasAdapter: true } : {}),
       ...(inspection?.parameters ? { modelParameters: inspection.parameters } : {}),
       ...(capabilities
         ? { supportsTools: capabilities.includes('tools'), supportsVision: capabilities.includes('vision') }

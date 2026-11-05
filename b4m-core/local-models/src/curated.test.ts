@@ -222,14 +222,26 @@ describe('curatedBuildForInstalled', () => {
     });
   });
 
-  it('does not keep a name once its weights are other than the build pins, unless the build pins none', () => {
+  it('matches nothing for a model with an adapter, however it is named', () => {
+    const list = manifest();
+    const [{ build }] = builds(list, 'qwen3-5-4b');
+    const gsq = builds(list, 'qwen3-8-27b-gsq')[0].build.weights[0];
+    const hasAdapter = true;
+    expect(curatedBuildForInstalled(list, { name: curatedSource(build).ollamaRef, hasAdapter })).toBeNull();
+    expect(
+      curatedBuildForInstalled(list, { name: 'x', modelBlob: curatedLibrary(build)?.digest, hasAdapter })
+    ).toBeNull();
+    expect(curatedBuildForInstalled(list, { name: gsq.path, hasAdapter })).toBeNull();
+  });
+
+  it('keeps a pull-ref match as family-only once its weights are other than the build pins, and drops a file match', () => {
     const list = manifest();
     const [{ entry, build }] = builds(list, 'qwen3-5-4b');
     const name = curatedSource(build).ollamaRef;
     const gsq = builds(list, 'qwen3-8-27b-gsq')[0];
     const file = gsq.build.weights[0];
     const other = 'f'.repeat(64);
-    expect(curatedBuildForInstalled(list, { name, modelBlob: other })).toBeNull();
+    expect(curatedBuildForInstalled(list, { name, modelBlob: other })).toEqual({ entry, build, via: 'ref-family' });
     expect(curatedBuildForInstalled(list, { name: `/models/${file.path}`, modelBlob: other })).toBeNull();
     if (build.ollama?.kind === 'library') delete (build.ollama as { digest?: string }).digest;
     expect(curatedBuildForInstalled(list, { name, modelBlob: other })).toEqual({ entry, build, via: 'ref' });

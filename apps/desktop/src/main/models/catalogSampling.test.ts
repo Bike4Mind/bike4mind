@@ -1,4 +1,5 @@
-import { curatedLibrary, curatedListing, curatedSource, ollamaRefAliases } from '@bike4mind/local-models';
+import { createHash } from 'node:crypto';
+import { curatedLibrary, curatedListing, curatedPins, curatedSource, ollamaRefAliases } from '@bike4mind/local-models';
 import { describe, expect, it } from 'vitest';
 import { catalogSampling } from './catalogSampling';
 import { loadCuratedManifest } from './loadCuratedManifest';
@@ -83,8 +84,33 @@ describe('catalogSampling', () => {
     expect(catalogSampling(manifest, `/models/${gsq?.weights[0].path}`, undefined, 'temperature 0.3')).toBeUndefined();
   });
 
-  it('keeps the PARAMETER sampling of a model listed under a curated ref with no blob, as one with adapter layers is', () => {
+  it('keeps the PARAMETER sampling of a model listed under a curated ref', () => {
     expect(catalogSampling(manifest, 'qwen3.5:4b', undefined, 'temperature 0.3')).toBeUndefined();
+  });
+
+  it('seeds a curated pull ref by family even when its weights differ from the pin', () => {
+    expect(catalogSampling(manifest, 'qwen3.5:4b', 'f'.repeat(64))).toEqual(catalogSampling(manifest, 'qwen3.5:4b'));
+    expect(catalogSampling(manifest, 'qwen3.5:4b', 'f'.repeat(64), 'temperature 0.3')).toBeUndefined();
+  });
+
+  it('gives a model with an adapter no seed, even when named exactly like a curated ref', () => {
+    const blob = manifest.entries.find(entry => entry.id === 'qwen3-5-4b')?.builds[0].ollama;
+    const digest = blob?.kind === 'library' ? blob.digest : undefined;
+    expect(catalogSampling(manifest, 'qwen3.5:4b', undefined, undefined, true)).toBeUndefined();
+    expect(catalogSampling(manifest, 'qwen3.5:4b', digest, undefined, true)).toBeUndefined();
+  });
+
+  it('pins every params layer fixture entry to the manifest by the sha256 of its compact JSON and a newline', () => {
+    const fixture: Record<string, { params: Record<string, number> | null }> = paramsLayers;
+    const builds = curatedListing(manifest).flatMap(({ builds }) => builds);
+    for (const [ref, { params }] of Object.entries(fixture)) {
+      const build = builds.find(candidate => curatedSource(candidate).ollamaRef === ref);
+      expect(build, ref).toBeDefined();
+      const digest = createHash('sha256')
+        .update(`${JSON.stringify(params)}\n`)
+        .digest('hex');
+      expect(digest, ref).toBe(build && curatedPins(build)?.params);
+    }
   });
 
   it('gives no seed to a model that is not a reviewed build', () => {

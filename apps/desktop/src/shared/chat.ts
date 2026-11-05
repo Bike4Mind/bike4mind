@@ -1021,6 +1021,8 @@ export interface ChatModelOption {
   controls?: ModelControls;
   /** An Ollama model's weights blob sha256, from /api/show; ties a copy under another name to its curated build. */
   modelBlob?: string;
+  /** An Ollama model with an ADAPTER layer; it matches no curated build. */
+  hasAdapter?: boolean;
   /** An Ollama model's Modelfile PARAMETER lines, from /api/show; a model that sets its own sampling keeps it. */
   modelParameters?: string;
   /** A local model that matches a curated build, on any local server: its family's recommended sampling. */

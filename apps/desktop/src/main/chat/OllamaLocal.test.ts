@@ -82,7 +82,7 @@ describe('OllamaLocal', () => {
     expect((await new OllamaLocal().models())[0]).not.toHaveProperty('modelBlob');
   });
 
-  it('lists no weights blob for a model with an adapter, and lists the Modelfile parameters', async () => {
+  it('flags a model with an adapter, and lists the Modelfile parameters', async () => {
     const weights = 'a'.repeat(64);
     const modelfile = `FROM /store/blobs/sha256-${weights}\nADAPTER /store/blobs/sha256-${'c'.repeat(64)}\n`;
     vi.stubGlobal(
@@ -94,8 +94,7 @@ describe('OllamaLocal', () => {
       )
     );
     const [model] = await new OllamaLocal().models();
-    expect(model).not.toHaveProperty('modelBlob');
-    expect(model).toMatchObject({ modelParameters: 'temperature 0.3' });
+    expect(model).toMatchObject({ hasAdapter: true, modelParameters: 'temperature 0.3' });
   });
 
   it.each([

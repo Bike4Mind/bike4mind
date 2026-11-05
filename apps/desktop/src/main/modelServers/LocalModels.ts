@@ -11,6 +11,7 @@ export interface CatalogSamplingQuery {
   name: string;
   modelBlob?: string | undefined;
   parameters?: string | undefined;
+  hasAdapter?: boolean | undefined;
 }
 
 export type CatalogSamplingHook = (model: CatalogSamplingQuery) => CatalogSampling | undefined;
@@ -18,7 +19,12 @@ export type CatalogSamplingHook = (model: CatalogSamplingQuery) => CatalogSampli
 /** Adapts a hook to a model option's name, weights blob and Modelfile parameters. */
 export function optionCatalogSampling(hook: CatalogSamplingHook | undefined) {
   return (option: ChatModelOption) =>
-    hook?.({ name: option.name, modelBlob: option.modelBlob, parameters: option.modelParameters });
+    hook?.({
+      name: option.name,
+      modelBlob: option.modelBlob,
+      parameters: option.modelParameters,
+      hasAdapter: option.hasAdapter,
+    });
 }
 
 /**

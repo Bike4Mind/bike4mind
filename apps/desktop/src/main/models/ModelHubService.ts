@@ -999,8 +999,13 @@ export class ModelHubService {
   }
 
   /** The curated family sampling for a local model on any local server; chat sends it as a seed. */
-  catalogSampling(name: string, modelBlob?: string, parameters?: string): CatalogSampling | undefined {
-    return catalogSampling(this.#deps.curated(), name, modelBlob, parameters);
+  catalogSampling(
+    name: string,
+    modelBlob?: string,
+    parameters?: string,
+    hasAdapter?: boolean
+  ): CatalogSampling | undefined {
+    return catalogSampling(this.#deps.curated(), name, modelBlob, parameters, hasAdapter);
   }
 
   /**
