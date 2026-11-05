@@ -47,9 +47,25 @@ export const LOOP_AUTO_RESUME_KINDS = ['budget', 'credits'] as const;
 
 export type LoopAutoResume = (typeof LOOP_AUTO_RESUME_KINDS)[number];
 
-/** Why a live, otherwise due loop is not running: paced to its daily budget, or the server-wide run cap. */
+/** Why a live, otherwise due loop is not running: paced to its daily budget, or a run cap. */
 export const LOOP_HOLD_KINDS = ['pacing', 'capacity'] as const;
 export type LoopHoldKind = (typeof LOOP_HOLD_KINDS)[number];
+
+/**
+ * Which cap a capacity hold is waiting on: the loop's own lanes, the owner's cloud lanes, the server-wide
+ * cap, or a lane's share of the budget below one iteration.
+ */
+export const LOOP_CAPACITY_LIMITS = ['loop', 'user', 'server', 'budget'] as const;
+export type LoopCapacityLimit = (typeof LOOP_CAPACITY_LIMITS)[number];
+
+/** Most cloud runs one loop may have in flight at once (`maxConcurrent`). */
+export const LOOP_MAX_CONCURRENT = 5;
+/** Cap (chars) on a loop's memory notes: the fallback tail of an answer, and the tail kept when parallel runs merge. */
+export const LOOP_MEMORY_TAIL_CHARS = 4000;
+
+export const activeLaneCount = (loop: Pick<ILoop, 'activeExecutionIds'>): number =>
+  loop.activeExecutionIds?.length ?? 0;
+export const loopMaxConcurrent = (loop: Pick<ILoop, 'maxConcurrent'>): number => loop.maxConcurrent ?? 1;
 
 /** Liveness problems the scheduler flags to the owner: a live loop idle with ready tickets, or a run far longer than usual. */
 export const LOOP_ALARM_KINDS = ['idle_with_work', 'long_run'] as const;
@@ -59,6 +75,8 @@ export interface ILoopHold {
   kind: LoopHoldKind;
   /** Pacing only: when the deferred run is due. */
   until?: Date;
+  /** Capacity only; absent on older holds, which read as `server`. */
+  limit?: LoopCapacityLimit;
   at: Date;
 }
 
@@ -221,8 +239,10 @@ export interface ILoop {
   lastRunAt?: Date;
   nextRunAt?: Date;
   lastExecutionId?: string;
-  /** Set from dispatch until the run is folded in; a loop with one is never re-dispatched. */
-  activeExecutionId?: string;
+  /** Cloud runs from dispatch until each is folded in; a loop is dispatched again only while a lane is free. */
+  activeExecutionIds?: string[];
+  /** Cloud lanes, 1 to `LOOP_MAX_CONCURRENT`; absent means 1 (`loopMaxConcurrent`). Desktop runs are not counted. */
+  maxConcurrent?: number;
   /** Claim lease held by a scheduler tick while it dispatches. */
   leaseUntil?: Date;
   runCount: number;
@@ -252,6 +272,18 @@ export interface ILoopsBudget {
   userDailyCredits?: number;
   adminDailyCredits?: number;
   effectiveCap?: number;
+  /** The admin lane settings as `loopLaneLimits` clamps them: cloud loop runs per user, and server-wide. */
+  laneLimits?: { lanesPerUser: number; maxActiveRuns: number };
+}
+
+/** A finished run's memory and what the fold needs to merge it with a parallel run's (see `foldRun`). */
+export interface LoopRunMemory {
+  notes: string;
+  nextAction: string;
+  /** When the run started; memory written after it came from a parallel run, so the notes are appended. */
+  startedAt: Date;
+  updatedAt: Date;
+  ticketTitle?: string;
 }
 
 /**
@@ -276,20 +308,28 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
     guard?: { stages?: string[] }
   ): Promise<ILoop | null>;
   deleteForUser(id: string, userId: string): Promise<boolean>;
-  /** Atomically leases one due `live` loop with no run in flight and not in `skipIds`, or returns null. */
+  /** Atomically leases one due `live` loop with a free lane and not in `skipIds`, or returns null. */
   claimDue(now: Date, leaseMs: number, skipIds?: string[], skipUserIds?: string[]): Promise<ILoop | null>;
   releaseLease(id: string): Promise<void>;
-  markDispatched(id: string, executionId: string, nextRunAt: Date): Promise<void>;
-  listInFlight(): Promise<ILoop[]>;
   /**
-   * Folds a finished run into the loop and clears `activeExecutionId`. Conditional on
-   * `activeExecutionId === executionId`, so a second fold of the same run is a no-op.
-   * Returns false when nothing matched.
+   * Adds the run to `activeExecutionIds` and releases the claim. `laneHoldAt` marks the loop held on its own
+   * lane limit from then (all lanes now busy with ready tickets waiting); without it any hold is cleared.
+   */
+  markDispatched(id: string, executionId: string, nextRunAt: Date, laneHoldAt?: Date): Promise<void>;
+  listInFlight(): Promise<ILoop[]>;
+  /** Cloud lanes in flight across all loops, and for one user. */
+  countInFlight(): Promise<number>;
+  countLanesForUser(userId: string): Promise<number>;
+  /**
+   * Folds a finished run into the loop and drops it from `activeExecutionIds`. Conditional on the run still
+   * being in it, so a second fold of the same run is a no-op. With `memory`, writes it the way
+   * `foldRunnerRun` does. Also clears this run's long_run alarm and a loop-lane hold. False when nothing matched.
    */
   foldRun(
     id: string,
     executionId: string,
-    update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
+    update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> },
+    memory?: LoopRunMemory
   ): Promise<boolean>;
   /** Pulls a `live` loop's `nextRunAt` forward to `now` and ends its idle back-off; used when one of its tickets becomes ready. */
   makeDueNow(id: string, now: Date): Promise<void>;
@@ -305,22 +345,26 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
    */
   resumeAutoPaused(id: string, kind: LoopAutoResume, now: Date): Promise<boolean>;
   /**
-   * Folds a finished desktop run into its loop: the new memory and `lastRunAt`, and one more `runCount`.
-   * Never touches `activeExecutionId`, which only cloud runs hold.
+   * Folds a finished desktop run into its loop: its memory, `lastRunAt`, and one more `runCount`. Never touches
+   * `activeExecutionIds`, which only cloud runs hold. The memory replaces the loop's when nothing wrote it since
+   * the run started; otherwise the run's notes are appended under a `[parallel run]` marker and the tail kept.
    */
-  foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void>;
+  foldRunnerRun(id: string, userId: string, run: LoopRunMemory, lastRunAt: Date): Promise<void>;
   /** Defers a claimed live loop to `nextRunAt` (a pacing hold) and releases the claim. */
   deferUntil(id: string, nextRunAt: Date, now: Date): Promise<void>;
+  /** Marks a claimed live loop held on `limit` and releases the claim. */
+  holdForCapacity(id: string, limit: LoopCapacityLimit, now: Date): Promise<void>;
+  /** Clears capacity holds the tick recomputes; a loop-lane hold is cleared by the fold instead. */
   clearCapacityHolds(): Promise<void>;
-  /** Marks every live loop `claimDue` would take now, except `skipIds`, as held by the run cap. */
+  /** Marks every live loop `claimDue` would take now, except `skipIds`, as held by the server-wide cap. */
   setCapacityHolds(now: Date, skipIds: string[]): Promise<void>;
-  /** Live loops with no run in flight due at or before `before`, oldest first. */
+  /** Live loops with no lane active due at or before `before`, oldest first. */
   listPastDueLive(before: Date, limit: number): Promise<ILoop[]>;
   /** Loops carrying an alarm, of `kinds` when given. */
   listAlarmed(kinds?: LoopAlarmKind[]): Promise<ILoop[]>;
   /**
-   * Sets the alarm while it still applies (a long run while it is the active run; an idle alarm while the loop is
-   * live with no run), keeping `since` when the same alarm (kind, and run for long_run) is already set.
+   * Sets the alarm while it still applies (a long run while it is an active run; an idle alarm while the loop is
+   * live with no lane active), keeping `since` when the same alarm (kind, and run for long_run) is already set.
    */
   setAlarm(id: string, alarm: ILoopAlarm): Promise<void>;
   clearAlarm(id: string, kind: LoopAlarmKind): Promise<void>;
