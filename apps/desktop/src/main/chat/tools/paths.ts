@@ -6,6 +6,7 @@ import {
   wslLocation,
   wslOperandPlaces,
   wslRealpath,
+  wslDrivePath,
   wslUncPath,
   type OperandReader,
   type WslLocation,
@@ -42,6 +43,44 @@ function comparable(path: string): string {
 
 const sameDistro = (a: WslLocation | null, b: WslLocation): boolean =>
   a !== null && a.distro.toLowerCase() === b.distro.toLowerCase();
+
+/** `paths` plus, on Windows, the drive path each WSL `/mnt/<x>` share path in them reaches. */
+export function withDriveSpellings(paths: readonly string[], platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') return [...paths];
+  return paths.flatMap(path => {
+    const drive = wslDrivePath(path);
+    return drive ? [path, drive] : [path];
+  });
+}
+
+/** On macOS and Windows, whose volumes ignore case by default, `path` in lower case. */
+export function caseFolded(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'darwin' || platform === 'win32' ? path.toLowerCase() : path;
+}
+
+/** `path` as the guards compare it: case folded where volumes ignore case, and `/`-separated on Windows. */
+export function guardForm(path: string, platform: NodeJS.Platform = process.platform): string {
+  const folded = caseFolded(path, platform);
+  return platform === 'win32' ? folded.replace(/\\/g, '/') : folded;
+}
+
+/** isWithin for two `guardForm` paths. */
+export function guardFormWithin(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root.endsWith('/') ? root : `${root}/`);
+}
+
+/** Whether any spelling of one target lies within any `guarded` path, its WSL drive spellings included. */
+export function withinGuarded(
+  guarded: readonly string[],
+  candidates: readonly string[],
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  const spellings = withDriveSpellings(candidates, platform).map(path => guardForm(path, platform));
+  return guarded.some(entry => {
+    const root = guardForm(entry, platform);
+    return spellings.some(spelling => guardFormWithin(root, spelling));
+  });
+}
 
 /** True when `candidate` is `root` itself or lies beneath it. */
 export function isWithin(rootPath: string, candidatePath: string): boolean {
@@ -275,7 +314,8 @@ export function withRealPath(path: string): string[] {
   return real === path ? [path] : [path, real];
 }
 
-function realpathSyncNearest(path: string): string {
+/** `path` with symlinks resolved as far as it exists, the rest kept as given. */
+export function realpathSyncNearest(path: string): string {
   try {
     return realpathSync.native(path);
   } catch {

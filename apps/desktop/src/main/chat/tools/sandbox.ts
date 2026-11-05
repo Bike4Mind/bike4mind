@@ -2,7 +2,7 @@ import { accessSync, constants } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isWithin, withRealPath } from './paths';
+import { guardForm, guardFormWithin, withDriveSpellings, withRealPath } from './paths';
 
 const SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 
@@ -121,11 +121,13 @@ export function protectionFor(candidates: readonly string[], access: 'read' | 'w
   // macOS and Windows volumes are case-insensitive by default, and realpath keeps the caller's
   // casing for a name that does not exist yet: `.claude/Settings.local.json` would create the
   // very file Claude Code loads. Folding everywhere only ever refuses more.
-  const folded = candidates.map(fold);
+  const folded = withDriveSpellings(candidates).map(fold);
   for (const guard of guards()) {
     if (access === 'read' && guard.readable) continue;
     for (const spelling of withRealPath(guard.path).map(fold)) {
-      if (folded.some(candidate => (guard.prefix ? candidate.startsWith(spelling) : isWithin(spelling, candidate)))) {
+      if (
+        folded.some(candidate => (guard.prefix ? candidate.startsWith(spelling) : guardFormWithin(spelling, candidate)))
+      ) {
         return guard.reason;
       }
     }
@@ -135,7 +137,7 @@ export function protectionFor(candidates: readonly string[], access: 'read' | 'w
 }
 
 function fold(path: string): string {
-  return path.toLowerCase();
+  return guardForm(path).toLowerCase();
 }
 
 export function sandboxAvailable(): boolean {

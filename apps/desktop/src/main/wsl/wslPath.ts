@@ -56,6 +56,14 @@ export function parseWslPath(path: string): WslLocation | null {
   };
 }
 
+/** A share path under a distro's `/mnt/<x>` as the Windows drive path `<X>:\...` it reaches; null for any other path. */
+export function wslDrivePath(path: string): string | null {
+  const linuxPath = parseWslPath(path)?.linuxPath;
+  const match = linuxPath ? /^\/mnt\/([a-z])(?:\/(.*))?$/i.exec(linuxPath) : null;
+  if (!match) return null;
+  return `${(match[1] as string).toUpperCase()}:\\${(match[2] ?? '').replace(/\//g, '\\')}`;
+}
+
 /** The WSL location of `directory`, or null for an ordinary folder or a host that is not Windows. */
 export function wslLocation(directory: string, platform: NodeJS.Platform = process.platform): WslLocation | null {
   return platform === 'win32' ? parseWslPath(directory) : null;

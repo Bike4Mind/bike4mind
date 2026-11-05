@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PathAccessDenied, resolveWithinRoots, resolveWithinRootsPhysically, withRealPath } from './paths';
+import {
+  PathAccessDenied,
+  resolveWithinRoots,
+  resolveWithinRootsPhysically,
+  withinGuarded,
+  withRealPath,
+} from './paths';
 
 describe('resolveWithinRoots', () => {
   let base: string;
@@ -191,6 +197,34 @@ describe('resolveWithinRootsPhysically', () => {
 
   it('denies everything when no folder has been granted', async () => {
     await expect(resolveWithinRootsPhysically('in.txt', [], granted)).rejects.toBeInstanceOf(PathAccessDenied);
+  });
+});
+
+describe('withinGuarded', () => {
+  const APP = 'C:\\Users\\me\\AppData\\Roaming\\App';
+
+  it('on Windows, reads a WSL /mnt/<x> share path as its drive path, ignoring case', () => {
+    for (const path of [
+      '\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App\\vault.json',
+      '\\\\wsl$\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App',
+      '\\\\wsl.localhost\\Ubuntu\\mnt\\C\\users\\me\\appdata\\roaming\\app\\x',
+      'c:/users/me/appdata/roaming/app/x',
+    ]) {
+      expect(withinGuarded([APP], ['/elsewhere', path], 'win32')).toBe(true);
+    }
+    expect(withinGuarded([APP], ['\\\\wsl.localhost\\Ubuntu\\home\\me\\AppData\\Roaming\\App'], 'win32')).toBe(false);
+    expect(
+      withinGuarded([APP], ['\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App2'], 'win32')
+    ).toBe(false);
+  });
+
+  it('maps nothing and keeps case elsewhere', () => {
+    expect(withinGuarded([APP], ['\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App'], 'linux')).toBe(
+      false
+    );
+    expect(withinGuarded(['/home/me/App'], ['/home/me/App/x'], 'linux')).toBe(true);
+    expect(withinGuarded(['/home/me/App'], ['/home/me/app/x'], 'linux')).toBe(false);
+    expect(withinGuarded(['/Users/me/App'], ['/users/me/app/x'], 'darwin')).toBe(true);
   });
 });
 
