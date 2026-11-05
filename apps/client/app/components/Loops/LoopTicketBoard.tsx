@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useMutationState } from '@tanstack/react-query';
 import {
   Box,
   Button,
@@ -30,9 +31,11 @@ import {
   type WorkItemStatus,
 } from '@bike4mind/common';
 import {
+  MOVE_LOOP_TICKET_KEY,
   useCreateLoopTicket,
   useMoveLoopTicket,
   type ILoopTicket,
+  type MoveLoopTicketVars,
   type ILoopTicketsResponse,
 } from '@client/app/hooks/data/loops';
 import { LoopMarkdown } from './loopUi';
@@ -65,6 +68,7 @@ const byPriorityThenAge = (a: ILoopTicket, b: ILoopTicket) =>
   workItemPriorityRank(a.priority) - workItemPriorityRank(b.priority) || a.createdAt.localeCompare(b.createdAt);
 
 function TicketCard({
+  loopId,
   ticket,
   stages,
   desktop,
@@ -72,6 +76,7 @@ function TicketCard({
   runLimit,
   onViewRun,
 }: {
+  loopId: string;
   ticket: ILoopTicket;
   stages: string[];
   /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
@@ -81,6 +86,11 @@ function TicketCard({
   onViewRun: (executionId: string) => void;
 }) {
   const moveTicket = useMoveLoopTicket();
+  // Only this card locks while its own move saves; the rest of the board stays usable.
+  const saving = useMutationState({
+    filters: { mutationKey: MOVE_LOOP_TICKET_KEY, status: 'pending' },
+    select: mutation => (mutation.state.variables as MoveLoopTicketVars).id,
+  }).includes(ticket.id);
   return (
     <Card size="sm" variant="outlined" data-testid={`loop-ticket-${ticket.id}`}>
       <Typography level="title-sm">{ticket.title}</Typography>
@@ -139,8 +149,10 @@ function TicketCard({
         <Select
           size="sm"
           value={ticket.stage ?? null}
-          disabled={moveTicket.isPending || ticket.status === 'in_progress'}
-          onChange={(_, stage) => stage && stage !== ticket.stage && moveTicket.mutate({ id: ticket.id, stage })}
+          disabled={saving || ticket.status === 'in_progress'}
+          onChange={(_, stage) =>
+            stage && stage !== ticket.stage && moveTicket.mutate({ loopId, id: ticket.id, stage })
+          }
           sx={{ flex: 1 }}
           data-testid="loop-ticket-stage-select"
         >
@@ -159,9 +171,9 @@ function TicketCard({
         <Select
           size="sm"
           value={ticket.priority}
-          disabled={moveTicket.isPending || ticket.status === 'in_progress'}
+          disabled={saving || ticket.status === 'in_progress'}
           onChange={(_, priority) =>
-            priority && priority !== ticket.priority && moveTicket.mutate({ id: ticket.id, priority })
+            priority && priority !== ticket.priority && moveTicket.mutate({ loopId, id: ticket.id, priority })
           }
           data-testid="loop-ticket-priority-select"
         >
@@ -348,6 +360,7 @@ export default function LoopTicketBoard({
             ].map(ticket => (
               <TicketCard
                 key={ticket.id}
+                loopId={loop.id}
                 ticket={ticket}
                 stages={loop.stages}
                 desktop={!!ticket.stage && desktopStages.has(ticket.stage)}

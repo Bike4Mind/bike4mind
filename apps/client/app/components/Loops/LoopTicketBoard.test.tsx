@@ -4,16 +4,20 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { ILoopTicket, ILoopTicketsResponse } from '@client/app/hooks/data/loops';
 
-const { onViewRun, moveTicket, createTicket } = vi.hoisted(() => ({
+const { onViewRun, moveTicket, createTicket, savingIds } = vi.hoisted(() => ({
   onViewRun: vi.fn(),
   moveTicket: { mutate: vi.fn(), isPending: false },
   createTicket: { mutate: vi.fn(), isPending: false },
+  // Ticket ids whose move is still saving, as useMutationState would select them.
+  savingIds: [] as string[],
 }));
 
 vi.mock('@client/app/hooks/data/loops', () => ({
+  MOVE_LOOP_TICKET_KEY: ['loops', 'move'],
   useMoveLoopTicket: () => moveTicket,
   useCreateLoopTicket: () => createTicket,
 }));
+vi.mock('@tanstack/react-query', () => ({ useMutationState: () => savingIds }));
 
 import LoopTicketBoard from './LoopTicketBoard';
 
@@ -58,7 +62,10 @@ const renderBoard = () =>
     </CssVarsProvider>
   );
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  savingIds.length = 0;
+});
 
 describe('LoopTicketBoard', () => {
   it('renders one column per stage in the loop order', () => {
@@ -119,7 +126,22 @@ describe('LoopTicketBoard', () => {
     const card = within(screen.getByTestId('loop-ticket-older'));
     fireEvent.click(within(card.getByTestId('loop-ticket-stage-select')).getByRole('combobox'));
     fireEvent.click(screen.getByRole('option', { name: 'doing' }));
-    expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', stage: 'doing' });
+    expect(moveTicket.mutate).toHaveBeenCalledWith({ loopId: 'l1', id: 'older', stage: 'doing' });
+  });
+
+  it('locks only the card whose move is saving', () => {
+    savingIds.push('older');
+    renderBoard();
+    const disabled = (id: string, testId: string) =>
+      within(within(screen.getByTestId(`loop-ticket-${id}`)).getByTestId(testId))
+        .getByRole('combobox')
+        .hasAttribute('disabled');
+    expect(disabled('older', 'loop-ticket-stage-select')).toBe(true);
+    expect(disabled('older', 'loop-ticket-priority-select')).toBe(true);
+    expect(disabled('newer', 'loop-ticket-stage-select')).toBe(false);
+    expect(disabled('newer', 'loop-ticket-priority-select')).toBe(false);
+    // A ticket a run is working stays locked as before.
+    expect(disabled('busy', 'loop-ticket-stage-select')).toBe(true);
   });
 
   const renderDesktopBoard = (runner?: ILoopTicketsResponse['runner']) =>
@@ -217,7 +239,7 @@ describe('LoopTicketBoard', () => {
     expect(card.getByTestId('loop-ticket-priority-chip')).toHaveTextContent('P2');
     fireEvent.click(within(card.getByTestId('loop-ticket-priority-select')).getByRole('combobox'));
     fireEvent.click(screen.getByRole('option', { name: 'P0' }));
-    expect(moveTicket.mutate).toHaveBeenCalledWith({ id: 'older', priority: 'p0' });
+    expect(moveTicket.mutate).toHaveBeenCalledWith({ loopId: 'l1', id: 'older', priority: 'p0' });
   });
 
   it('adds a ticket with the chosen priority', () => {
