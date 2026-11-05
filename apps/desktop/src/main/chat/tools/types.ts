@@ -726,6 +726,8 @@ export interface ApprovalAlways {
   paths?: readonly string[];
   /** Folders a glob or an expanded operand reaches anything under (see ShellScan.globFolders). */
   globFolders?: readonly string[];
+  /** See ShellScan.dotlessGlobFolders. */
+  dotlessGlobFolders?: readonly string[];
   /** Paths in a WSL distro no root is in: asked each time, never covered by a rule, grant or saved answer. */
   ungranted?: readonly string[];
 }

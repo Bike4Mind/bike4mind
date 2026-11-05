@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { lstat, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
@@ -15,6 +15,8 @@ import { own } from '@shared/ownKeys';
 import { ghReadFiles, repositoryWrite, type RepositoryWrite } from './ownRepository';
 import {
   PathAccessDenied,
+  guardForm,
+  guardFormWithin,
   onAnotherComputer,
   operandPlaces,
   operandTargets,
@@ -48,8 +50,10 @@ export interface ShellScan {
   commands: ShellCommand[];
   /** Physical paths named by the script, including paths inside shared roots and its starting folder. */
   paths?: string[];
-  /** Folders a glob or an expanded operand reaches anything under, so a protected folder within or below one is reached. */
+  /** Folders a glob, an expanded operand or a recursive command reaches anything under, so a protected folder within or below one is reached. */
   globFolders?: string[];
+  /** Folders a glob reaches below, but only through names that do not start with a dot (`ls *`). */
+  dotlessGlobFolders?: string[];
   /** Directories the command reaches outside every granted root and the temp dirs. */
   directories: string[];
   /** Paths in a WSL distro no root is in, named without reading them: asked every time, never offered as a grant. */
@@ -316,7 +320,238 @@ function globPrefix(text: string): string | null {
   return match.index === 0 ? null : text.slice(0, match.index);
 }
 
-const singleQuoted = (raw: string): boolean => /^'[^']*'$/.test(raw);
+/** One character of a word with its quotes removed, `active` when unquoted so a glob or brace in it is live; or an expansion. */
+type WordPiece = { char: string; active: boolean } | { expansion: string };
+
+/** The index just past the `close` that balances the run starting at `from`, skipping escapes and single quotes. */
+function matchingEnd(word: string, from: number, open: string, close: string): number {
+  let depth = 1;
+  for (let at = from; at < word.length; at++) {
+    const char = word[at];
+    if (char === '\\') {
+      at++;
+    } else if (char === close) {
+      if (--depth === 0) return at + 1;
+    } else if (open !== '' && char === open) {
+      depth++;
+    } else if (char === "'" && close !== '"') {
+      const end = word.indexOf("'", at + 1);
+      at = end === -1 ? word.length : end;
+    }
+  }
+  return word.length;
+}
+
+/** Where the `$` or backtick expansion at `at` ends; `at + 1` when the `$` is a literal one. */
+function expansionEnd(word: string, at: number, quoted: boolean): number {
+  const next = word[at + 1] ?? '';
+  if (word[at] === '`') return matchingEnd(word, at + 1, '', '`');
+  if (next === '(') return matchingEnd(word, at + 2, '(', ')');
+  if (next === '{') return matchingEnd(word, at + 2, '{', '}');
+  if (next === '[') return matchingEnd(word, at + 2, '[', ']');
+  // `$'\x2e'` and `$"..."` are decoded or translated by bash, so they are read as expansions.
+  if (!quoted && (next === "'" || next === '"')) return matchingEnd(word, at + 2, '', next);
+  if (/[A-Za-z_]/.test(next)) {
+    let end = at + 2;
+    while (end < word.length && /\w/.test(word[end] as string)) end++;
+    return end;
+  }
+  if (/[0-9@*#?$!-]/.test(next)) return at + 2;
+  return at + 1;
+}
+
+/** A word's characters as bash reads them: quotes removed, backslash escapes applied, and each expansion kept whole. */
+function wordPieces(word: string): WordPiece[] {
+  const pieces: WordPiece[] = [];
+  const push = (char: string, active: boolean): void => {
+    pieces.push({ char, active });
+  };
+  const expansion = (at: number, quoted: boolean): number => {
+    const end = expansionEnd(word, at, quoted);
+    if (end === at + 1) push(word[at] as string, false);
+    else pieces.push({ expansion: word.slice(at, end) });
+    return end - 1;
+  };
+  for (let at = 0; at < word.length; at++) {
+    const char = word[at] as string;
+    if (char === '\\') {
+      if (at + 1 >= word.length) push(char, false);
+      else if (word[++at] !== '\n') push(word[at] as string, false);
+    } else if (char === "'") {
+      const end = word.indexOf("'", at + 1);
+      const stop = end === -1 ? word.length : end;
+      for (let quoted = at + 1; quoted < stop; quoted++) push(word[quoted] as string, false);
+      at = stop;
+    } else if (char === '"') {
+      for (at++; at < word.length && word[at] !== '"'; at++) {
+        const inner = word[at] as string;
+        if (inner === '\\' && at + 1 < word.length && '$`"\\\n'.includes(word[at + 1] as string)) {
+          if (word[++at] !== '\n') push(word[at] as string, false);
+        } else if (inner === '$' || inner === '`') {
+          at = expansion(at, true);
+        } else {
+          push(inner, false);
+        }
+      }
+    } else if (char === '$' || char === '`') {
+      at = expansion(at, false);
+    } else {
+      push(char, true);
+    }
+  }
+  return pieces;
+}
+
+const isActive = (piece: WordPiece | undefined, char: string): boolean =>
+  piece !== undefined && 'char' in piece && piece.active && piece.char === char;
+
+/** More words than this from one brace expansion leave the operand unread. */
+const BRACE_LIMIT = 64;
+
+/** The words a `{a..e}` or `{1..9..2}` sequence makes, null when it is no sequence, or 'many' past the limit. */
+function braceSequence(inner: readonly WordPiece[]): WordPiece[][] | null | 'many' {
+  if (!inner.every(piece => 'char' in piece && piece.active)) return null;
+  const text = inner.map(piece => ('char' in piece ? piece.char : '')).join('');
+  const numeric = /^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/.exec(text);
+  const letters = /^([A-Za-z])\.\.([A-Za-z])(?:\.\.(-?\d+))?$/.exec(text);
+  const match = numeric ?? letters;
+  if (!match) return null;
+  const [from, to] = numeric
+    ? [Number(match[1]), Number(match[2])]
+    : [(match[1] as string).charCodeAt(0), (match[2] as string).charCodeAt(0)];
+  const step = Math.abs(Number(match[3] ?? 1)) || 1;
+  const count = Math.floor(Math.abs(to - from) / step) + 1;
+  if (count > BRACE_LIMIT) return 'many';
+  const padded = numeric && (/^-?0\d/.test(match[1] as string) || /^-?0\d/.test(match[2] as string));
+  const size = padded ? Math.max((match[1] as string).length, (match[2] as string).length) : 0;
+  const words: WordPiece[][] = [];
+  for (let index = 0; index < count; index++) {
+    const value = from + (to >= from ? 1 : -1) * index * step;
+    const text = numeric ? String(value).padStart(size, '0') : String.fromCharCode(value);
+    words.push([...text].map(char => ({ char, active: false })));
+  }
+  return words;
+}
+
+/** Bash's brace expansion, which runs before every other: null when it makes more than BRACE_LIMIT words. */
+function expandBraces(pieces: readonly WordPiece[]): WordPiece[][] | null {
+  for (let open = 0; open < pieces.length; open++) {
+    if (!isActive(pieces[open], '{')) continue;
+    let depth = 0;
+    let close = -1;
+    const commas: number[] = [];
+    for (let at = open; at < pieces.length && close === -1; at++) {
+      if (isActive(pieces[at], '{')) depth++;
+      else if (isActive(pieces[at], '}') && --depth === 0) close = at;
+      else if (depth === 1 && isActive(pieces[at], ',')) commas.push(at);
+    }
+    if (close === -1) continue;
+    const bounds = [open, ...commas, close];
+    const options =
+      commas.length > 0
+        ? bounds.slice(1).map((end, index) => pieces.slice((bounds[index] as number) + 1, end))
+        : braceSequence(pieces.slice(open + 1, close));
+    if (options === null) continue;
+    if (options === 'many') return null;
+    const words: WordPiece[][] = [];
+    for (const option of options) {
+      const expanded = expandBraces([...pieces.slice(0, open), ...option, ...pieces.slice(close + 1)]);
+      if (expanded === null) return null;
+      words.push(...expanded);
+      if (words.length > BRACE_LIMIT) return null;
+    }
+    return words;
+  }
+  return [[...pieces]];
+}
+
+/** Stands in for an expansion the scan cannot fill in. */
+const EXPANSION_MARK = '\u0000';
+
+/** One word as the program receives it, as far as the scan can tell. */
+interface OperandWord {
+  /** Known variables and `~` filled in, quotes removed, and each other expansion an EXPANSION_MARK. */
+  text: string;
+  /** Per character of `text`: an unquoted `*`, `?` or `[`. */
+  glob: readonly boolean[];
+  /** Where the first expansion the scan cannot fill in sits, or null. */
+  expandAt: number | null;
+}
+
+/** What `~`, `$HOME`, `$PWD` and `$OLDPWD` stand for where the word is read. */
+interface WordScope {
+  home: string;
+  cwd: string;
+  previous: string;
+  homeUsed(): void;
+}
+
+const KNOWN_VARIABLE = /^\$(?:\{(HOME|PWD|OLDPWD)\}|(HOME|PWD|OLDPWD))$/;
+
+function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWord {
+  let text = '';
+  const glob: boolean[] = [];
+  let expandAt: number | null = null;
+  const literal = (value: string): void => {
+    text += value;
+    for (let index = 0; index < value.length; index++) glob.push(false);
+  };
+  const unknown = (): void => {
+    expandAt ??= text.length;
+    literal(EXPANSION_MARK);
+  };
+  let from = 0;
+  if (isActive(pieces[0], '~')) {
+    let name = '';
+    let end = 1;
+    for (; end < pieces.length && !isActive(pieces[end], '/'); end++) {
+      const piece = pieces[end];
+      if (!piece || !('char' in piece) || !piece.active) break;
+      name += piece.char;
+    }
+    if (end === pieces.length || isActive(pieces[end], '/')) {
+      from = end;
+      const user = /^[A-Za-z_][\w.-]*$/.test(name);
+      if (name === '' || user) scope.homeUsed();
+      if (name === '') literal(scope.home);
+      else if (name === '+') literal(scope.cwd);
+      else if (name === '-') literal(scope.previous);
+      else if (user) literal(expandHome(`~${name}`, scope.home));
+      else unknown();
+    }
+  }
+  for (const piece of pieces.slice(from)) {
+    if ('char' in piece) {
+      text += piece.char;
+      glob.push(piece.active && '*?['.includes(piece.char));
+      continue;
+    }
+    const known = KNOWN_VARIABLE.exec(piece.expansion);
+    const variable = known?.[1] ?? known?.[2];
+    if (variable === 'HOME') {
+      scope.homeUsed();
+      literal(scope.home);
+    } else if (variable === 'PWD') {
+      literal(scope.cwd);
+    } else if (variable === 'OLDPWD') {
+      literal(scope.previous);
+    } else {
+      unknown();
+    }
+  }
+  return { text, glob, expandAt };
+}
+
+/** Every word one shell word becomes after brace expansion; null when there are too many to read. */
+function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
+  return expandBraces(wordPieces(raw))?.map(pieces => resolveWord(pieces, scope)) ?? null;
+}
+
+/** A word already as the program sees it, as a Windows program's operand is: no quotes, and no expansion left. */
+function literalWord(text: string): OperandWord {
+  const expandAt = text.search(/[$`]/);
+  return { text, glob: [...text].map(char => '*?['.includes(char)), expandAt: expandAt === -1 ? null : expandAt };
+}
 
 interface ReadOperand {
   /** The path the operand names, or for a glob or an expansion the folder it expands under. */
@@ -327,15 +562,404 @@ interface ReadOperand {
   unread: boolean;
 }
 
-/**
- * How the scan reads one operand, `text` being it with quotes removed and `~` expanded. A single-quoted
- * word is literal, and a double-quoted one expands variables but no glob.
- */
-function readOperand(raw: string, text: string, dirnameOf: (path: string) => string): ReadOperand {
-  const start = singleQuoted(raw) ? -1 : text.search(/^"[^"]*"$/.test(raw) ? /[$`]/ : /[?*[$`]/);
-  if (start === -1) return { path: text, start: null, unread: false };
+function readOperand(word: OperandWord, dirnameOf: (path: string) => string): ReadOperand {
+  const globAt = word.glob.indexOf(true);
+  const starts = [globAt === -1 ? null : globAt, word.expandAt].filter((at): at is number => at !== null);
+  if (starts.length === 0) return { path: word.text, start: null, unread: false };
+  const start = Math.min(...starts);
   // As compileRule does: a partial name is a match inside its folder, and `x/` names `x` itself.
-  return { path: dirnameOf(`${text.slice(0, start)}x`), start, unread: /[$`]/.test(text.slice(start)) };
+  return { path: dirnameOf(`${word.text.slice(0, start)}x`), start, unread: word.expandAt !== null };
+}
+
+type GlobChar = { char: string; glob: boolean };
+
+/**
+ * Whether one glob component can match `name`, by bash's rules: a leading dot is matched only by a
+ * literal one unless dotglob is on, which still never matches `.` or `..`. Case is ignored, which only asks more.
+ */
+function globMatches(pattern: readonly GlobChar[], name: string, dotGlob: boolean): boolean {
+  const first = pattern[0];
+  const literalDot = first !== undefined && !first.glob && first.char === '.';
+  if (name.startsWith('.') && !literalDot && !(dotGlob && name !== '.' && name !== '..')) return false;
+  const escape = (char: string): string => char.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  let source = '';
+  for (let at = 0; at < pattern.length; at++) {
+    const { char, glob } = pattern[at] as GlobChar;
+    if (!glob) {
+      source += escape(char);
+    } else if (char === '*') {
+      source += '.*';
+    } else if (char === '?') {
+      source += '.';
+    } else {
+      let body = at + 1;
+      const negated = pattern[body]?.char === '!' || pattern[body]?.char === '^';
+      if (negated) body++;
+      const close = pattern.findIndex((piece, index) => index > body && piece.char === ']');
+      if (close === -1) {
+        source += '\\[';
+        continue;
+      }
+      const members = pattern
+        .slice(body, close)
+        .map(piece => piece.char)
+        .join('');
+      source += members.includes('[:') ? '.' : `[${negated ? '^' : ''}${members.replace(/[\\\]^[]/g, '\\$&')}]`;
+      at = close;
+    }
+  }
+  try {
+    return new RegExp(`^${source}$`, 'is').test(name);
+  } catch {
+    return true;
+  }
+}
+
+/** What a glob operand can reach beyond the folder it expands under. */
+interface GlobShape {
+  /** Its first component cannot match a name that starts with a dot. */
+  dotless: boolean;
+  /** Components that can walk up a folder (`..`, or `.?` in a bash without globskipdots). */
+  up: number;
+  /** A component can match `.claude`, the folder holding a project's permission settings. */
+  namesSettings: boolean;
+}
+
+function globShape(word: OperandWord, start: number, dotGlob: boolean, separator: RegExp): GlobShape {
+  let from = start;
+  while (from > 0 && !separator.test(word.text[from - 1] as string)) from--;
+  let current: GlobChar[] = [];
+  const components: GlobChar[][] = [current];
+  for (let at = from; at < word.text.length; at++) {
+    const char = word.text[at] as string;
+    if (separator.test(char)) {
+      current = [];
+      components.push(current);
+    } else {
+      current.push({ char, glob: word.glob[at] === true });
+    }
+  }
+  const patterns = components.filter(component => component.some(piece => piece.glob));
+  const up = components.filter(
+    component =>
+      component.map(piece => piece.char).join('') === '..' ||
+      (component.some(piece => piece.glob) && globMatches(component, '..', dotGlob))
+  ).length;
+  const first = components[0]?.[0];
+  return {
+    dotless: up === 0 && !dotGlob && !(first !== undefined && !first.glob && first.char === '.'),
+    up,
+    namesSettings: patterns.some(pattern => globMatches(pattern, '.claude', dotGlob)),
+  };
+}
+
+/** A script that may turn on dotglob, so a leading `*` can match a dotfile. */
+const MAY_SET_DOTGLOB = /shopt|GLOBIGNORE|BASHOPTS|dotglob/;
+
+type Reach = 'read' | 'write';
+
+/** Programs that unpack an archive into a folder, so `inPlaceWrites` names their trees. */
+const UNPACKS = new Set(['tar', 'bsdtar', 'unzip', '7z', '7za', '7zz', 'cpio']);
+
+const shortFlags = (args: readonly string[]): string =>
+  args
+    .map(unquote)
+    .filter(arg => /^-[A-Za-z]+$/.test(arg))
+    .map(arg => arg.slice(1))
+    .join('');
+
+/**
+ * The operands a command acts on as whole folders, by index into `args`, read (`grep -r`) or written (`rm -r`,
+ * `mv`, a copy's destination, `find -delete`); `cwd` is the reach of a command that defaults to its folder.
+ */
+function treeOperands(program: string, args: readonly string[]): { operands: Map<number, Reach>; cwd: Reach | null } {
+  const operands = new Map<number, Reach>();
+  const flags = shortFlags(args);
+  const longs = new Set(args.map(unquote).filter(arg => arg.startsWith('--')));
+  const positional = args.flatMap((arg, index) => (unquote(arg).startsWith('-') ? [] : [index]));
+  const mark = (indices: readonly number[], reach: Reach): void => {
+    for (const index of indices) operands.set(index, reach);
+  };
+  // A copy writes its destination (the last operand, or `-t`'s value) and reads the rest.
+  const copy = (): void => {
+    const target = args.findIndex(arg => unquote(arg) === '-t' || unquote(arg).startsWith('--target-directory='));
+    const destination =
+      target === -1 ? positional.at(-1) : unquote(args[target] as string) === '-t' ? target + 1 : target;
+    mark(positional, 'read');
+    if (destination !== undefined) operands.set(destination, 'write');
+  };
+  // grep and rg take a pattern first unless `-e` or `-f` gives it.
+  const searched = (): number[] =>
+    args.some(arg => /^-[A-Za-z]*[ef]$|^--(regexp|file)(=|$)/.test(unquote(arg))) ? positional : positional.slice(1);
+  switch (program) {
+    case 'rm':
+      if (/[rR]/.test(flags) || longs.has('--recursive')) mark(positional, 'write');
+      break;
+    case 'chmod':
+    case 'chown':
+    case 'chgrp':
+      if (flags.includes('R') || longs.has('--recursive')) mark(positional.slice(1), 'write');
+      break;
+    case 'mv':
+      mark(positional, 'write');
+      break;
+    case 'cp':
+    case 'scp':
+      if (/[rRa]/.test(flags) || longs.has('--recursive') || longs.has('--archive')) copy();
+      break;
+    case 'rsync':
+      copy();
+      break;
+    case 'find': {
+      const end = args.findIndex(arg => /^[-(!]/.test(unquote(arg)));
+      const paths = positional.filter(index => end === -1 || index < end);
+      if (!args.some(arg => (RUNS_A_PROGRAM.find as RegExp).test(unquote(arg)))) break;
+      mark(paths, 'write');
+      return { operands, cwd: paths.length === 0 ? 'write' : null };
+    }
+    case 'grep':
+    case 'egrep':
+    case 'fgrep':
+    case 'rgrep':
+    case 'rg': {
+      const recursive =
+        program === 'rg' ||
+        program === 'rgrep' ||
+        /[rR]/.test(flags) ||
+        longs.has('--recursive') ||
+        longs.has('--dereference-recursive');
+      if (!recursive) break;
+      const files = searched();
+      mark(files, 'read');
+      return { operands, cwd: files.length === 0 ? 'read' : null };
+    }
+    case 'tar':
+    case 'bsdtar':
+    case 'zip':
+      mark(positional, 'read');
+      break;
+  }
+  return { operands, cwd: null };
+}
+
+/** Options whose value is a folder or file, so an expansion there is an unread path. */
+const PATH_OPTIONS = new Set(['-C', '-d', '--directory', '--target-directory']);
+const PATH_OPTION_VALUE = /^(of|if|--directory|--target-directory)=/;
+
+/** Programs whose first operand, or `-e`'s value, is a pattern or a script rather than a path. */
+const PATTERN_FIRST: ReadonlyMap<string, { given: RegExp; values: RegExp }> = new Map([
+  ...['grep', 'egrep', 'fgrep', 'rgrep', 'rg'].map(
+    name => [name, { given: /^-[A-Za-z]*[ef]$|^--(regexp|file)(=|$)/, values: /^(-[A-Za-z]*e|--regexp)$/ }] as const
+  ),
+  ...['sed', 'gsed'].map(
+    name =>
+      [name, { given: /^-[A-Za-z]*[ef]$|^--(expression|file)(=|$)/, values: /^(-[A-Za-z]*e|--expression)$/ }] as const
+  ),
+  ...['awk', 'gawk', 'mawk', 'nawk'].map(
+    name =>
+      [
+        name,
+        { given: /^-[fE]$|^--(file|exec|source)(=|$)/, values: /^(-[eFv]|--source|--assign|--field-separator)$/ },
+      ] as const
+  ),
+]);
+
+/** Indices into `args` holding a pattern or script, which an expansion leaves no unread path in. */
+function patternWords(program: string, args: readonly string[]): Set<number> {
+  const shape = PATTERN_FIRST.get(program);
+  const words = new Set<number>();
+  if (!shape) return words;
+  for (const [index, arg] of args.entries()) if (shape.values.test(unquote(arg))) words.add(index + 1);
+  if (!args.some(arg => shape.given.test(unquote(arg)))) {
+    const first = args.findIndex((arg, index) => !unquote(arg).startsWith('-') && !words.has(index));
+    if (first !== -1) words.add(first);
+  }
+  return words;
+}
+
+/**
+ * Whether a sed script runs a program or reads or writes a file of its own (`e`, `r`, `w`, `s///w`,
+ * `s///e`). Anything it cannot parse counts too.
+ */
+export function sedScriptActs(script: string): boolean {
+  let at = 0;
+  const length = script.length;
+  const blanks = (): void => {
+    while (at < length && /[ \t]/.test(script[at] as string)) at++;
+  };
+  const until = (stops: RegExp): void => {
+    while (at < length && !stops.test(script[at] as string)) at++;
+  };
+  // Past the closing delimiter of a regex or replacement; false when there is none.
+  const delimited = (delimiter: string): boolean => {
+    for (; at < length; at++) {
+      if (script[at] === '\\') at++;
+      else if (script[at] === delimiter) {
+        at++;
+        return true;
+      }
+    }
+    return false;
+  };
+  const address = (): boolean => {
+    const char = script[at];
+    if (char !== undefined && /[\d$]/.test(char)) {
+      while (at < length && /[\d$~]/.test(script[at] as string)) at++;
+      return true;
+    }
+    if (char === '/' || char === '\\') {
+      const delimiter = char === '/' ? '/' : script[at + 1];
+      at += char === '/' ? 1 : 2;
+      if (delimiter === undefined || !delimited(delimiter)) return false;
+      while (at < length && /[IM]/.test(script[at] as string)) at++;
+    }
+    return true;
+  };
+  for (;;) {
+    while (at < length && /[\s;]/.test(script[at] as string)) at++;
+    if (at >= length) return false;
+    if (script[at] === '#') {
+      until(/\n/);
+      continue;
+    }
+    if (script[at] === '}') {
+      at++;
+      continue;
+    }
+    if (!address()) return true;
+    blanks();
+    if (script[at] === ',') {
+      at++;
+      blanks();
+      if (script[at] === '+' || script[at] === '~') {
+        at++;
+        while (at < length && /\d/.test(script[at] as string)) at++;
+      } else if (!address()) {
+        return true;
+      }
+    }
+    blanks();
+    while (script[at] === '!') {
+      at++;
+      blanks();
+    }
+    const command = script[at++];
+    if (command === undefined) return true;
+    if (command === '{') continue;
+    if (':btTv'.includes(command)) {
+      until(/[;\n]/);
+      continue;
+    }
+    if ('aic'.includes(command)) {
+      // Text to the end of the line, which a trailing backslash continues.
+      do until(/\n/);
+      while (script[at - 1] === '\\' && at++ < length);
+      continue;
+    }
+    if (command === 's' || command === 'y') {
+      const delimiter = script[at++];
+      if (delimiter === undefined || delimiter === '\\' || delimiter === '\n') return true;
+      if (!delimited(delimiter) || !delimited(delimiter)) return true;
+      while (command === 's' && at < length && /[gpiImM\dew]/.test(script[at] as string)) {
+        if (script[at] === 'e' || script[at] === 'w') return true;
+        at++;
+      }
+    } else if ('lLqQ'.includes(command)) {
+      blanks();
+      while (at < length && /\d/.test(script[at] as string)) at++;
+    } else if (!'=dDgGhHnNpPxzF'.includes(command)) {
+      return true;
+    }
+    blanks();
+    if (at < length && !/[;\n}#]/.test(script[at] as string)) return true;
+  }
+}
+
+/** Whether an awk program writes, pipes or reads a file or runs a program of its own. */
+export function awkProgramActs(program: string): boolean {
+  return /\bsystem\s*\(|\|\s*&?\s*getline|\bgetline\b[^;{}\n]*<|\bprintf?\b[^;{}\n]*[>|]|@(include|load)\b/.test(
+    program
+  );
+}
+
+/** A word's value when the scan can read it whole, else null. */
+function staticWord(raw: string): string | null {
+  const pieces = wordPieces(raw);
+  return pieces.every(piece => 'char' in piece)
+    ? pieces.map(piece => ('char' in piece ? piece.char : '')).join('')
+    : null;
+}
+
+/**
+ * Whether a sed or awk call runs a script the scan cannot vouch for: one that writes, reads or runs
+ * something itself, a script file, an expanded script, or `sed -s`.
+ */
+function runsOpaqueScript(program: string, args: readonly string[]): boolean {
+  const sed = program === 'sed' || program === 'gsed';
+  const awk = ['awk', 'gawk', 'mawk', 'nawk'].includes(program);
+  if (!sed && !awk) return false;
+  const scripts: string[] = [];
+  let given = false;
+  let positional = false;
+  for (let index = 0; index < args.length; index++) {
+    const arg = staticWord(args[index] as string);
+    // Before the script is known, an expanded word may be it.
+    if (arg === null) {
+      if (!given) return true;
+      continue;
+    }
+    const next = (): string | null => {
+      const value = args[++index];
+      return value === undefined ? null : staticWord(value);
+    };
+    if (arg === '--') {
+      positional = true;
+      continue;
+    }
+    if (!positional && arg.startsWith('--')) {
+      const [name = '', value] = arg.slice(2).split(/=(.*)/s);
+      if (sed && (name === 'file' || name === 'separate')) return true;
+      if (awk && ['file', 'exec', 'load'].includes(name)) return true;
+      if (awk && name === 'include' && (value ?? next()) !== 'inplace') return true;
+      if ((sed && name === 'expression') || (awk && name === 'source')) {
+        const script = value ?? next();
+        if (script === null) return true;
+        scripts.push(script);
+        given = true;
+      }
+      continue;
+    }
+    if (!positional && arg.length > 1 && arg.startsWith('-')) {
+      for (let at = 1; at < arg.length; at++) {
+        const letter = arg[at] as string;
+        const rest = arg.slice(at + 1);
+        if (sed && (letter === 'f' || letter === 's')) return true;
+        if (awk && 'fEl'.includes(letter)) return true;
+        if (sed && letter === 'i') break;
+        if (letter === 'e') {
+          const script = rest || next();
+          if (script === null) return true;
+          scripts.push(script);
+          given = true;
+          break;
+        }
+        if (awk && letter === 'i') {
+          if ((rest || next()) !== 'inplace') return true;
+          break;
+        }
+        if ((sed && letter === 'l') || (awk && 'Fv'.includes(letter))) {
+          if (!rest) index++;
+          break;
+        }
+      }
+      continue;
+    }
+    if (!given) {
+      scripts.push(arg);
+      given = true;
+    }
+  }
+  return scripts.some(script => (sed ? sedScriptActs(script) : awkProgramActs(script)));
 }
 
 /**
@@ -1741,6 +2365,12 @@ export async function scanShell(
     const commands: ShellCommand[] = [];
     const paths = new Set<string>([await realpathNearest(startDirectory)]);
     const globFolders = new Set<string>();
+    const dotlessGlobFolders = new Set<string>();
+    const dotGlob = MAY_SET_DOTGLOB.test(command);
+    // Links `ln -s` makes in this script, in guard form: the scan cannot follow one that does not exist yet.
+    const createdLinks = new Set<string>();
+    // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
+    const settingsBases = await Promise.all([startDirectory, ...roots].map(base => realpathNearest(base)));
     // Path operands (file commands, redirects, cd) a variable or substitution decides; their command is never coverable.
     let unreadOperands = 0;
     const directories = new Set<string>();
@@ -1761,6 +2391,59 @@ export async function scanShell(
       if (globPrefix(path) === path ? isEnvFile(path) : globMayMatchEnvFile(path)) envFiles.add(path);
     };
 
+    const scope = (): WordScope => {
+      const shellPath = (path: string): string => wslLocation(path)?.linuxPath ?? path;
+      return {
+        home,
+        cwd: shellPath(state.cwd),
+        previous: shellPath(state.previous),
+        homeUsed: () => {
+          if (!homeKnown) homeGuessed = true;
+        },
+      };
+    };
+
+    /**
+     * Records `folder` as reached whole, and a write there as reaching the settings of a session folder in it.
+     * `dotless` when only names without a leading dot are reached directly under it.
+     */
+    const reachFolder = async (folder: string, dotless: boolean, reach: Reach | null): Promise<void> => {
+      (dotless ? dotlessGlobFolders : globFolders).add(folder);
+      if (reach !== 'write') return;
+      const form = guardForm(folder);
+      for (const base of settingsBases) {
+        const settings = join(base, '.claude');
+        const target = guardForm(settings);
+        if (!guardFormWithin(form, target) || form === target) continue;
+        if (dotless && target.slice(form.length).replace(/^\/+/, '').startsWith('.')) continue;
+        paths.add(settings);
+      }
+      if (!dotless && (await lstat(join(folder, '.claude')).catch(() => null))) paths.add(join(folder, '.claude'));
+    };
+
+    /** Whether `operand` lies within a link this script made, whose target the scan cannot read. */
+    const underCreatedLink = (cwd: string, operand: string, reader: OperandReader): boolean =>
+      createdLinks.size > 0 &&
+      operandTargets(cwd, operand, reader).some(target =>
+        [...createdLinks].some(link => guardFormWithin(link, guardForm(target)))
+      );
+
+    /** One word's glob shape and the folder it reaches, moved up for each component that can walk up. */
+    const shapeOf = (
+      word: OperandWord,
+      operand: ReadOperand,
+      rules: { dirname: (path: string) => string },
+      windows: boolean
+    ): { shape: GlobShape | null; folder: string } => {
+      const shape =
+        operand.start === null || operand.unread
+          ? null
+          : globShape(word, operand.start, dotGlob, windows ? /[\\/]/ : /\//);
+      let folder = operand.path;
+      for (let up = 0; up < (shape?.up ?? 0); up++) folder = rules.dirname(folder);
+      return { shape, folder };
+    };
+
     /**
      * A `probe` only reads, so a toolchain folder it names is recorded as a path, not an outside folder to grant.
      * Returns where the command lands, which is what a `cd` moves to.
@@ -1769,19 +2452,49 @@ export async function scanShell(
       raw: string,
       cwd: string,
       probe = false,
-      reader: OperandReader = 'program'
+      reader: OperandReader = 'program',
+      reach: Reach | null = null
     ): Promise<string | null> => {
-      const written = singleQuoted(raw) ? raw.slice(1, -1) : expand(unquote(raw));
-      const [device, text] = reader === 'windows' ? windowsDevicePath(written) : ['', written];
+      if (reader === 'windows') {
+        const [device, text] = windowsDevicePath(raw);
+        return checkWord(literalWord(text), device, cwd, probe, reader, reach);
+      }
+      const words = operandWords(raw, scope());
+      if (words === null) {
+        unreadOperands++;
+        return null;
+      }
+      let landed: string | null = null;
+      for (const word of words) landed ??= await checkWord(word, '', cwd, probe, reader, reach);
+      return landed;
+    };
+
+    const checkWord = async (
+      word: OperandWord,
+      device: string,
+      cwd: string,
+      probe: boolean,
+      reader: OperandReader,
+      reach: Reach | null
+    ): Promise<string | null> => {
+      const { text } = word;
       if (text === '') return null;
       const rules = reader === 'windows' ? win32 : operandRules(cwd);
-      const operand = readOperand(raw, text, rules.dirname);
+      const operand = readOperand(word, rules.dirname);
       if (operand.unread) unreadOperands++;
-      const prefix = device + operand.path;
+      const { shape, folder } = shapeOf(word, operand, rules, reader === 'windows' || sep === '\\');
+      const prefix = device + folder;
+      if (underCreatedLink(cwd, prefix, reader)) unreadOperands++;
       const named = operand.start === null ? prefix : device + text.slice(0, operand.start);
       // A glob can expand to `..` (`~/.nvm*/../.ssh`, `~/.nvm/.?/.ssh`), so a dot after the glob never stays inside.
       const stays =
         operand.start === null || (!operand.unread && !text.slice(operand.start).includes('.') && !named.endsWith('.'));
+      const dotless = shape?.dotless === true;
+      const reached = async (place: string): Promise<void> => {
+        if (operand.start !== null) await reachFolder(place, dotless, reach);
+        else if (reach) await reachFolder(place, false, reach);
+        if (shape?.namesSettings) paths.add(join(place, '.claude'));
+      };
       const places = await operandPlaces(prefix, allowed, cwd, reader);
       let own = false;
       for (const { lexical, physical, inside } of places) {
@@ -1791,9 +2504,9 @@ export async function scanShell(
         } else if (inside && physical !== null) {
           paths.add(physical);
           if (operand.start === null) own = true;
-          else globFolders.add(physical);
+          await reached(physical);
         } else {
-          if (operand.start !== null) globFolders.add(lexical);
+          await reached(lexical);
           paths.add(lexical);
           // Named without a look, so the scan opens no connection to that computer.
           if (physical === null && onAnotherComputer(lexical)) {
@@ -1856,7 +2569,9 @@ export async function scanShell(
       const writes = writtenCommands.has(node.id) || hasWriteRedirect(node);
       const arithmetic = tokens.some(token => EVALUATES_ARITHMETIC.test(token));
       const opaque = opaqueForm(tokens);
-      const coverable = !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens);
+      const name = programName(unquote(wrapped ?? ''));
+      const coverable =
+        !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens) && !runsOpaqueScript(name, wrappedRest);
       // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
       // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
       const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
@@ -1906,13 +2621,17 @@ export async function scanShell(
       }
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
+      const trees = treeOperands(name, wrappedRest);
+      const wrapperWordCount = rest.length - wrappedRest.length;
+      const reachAt = (index: number): Reach | null => trees.operands.get(index - wrapperWordCount) ?? null;
       if (!TOUCHES_FILES.has(program)) {
         const here = wslLocation(state.cwd);
         const windowsProgram = here !== null && WINDOWS_PROGRAM.test(wordValue(wrapped ?? ''));
+        const patterns = patternWords(name, wrappedRest);
         // Programs outside the folder-discovery list can still name permission files (sed,
         // awk, dd, ...). Record static operands for the permission-file floor too, including
         // option values, without treating every ordinary argument as an outside folder grant.
-        for (const arg of rest) {
+        for (const [index, arg] of rest.entries()) {
           // A Windows program run through interop opens a Windows path where Windows would, so that place is
           // judged, for the word bash passes and for the part after an `=` in it.
           if (windowsProgram) {
@@ -1925,47 +2644,126 @@ export async function scanShell(
           }
           const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
           if (value.startsWith('-')) continue;
-          const text = singleQuoted(value) ? value.slice(1, -1) : expand(unquote(value));
-          if (text === '') continue;
-          // Not counted as unread: an argument here is often no path at all (`git commit -m "$(cat msg)"`).
-          // An expansion is judged by its folder only when a static path leads it (`src/$X`).
-          const operand = readOperand(value, text, operandRules(state.cwd).dirname);
-          if (operand.unread && !/[\\/]/.test(text.slice(0, operand.start ?? 0))) continue;
-          const prefix = operand.path;
-          const record = (physical: string): void => {
-            paths.add(physical);
-            if (operand.start !== null) globFolders.add(physical);
-          };
-          const targets = operandTargets(state.cwd, prefix);
-          const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
-          for (const target of unreachable) ungranted.add(target);
-          if (!here) {
-            if (unreachable.length === 0) {
-              const volume = [parse(targets[0] ?? prefix).root];
-              record(await resolveWithinRootsPhysically(prefix, volume, state.cwd));
-              const own = operand.start === null ? await ownPlaces(prefix, state.cwd, volume) : [];
-              for (const place of own) paths.add(place);
-            }
+          const reach = reachAt(index);
+          // An expansion is an unread path where a path is expected: an option's folder or file, a tree
+          // operand, or a word with a separator outside the expansion (`"$X"/f`, but not `"$PAT"`).
+          const option = PATH_OPTION_VALUE.test(wordValue(arg)) || PATH_OPTIONS.has(wordValue(rest[index - 1] ?? ''));
+          const pattern = patterns.has(index - wrapperWordCount);
+          const words = operandWords(value, scope());
+          if (words === null) {
+            if (option || reach || (!pattern && value.includes('/'))) unreadOperands++;
             continue;
           }
-          // A WSL folder's command reads its operands against its own distro. A Windows path or a granted other
-          // distro is not on that filesystem and is left unread; one that is and fails fails the scan.
-          const distro = [wslUncPath(here, '/')];
-          for (const { lexical, physical, inside } of await operandPlaces(prefix, distro, state.cwd)) {
-            if (wslLocation(lexical)?.distro.toLowerCase() !== here.distro.toLowerCase()) continue;
-            if (!inside || physical === null) throw new PathAccessDenied(prefix);
-            record(physical);
+          for (const word of words) {
+            const pathLike = option || reach !== null || (!pattern && /[\\/]/.test(word.text));
+            await checkArgument(word, reach, pathLike);
           }
-          if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) paths.add(place);
         }
       } else {
         const probe = READ_PROBES.has(program) && containedCommand(tokens);
-        for (const arg of rest) {
+        for (const [index, arg] of rest.entries()) {
           if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
-          await check(arg, state.cwd, probe);
+          await check(arg, state.cwd, probe, 'program', reachAt(index));
         }
       }
+      if (trees.cwd) await checkArgument(literalWord('.'), trees.cwd, true);
+      if (UNPACKS.has(name)) {
+        for (const tree of inPlace.trees) {
+          for (const word of operandWords(tree, scope()) ?? []) await checkArgument(word, 'write', true);
+        }
+      }
+      if (name === 'ln') await noteLinks(wrappedRest);
       if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original });
+    };
+
+    /**
+     * Records an argument of a program outside TOUCHES_FILES as a path it names, without offering its folder
+     * as a grant. An expansion that is not `pathLike` is taken for no path at all (`git commit -m "$(cat msg)"`).
+     */
+    const checkArgument = async (word: OperandWord, reach: Reach | null, pathLike: boolean): Promise<void> => {
+      if (word.text === '') return;
+      const rules = operandRules(state.cwd);
+      const operand = readOperand(word, rules.dirname);
+      if (operand.unread) {
+        if (!pathLike) return;
+        unreadOperands++;
+      }
+      const { shape, folder: prefix } = shapeOf(word, operand, rules, sep === '\\');
+      if (underCreatedLink(state.cwd, prefix, 'program')) unreadOperands++;
+      const record = async (physical: string): Promise<void> => {
+        paths.add(physical);
+        if (operand.start !== null) await reachFolder(physical, shape?.dotless === true, reach);
+        else if (reach) await reachFolder(physical, false, reach);
+        if (shape?.namesSettings) paths.add(join(physical, '.claude'));
+      };
+      const targets = operandTargets(state.cwd, prefix);
+      const unreachable = targets.filter(target => inUngrantedDistro(target, allowed));
+      for (const target of unreachable) ungranted.add(target);
+      const here = wslLocation(state.cwd);
+      if (!here) {
+        if (unreachable.length === 0) {
+          const volume = [parse(targets[0] ?? prefix).root];
+          await record(await resolveWithinRootsPhysically(prefix, volume, state.cwd));
+          const own = operand.start === null ? await ownPlaces(prefix, state.cwd, volume) : [];
+          for (const place of own) paths.add(place);
+        }
+        return;
+      }
+      // A WSL folder's command reads its operands against its own distro. A Windows path or a granted other
+      // distro is not on that filesystem and is left unread; one that is and fails fails the scan.
+      const distro = [wslUncPath(here, '/')];
+      for (const { lexical, physical, inside } of await operandPlaces(prefix, distro, state.cwd)) {
+        if (wslLocation(lexical)?.distro.toLowerCase() !== here.distro.toLowerCase()) continue;
+        if (!inside || physical === null) throw new PathAccessDenied(prefix);
+        await record(physical);
+      }
+      if (operand.start === null) for (const place of await ownPlaces(prefix, state.cwd, distro)) paths.add(place);
+    };
+
+    /**
+     * `ln -s TARGET LINK`: the target is read where the link will sit, and later operands under the link
+     * leave the command unread, as the scan cannot follow a link that does not exist yet.
+     */
+    const noteLinks = async (args: readonly string[]): Promise<void> => {
+      const flags = shortFlags(args);
+      if (!flags.includes('s') && !args.some(arg => unquote(arg) === '--symbolic')) return;
+      let directory: string | null = null;
+      const operands: string[] = [];
+      for (let index = 0; index < args.length; index++) {
+        const arg = unquote(args[index] as string);
+        if (arg === '-t' || arg === '-S') {
+          if (arg === '-t') directory = args[index + 1] ?? null;
+          index++;
+        } else if (arg.startsWith('--target-directory=')) {
+          directory = args[index].slice(args[index].indexOf('=') + 1);
+        } else if (!arg.startsWith('-')) {
+          operands.push(args[index] as string);
+        }
+      }
+      const single = directory === null && operands.length === 1;
+      const sources = directory !== null || single ? operands : operands.slice(0, -1);
+      const place = directory ?? (single ? '.' : operands.at(-1));
+      if (place === undefined) return;
+      const text = (raw: string): string | null => {
+        const [word] = operandWords(raw, scope()) ?? [];
+        return word && word.expandAt === null ? word.text : null;
+      };
+      const at = text(place);
+      if (at === null) return;
+      const location = operandTargets(state.cwd, at)[0];
+      if (location === undefined) return;
+      const rules = operandRules(state.cwd);
+      // `ln -s a b` makes `b`, or `b/a` when `b` is a folder; `-t` and a lone target make `<folder>/a`.
+      const named = directory === null && !single;
+      const inside = sources.flatMap(source => {
+        const name = text(source);
+        return name === null ? [] : [join(location, rules.basename(name))];
+      });
+      for (const source of sources) {
+        await check(source, location);
+        if (named) await check(source, dirname(location));
+      }
+      for (const link of named ? [location, ...inside] : inside) createdLinks.add(guardForm(link));
     };
 
     /** True when a glob or an expansion leaves the folder it moves to unknown. */
@@ -1979,11 +2777,14 @@ export async function scanShell(
         return false;
       }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
-      const unknown =
-        target !== undefined &&
-        target !== '-' &&
-        readOperand(target, expand(unquote(target)), operandRules(state.cwd).dirname).start !== null;
+      const words = target === undefined || target === '-' ? [] : operandWords(target, scope());
+      const unread = unreadOperands;
       const next = target === '-' ? state.previous : await check(target ?? '~', state.cwd, false, 'shell');
+      const unknown =
+        words === null ||
+        words.length > 1 ||
+        unreadOperands > unread ||
+        words.some(word => readOperand(word, operandRules(state.cwd).dirname).start !== null);
       if (next === null) return unknown;
       if (program === 'pushd') state.stack.push(state.cwd);
       state.previous = state.cwd;
@@ -2119,6 +2920,7 @@ export async function scanShell(
       commands,
       paths: [...paths],
       ...(globFolders.size > 0 ? { globFolders: [...globFolders] } : {}),
+      ...(dotlessGlobFolders.size > 0 ? { dotlessGlobFolders: [...dotlessGlobFolders] } : {}),
       directories: [...directories],
       ungranted: [...ungranted],
       envFiles: [...envFiles],

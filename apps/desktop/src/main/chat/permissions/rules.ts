@@ -269,6 +269,8 @@ export interface PermissionSubject {
     paths?: readonly string[];
     /** Folders a glob or an expanded operand reaches anything under: a protected folder within or below one is reached. */
     globFolders?: readonly string[];
+    /** As globFolders, but reached only through names without a leading dot directly under each. */
+    dotlessGlobFolders?: readonly string[];
     /** Paths in a WSL distro no root is in: no allow rule covers a call that names one. */
     ungranted?: readonly string[];
   };
@@ -449,6 +451,7 @@ export class PermissionRuleSet {
         return null;
       }
       if (subject.shell.globFolders?.some(folder => this.isProtectedFolder(folder))) return null;
+      if (subject.shell.dotlessGlobFolders?.some(folder => this.isProtectedFolder(folder, true))) return null;
       if (!directories.every(directory => this.coversFolder(directory))) return null;
       let first: CompiledRule | null = null;
       for (const command of commands) {
@@ -504,18 +507,31 @@ export class PermissionRuleSet {
     );
   }
 
-  /** Inside a protected folder, or above one: `cd ~ && cp x .claude/settings.json` reaches it from home. */
-  private isProtectedFolder(directory: string): boolean {
+  /**
+   * Inside a protected folder, or above one: `cd ~ && cp x .claude/settings.json` reaches it from home.
+   * `dotless` when only names without a leading dot are reached directly under `directory`.
+   */
+  private isProtectedFolder(directory: string, dotless = false): boolean {
     const all = spellings(directory);
     const roots = this.guardRoots;
     return (
       all === null ||
       all.some(spelling => {
         const form = guardForm(spelling);
-        return roots.some(root => guardFormWithin(root.form, form) || guardFormWithin(form, root.form));
+        return roots.some(root => folderReaches(form, root.form, dotless));
       })
     );
   }
+}
+
+/**
+ * Whether reaching everything under `folder` reaches `root`, both in guard form: `folder` is inside it or above
+ * it. `dotless` when the names directly under `folder` that are reached never start with a dot, as for `ls *`.
+ */
+export function folderReaches(folder: string, root: string, dotless = false): boolean {
+  if (guardFormWithin(root, folder)) return true;
+  if (!guardFormWithin(folder, root)) return false;
+  return !dotless || !root.slice(folder.length).replace(/^\/+/, '').startsWith('.');
 }
 
 /**
