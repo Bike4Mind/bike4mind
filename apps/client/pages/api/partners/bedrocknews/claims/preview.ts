@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { isGrantablePuzzleDate } from '@server/partners/bedrocknewsPuzzleDate';
 import { payableRungCredits, rungCredits } from '@server/partners/bedrocknewsPuzzleReward';
 import { answerClaim, withOwnBalance } from '@server/partners/bedrocknewsClaimRoute';
 import {
@@ -30,17 +31,19 @@ export default baseApi({ auth: 'jwtOnly' })
         if (!result) return { state: 'unavailable' };
         // Another account's payout would read as this user's own.
         if (b4mUserId !== user.id) return { state: 'claimed-elsewhere' };
-        return { state: 'redeemed', result: await withOwnBalance(result, user.id) };
+        return { state: 'redeemed', result: await withOwnBalance(result, user.id), account: user.email };
       }
 
       // Everything was paid through another ticket; show it as claimed rather than "Add 0 credits".
-      if (rungs.length === 0) return { state: 'redeemed', result: NOTHING_PAID };
+      if (rungs.length === 0) return { state: 'redeemed', result: NOTHING_PAID, account: user.email };
 
+      // The grant refuses rungs outside its date window, so they are worth nothing here either.
+      const grantable = rungs.filter(({ date }) => isGrantablePuzzleDate(date));
       const [credits, payable] = await Promise.all([
-        rungCredits(rungs.map(({ length, hard }) => ({ tier: length, hard }))),
+        rungCredits(grantable.map(({ length, hard }) => ({ tier: length, hard }))),
         payableRungCredits(
           user.id,
-          rungs.map(({ date, length, hard }) => ({ puzzleDate: date, tier: length, hard }))
+          grantable.map(({ date, length, hard }) => ({ puzzleDate: date, tier: length, hard }))
         ),
       ]);
       return { state: 'ready', credits, payable, rungs, account: user.email };

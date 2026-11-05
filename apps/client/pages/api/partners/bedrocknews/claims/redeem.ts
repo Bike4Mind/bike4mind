@@ -13,6 +13,6 @@ export default baseApi({ auth: 'jwtOnly' })
       const redeemed = await redeemTicket(ticket, user);
       if (!redeemed.ok) return failureState('redeem', redeemed.code);
       if (!isClaimResult(redeemed.result)) return malformedState('redeem');
-      return { state: 'done', result: await withOwnBalance(redeemed.result, user.id) };
+      return { state: 'done', result: await withOwnBalance(redeemed.result, user.id), account: user.email };
     })
   );

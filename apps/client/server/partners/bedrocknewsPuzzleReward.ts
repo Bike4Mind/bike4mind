@@ -10,6 +10,7 @@ import {
 import { creditService } from '@bike4mind/services';
 import { accountBlockReasons, type AccountStateFields } from '@bike4mind/services/userService/accountState';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { isGrantablePuzzleDate } from './bedrocknewsPuzzleDate';
 
 export const BEDROCKNEWS_PUZZLE_REASON = 'bedrocknews_puzzle_reward';
 export const BEDROCKNEWS_FIRST_SOLVE_REASON = 'bedrocknews_first_solve';
@@ -242,6 +243,7 @@ export async function payableRungCredits(
   const paidByDate = new Map<string, number>();
   let payable = 0;
   for (const { puzzleDate, tier, hard } of rungs) {
+    if (!isGrantablePuzzleDate(puzzleDate)) continue;
     const amount = rungAmount(setting(TIER_CREDITS_SETTING[tier]), multiplier, hard);
     if (amount <= 0) continue;
     const paid = await CreditTransaction.findOne({ transactionId: puzzleTransactionId(userId, puzzleDate, tier) })

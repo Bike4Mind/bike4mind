@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { isCalendarDate, PUZZLE_DATE_PATTERN } from './bedrocknewsPuzzleDate';
 import { PUZZLE_TIERS } from './bedrocknewsPuzzleReward';
 import { TICKET_STATUSES, type ClaimResult, type TicketPreview } from './bedrocknewsTickets';
 
@@ -9,9 +10,10 @@ type CommonState = {
 export type PreviewState =
   | CommonState
   | { state: 'ready'; credits: number; payable?: number; rungs: TicketPreview['rungs']; account: string }
-  | { state: 'redeemed'; result: ClaimResult };
+  | { state: 'redeemed'; result: ClaimResult; account: string };
 
-export type RedeemState = CommonState | { state: 'budget-spent' } | { state: 'done'; result: ClaimResult };
+export type RedeemState =
+  CommonState | { state: 'budget-spent' } | { state: 'done'; result: ClaimResult; account: string };
 
 type RouteState = { preview: PreviewState; redeem: RedeemState };
 type Route = keyof RouteState;
@@ -59,6 +61,14 @@ export const isTicketPreview = (value: unknown): value is TicketPreview =>
   isRecord(value) &&
   includes(TICKET_STATUSES, value.status) &&
   Array.isArray(value.rungs) &&
-  value.rungs.every(rung => isRecord(rung) && includes(PUZZLE_TIERS, rung.length) && typeof rung.hard === 'boolean') &&
+  value.rungs.every(
+    rung =>
+      isRecord(rung) &&
+      typeof rung.date === 'string' &&
+      PUZZLE_DATE_PATTERN.test(rung.date) &&
+      isCalendarDate(rung.date) &&
+      includes(PUZZLE_TIERS, rung.length) &&
+      typeof rung.hard === 'boolean'
+  ) &&
   (value.result === undefined || isClaimResult(value.result)) &&
   (value.b4mUserId === undefined || typeof value.b4mUserId === 'string');

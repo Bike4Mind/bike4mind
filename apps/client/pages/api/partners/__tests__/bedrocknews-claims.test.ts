@@ -89,12 +89,17 @@ describe('BedrockNews claim routes', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z'));
     warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
     dbUser(PAYABLE);
     mockRungCredits.mockResolvedValue(130);
     mockPayableRungCredits.mockResolvedValue(130);
   });
-  afterEach(() => warn.mockRestore());
+  afterEach(() => {
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
 
   it.each([
     ['preview', preview],
@@ -129,17 +134,21 @@ describe('BedrockNews claim routes', () => {
   });
 
   describe('preview', () => {
-    it.each([[{}], [{ status: 'open', rungs: 'nope' }], [{ status: 'open', rungs: [{ length: 4, hard: false }] }]])(
-      'is unavailable for the malformed body %j without a 500',
-      async body => {
-        mockPreview.mockResolvedValue({ ok: true, preview: body });
-        const res = await preview();
-        expect(res._getStatusCode()).toBe(200);
-        expect(res._getJSONData()).toEqual({ state: 'unavailable' });
-        expect(warn).toHaveBeenCalled();
-        expect(JSON.stringify(warn.mock.calls)).not.toContain(TICKET);
-      }
-    );
+    it.each([
+      [{}],
+      [{ status: 'open', rungs: 'nope' }],
+      [{ status: 'open', rungs: [{ length: 4, hard: false }] }],
+      [{ status: 'open', rungs: [{ length: 5, hard: false }] }],
+      [{ status: 'open', rungs: [{ date: '2026-13-45', length: 5, hard: false }] }],
+      [{ status: 'open', rungs: [{ date: 20261102, length: 5, hard: false }] }],
+    ])('is unavailable for the malformed body %j without a 500', async body => {
+      mockPreview.mockResolvedValue({ ok: true, preview: body });
+      const res = await preview();
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ state: 'unavailable' });
+      expect(warn).toHaveBeenCalled();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(TICKET);
+    });
 
     it('is ready with the priced rungs and the session user own email', async () => {
       mockPreview.mockResolvedValue({ ok: true, preview: { status: 'open', expiresAt: 'x', rungs: RUNGS } });
@@ -150,6 +159,24 @@ describe('BedrockNews claim routes', () => {
       expect(mockRungCredits).toHaveBeenCalledWith([
         { tier: 5, hard: false },
         { tier: 7, hard: true },
+      ]);
+    });
+
+    it('prices only the rungs inside the grant date window', async () => {
+      const stale = { date: '2026-09-01', length: 6, hard: false };
+      mockPreview.mockResolvedValue({
+        ok: true,
+        preview: { status: 'open', expiresAt: 'x', rungs: [...RUNGS, stale] },
+      });
+      const res = await preview();
+      expect(res._getJSONData()).toMatchObject({ state: 'ready', rungs: [...RUNGS, stale] });
+      expect(mockRungCredits).toHaveBeenCalledWith([
+        { tier: 5, hard: false },
+        { tier: 7, hard: true },
+      ]);
+      expect(mockPayableRungCredits).toHaveBeenCalledWith(SESSION_USER.id, [
+        { puzzleDate: '2026-11-02', tier: 5, hard: false },
+        { puzzleDate: '2026-11-01', tier: 7, hard: true },
       ]);
     });
 
@@ -168,6 +195,7 @@ describe('BedrockNews claim routes', () => {
       expect((await preview())._getJSONData()).toEqual({
         state: 'redeemed',
         result: { claimed: [], total: 0, balance: null, firstSolveCredits: 0, capped: 0 },
+        account: EMAIL,
       });
       expect(mockRungCredits).not.toHaveBeenCalled();
       expect(mockPayableRungCredits).not.toHaveBeenCalled();
@@ -190,7 +218,7 @@ describe('BedrockNews claim routes', () => {
           b4mUserId: SESSION_USER.id,
         },
       });
-      expect((await preview())._getJSONData()).toEqual({ state: 'redeemed', result: RESULT });
+      expect((await preview())._getJSONData()).toEqual({ state: 'redeemed', result: RESULT, account: EMAIL });
     });
 
     it.each([
@@ -250,7 +278,7 @@ describe('BedrockNews claim routes', () => {
     it('passes the session user id and the DB email, answering done', async () => {
       mockRedeem.mockResolvedValue({ ok: true, result: FOREIGN_RESULT });
       const res = await redeem();
-      expect(res._getJSONData()).toEqual({ state: 'done', result: RESULT });
+      expect(res._getJSONData()).toEqual({ state: 'done', result: RESULT, account: EMAIL });
       expect(mockRedeem).toHaveBeenCalledWith(TICKET, { id: SESSION_USER.id, email: EMAIL });
     });
 

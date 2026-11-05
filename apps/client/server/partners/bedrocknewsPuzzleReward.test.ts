@@ -410,6 +410,23 @@ describe('payableRungCredits', () => {
     await expect(payableRungCredits(USER_ID, [rung(DATE, 5), rung(DATE, 6)])).resolves.toBe(60);
   });
 
+  it('counts nothing for a rung outside the grant date window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-05T12:00:00Z'));
+    try {
+      await expect(
+        payableRungCredits(USER_ID, [
+          rung('2026-09-01', 5),
+          rung('2026-11-06', 5),
+          rung('2026-13-45', 5),
+          rung(DATE, 5),
+        ])
+      ).resolves.toBe(40);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('follows a lowered cap setting', async () => {
     givenSettings({ BedrockNewsPuzzleDailyCap: '30' });
 

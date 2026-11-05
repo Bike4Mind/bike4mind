@@ -73,6 +73,22 @@ describe('previewTicket', () => {
     expect(await previewTicket(TICKET)).toEqual({ ok: false, code: 'BEDROCKNEWS_UNAVAILABLE', status });
   });
 
+  it('warns once with the status only for an HTML 502 and still maps to unavailable', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    mockFetch.mockResolvedValue(new Response('<html>gateway secret-key</html>', { status: 502 }));
+    expect(await previewTicket(TICKET)).toEqual({ ok: false, code: 'BEDROCKNEWS_UNAVAILABLE', status: 502 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('[partners] bedrocknews ticket request rejected', {
+      status: 502,
+      code: 'BEDROCKNEWS_UNAVAILABLE',
+    });
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).not.toContain(TICKET);
+    expect(logged).not.toContain('secret');
+    expect(logged).not.toContain('gateway');
+    warn.mockRestore();
+  });
+
   it('answers NOT_CONFIGURED without a request when settings are empty', async () => {
     mockGetSettingsMap.mockResolvedValue({});
     expect(await previewTicket(TICKET)).toEqual({ ok: false, code: 'NOT_CONFIGURED', status: 503 });

@@ -44,7 +44,7 @@ interface ClaimResult {
 
 type ClaimState =
   | { state: 'ready'; credits: number; payable?: number; rungs: Rung[]; account: string }
-  | { state: 'done' | 'redeemed'; result: ClaimResult }
+  | { state: 'done' | 'redeemed'; result: ClaimResult; account?: string }
   | {
       state:
         'verify-email' | 'expired' | 'not-found' | 'in-progress' | 'claimed-elsewhere' | 'budget-spent' | 'unavailable';
@@ -465,7 +465,6 @@ const BedrockNewsClaimPage = () => {
   const [view, setView] = useState<View>(
     ticket ? { kind: 'loading' } : { kind: 'claim', claim: { state: 'not-found' } }
   );
-  const [account, setAccount] = useState<string>();
   const [confirming, setConfirming] = useState(false);
   const confirmingRef = useRef(false);
   const didPreview = useRef(false);
@@ -473,7 +472,6 @@ const BedrockNewsClaimPage = () => {
   const loadPreview = (claimTicket: string) => {
     setView({ kind: 'loading' });
     postClaim(PREVIEW_URL, claimTicket).then(claim => {
-      if (claim.state === 'ready') setAccount(claim.account);
       setView({ kind: 'claim', claim });
     });
   };
@@ -560,7 +558,7 @@ const BedrockNewsClaimPage = () => {
   if (claim.state === 'done' || claim.state === 'redeemed') {
     return (
       <ClaimShell logoUrl={logoUrl}>
-        <DoneView result={claim.result} account={account} backHref={backHref} />
+        <DoneView result={claim.result} account={claim.account} backHref={backHref} />
       </ClaimShell>
     );
   }

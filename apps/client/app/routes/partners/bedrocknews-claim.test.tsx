@@ -143,7 +143,7 @@ describe('BedrockNewsClaimPage', () => {
     expect(screen.getByTestId('claim-card')).toHaveAttribute('aria-busy', 'true');
     expect(mockPost).toHaveBeenLastCalledWith('/api/partners/bedrocknews/claims/redeem', { ticket: TICKET });
 
-    resolveRedeem({ data: { state: 'done', result: DONE } });
+    resolveRedeem({ data: { state: 'done', result: DONE, account: 'victor@example.com' } });
     const status = (await screen.findByText('150 credits added')).closest('[role="status"]') as HTMLElement;
     expect(within(status).getByText('to victor@example.com')).toBeInTheDocument();
     expect(screen.getByText('New balance')).toBeInTheDocument();
@@ -156,6 +156,16 @@ describe('BedrockNewsClaimPage', () => {
       `https://news.example/games/headword#claim=${TICKET}`
     );
     expect(screen.queryByRole('button', { name: /credits/ })).not.toBeInTheDocument();
+  });
+
+  it('names the account the redeem paid, not the one the preview showed', async () => {
+    mockPost
+      .mockResolvedValueOnce({ data: READY })
+      .mockResolvedValueOnce({ data: { state: 'done', result: DONE, account: 'other@example.com' } });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add 150 credits' }));
+    expect(await screen.findByText('to other@example.com')).toBeInTheDocument();
+    expect(screen.queryByText(/victor@example.com/)).not.toBeInTheDocument();
   });
 
   it('shows the amount actually paid, not the previewed one', async () => {
