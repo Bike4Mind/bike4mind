@@ -288,7 +288,8 @@ import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-ind
 import AllowGpt4oMiniTtsWhereTts1IsFree from './20260921238800_allow-gpt-4o-mini-tts-where-tts-1-is-free';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
-import EnsureBillingMismatchIndexes from './20260921239700_ensure-billing-mismatch-indexes';
+import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
+import EnsureBillingMismatchIndexes from './20260921239800_ensure-billing-mismatch-indexes';
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -504,6 +505,7 @@ const coreMigrations: MigrationFile[] = [
   AllowGpt4oMiniTtsWhereTts1IsFree,
   EnsureReferralInviterIndexes,
   EnsureHeldCreditRewardUserStatusIndex,
+  DropRetiredUnlockSettings,
   EnsureBillingMismatchIndexes,
   EnsureOverwatchUserDayInternalIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
