@@ -13,9 +13,15 @@ const mockId = vi.hoisted(() => ({ value: 'abc' }));
 vi.mock('@client/app/utils/invitesAPICalls', () => ({
   fetchInvite: vi.fn(),
 }));
+const inviteMutations = vi.hoisted(() => ({
+  accept: vi.fn(),
+  refuse: vi.fn(),
+  respond: vi.fn(),
+}));
 vi.mock('@client/app/hooks/data/invites', () => ({
-  useAcceptDocument: () => ({ mutateAsync: vi.fn() }),
-  useRefuseDocument: () => ({ mutateAsync: vi.fn() }),
+  useAcceptDocument: () => ({ mutateAsync: inviteMutations.accept }),
+  useRefuseDocument: () => ({ mutateAsync: inviteMutations.refuse }),
+  useRespondToInvites: () => ({ mutateAsync: inviteMutations.respond }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { username: 'me' } }),
@@ -44,6 +50,41 @@ describe('SharePage', () => {
   beforeEach(() => {
     vi.mocked(fetchInvite).mockReset();
     mockId.value = 'abc';
+    Object.values(inviteMutations).forEach(m => m.mockReset().mockResolvedValue(undefined));
+  });
+
+  it('accepts a multi-invite link with one bulk request and no per-invite calls', async () => {
+    mockId.value = 'a,b,c,d,e';
+    vi.mocked(fetchInvite).mockResolvedValue(loadedInvite);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText('Accept'));
+
+    await vi.waitFor(() => expect(inviteMutations.respond).toHaveBeenCalledTimes(1));
+    expect(inviteMutations.respond).toHaveBeenCalledWith({ action: 'accept', ids: ['a', 'b', 'c', 'd', 'e'] });
+    expect(inviteMutations.accept).not.toHaveBeenCalled();
+  });
+
+  it('refuses a multi-invite link with one bulk request', async () => {
+    mockId.value = 'a,b,c';
+    vi.mocked(fetchInvite).mockResolvedValue(loadedInvite);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText('Refuse'));
+
+    await vi.waitFor(() => expect(inviteMutations.respond).toHaveBeenCalledTimes(1));
+    expect(inviteMutations.respond).toHaveBeenCalledWith({ action: 'refuse', ids: ['a', 'b', 'c'] });
+    expect(inviteMutations.refuse).not.toHaveBeenCalled();
+  });
+
+  it('keeps a single invite on the single-invite accept call', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue(loadedInvite);
+    renderPage();
+
+    fireEvent.click(await screen.findByLabelText('Accept'));
+
+    await vi.waitFor(() => expect(inviteMutations.accept).toHaveBeenCalledWith('abc'));
+    expect(inviteMutations.respond).not.toHaveBeenCalled();
   });
 
   it('still renders Accept when one of several invites has expired', async () => {

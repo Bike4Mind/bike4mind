@@ -17,7 +17,7 @@ import {
 } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
-import { InviteType } from '@bike4mind/common';
+import { InviteType, MAX_BULK_ITEMS } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 
 function invalidateOrganizationInviteeSearch(queryClient: QueryClient, organizationId?: string) {
@@ -184,6 +184,46 @@ export function useRefuseDocument({
       toast.error('Failed to refuse shared document');
     },
     onSettled: () => onSettled(),
+  });
+}
+
+type BulkInviteResponse = {
+  results: { id: string; ok: boolean; type?: InviteType; error?: string }[];
+  okCount: number;
+};
+
+/** Accepts or refuses several invites with one POST /api/invites/bulk per MAX_BULK_ITEMS ids. */
+export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ action, ids }: { action: 'accept' | 'refuse'; ids: string[] }) => {
+      let okCount = 0;
+      for (let i = 0; i < ids.length; i += MAX_BULK_ITEMS) {
+        const { data } = await api.post<BulkInviteResponse>('/api/invites/bulk', {
+          action,
+          ids: ids.slice(i, i + MAX_BULK_ITEMS),
+        });
+        okCount += data.okCount;
+      }
+      return { action, okCount, total: ids.length };
+    },
+    onSuccess: ({ action, okCount, total }) => {
+      const verb = action === 'accept' ? 'accepted' : 'refused';
+      if (okCount === total) toast.success(`${total} document shares ${verb}`);
+      else if (okCount > 0) toast.warning(`${okCount} of ${total} document shares ${verb}`);
+      else toast.error(`Failed to ${action} the shared documents`);
+    },
+    onError: (error, { action }) => {
+      console.error(error);
+      let message = `Failed to ${action} the shared documents`;
+      if (isAxiosError(error)) message = error.response?.data?.error || error.response?.data?.message || message;
+      toast.error(message);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['invites', 'inbox'] });
+      onSettled?.();
+    },
   });
 }
 

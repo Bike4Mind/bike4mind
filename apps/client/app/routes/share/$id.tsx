@@ -1,4 +1,4 @@
-import { useAcceptDocument, useRefuseDocument } from '@client/app/hooks/data/invites';
+import { useAcceptDocument, useRefuseDocument, useRespondToInvites } from '@client/app/hooks/data/invites';
 import { fetchInvite } from '@client/app/utils/invitesAPICalls';
 import CheckIcon from '@mui/icons-material/Check';
 import HandymanOutlinedIcon from '@mui/icons-material/HandymanOutlined';
@@ -134,6 +134,8 @@ const SharePage = () => {
     isPublic: true,
   });
 
+  const respondToInvites = useRespondToInvites();
+
   const handleBulkAction = async (action: 'accept' | 'refuse') => {
     setLoading(true);
 
@@ -142,11 +144,17 @@ const SharePage = () => {
     );
 
     try {
-      await Promise.allSettled(
-        validInvites.map(item =>
-          action === 'accept' ? acceptInvite.mutateAsync(item.id) : refuseInvite.mutateAsync(item.id)
-        )
-      );
+      // Failures are toasted by the hooks; the page goes home either way, as it always has.
+      const respond = async () => {
+        if (validInvites.length > 1) {
+          return respondToInvites.mutateAsync({ action, ids: validInvites.map(item => item.id) });
+        }
+        if (validInvites.length === 1) {
+          const { id } = validInvites[0];
+          return action === 'accept' ? acceptInvite.mutateAsync(id) : refuseInvite.mutateAsync(id);
+        }
+      };
+      await Promise.allSettled([respond()]);
       goHome();
     } finally {
       setLoading(false);
