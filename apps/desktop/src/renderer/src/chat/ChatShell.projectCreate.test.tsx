@@ -41,6 +41,7 @@ const FIRST: ChatSessionSummary = {
   id: 'code-1',
   title: 'First',
   mode: 'code',
+  model: 'test-model',
   project: PROJECT,
   messageCount: 0,
   createdAt: '2026-10-01T00:00:00.000Z',

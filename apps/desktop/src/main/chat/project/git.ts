@@ -12,6 +12,21 @@ const execFileAsync = promisify(execFile);
 /** Long enough for a cold `git fetch` on a large repo, short enough not to hang the dialog. */
 const GIT_TIMEOUT_MS = 20_000;
 
+/**
+ * `git worktree add` checks out every file of the repository, which on a large one under load
+ * (a dependency install running beside it) takes far longer than GIT_TIMEOUT_MS. Only the calls
+ * that check out a whole tree take this; see resolveWorkspace.
+ */
+export const WORKTREE_ADD_TIMEOUT_MS = 5 * 60_000;
+
+/** A git error shown to a person or a model is one readable sentence, not a stderr dump. */
+const MAX_GIT_MESSAGE_CHARS = 300;
+
+export type GitOptions = {
+  /** Overrides GIT_TIMEOUT_MS for this one call. */
+  timeoutMs?: number;
+};
+
 const MAX_GIT_OUTPUT_BYTES = 4_000_000;
 
 /**
@@ -24,12 +39,32 @@ const MAX_GIT_OUTPUT_BYTES = 4_000_000;
 export class GitError extends Error {
   constructor(
     readonly args: readonly string[],
-    stderr: string
+    stderr: string,
+    /** Set when git was killed for running past its timeout, in ms. */
+    readonly timedOutAfterMs?: number
   ) {
-    super(readableGitMessage(stderr) || `git ${args.join(' ')} failed`);
+    super(gitFailureMessage(args, stderr, timedOutAfterMs));
     this.name = 'GitError';
   }
 }
+
+function gitFailureMessage(args: readonly string[], stderr: string, timedOutAfterMs?: number): string {
+  if (timedOutAfterMs !== undefined) {
+    return `git ${args.slice(0, 2).join(' ')} timed out after ${formatDuration(timedOutAfterMs)}.`;
+  }
+  return readableGitMessage(stderr) || `git ${args.join(' ')} failed`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 60_000 && ms % 60_000 === 0) return `${ms / 60_000} min`;
+  return ms < 1000 ? `${ms} ms` : `${Math.round(ms / 1000)} s`;
+}
+
+/**
+ * A line git redraws in place to show progress ("Updating files:  4% (616/15405)"). It carries no
+ * reason, and a killed checkout leaves hundreds of them in stderr.
+ */
+const PROGRESS_LINE = /^[A-Za-z][A-Za-z ]*:\s+\d{1,3}% \(\d+\/\d+\)/;
 
 /**
  * git's stderr as a sentence for the person reading the chip row: the `fatal:`/`error:` tags
@@ -37,17 +72,18 @@ export class GitError extends Error {
  * is not in. What git actually says is kept word for word.
  */
 export function readableGitMessage(stderr: string): string {
-  return stderr
-    .split('\n')
+  const message = stderr
+    .split(/\r\n|\r|\n/)
     .map(line => line.trim())
-    .filter(line => line && !/^hint:/i.test(line))
+    .filter(line => line && !/^hint:/i.test(line) && !PROGRESS_LINE.test(line))
     .map(line => line.replace(/^(fatal|error|warning):\s*/i, ''))
     .join(' ')
     .trim();
+  return message.length <= MAX_GIT_MESSAGE_CHARS ? message : `${message.slice(0, MAX_GIT_MESSAGE_CHARS - 3)}...`;
 }
 
-export function git(directory: string, args: readonly string[]): Promise<string> {
-  return runGit(directory, args, hostGitArgs(args, directory));
+export function git(directory: string, args: readonly string[], options: GitOptions = {}): Promise<string> {
+  return runGit(directory, args, hostGitArgs(args, directory), options);
 }
 
 /** A path git printed for `directory`, as this host reaches it: git in a WSL folder prints Linux paths. */
@@ -61,7 +97,12 @@ function gitNetwork(directory: string, args: readonly string[]): Promise<string>
   return hostNetworkGitArgs(args, directory).then(full => runGit(directory, args, full));
 }
 
-async function runGit(directory: string, args: readonly string[], fullArgs: readonly string[]): Promise<string> {
+async function runGit(
+  directory: string,
+  args: readonly string[],
+  fullArgs: readonly string[],
+  { timeoutMs = GIT_TIMEOUT_MS }: GitOptions = {}
+): Promise<string> {
   try {
     const command = await gitCommand(directory, fullArgs);
     if (!command) throw new Error('git is not installed');
@@ -69,14 +110,18 @@ async function runGit(directory: string, args: readonly string[], fullArgs: read
     const { stdout } = await execFileAsync(command.file, command.args, {
       cwd: command.cwd,
       env,
-      timeout: GIT_TIMEOUT_MS,
+      timeout: timeoutMs,
       windowsHide: true,
       maxBuffer: MAX_GIT_OUTPUT_BYTES,
     });
     return stdout;
   } catch (err) {
     const stderr = typeof (err as { stderr?: unknown }).stderr === 'string' ? (err as { stderr: string }).stderr : '';
-    throw new GitError(args, stderr || (err instanceof Error ? err.message : ''));
+    // execFile sets `killed` when it killed git itself: on the timeout, or on too much output.
+    const timedOut =
+      (err as { killed?: unknown }).killed === true &&
+      (err as { code?: unknown }).code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+    throw new GitError(args, stderr || (err instanceof Error ? err.message : ''), timedOut ? timeoutMs : undefined);
   }
 }
 
