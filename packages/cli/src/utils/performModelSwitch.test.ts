@@ -8,21 +8,32 @@ import {
 } from './performModelSwitch';
 
 describe('modelSavePatch', () => {
-  const DETECTED = 'http://127.0.0.1:11434';
-  const ollama = { id: 'qwen3.5', backend: ModelBackend.Ollama };
+  const HOST = 'http://127.0.0.1:11434';
+  const DETECTED = { host: HOST, modelIds: new Set(['qwen3.5', 'llama3.2']) };
+  const ollama = { id: 'qwen3.5' };
 
   it('saves the detected host and local default with a detected Ollama model', () => {
     expect(modelSavePatch(ollama, {}, DETECTED)).toEqual({
       defaultModel: 'qwen3.5',
-      ollamaHost: DETECTED,
+      ollamaHost: HOST,
       localDefaultModel: 'qwen3.5',
     });
   });
 
+  it('saves the local default again for a second pick once the detected host is saved', () => {
+    expect(modelSavePatch({ id: 'llama3.2' }, { ollamaHost: HOST }, DETECTED)).toEqual({
+      defaultModel: 'llama3.2',
+      ollamaHost: HOST,
+      localDefaultModel: 'llama3.2',
+    });
+  });
+
   it.each([
-    ['a hosted model', { id: 'claude-opus-4-8', backend: ModelBackend.Anthropic }, {}, DETECTED],
-    ['a saved model server model', { id: 'local:srv-a:qwen', backend: ModelBackend.Ollama }, {}, DETECTED],
-    ['a host that is already saved', ollama, { ollamaHost: 'box' }, DETECTED],
+    ['a hosted model', { id: 'claude-opus-4-8' }, {}, DETECTED],
+    ['a server model with an Ollama backend', { id: 'gpt-oss:20b', backend: ModelBackend.Ollama }, {}, DETECTED],
+    ['a prototype key', { id: 'constructor' }, {}, DETECTED],
+    ['a saved model server model', { id: 'local:srv-a:qwen' }, {}, DETECTED],
+    ['a different host that is already saved', ollama, { ollamaHost: 'box' }, DETECTED],
     ['no detected host', ollama, {}, null],
   ])('saves only the model for %s', (_name, picked, config, detected) => {
     expect(modelSavePatch(picked, config, detected)).toEqual({ defaultModel: picked.id });

@@ -82,8 +82,8 @@ export interface BuildLlmBackendResult {
   modelInfo: ModelInfo;
   /** Settles once every other saved model server has joined `llm` or been skipped. */
   later: Promise<void>;
-  /** The base URL of an Ollama that was found running with no host configured; null otherwise. */
-  detectedOllamaHost: string | null;
+  /** An Ollama found running with no host configured, with the ids it listed; null otherwise. */
+  detectedOllama: { host: string; modelIds: ReadonlySet<string> } | null;
 }
 
 /**
@@ -264,6 +264,7 @@ export interface LocalModelsAttachment {
   /** The Ollama host in use, or null when none is configured. */
   ollamaHost: string | null;
   ollamaModelCount: number;
+  ollamaModelIds: string[];
   /** Ollama's model listing failed or timed out, so its models are unknown. */
   ollamaListingFailed: boolean;
   /** `ollamaHost` was found by detection, not configured. */
@@ -529,6 +530,7 @@ export async function attachLocalModels(
   const summary = {
     ollamaHost,
     ollamaModelCount: ollamaModels.length,
+    ollamaModelIds: ollamaModels.map(m => m.id),
     ollamaListingFailed: ollama.error !== undefined,
     ollamaDetected: ollama.detected,
     servers: servers.owner ? [{ name: servers.owner.name, modelCount: servers.owner.models.length }] : [],
@@ -628,6 +630,9 @@ export async function buildLlmBackend(
     models,
     modelInfo,
     later,
-    detectedOllamaHost: attached.ollamaDetected ? attached.ollamaHost : null,
+    detectedOllama:
+      attached.ollamaDetected && attached.ollamaHost
+        ? { host: attached.ollamaHost, modelIds: new Set(attached.ollamaModelIds) }
+        : null,
   };
 }

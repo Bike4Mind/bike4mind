@@ -361,13 +361,16 @@ describe('buildLlmBackend, detecting a running Ollama', () => {
     expect(startupLog).toEqual([]);
   });
 
-  it('reports the detected host to the caller, and no host when it was configured', async () => {
+  it('reports the detected host and its model ids to the caller, and nothing when it was configured', async () => {
     const detected = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
-    expect((await buildLlmBackend(detecting(), detected.deps)).detectedOllamaHost).toBe(DETECTED);
+    expect((await buildLlmBackend(detecting(), detected.deps)).detectedOllama).toEqual({
+      host: DETECTED,
+      modelIds: new Set(['ollama1']),
+    });
 
     const flagged = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
     const res = await buildLlmBackend(detecting({ ollamaHost: 'http://flag-box:11434' }), flagged.deps);
-    expect(res.detectedOllamaHost).toBeNull();
+    expect(res.detectedOllama).toBeNull();
   });
 
   it('gives a detected host a short listing deadline instead of the saved-host one', async () => {
@@ -386,7 +389,7 @@ describe('buildLlmBackend, detecting a running Ollama', () => {
 
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(res.llm).toBe(serverBackend);
-    expect(res.detectedOllamaHost).toBeNull();
+    expect(res.detectedOllama).toBeNull();
     expect(startupLog).toEqual([]);
   });
 
@@ -401,7 +404,7 @@ describe('buildLlmBackend, detecting a running Ollama', () => {
     const res = await buildLlmBackend(detecting({ startupLog }), deps);
 
     expect(res.llm).toBe(serverBackend);
-    expect(res.detectedOllamaHost).toBeNull();
+    expect(res.detectedOllama).toBeNull();
     expect(startupLog).toEqual([]);
   });
 
