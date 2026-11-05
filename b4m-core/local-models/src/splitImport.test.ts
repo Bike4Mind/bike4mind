@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -445,6 +445,40 @@ describe('runSplitImport', () => {
     ).rejects.toThrow('aborted');
     expect(runtime.create).not.toHaveBeenCalled();
     expect(Math.max(...reported)).toBeLessThan(300);
+  });
+
+  it('removes its own staged copy when Ollama holds the part by the time the download returns', async () => {
+    const { hub, runtime } = fakes();
+    const dir = join(root, 'run');
+    const shared = `sha256:${hex('f')}`;
+    let sharedDone = false;
+    runtime.hasBlob.mockImplementation(async (digest: string) => digest === shared && sharedDone);
+    const download = hub.download.getMockImplementation();
+    hub.download.mockImplementation(async (file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+      const result = await download!(file, destination, opts);
+      if (file.sha256 === hex('f')) sharedDone = true;
+      return result;
+    });
+    let stagedAtCreate: string[] = [];
+    runtime.create.mockImplementationOnce(async () => {
+      stagedAtCreate = await readdir(dir);
+    });
+    await runSplitImport(plan(), { hub, runtime, dir });
+    expect(runtime.uploadBlob).not.toHaveBeenCalledWith(shared, expect.anything(), expect.anything());
+    expect(stagedAtCreate).toEqual([]);
+  });
+
+  it('leaves a staged file it did not download when Ollama already holds the part', async () => {
+    const { hub, runtime } = fakes({ present: [`sha256:${hex('f')}`] });
+    const dir = join(root, 'run');
+    let stagedAtCreate: string[] = [];
+    runtime.create.mockImplementationOnce(async () => {
+      stagedAtCreate = await readdir(dir);
+    });
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, `${hex('f')}.gguf`), 'other run');
+    await runSplitImport(plan(), { hub, runtime, dir, keep: () => new Set([`sha256:${hex('f')}`]) });
+    expect(stagedAtCreate).toEqual([`${hex('f')}.gguf`]);
   });
 
   it('stops waiting for a busy part when the run is aborted', async () => {

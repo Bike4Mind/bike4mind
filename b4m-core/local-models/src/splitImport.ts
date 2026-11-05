@@ -299,6 +299,7 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
     let held = await runtime.hasBlob(part.digest, { signal });
     const path = splitPartPath(dir, part);
     let uploaded = false;
+    let downloaded = false;
     try {
       for (let wait = BUSY_POLL_MIN_MS; !held; wait = Math.min(wait * 2, BUSY_POLL_MAX_MS)) {
         try {
@@ -306,6 +307,7 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
             signal,
             onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
           });
+          downloaded = true;
           break;
         } catch (error) {
           if (!(error instanceof ModelFileBusyError)) throw error;
@@ -325,8 +327,10 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
       }
     } catch (error) {
       if (signal?.aborted || !(await runtime.hasBlob(part.digest).catch(() => false))) throw error;
+      held = true;
     }
-    if (uploaded) await removeStaged(path);
+    // Only a copy this run finished downloading is its own to delete; otherwise it may be another import's staging.
+    if (uploaded || (downloaded && held)) await removeStaged(path);
     done += size;
     report(done);
   }
