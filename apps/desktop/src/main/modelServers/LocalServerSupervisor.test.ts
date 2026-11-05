@@ -141,7 +141,7 @@ describe('LocalServerSupervisor', () => {
 
 describe('hostLaunchers', () => {
   it('asks for a models folder before looking for llama-server, and runs the one entered', async () => {
-    const launchers = hostLaunchers({});
+    const launchers = hostLaunchers({ env: {} });
     expect(await launchers.program('llama-server', {})).toEqual({
       problem: 'Enter the folder of GGUF models for llama-server to serve.',
     });

@@ -104,6 +104,7 @@ import { captureHistoryPage } from './captureHistoryPage';
 import { forgetLocalContexts, forgetLocalContextOf, OllamaLocal } from './OllamaLocal';
 import { registerModelServersIpc } from '../modelServers/ipc';
 import { LocalModels, optionCatalogSampling, type CatalogSamplingHook } from '../modelServers/LocalModels';
+import { hostLaunchers } from '../modelServers/LocalServerSupervisor';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { readHostOllamaEnv } from '../modelServers/observedOllama';
@@ -520,6 +521,9 @@ export function registerChat(
     edited: () => models.forgetLocal(),
     listedLate: lateReload.notify,
     readOllamaEnv: url => readHostOllamaEnv(url),
+    launchers: hostLaunchers({
+      unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
+    }),
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();

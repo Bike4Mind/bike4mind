@@ -153,8 +153,25 @@ export class LocalServerSupervisor {
   }
 }
 
+/**
+ * On a GPU that shares system memory, lets ggml's CUDA and HIP backends allocate past the dedicated part instead of
+ * failing the load. B4M_DISABLE_GPU_SPILL=1 opts out; a GGML_CUDA_ENABLE_UNIFIED_MEMORY the user set wins.
+ */
+export function spillEnv(env: NodeJS.ProcessEnv, unifiedMemory: boolean): NodeJS.ProcessEnv {
+  if (!unifiedMemory || env.B4M_DISABLE_GPU_SPILL === '1' || env.GGML_CUDA_ENABLE_UNIFIED_MEMORY !== undefined) {
+    return env;
+  }
+  return { ...env, GGML_CUDA_ENABLE_UNIFIED_MEMORY: '1' };
+}
+
+export interface HostLauncherOptions {
+  env?: NodeJS.ProcessEnv;
+  /** Whether this computer's GPU uses system memory (HardwareProfile memoryKind 'unified'); false when unknown. */
+  unifiedMemory?(): Promise<boolean>;
+}
+
 /** Starts servers on this computer's own OS, finding programs on the user's login-shell PATH. */
-export function hostLaunchers(env: NodeJS.ProcessEnv = process.env): Launchers {
+export function hostLaunchers({ env = process.env, unifiedMemory }: HostLauncherOptions = {}): Launchers {
   return {
     async program(runtime, settings) {
       if (runtime === 'ollama') {
@@ -171,7 +188,8 @@ export function hostLaunchers(env: NodeJS.ProcessEnv = process.env): Launchers {
       return found ? { path: found } : { problem: 'Desktop could not find llama-server on PATH. Enter its full path.' };
     },
     async start(program, request, signal) {
-      const childEnv = { ...env, PATH: await resolveUserPath() };
+      const unified = (await unifiedMemory?.().catch(() => false)) ?? false;
+      const childEnv = spillEnv({ ...env, PATH: await resolveUserPath() }, unified);
       const flashAttention = request.settings.flashAttention;
       if (request.runtime === 'ollama') {
         return startOllamaServe({
