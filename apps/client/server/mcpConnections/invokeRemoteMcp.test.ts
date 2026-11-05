@@ -17,6 +17,7 @@ import {
   RemoteMcpTimeoutError,
   type RemoteMcpErrorCode,
 } from '@bike4mind/mcp/remote';
+import { createInProcessRemoteMcpRunner } from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
 // The c1 fixture server is test-only source, not part of the package's published surface.
 import {
   FIXTURE_RESOURCE_METADATA_URL,
@@ -89,6 +90,17 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { tryIncrementWithinLimitFixedWindow: tryIncrement },
 }));
 vi.mock('sst', () => ({ Resource: state.resource }));
+const lambda = vi.hoisted(() => ({
+  send: vi.fn<(command: { input: Record<string, unknown> }) => Promise<unknown>>(),
+}));
+vi.mock('@aws-sdk/client-lambda', () => ({
+  LambdaClient: class {
+    send = lambda.send;
+  },
+  InvokeCommand: class {
+    constructor(public input: Record<string, unknown>) {}
+  },
+}));
 vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({
   decryptToken: (value: string | null | undefined) => (value ? value.replace(/^enc:/, '') : null),
 }));
@@ -126,13 +138,8 @@ vi.mock('./customMcpAccess', async importOriginal => ({
   }),
 }));
 
-const {
-  CustomMcpPolicyBlockedError,
-  CustomMcpUnavailableError,
-  createInProcessRemoteMcpRunner,
-  invokeRemoteMcp,
-  resolveRemoteMcpRunner,
-} = await import('./invokeRemoteMcp');
+const { CustomMcpPolicyBlockedError, CustomMcpUnavailableError, invokeRemoteMcp, resolveRemoteMcpRunner } =
+  await import('./invokeRemoteMcp');
 const { recordCircuitBreakerRejection, recordCircuitBreakerTransition } =
   await import('@bike4mind/server-utils/utils/cloudwatch');
 
@@ -225,6 +232,7 @@ beforeEach(() => {
   for (const key of Object.keys(answers)) delete answers[key];
   for (const key of Object.keys(state.resource)) delete state.resource[key];
   vi.clearAllMocks();
+  lambda.send.mockReset();
   vi.spyOn(dns, 'lookup').mockImplementation(fakeLookup as unknown as typeof dns.lookup);
 });
 
@@ -1012,10 +1020,120 @@ describe('invokeRemoteMcp - checks before any network', () => {
 });
 
 describe('resolveRemoteMcpRunner', () => {
-  it('runs in-process when no remote handler is linked, and fails closed when one is', () => {
-    expect(typeof resolveRemoteMcpRunner()).toBe('function');
+  const lambdaReply = (body: unknown) => async () => ({ Payload: new TextEncoder().encode(JSON.stringify(body)) });
+  const listPayload = {
+    url: 'https://mcp.example.com/mcp',
+    transport: 'auto' as const,
+    headers: {},
+    action: 'listTools' as const,
+    network: { ownHosts: [] },
+  };
+
+  it('uses the Lambda when linked, even on self-host', async () => {
     state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
-    expect(() => resolveRemoteMcpRunner()).toThrow(/not implemented/);
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const run = { action: 'listTools', result: { tools: [], dropped: [], detectedTransport: 'streamable-http' } };
+    lambda.send.mockImplementationOnce(lambdaReply({ ok: true, run }));
+    await expect(resolveRemoteMcpRunner()(listPayload)).resolves.toEqual(run);
+    expect(lambda.send).toHaveBeenCalledTimes(1);
+    expect(lambda.send.mock.calls[0][0].input).toMatchObject({
+      FunctionName: 'remote-mcp-fn',
+      InvocationType: 'RequestResponse',
+    });
+  });
+
+  // An IP-literal URL is rejected before any network call, so the in-process runner answers
+  // invalid_url while a Lambda runner would have called lambda.send.
+  const expectInProcess = async () => {
+    const runner = resolveRemoteMcpRunner();
+    expect(runner).toBe(resolveRemoteMcpRunner());
+    await expect(runner({ ...listPayload, url: 'https://127.0.0.1/mcp' })).rejects.toMatchObject({
+      code: 'invalid_url',
+    });
+    expect(lambda.send).not.toHaveBeenCalled();
+  };
+
+  it('runs in-process when unlinked on self-host', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('NODE_ENV', 'production');
+    await expectInProcess();
+  });
+
+  it('runs in-process when unlinked in local development', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'true');
+    vi.stubEnv('NODE_ENV', 'production');
+    await expectInProcess();
+  });
+
+  it('runs in-process when unlinked under NODE_ENV=development', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'false');
+    vi.stubEnv('NODE_ENV', 'development');
+    await expectInProcess();
+  });
+
+  it.each(['production', 'test', '', undefined])(
+    'fails closed on a hosted runtime without the link (NODE_ENV=%j)',
+    env => {
+      vi.stubEnv('B4M_SELF_HOST', 'false');
+      vi.stubEnv('IS_LOCAL', 'false');
+      vi.stubEnv('NODE_ENV', env);
+      expect(() => resolveRemoteMcpRunner()).toThrow(/not linked/);
+    }
+  );
+
+  it('refuses an injected runner on a hosted runtime without the link', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'false');
+    vi.stubEnv('NODE_ENV', 'production');
+    const id = seed('/mcp');
+    await expect(
+      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() })
+    ).rejects.toThrow(/not linked/);
+    expect(fixture.requests).toHaveLength(0);
+  });
+
+  it('a failed invoke surfaces as an error and never runs in-process', async () => {
+    state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    lambda.send.mockRejectedValueOnce(new Error('ETIMEDOUT'));
+    const id = seed('/mcp');
+    await expect(
+      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { context: context() })
+    ).rejects.toThrow('Remote MCP handler invocation failed');
+    expect(lambda.send).toHaveBeenCalledTimes(1);
+    expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'internal_error' });
+  });
+
+  it('a typed auth_failed from the Lambda keeps its class and does not trip the breaker', async () => {
+    state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
+    const id = seed('/mcp');
+    const wire = { ok: false, error: { code: 'auth_failed', message: 'no', scope: 'tools.read' } };
+    for (let i = 0; i < 8; i++) {
+      lambda.send.mockImplementationOnce(lambdaReply(wire));
+      const error = await invokeRemoteMcp(
+        { action: 'listTools', connectionId: id, userId: 'user-1' },
+        { context: context() }
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(RemoteMcpAuthFailedError);
+      expect(error).toMatchObject({ scope: 'tools.read' });
+    }
+    expect(lambda.send).toHaveBeenCalledTimes(8);
+  });
+
+  it('a Lambda ssrf_blocked is still masked on hosted, with the real code audited', async () => {
+    state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };
+    const id = seed('/mcp');
+    lambda.send.mockImplementationOnce(
+      lambdaReply({ ok: false, error: { code: 'ssrf_blocked', message: 'resolves to 10.0.0.5' } })
+    );
+    const error = await invokeRemoteMcp(
+      { action: 'listTools', connectionId: id, userId: 'user-1' },
+      { context: context() }
+    ).catch((e: unknown) => e as RemoteMcpError);
+    expect(error).toMatchObject({ code: 'protocol', message: 'The server did not respond as an MCP server' });
+    expect(state.audits[0]).toMatchObject({ outcome: 'failure', errorCode: 'ssrf_blocked' });
   });
 });
 
