@@ -151,6 +151,20 @@ describe('startOllamaServe', () => {
     expect(await refused(server.port)).toBe(true);
   });
 
+  it('gives a child none of the inherited launch variables when the settings set none', async () => {
+    const record = join(root, 'record-unset.json');
+    const server = await start(
+      { settings: {} },
+      { FAKE_OLLAMA_RECORD: record, OLLAMA_FLASH_ATTENTION: '0', OLLAMA_KV_CACHE_TYPE: 'q4_0' }
+    );
+    try {
+      const seen = JSON.parse(await readFile(record, 'utf8')) as { env: Record<string, string> };
+      expect(seen.env).toEqual({ OLLAMA_HOST: `127.0.0.1:${server.port}` });
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('fails with portInUse when another server holds the port, never taking its answers as its own', async () => {
     const taken = await holder();
     try {
@@ -195,6 +209,27 @@ describe('startOllamaServe', () => {
     await new Promise(done => setTimeout(done, 300));
     controller.abort(reason);
     await expect(starting).rejects.toBe(reason);
+    const pid = Number(await readFile(pidFile, 'utf8'));
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it('stops the process when the start is aborted during its last readiness check', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled');
+    const pidFile = join(root, 'aborted-ready.pid');
+    const result = await start(
+      {
+        signal: controller.signal,
+        fetch: async (input, init) => {
+          const response = await fetch(input, init);
+          controller.abort(reason);
+          return response;
+        },
+      },
+      { FAKE_OLLAMA_PID_FILE: pidFile }
+    ).catch((caught: unknown) => caught);
+    if (result && typeof result === 'object' && 'stop' in result) await (result as { stop(): Promise<unknown> }).stop();
+    expect(result).toBe(reason);
     const pid = Number(await readFile(pidFile, 'utf8'));
     expect(() => process.kill(pid, 0)).toThrow();
   });

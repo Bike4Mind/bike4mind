@@ -285,6 +285,8 @@ export async function startOllamaServe(options: StartOllamaServeOptions): Promis
       if (listening && (await answers()) && !exit) break;
       await Promise.race([new Promise(done => setTimeout(done, POLL_MS).unref()), changed, aborted]);
     }
+    // An abort during the last readiness check must not hand back a running server.
+    options.signal?.throwIfAborted();
   } catch (error) {
     await stop();
     options.signal?.throwIfAborted();
