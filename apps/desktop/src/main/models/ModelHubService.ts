@@ -99,6 +99,7 @@ import {
   serverRuntimeId,
   specsRate,
   type ModelServerSpecs,
+  type QuantizedKvCacheType,
 } from '@shared/modelServers';
 import { draftTokensOf } from '../chat/loadOptions';
 import { chatContextTokens, type LocalModelFootprint } from '../chat/localContext';
@@ -644,11 +645,13 @@ interface Sizing {
   rating: 'probe' | 'entered';
   /** Whose memory `hardware` is, for the verdict's wording. */
   where: FitWhere;
+  /** The server's OLLAMA_KV_CACHE_TYPE as entered in Settings; absent is f16. */
+  kvCacheType?: QuantizedKvCacheType;
 }
 
 /** The num_ctx OllamaLocal would send this model with, so a badge rates the load chat makes. */
 function chatContext(
-  { chatHardware, setting }: Sizing,
+  { chatHardware, setting, kvCacheType }: Sizing,
   arch: LocalModelFootprint['arch'],
   weightsBytes: number,
   bounds: { modelLimit?: number; configured?: number; projectorBytes?: number; draftMax?: number }
@@ -656,7 +659,7 @@ function chatContext(
   const { projectorBytes, draftMax, ...limits } = bounds;
   return chatContextTokens({
     setting,
-    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware, draftMax },
+    footprint: { arch, weightsBytes, projectorBytes, hardware: chatHardware, draftMax, kvCacheType },
     ...limits,
   });
 }
@@ -673,6 +676,7 @@ function reviewedFit(entry: HubEntry, build: HubBuild, sizing: Sizing): ModelFit
   return fitFromArch(entry.arch, weightsBytes, sizing.hardware, context, {
     mmprojBytes,
     draftMax,
+    kvCacheType: sizing.kvCacheType,
     where: sizing.where,
     expertBytesPerLayer: build.tensorStats?.expertBytesPerLayer,
     activeParamsFraction: activeParamsFraction(entry.params),
@@ -739,16 +743,25 @@ export class ModelHubService {
       chatHardware: hardware,
       rating: specsRate(specs) ? 'entered' : 'probe',
       where: 'local',
+      kvCacheType: specs?.kvCacheType,
     };
   }
 
   /** Null for a saved server without entered hardware: its models are not rated. */
   async #sizing(target: Target): Promise<Sizing | null> {
     if (target.local) return this.#localSizing();
-    const hardware = serverHardware(this.#deps.specs?.(target.id) ?? null);
+    const specs = this.#deps.specs?.(target.id) ?? null;
+    const hardware = serverHardware(specs);
     // Chat sends a saved server the Auto floor whatever the Settings choice, having no measure of it.
     return hardware
-      ? { hardware, setting: AUTO_LOCAL_CONTEXT, chatHardware: null, rating: 'entered', where: 'server' }
+      ? {
+          hardware,
+          setting: AUTO_LOCAL_CONTEXT,
+          chatHardware: null,
+          rating: 'entered',
+          where: 'server',
+          kvCacheType: specs?.kvCacheType,
+        }
       : null;
   }
 
@@ -815,6 +828,7 @@ export class ModelHubService {
           mmprojBytes: projector,
           expertBytesPerLayer: inspection?.expertBytesPerLayer,
           draftMax,
+          kvCacheType: sizing.kvCacheType,
           where,
         })
       : fitFromSize(model.sizeBytes, hardware, context, { limitKnown: limit !== undefined, where });

@@ -363,6 +363,14 @@ describe('estimateFit', () => {
     expect(fit({ runtime: { kind: 'ollama', kv: Q8, flashAttn: 'off' } }).kv).toEqual(F16);
   });
 
+  it('labels a probed arch f16 on Ollama, since its probe is sized at f16', () => {
+    const probed = arch({
+      ...ARCH_64K,
+      kvProbe: { bytesPerToken: 1000, fixedBytes: 5000, source: 'llama-fit-params', runtime: 'b11889' },
+    });
+    expect(fit({ arch: probed, runtime: { kind: 'ollama', kv: Q8 } }).kv).toEqual(F16);
+  });
+
   it('keeps Ollama at its daemon KV type', () => {
     const r = fit({ hardware: mac(15), runtime: OLLAMA });
     expect(r).toMatchObject({ verdict: 'tight', reason: 'reduced-context', context: 32768, kv: F16 });

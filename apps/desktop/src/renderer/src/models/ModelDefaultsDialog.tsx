@@ -607,7 +607,7 @@ function LoadOptionRows({
   disabled: boolean;
 }) {
   const offered = offer.context;
-  if (!offered && !offer.draft && !offer.keepAlive) return null;
+  if (!offered && !offer.draft && !offer.keepAlive && !offer.kvCache) return null;
   const options = offered ? contextOptions(offered) : [];
   const sent = contextSent(offer, context);
   const reloads =
@@ -739,6 +739,21 @@ function LoadOptionRows({
               </Option>
             ))}
           </Select>
+        </OptionRow>
+      )}
+      {offer.kvCache && (
+        <OptionRow
+          label="KV cache"
+          testId="model-defaults-kv-cache"
+          note={
+            offer.kvCache.type === 'f16'
+              ? "Ollama's default. Set for the whole server with OLLAMA_KV_CACHE_TYPE; enter another type under Settings, Model servers, Hardware so memory ratings use it."
+              : 'Set for the whole server with OLLAMA_KV_CACHE_TYPE, as entered under Settings, Model servers, Hardware.'
+          }
+        >
+          <Typography level="body-sm" sx={{ flexShrink: 0 }} data-testid="model-defaults-kv-cache-value">
+            {offer.kvCache.type}
+          </Typography>
         </OptionRow>
       )}
     </>

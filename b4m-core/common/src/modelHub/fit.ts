@@ -405,7 +405,8 @@ function kvCandidates(runtime: FitRuntime, arch: ModelArch): KvPair[] {
   const fixed = runtime.kv && runtime.kv !== 'auto' ? runtime.kv : undefined;
   const faOff = runtime.flashAttn === 'off';
   // Ollama quietly keeps an f16 cache when flash attention is off.
-  if (runtime.kind === 'ollama') return [fixed && !faOff ? fixed : F16];
+  // A probed arch sizes its cache as measured at f16, so the plan is labeled f16 too.
+  if (runtime.kind === 'ollama') return [fixed && !faOff && !arch.kvProbe ? fixed : F16];
   // A fixed quantized V needs flash attention 'on'; under 'auto' a backend without it rejects the cache at load.
   if (fixed) return [fixed.v === 'f16' || runtime.flashAttn === 'on' ? fixed : F16];
   if (faOff || arch.kvProbe) return [F16];

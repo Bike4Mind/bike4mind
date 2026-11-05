@@ -108,6 +108,16 @@ describe('localContextSizing', () => {
     expect(sized.cachedFootprint(qwen)).toMatchObject({ hardware: null, weightsBytes: 397_821_000 });
   });
 
+  it('sizes with the KV cache type entered at the time of each read', async () => {
+    let entered: 'q8_0' | undefined = 'q8_0';
+    const sized = sizing({ kvCacheType: () => entered });
+    expect((await sized.footprint(qwen)).kvCacheType).toBe('q8_0');
+    expect(sized.kvCacheType?.()).toBe('q8_0');
+    entered = undefined;
+    expect(sized.cachedFootprint(qwen).kvCacheType).toBeUndefined();
+    expect((await sizing().footprint(qwen)).kvCacheType).toBeUndefined();
+  });
+
   it('backs off after a failed inspection instead of asking on every refresh', async () => {
     let clock = 0;
     const showVerbose = vi.fn().mockRejectedValueOnce(new Error('timeout')).mockResolvedValue(verbose);

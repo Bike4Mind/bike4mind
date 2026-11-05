@@ -36,6 +36,13 @@ describe('specsInput', () => {
     expect(specsInput(null)).toBeNull();
     expect(specsInput('64')).toBeNull();
   });
+
+  it('keeps a quantized KV cache type and drops any other', () => {
+    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    expect(specsInput({ ...blank, kvCacheType: 'q4_0' })).toEqual({ ...blank, kvCacheType: 'q4_0' });
+    expect(specsInput({ ...blank, kvCacheType: 'f16' })).toEqual(blank);
+    expect(specsInput({ ...blank, kvCacheType: 'q8_0; rm' })).toEqual(blank);
+  });
 });
 
 describe('registerModelServersIpc transport', () => {

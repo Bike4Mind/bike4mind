@@ -11,6 +11,7 @@ import {
   type ModelContextSetting,
 } from '@shared/localContextSetting';
 import { MAX_DRAFT_TOKENS, type ModelLoadOffer, type ModelLoadSettings } from '@shared/modelSettings';
+import type { QuantizedKvCacheType } from '@shared/modelServers';
 import type { CompletionMessage, CompletionRequest } from './completions';
 import { configuredNumCtx, positiveTokenCount } from './localChatContext';
 import { draftFactsOf, draftTokensOf, ollamaDraft, ollamaLoadFields } from './loadOptions';
@@ -211,6 +212,8 @@ export interface LocalContextSizing {
   cachedFootprint(facts: LocalModelFacts): LocalModelFootprint;
   /** After the Settings choice changes: read every model's shape again. */
   forget?(): void;
+  /** The daemon's OLLAMA_KV_CACHE_TYPE as entered in Settings; undefined is f16. */
+  kvCacheType?(): QuantizedKvCacheType | undefined;
 }
 
 type Inspection = z.infer<typeof showSchema>;
@@ -240,6 +243,8 @@ export interface RemoteOllama {
   hasCredentials(): boolean;
   /** Removes the server's credential from text it sent, such as an error inside a streamed reply. */
   redact: (text: string, response: Response) => string;
+  /** The server's OLLAMA_KV_CACHE_TYPE as entered in Settings; undefined is f16. */
+  kvCacheType?(): QuantizedKvCacheType | undefined;
 }
 
 export class OllamaLocal {
@@ -565,8 +570,10 @@ export class OllamaLocal {
   /** The load-time options this model takes, each size rated for `draftTokens` (undefined: the model's own). */
   async loadOffer(modelId: string, draftTokens?: number): Promise<ModelLoadOffer> {
     const name = ollamaModelName(modelId, this.runtimeId);
+    const entered = this.server ? this.server.kvCacheType?.() : this.sizing?.kvCacheType?.();
+    const kvCache: ModelLoadOffer['kvCache'] = { type: entered ?? 'f16' };
     const inspection = await this.chatInspection(name);
-    if (!inspection) return { keepAlive: true };
+    if (!inspection) return { keepAlive: true, kvCache };
     const facts = draftFactsOf(inspection);
     const draft = ollamaDraft(facts);
     const footprint = await this.footprint(name, inspection, draftTokens === undefined ? {} : { draftTokens });
@@ -597,6 +604,7 @@ export class OllamaLocal {
       },
       ...(draft ? { draft: { modelDefault: draft.modelDefault, max: MAX_DRAFT_TOKENS } } : {}),
       keepAlive: true,
+      kvCache,
     };
   }
 
