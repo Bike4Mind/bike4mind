@@ -95,7 +95,7 @@ export const USERS_BULK_ACTION_COPY: Record<AdminUsersBulkActionType, BulkAction
     label: 'Contain',
     confirmLabel: count => `Contain ${count}`,
     description:
-      'Suspends them, removes any positive credit balance and revokes their API keys, together for each user. A negative balance (credits owed) is kept as it is.',
+      'Suspends them, cancels their Stripe subscriptions, removes any positive credit balance and revokes their API keys, together for each user. A negative balance (credits owed) is kept as it is.',
     done: 'Contained',
     tone: 'danger',
     reasonPresets: ADMIN_REASON_PRESETS.bulkAbuseResponse,

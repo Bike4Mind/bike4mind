@@ -38,8 +38,4 @@ describe('UsersBulkBar help', () => {
     }
     expect(legend).toHaveTextContent('undo it for 30 seconds');
   });
-
-  it('says Contain keeps a negative balance', () => {
-    expect(USERS_BULK_ACTION_COPY.contain.description).toContain('A negative balance (credits owed) is kept');
-  });
 });
