@@ -1928,7 +1928,9 @@ export async function scanShell(
           const text = singleQuoted(value) ? value.slice(1, -1) : expand(unquote(value));
           if (text === '') continue;
           // Not counted as unread: an argument here is often no path at all (`git commit -m "$(cat msg)"`).
+          // An expansion is judged by its folder only when a static path leads it (`src/$X`).
           const operand = readOperand(value, text, operandRules(state.cwd).dirname);
+          if (operand.unread && !/[\\/]/.test(text.slice(0, operand.start ?? 0))) continue;
           const prefix = operand.path;
           const record = (physical: string): void => {
             paths.add(physical);

@@ -521,6 +521,31 @@ describe('PermissionRuleSet', () => {
       expect(await decideScript(script, join(directory, 'src'))).toBeNull();
     });
 
+    describe('from a project that holds a protected .claude folder', () => {
+      const fromProject = async (script: string): Promise<string | null> => {
+        const project = join(directory, 'project');
+        await mkdir(join(project, '.claude'), { recursive: true });
+        await mkdir(join(project, 'src'));
+        const scan = await scanShell(script, project, [directory]);
+        if (!scan) throw new Error(`Expected ${script} to parse`);
+        return decide(set({ allow: [...allow, 'Bash(grep:*)'] }, [join(project, '.claude')]), {
+          tool: 'bash_execute',
+          shell: { script, ...scan },
+        });
+      };
+
+      it.each(['echo "$X"', 'git commit -m "$(cat msg)"', 'grep "$PAT" src'])(
+        'still allows %s by its prefix rule',
+        async script => {
+          expect(await fromProject(script)).toBe('allow');
+        }
+      );
+
+      it.each(['rm "$X"', 'cat < "$X"', 'ls *'])('asks for %s', async script => {
+        expect(await fromProject(script)).toBeNull();
+      });
+    });
+
     it.each(['git commit -m "$(cat msg)"', 'echo "$X"', 'echo hi'])(
       'still allows %s, whose expanded argument names no path, by its prefix rule',
       async script => {
