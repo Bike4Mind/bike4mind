@@ -64,10 +64,12 @@ import {
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal, type LoadSettingsReader } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { ProcessProbe } from './adoptedServers';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
-import { loopbackPortFree } from './loopbackPort';
+import { loopbackLaunchPort, loopbackPortFree } from './loopbackPort';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
@@ -166,6 +168,10 @@ export interface ModelServerRegistryDeps {
   readOllamaEnv?(url: string): Promise<OllamaEnvironment | null>;
   /** Whether Desktop could start a server on 127.0.0.1:port now; defaults to trying to bind it (loopbackPortFree). */
   portFree?(port: number): Promise<boolean>;
+  /** Where the servers Desktop runs are listed, so a launch after a crash takes them back; none without it. */
+  ownedServers?: StoreFile;
+  /** For taking those back; defaults to this computer's (hostProcessProbe). */
+  processes?: ProcessProbe;
 }
 
 /** Where Desktop can start a server for a saved address, and what it runs there. */
@@ -180,6 +186,8 @@ interface LaunchTarget {
 }
 
 interface LaunchState {
+  /** At the last check, something held the loopback port without answering there. */
+  portHeld: boolean;
   /** Read from an Ollama Desktop did not start; null when unreadable. */
   observed: Record<string, string> | null;
   observedAt: number;
@@ -220,6 +228,8 @@ export class ModelServerRegistry {
       launchers: deps.launchers,
       logger: deps.logger,
       changed: id => this.launchChanged(id),
+      records: deps.ownedServers,
+      processes: deps.processes,
     });
   }
 
@@ -277,13 +287,17 @@ export class ModelServerRegistry {
 
   /**
    * The OLLAMA_KV_CACHE_TYPE the Ollama at `id` runs with, which fit sizes its cache with; undefined is f16. Known for
-   * one Desktop started, and for another on this computer whose settings could be read.
+   * one Desktop started, for another on this computer whose settings could be read, and as entered under Hardware for
+   * a remote or SSH one.
    */
   kvCacheType(id: string): QuantizedKvCacheType | undefined {
     const owned = this.supervisor.owned(id);
     if (owned) return owned.runtime === 'ollama' ? owned.settings.kvCacheType : undefined;
+    const owner = this.ownerOf(id);
+    if (owner === 'remote')
+      return this.launchTarget(id)?.runtime === 'ollama' ? this.specs(id)?.kvCacheType : undefined;
     const observed = this.launchStates.get(id)?.observed;
-    return observed && this.ownerOf(id) === 'other' ? observedKvCacheType(observed) : undefined;
+    return observed && owner === 'other' ? observedKvCacheType(observed) : undefined;
   }
 
   localKvCacheType(): QuantizedKvCacheType | undefined {
@@ -311,7 +325,13 @@ export class ModelServerRegistry {
     const owner = this.ownerOf(id);
     if (target.port === null || owner === 'remote') throw new Error(launchRefusal(owner, nounOf(target)));
     if (owner === 'desktop') throw new Error(`Desktop already runs this ${nounOf(target)}.`);
-    if (owner === 'other') throw new Error(`Something already answers at 127.0.0.1:${target.port}. Stop it first.`);
+    if (owner === 'other') {
+      throw new Error(
+        this.launchStates.get(id)?.portHeld
+          ? portHeldMessage(target.port)
+          : `Something already answers at 127.0.0.1:${target.port}. Stop it first.`
+      );
+    }
     const settings = this.launchSettings(id);
     const problem = launchSettingsProblem(settings, target.runtime);
     if (problem) throw new Error(problem);
@@ -880,8 +900,8 @@ export class ModelServerRegistry {
     const target = this.launchTarget(id);
     if (!target || target.port === null) return 'remote';
     if (this.supervisor.owned(id) || this.supervisor.busy(id)) return 'desktop';
-    const { state } = target.health;
-    return state === 'online' || state === 'credentials' || state === 'refused' ? 'other' : 'none';
+    if (answers(target.health)) return 'other';
+    return this.launchStates.get(id)?.portHeld ? 'other' : 'none';
   }
 
   private launchTarget(id: string): LaunchTarget | null {
@@ -925,7 +945,12 @@ export class ModelServerRegistry {
       settings,
       pendingRestart: !!owned && !sameLaunch(owned.settings, settings),
       canStart: owner === 'none' && target.health.state === 'unreachable' && !settingsProblem,
-      problem: owner === 'remote' ? null : (this.supervisor.problem(id) ?? settingsProblem),
+      problem:
+        owner === 'remote'
+          ? null
+          : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
+            ? portHeldMessage(target.port)
+            : (this.supervisor.problem(id) ?? settingsProblem),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
@@ -954,6 +979,10 @@ export class ModelServerRegistry {
     const target = this.launchTarget(id);
     if (!target) return;
     const state = this.launchState(id);
+    const unanswered =
+      target.port !== null && !answers(target.health) && !this.supervisor.owned(id) && !this.supervisor.busy(id);
+    // As probe decides launchable: a listener that never answers still holds the port.
+    state.portHeld = unanswered && !(await (this.deps.portFree ?? loopbackPortFree)(target.port as number));
     const owner = this.ownerOf(id);
     if (target.runtime !== 'ollama' || owner === 'remote') state.lastObserved = null;
     if (target.runtime !== 'ollama' || owner !== 'other') {
@@ -977,6 +1006,7 @@ export class ModelServerRegistry {
     let state = this.launchStates.get(id);
     if (!state) {
       state = {
+        portHeld: false,
         observed: null,
         observedAt: 0,
         observedVersion: null,
@@ -1189,15 +1219,22 @@ export class ModelServerRegistry {
   }
 
   private load(): Promise<void> {
-    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()]).then(([records, specs]) => {
-      for (const record of records) {
-        if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
-          this.entries.set(record.id, this.build(record));
+    this.loaded ??= Promise.all([this.deps.store.list(), this.deps.store.localSpecs()])
+      .then(([records, specs]) => {
+        for (const record of records) {
+          if (record.transport.type === 'ssh' || parseServerAddress(record.transport.baseUrl)) {
+            this.entries.set(record.id, this.build(record));
+          }
         }
-      }
-      this.localSpecs = specs;
-      if (specs) this.deps.localSpecsChanged?.();
-    });
+        this.localSpecs = specs;
+        if (specs) this.deps.localSpecsChanged?.();
+      })
+      .then(() =>
+        this.supervisor.adopt(record => {
+          const target = this.launchTarget(record.id);
+          return target?.port === record.port && target.runtime === record.runtime;
+        })
+      );
     return this.loaded;
   }
 
@@ -1237,13 +1274,8 @@ const LOCAL_OLLAMA_PORT = new URL(LOCAL_OLLAMA_URL).port;
 const LOOPBACK_NAMES = new Set(['127.0.0.1', 'localhost', '::1', '0.0.0.0', '::', '::ffff:7f00:1']);
 
 /** The hosts a server Desktop starts answers on: it binds 127.0.0.1 only. */
-const LAUNCH_HOSTS = new Set(['127.0.0.1', 'localhost']);
-
-/** The port Desktop would start a server on for this address; null when it is not plain http on this computer. */
 function launchPort(parsed: ParsedAddress): number | null {
-  const url = new URL(parsed.baseUrl);
-  if (url.protocol !== 'http:' || !LAUNCH_HOSTS.has(url.hostname.toLowerCase()) || !url.port) return null;
-  return ['', '/', '/v1', '/v1/'].includes(url.pathname) ? Number(url.port) : null;
+  return loopbackLaunchPort(parsed.baseUrl);
 }
 
 function sizingKey(kv: QuantizedKvCacheType | undefined, flash: FlashAttention | undefined): string {
@@ -1263,6 +1295,14 @@ function nounOf(target: Pick<LaunchTarget, 'runtime' | 'product'>): string {
 
 function launchRefusal(owner: LaunchOwner, noun: string): string {
   return launchLockedMessage({ owner, noun }) ?? `Desktop is not running this ${noun}.`;
+}
+
+function answers(health: ModelServerHealth): boolean {
+  return health.state === 'online' || health.state === 'credentials' || health.state === 'refused';
+}
+
+function portHeldMessage(port: number): string {
+  return `Another program is using 127.0.0.1:${port} but does not answer there. Stop it, then check again.`;
 }
 
 /** The port "This computer" already uses: saving it again would list the same Ollama twice. */

@@ -3,6 +3,7 @@ import type { FetchLike, OllamaEnvironment } from '@bike4mind/local-models';
 import type { ServerEndpoint } from '@bike4mind/local-models/servers';
 import { launchLockedMessage } from '@shared/modelServers';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { ProcessProbe } from './adoptedServers';
 import type { LaunchRequest, Launchers, ServerHandle } from './LocalServerSupervisor';
 import { LOCAL_OLLAMA_URL, ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
@@ -45,6 +46,8 @@ function setup(
   options: {
     readOllamaEnv?: (url: string) => Promise<OllamaEnvironment | null>;
     portFree?: (port: number) => Promise<boolean>;
+    ownedServers?: StoreFile;
+    processes?: ProcessProbe;
   } = {}
 ) {
   const up = new Set<string>();
@@ -127,6 +130,8 @@ function setup(
     changed,
     readOllamaEnv: options.readOllamaEnv,
     portFree: options.portFree ?? (async port => !up.has(`http://127.0.0.1:${port}`)),
+    ownedServers: options.ownedServers,
+    processes: options.processes,
   });
   const saved = vi.fn();
   registry.onServerSaved(saved);
@@ -448,6 +453,80 @@ describe('ModelServerRegistry launching servers', () => {
     expect(handles.map(handle => handle.running)).toEqual([false, true]);
     await registry.stopLocalServers();
     expect(handles[1].running).toBe(false);
+  });
+
+  it('takes back the Ollama it started before Desktop exited without stopping it, with its launch settings', async () => {
+    const record = {
+      id: 'local',
+      runtime: 'ollama',
+      pid: 777,
+      startTime: '1700000000:42',
+      port: 11434,
+      startedAt: '2026-11-04T00:00:00.000Z',
+      settings: { kvCacheType: 'q8_0' },
+    };
+    const ownedServers = memoryFile();
+    await ownedServers.write(JSON.stringify({ version: 1, servers: [record] }));
+    const live = new Map([[777, record.startTime]]);
+    const signal = vi.fn((pid: number) => {
+      live.delete(pid);
+      up.delete(LOCAL_OLLAMA_URL);
+    });
+    const processes: ProcessProbe = {
+      startTime: async pid => live.get(pid) ?? null,
+      listening: async () => true,
+      signal,
+    };
+    const { registry, up, launchers } = setup({ ownedServers, processes });
+    up.add(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    expect((await local(registry)).launch).toMatchObject({
+      owner: 'desktop',
+      pendingRestart: true,
+      sizingKvCacheType: 'q8_0',
+      sizingFlashAttention: 'on',
+    });
+    expect(registry.localKvCacheType()).toBe('q8_0');
+
+    const [stopped] = await registry.stopServer('local');
+    expect(signal).toHaveBeenCalledWith(777, 'SIGTERM');
+    expect(stopped.launch).toMatchObject({ owner: 'none', canStart: true });
+    expect(JSON.parse((await ownedServers.read())!).servers).toEqual([]);
+    expect(launchers.start).not.toHaveBeenCalled();
+  });
+
+  it('sizes a remote Ollama with the KV cache type entered under Hardware', async () => {
+    const { registry, up } = setup();
+    up.add('http://192.168.1.20:11434');
+    const [, added] = await registry.add({
+      address: 'http://192.168.1.20:11434',
+      credential: none,
+      name: 'gpu box',
+      kind: 'ollama',
+      access: 'chat',
+    });
+    expect(registry.kvCacheType(added.id)).toBeUndefined();
+    const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false, kvCacheType: 'q8_0' as const };
+    const [, updated] = await registry.update(added.id, { specs });
+    expect(updated.specs).toEqual(specs);
+    expect(updated.launch).toMatchObject({ owner: 'remote', sizingKvCacheType: 'q8_0' });
+    expect(registry.kvCacheType(added.id)).toBe('q8_0');
+    const chat = registry.chatFor(`srv-${added.id}`)!;
+    expect((await chat.loadOffer!(`local:srv-${added.id}:qwen2.5:0.5b`)).kvCache).toEqual({ type: 'q8_0' });
+  });
+
+  it('counts a loopback port held by something that does not answer as in use, and offers no Start', async () => {
+    let held = true;
+    const { registry, launchers } = setup({ portFree: async () => !held });
+    await registry.check('local');
+    const message = 'Another program is using 127.0.0.1:11434 but does not answer there. Stop it, then check again.';
+    expect((await local(registry)).launch).toMatchObject({ owner: 'other', canStart: false, problem: message });
+    await expect(registry.startServer('local')).rejects.toThrow(message);
+    expect(launchers.start).not.toHaveBeenCalled();
+
+    held = false;
+    await registry.check('local');
+    expect((await local(registry)).launch).toMatchObject({ owner: 'none', canStart: true, problem: null });
   });
 
   it('refuses settings Desktop could not start with', async () => {

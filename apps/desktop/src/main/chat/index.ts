@@ -525,6 +525,7 @@ export function registerChat(
     launchers: hostLaunchers({
       unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
     }),
+    ownedServers: privateFile(join(userData, 'local-servers.json')),
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();

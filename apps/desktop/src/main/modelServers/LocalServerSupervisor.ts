@@ -1,6 +1,17 @@
 import { findOllamaBinary, LlamaServerRuntime, startOllamaServe } from '@bike4mind/local-models';
 import type { LaunchRuntime, ModelServerLaunchSettings } from '@shared/modelServers';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
 import { findOnPath, resolveUserPath } from '../chat/tools/userPath';
+import {
+  adoptedHandle,
+  hostProcessProbe,
+  readOwnedRecords,
+  sameStartTime,
+  writeOwnedRecords,
+  type AdoptedTiming,
+  type OwnedRecord,
+  type ProcessProbe,
+} from './adoptedServers';
 
 /** A server process Desktop started: `ollama serve`, or a llama-server router. */
 export interface ServerHandle {
@@ -47,21 +58,67 @@ export interface LocalServerSupervisorDeps {
   logger: { warn(message: string): void };
   /** A server Desktop started exited without being stopped, or one changed between starting, running and stopping. */
   changed(id: string): void;
+  /** Lists the servers Desktop runs while they run, for `adopt`; without it nothing is listed or adopted. */
+  records?: StoreFile;
+  /** Defaults to this computer's (hostProcessProbe). */
+  processes?: ProcessProbe;
+  adoptedTiming?: AdoptedTiming;
 }
 
 const NOUN: Record<LaunchRuntime, string> = { ollama: 'Ollama', 'llama-server': 'llama-server' };
 
 /**
- * The model servers Desktop runs on this computer, by saved server id: at most one per id, each known by its child
- * process and port. Nothing here adopts a server it did not start.
+ * The model servers Desktop runs on this computer, by saved server id: at most one per id, each known by its process
+ * and port. The only servers it did not start in this run that it takes as its own are ones `adopt` finds it started
+ * in an earlier one.
  */
 export class LocalServerSupervisor {
   private readonly slots = new Map<string, Slot>();
   private readonly problems = new Map<string, string>();
   private readonly launchers: Launchers;
+  private readonly processes: ProcessProbe;
+  private readonly records = new Map<string, OwnedRecord>();
+  private writing: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: LocalServerSupervisorDeps) {
     this.launchers = deps.launchers ?? hostLaunchers();
+    this.processes = deps.processes ?? hostProcessProbe();
+  }
+
+  /**
+   * Takes back the servers an earlier run listed and did not stop, when `accepts` still wants each one: only a process
+   * with the recorded pid and start time that still listens on the recorded port. Drops every other record.
+   */
+  async adopt(accepts: (record: OwnedRecord) => boolean): Promise<void> {
+    const file = this.deps.records;
+    if (!file) return;
+    let found: OwnedRecord[];
+    try {
+      found = readOwnedRecords(await file.read());
+    } catch (error) {
+      this.deps.logger.warn(`MODEL SERVERS: could not read the servers Desktop ran: ${String(error)}`);
+      return;
+    }
+    for (const record of found) {
+      if (this.slots.has(record.id) || !accepts(record) || !(await this.stillRuns(record))) continue;
+      const handle = adoptedHandle(record, this.processes, this.deps.adoptedTiming);
+      const slot: Slot = {
+        request: { runtime: record.runtime, port: record.port, settings: record.settings },
+        busy: null,
+        handle,
+        starting: null,
+      };
+      this.slots.set(record.id, slot);
+      this.records.set(record.id, record);
+      this.watch(record.id, slot, handle);
+    }
+    if (this.records.size !== found.length) await this.persist();
+  }
+
+  private async stillRuns(record: OwnedRecord): Promise<boolean> {
+    const startTime = await this.processes.startTime(record.pid).catch(() => null);
+    if (!sameStartTime(startTime, record.startTime)) return false;
+    return this.processes.listening(record.port).catch(() => false);
   }
 
   owned(id: string): OwnedServer | null {
@@ -106,19 +163,13 @@ export class LocalServerSupervisor {
       const found = await this.launchers.program(request.runtime, request.settings);
       if ('problem' in found) throw new Error(found.problem);
       const handle = await this.launchers.start(found.path, request, controller.signal);
+      if (controller.signal.aborted) {
+        await handle.stop();
+        throw controller.signal.reason;
+      }
       slot.handle = handle;
-      void handle.exited.then(exit => {
-        if (this.slots.get(id) !== slot) return;
-        this.slots.delete(id);
-        if (!exit.stopped) {
-          const how = exit.signal ? `signal ${exit.signal}` : `code ${exit.code}`;
-          const last = handle.log().at(-1)?.trim();
-          const problem = `${NOUN[request.runtime]} stopped (${how})${last ? `: ${last.slice(0, 300)}` : '.'}`;
-          this.problems.set(id, problem);
-          this.deps.logger.warn(`MODEL SERVERS: ${problem}`);
-        }
-        this.deps.changed(id);
-      });
+      this.watch(id, slot, handle);
+      await this.remember(id, slot, handle);
     } catch (error) {
       if (this.slots.get(id) === slot) this.slots.delete(id);
       const message = error instanceof Error ? error.message : String(error);
@@ -143,8 +194,61 @@ export class LocalServerSupervisor {
       await slot.handle.stop();
     } finally {
       if (this.slots.get(id) === slot) this.slots.delete(id);
+      await this.forget(id);
       this.deps.changed(id);
     }
+  }
+
+  private watch(id: string, slot: Slot, handle: ServerHandle): void {
+    void handle.exited.then(exit => {
+      if (this.slots.get(id) !== slot) return;
+      this.slots.delete(id);
+      void this.forget(id);
+      if (!exit.stopped) {
+        const how = exit.signal ? ` (signal ${exit.signal})` : exit.code === null ? '' : ` (code ${exit.code})`;
+        const last = handle.log().at(-1)?.trim();
+        const problem = `${NOUN[slot.request.runtime]} stopped${how}${last ? `: ${last.slice(0, 300)}` : '.'}`;
+        this.problems.set(id, problem);
+        this.deps.logger.warn(`MODEL SERVERS: ${problem}`);
+      }
+      this.deps.changed(id);
+    });
+  }
+
+  /** Lists a server this run started, for `adopt`; one whose start time cannot be read is never adopted, so not listed. */
+  private async remember(id: string, slot: Slot, handle: ServerHandle): Promise<void> {
+    if (!this.deps.records) return;
+    const startTime = await this.processes.startTime(handle.pid).catch(() => null);
+    if (!startTime || this.slots.get(id) !== slot || !handle.running) return;
+    const { runtime, port, settings } = slot.request;
+    this.records.set(id, {
+      id,
+      runtime,
+      pid: handle.pid,
+      startTime,
+      port,
+      startedAt: new Date().toISOString(),
+      settings,
+      ...(handle.apiKey ? { apiKey: handle.apiKey } : {}),
+    });
+    await this.persist();
+  }
+
+  private forget(id: string): Promise<void> {
+    return this.records.delete(id) ? this.persist() : Promise.resolve();
+  }
+
+  /** Writes in call order, each with the list as it stood when called. */
+  private persist(): Promise<void> {
+    const file = this.deps.records;
+    if (!file) return Promise.resolve();
+    const contents = writeOwnedRecords([...this.records.values()]);
+    this.writing = this.writing
+      .then(() => file.write(contents))
+      .catch(error =>
+        this.deps.logger.warn(`MODEL SERVERS: could not list the servers Desktop runs: ${String(error)}`)
+      );
+    return this.writing;
   }
 
   /** Every server Desktop runs, before quitting. Children it misses die with the process (see processTree). */
