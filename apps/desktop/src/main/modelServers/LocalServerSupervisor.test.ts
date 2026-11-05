@@ -293,11 +293,12 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
       { ...RECORD, id: 'b', pid: 5555, port: 11501 },
     ];
     const file = memoryFile(JSON.stringify({ version: 1, servers: records }));
-    const { instance } = adopter(file, processes({ 4321: RECORD.startTime, 5555: RECORD.startTime }).probe);
+    const { instance, warn } = adopter(file, processes({ 4321: RECORD.startTime, 5555: RECORD.startTime }).probe);
     await instance.adopt(() => true);
     expect(instance.owned('a')).toBeNull();
     expect(instance.owned('b')).not.toBeNull();
     expect(listed(file).map((record: { id: string }) => record.id)).toEqual(['b']);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('1 of 2 servers Desktop ran could not be read back'));
 
     const keyless = memoryFile(JSON.stringify({ version: 1, servers: [{ ...ROUTER, apiKey: 'k-zz' }] }));
     const other = adopter(keyless, processes({ 4321: RECORD.startTime }).probe);

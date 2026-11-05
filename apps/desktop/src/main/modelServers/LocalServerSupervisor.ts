@@ -118,6 +118,11 @@ export class LocalServerSupervisor {
       this.deps.logger.warn(`MODEL SERVERS: could not read the servers Desktop ran: ${String(error)}`);
       return;
     }
+    if (found.length < listedCount) {
+      this.deps.logger.warn(
+        `MODEL SERVERS: ${listedCount - found.length} of ${listedCount} servers Desktop ran could not be read back (malformed, or a key the keychain no longer opens), so Desktop will not take them back`
+      );
+    }
     const firstOfId = found.filter((record, at) => found.findIndex(other => other.id === record.id) === at);
     const candidates = firstOfId.filter(record => !this.slots.has(record.id) && accepts(record));
     let reset = false;

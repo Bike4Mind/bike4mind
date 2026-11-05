@@ -1065,6 +1065,8 @@ export class ModelServerRegistry {
 
   /** A server Desktop runs started, stopped or exited. */
   private launchChanged(id: string): void {
+    // A start aborted by remove() still settles here, after its server is gone.
+    if (!this.launchTarget(id)) return;
     this.sizingChanged(id);
     if (this.supervisor.busy(id)) this.emit();
     else void this.check(id).catch(() => undefined);
