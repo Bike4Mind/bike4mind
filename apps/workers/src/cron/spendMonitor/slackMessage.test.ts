@@ -100,21 +100,32 @@ describe('buildSpendAlertMessage', () => {
     expect(out).not.toContain('credits (~');
   });
 
-  it('shows top accounts for platform rules and source mix for account rules', () => {
+  it('shows top accounts for platform rules only, and the source mix for both', () => {
     const breakdown = {
       topModels: [{ model: 'gpt-x', credits: 1200 }],
       topAccounts: [{ label: 'big@example.com', credits: 3000 }],
-      sources: { api: 5000, chat: 1000 },
+      sources: { cli: 1000, desktop: 5000 },
     };
     const platform = json(
       build({ alert: { ...baseAlert, rule: 'platform_spike', scopeType: 'platform', scopeId: 'all' }, breakdown })
     );
     expect(platform).toContain('big@example.com: 3,000');
-    expect(platform).not.toContain('Source mix');
+    expect(platform).toContain('Where it was spent (credits)');
     const account = json(build({ breakdown }));
-    expect(account).toContain('api: 5,000');
+    // Largest source first.
+    expect(account).toContain('desktop: 5,000\\ncli: 1,000');
     expect(account).toContain('gpt-x: 1,200');
     expect(account).not.toContain('Top accounts');
+  });
+
+  it('marks a trusted account on the scope line, the context and the resolve', () => {
+    const trustedAlert = { ...baseAlert, context: { ...baseAlert.context, trusted: true } };
+    const out = json(build({ alert: trustedAlert }));
+    expect(out).toContain('jane@example.com (trusted)');
+    expect(out).toContain('trusted-account limits');
+    const resolved = json(build({ kind: 'resolve', alert: { ...trustedAlert, resolvedAt: openedAt } }));
+    expect(resolved).toContain('jane@example.com (trusted), peak');
+    expect(json(build())).not.toContain('trusted');
   });
 
   it('renders a short resolve message with peak and duration', () => {
