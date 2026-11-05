@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   CuratedCatalogV3Schema,
+  curatedV2Content,
   curatedV2FromV3,
   estimateFit,
   hubLicenseLabel,
@@ -66,7 +67,9 @@ describe('the curated v3 list', () => {
 
   it('records the bundled v2 content hash under the current v2 sequence', () => {
     const channel = strict().v2Channel;
-    const sha = createHash('sha256').update(JSON.stringify(bundled)).digest('hex');
+    const sha = createHash('sha256')
+      .update(JSON.stringify(curatedV2Content(bundled as never)))
+      .digest('hex');
     expect(channel?.contentSha256[String(channel.sequence)]).toBe(sha);
     expect(bundled.sequence).toBe(channel?.sequence);
   });

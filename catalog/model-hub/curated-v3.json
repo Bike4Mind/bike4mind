@@ -245,15 +245,21 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16", "draftNumPredict": 0 },
-              "evidenceRunId": "ann:p2:Q08:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16", "draftNumPredict": 0, "numBatch": 1024 },
+              "evidenceRunId": "p2:Q08:best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 139.77, "codeDecodeTokS": 128.89, "prefill16kTokS": 16389.35, "gpuMiB": 1832 }
+              "metrics": {
+                "decodeTokS": 139.77,
+                "codeDecodeTokS": 128.89,
+                "prefill16kTokS": 16389.35,
+                "gpuPeakMiB": 2629
+              },
+              "note": "Noisy run; 1-minute host load 3.3 before, 9.0 after."
             }
           ]
         }
@@ -342,15 +348,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "numBatch": 1024 },
               "evidenceRunId": "p2:Q4B:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 43.59, "prefill16kTokS": 3669.9, "gpuMiB": 5229 }
+              "metrics": { "decodeTokS": 43.59, "prefill16kTokS": 3669.9, "gpuPeakMiB": 5229 }
             }
           ]
         }
@@ -439,15 +445,16 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "numBatch": 1024 },
               "evidenceRunId": "p2:S3:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 36.8, "prefill16kTokS": 2560.35, "gpuMiB": 7727 }
+              "metrics": { "decodeTokS": 36.8, "prefill16kTokS": 2560.35, "gpuPeakMiB": 7727 },
+              "note": "Noisy run; 1-minute host load 8.2 before, 10.0 after."
             }
           ]
         }
@@ -536,15 +543,16 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16" },
-              "evidenceRunId": "ann:p2:GE4B:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16", "numBatch": 1024 },
+              "evidenceRunId": "p2:GE4B:best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 50.87, "codeDecodeTokS": 49.31, "prefill16kTokS": 3971, "gpuMiB": 4922 }
+              "metrics": { "decodeTokS": 50.87, "codeDecodeTokS": 49.31, "prefill16kTokS": 3971, "gpuPeakMiB": 5779 },
+              "note": "Noisy run; 1-minute host load 3.3 before, 3.7 after."
             }
           ]
         }
@@ -633,15 +641,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16" },
-              "evidenceRunId": "ann:p2:G12B:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16", "numBatch": 1024 },
+              "evidenceRunId": "p2:G12B:best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 25.37, "codeDecodeTokS": 24.38, "prefill16kTokS": 1559.1, "gpuMiB": 8620 }
+              "metrics": { "decodeTokS": 25.37, "codeDecodeTokS": 24.38, "prefill16kTokS": 1559.1, "gpuPeakMiB": 9423 }
             }
           ]
         }
@@ -731,16 +739,16 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16" },
-              "evidenceRunId": "ann:p2:K3:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16", "numBatch": 1024 },
+              "evidenceRunId": "p2:K3:clean-0949",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 63.3, "codeDecodeTokS": 69.12, "prefill16kTokS": 1953.4, "gpuMiB": 16619 },
-              "note": "Measured with a host load average near 55."
+              "metrics": { "decodeTokS": 63.3, "codeDecodeTokS": 69.12, "prefill16kTokS": 1953.4, "gpuPeakMiB": 17432 },
+              "note": "Noisy run; 1-minute host load 18.0 before, 3.9 after."
             }
           ]
         }
@@ -831,15 +839,21 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 2 },
+              "settings": {
+                "numCtx": 32768,
+                "flashAttn": "auto",
+                "kv": "q8_0",
+                "draftNumPredict": 2,
+                "numBatch": 1024
+              },
               "evidenceRunId": "p2:N1:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 64.12, "prefill16kTokS": 2275.35, "gpuMiB": 23668 }
+              "metrics": { "decodeTokS": 64.12, "prefill16kTokS": 2275.35, "gpuPeakMiB": 23668 }
             }
           ]
         },
@@ -883,16 +897,22 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 3 },
+              "settings": {
+                "numCtx": 32768,
+                "flashAttn": "auto",
+                "kv": "q8_0",
+                "draftNumPredict": 3,
+                "numBatch": 1024
+              },
               "evidenceRunId": "p2:N2:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 50.09, "prefill16kTokS": 1889.95, "gpuMiB": 38826 },
-              "note": "Measured with a host load average near 30."
+              "metrics": { "decodeTokS": 50.09, "prefill16kTokS": 1889.95, "gpuPeakMiB": 38826 },
+              "note": "Noisy run; 1-minute host load 30.3 before, 19.5 after."
             }
           ]
         }
@@ -981,16 +1001,22 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 4 },
+              "settings": {
+                "numCtx": 32768,
+                "flashAttn": "auto",
+                "kv": "q8_0",
+                "draftNumPredict": 4,
+                "numBatch": 1024
+              },
               "evidenceRunId": "p2:N6:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 17.45, "prefill16kTokS": 697.05, "gpuMiB": 20060 },
-              "note": "Measured with a host load average near 30."
+              "metrics": { "decodeTokS": 17.45, "prefill16kTokS": 697.05, "gpuPeakMiB": 20060 },
+              "note": "Noisy run; 1-minute host load 31.0 before, 8.9 after."
             }
           ]
         },
@@ -1033,15 +1059,22 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 4 },
+              "settings": {
+                "numCtx": 32768,
+                "flashAttn": "auto",
+                "kv": "q8_0",
+                "draftNumPredict": 4,
+                "numBatch": 1024
+              },
               "evidenceRunId": "p2:K1:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 13.43, "prefill16kTokS": 686.85, "gpuMiB": 31089 }
+              "metrics": { "decodeTokS": 13.43, "prefill16kTokS": 686.85, "gpuPeakMiB": 31089 },
+              "note": "Noisy run; 1-minute host load 4.3 before, 4.1 after."
             }
           ]
         }
@@ -1140,15 +1173,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "numBatch": 1024 },
               "evidenceRunId": "p2:GSQ3:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 16.66, "prefill16kTokS": 731.2, "gpuMiB": 14775 }
+              "metrics": { "decodeTokS": 16.66, "prefill16kTokS": 731.2, "gpuPeakMiB": 14775 }
             }
           ]
         },
@@ -1201,15 +1234,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "numBatch": 1024 },
               "evidenceRunId": "p2:GSQ2:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
-                "hardware": "n1x-unified-128gb",
+                "hardware": "rtx-spark-n1x-80",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 17.48, "prefill16kTokS": 582.45, "gpuMiB": 11705 }
+              "metrics": { "decodeTokS": 17.48, "prefill16kTokS": 582.45, "gpuPeakMiB": 11705 }
             }
           ]
         }
@@ -1218,7 +1251,7 @@
   ],
   "v2Channel": {
     "sequence": 4,
-    "contentSha256": { "4": "135a1a95a9e37c6a8da44fa6c22187655861ab2754fd3f3d484f332a0faa6e57" },
+    "contentSha256": { "4": "4b93ade5579296fde2bfed32a3f3d60644f81457665cf96e9dd64a5d9e313845" },
     "updatedAt": "2026-11-04T00:00:00Z",
     "changelog": [
       {

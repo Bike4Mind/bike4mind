@@ -4,7 +4,7 @@ import path from 'node:path';
 import { curatedV2FromV3 } from '@bike4mind/common';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CATALOG_PATH, REPO_ROOT } from './cli';
-import { CATALOG_V3_PATH, checkCuratedV2, curatedV2Sha256, generateCuratedV2 } from './curatedV2';
+import { bumpCuratedV2, CATALOG_V3_PATH, checkCuratedV2, curatedV2Sha256, generateCuratedV2 } from './curatedV2';
 
 type Doc = Record<string, any>; // any: the fixtures edit arbitrary parts of a JSON document
 
@@ -44,32 +44,51 @@ describe('checkCuratedV2', () => {
     expect(await checkCuratedV2(root)).toBeNull();
   });
 
-  it('fails a v2 content change until the sequence moves and its hash is recorded', async () => {
+  it('fails a v2 content change until --bump moves the sequence and records its hash', async () => {
     const root = await scratchRoot();
+    const v3File = path.join(root, CATALOG_V3_PATH);
+    const item = (sequence: number) => ({
+      sequence,
+      date: '2026-11-05',
+      added: [],
+      removed: [],
+      changed: ['qwen3-5-4b'],
+      notes: 'Moved the 8 GB picks.',
+    });
     await editV3(root, doc => {
       doc.v2Channel.tiers[2].picks[0] = { slot: 'best', entry: 'qwen3-5-4b', build: 'q4-k-m' };
       doc.v2Channel.tiers[2].picks[1] = { slot: 'fast', entry: 'qwen3-5-0-8b', build: 'q8-0' };
     });
     const changed = await generateCuratedV2(root);
-    expect(changed.problem).toMatch(/set v2Channel.sequence to 5, add "5": "[0-9a-f]{64}"/);
+    expect(changed.problem).toMatch(
+      /no longer matches the hash recorded for v2Channel sequence 4; add a v2Channel.changelog item for sequence 5, then run pnpm --filter @bike4mind\/scripts curated:v2 --bump/
+    );
     expect(await checkCuratedV2(root)).toBe(changed.problem);
+    await expect(bumpCuratedV2(root)).rejects.toThrow(/add a v2Channel.changelog item for sequence 5 first/);
 
-    await editV3(root, doc => {
-      doc.v2Channel.sequence = 5;
-      doc.v2Channel.changelog.unshift({ ...doc.v2Channel.changelog[0], sequence: 5, changed: ['qwen3-5-4b'] });
-      // A placeholder first, since the v3 schema needs a hash for the current sequence.
-      doc.v2Channel.contentSha256['5'] = '0'.repeat(64);
-      doc.v2Channel.contentSha256['5'] = curatedV2Sha256(curatedV2FromV3(doc as never));
-    });
-    const bumped = await generateCuratedV2(root);
-    expect(bumped.problem).toBeNull();
-    await writeFile(path.join(root, CATALOG_PATH), bumped.text);
+    await editV3(root, doc => doc.v2Channel.changelog.unshift(item(5)));
+    const before = await readFile(v3File, 'utf8');
+    expect(await bumpCuratedV2(root)).toBe(5);
+    expect(await checkCuratedV2(root)).toBeNull();
+    const bumped: Doc = JSON.parse(await readFile(v3File, 'utf8'));
+    expect(bumped.v2Channel).toMatchObject({ sequence: 5, updatedAt: '2026-11-05T00:00:00Z' });
+    expect(bumped.v2Channel.contentSha256['5']).toBe(curatedV2Sha256(curatedV2FromV3(bumped as never)));
+    expect(Object.keys(bumped.v2Channel.contentSha256)).toEqual(['4', '5']);
+    expect(JSON.parse(before).entries).toEqual(bumped.entries);
+
+    // The hash covers content only, so a changelog edit regenerates without another bump.
+    await editV3(root, doc => (doc.v2Channel.changelog[0].notes = 'Moved the 8 GB best and fast picks.'));
+    expect(await checkCuratedV2(root)).toMatch(/stale/);
+    await writeFile(path.join(root, CATALOG_PATH), (await generateCuratedV2(root)).text);
     expect(await checkCuratedV2(root)).toBeNull();
 
-    await editV3(root, doc =>
-      Object.assign(doc.v2Channel.tiers[2].picks[0], { entry: 'gemma-4-12b', build: 'qat-q4-0' })
-    );
-    expect(await checkCuratedV2(root)).toMatch(/set v2Channel.sequence to 6/);
+    await editV3(root, doc => doc.v2Channel.changelog.unshift(item(6)));
+    await expect(bumpCuratedV2(root)).rejects.toThrow(/has not changed since sequence 5/);
+    await editV3(root, doc => {
+      doc.v2Channel.changelog.shift();
+      Object.assign(doc.v2Channel.tiers[2].picks[0], { entry: 'gemma-4-12b', build: 'qat-q4-0' });
+    });
+    expect(await checkCuratedV2(root)).toMatch(/sequence 5; add a v2Channel.changelog item for sequence 6/);
   });
 
   it('rejects a missing or invalid v3 file instead of generating from nothing', async () => {

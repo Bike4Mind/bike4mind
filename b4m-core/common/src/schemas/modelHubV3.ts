@@ -85,6 +85,7 @@ const LICENSE_LABELS = new Map<string, string>([
   ['isc', 'ISC'],
   ['gemma', 'Gemma Terms of Use'],
 ]);
+const LABEL_OWNERS = new Map([...LICENSE_LABELS].map(([id, label]) => [label, id]));
 
 /** A build's own license, with the label clients show beside it. */
 const BuildLicenseSchema = HubLicenseRefSchema.extend({ label: LicenseLabelSchema });
@@ -103,7 +104,7 @@ const TextProfileSettingsSchema = z.object({
 const ProfileSchema = z.object({
   id: z.enum(HUB_PROFILE_IDS),
   settings: TextProfileSettingsSchema,
-  // The results-store row that chose these settings.
+  // The results-store run these settings and metrics come from.
   evidenceRunId: z
     .string()
     .max(120)
@@ -168,8 +169,10 @@ function profileIssues(entry: TextEntryShape, build: HubBuildV3, b: number): Hub
 
 function labelIssue(license: { id: string; label: string }, path: PropertyKey[]): HubEntryIssue[] {
   const known = LICENSE_LABELS.get(license.id.toLowerCase());
-  if (known === undefined || known === license.label) return [];
-  return [{ path, message: `the label for ${license.id} is ${known}` }];
+  if (known !== undefined)
+    return known === license.label ? [] : [{ path, message: `the label for ${license.id} is ${known}` }];
+  const owner = LABEL_OWNERS.get(license.label);
+  return owner === undefined ? [] : [{ path, message: `${license.label} is the label for ${owner}` }];
 }
 
 function licenseIssues(entry: TextEntryShape, build: HubBuildV3, b: number): HubEntryIssue[] {
@@ -225,7 +228,7 @@ export type HubTierV3 = z.infer<typeof TierV3Schema>;
 /** What the curated-v2 channel publishes from this list; curatedV2FromV3 turns it into the v2 manifest. */
 const V2ChannelSchema = z.object({
   sequence: z.number().int().min(1).max(HUB_MAX_SEQUENCE),
-  // sha256 of JSON.stringify of the generated v2 list, per v2 sequence, so a content change needs a new sequence.
+  // Per v2 sequence, sha256 of JSON.stringify(curatedV2Content(v2)); the curated:v2 script checks and records it.
   contentSha256: z
     .record(z.string().regex(/^[1-9][0-9]{0,8}$/), z.string().regex(/^[0-9a-f]{64}$/))
     .refine(hubMaxKeys(HUB_MAX_CHANGELOG), 'too many sequences'),
@@ -299,8 +302,6 @@ function refineManifestV3(manifest: ManifestV3Shape, ctx: z.RefinementCtx<Manife
   }
   const channel = manifest.v2Channel;
   if (channel) {
-    if (!Object.hasOwn(channel.contentSha256, String(channel.sequence)))
-      issue(['v2Channel', 'contentSha256'], `no hash for sequence ${channel.sequence}`);
     for (const key of Object.keys(channel.contentSha256))
       if (Number(key) > channel.sequence) issue(['v2Channel', 'contentSha256', key], 'a later sequence');
   }

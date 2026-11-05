@@ -41,6 +41,12 @@ function lookup<T>(map: ReadonlyMap<string, T>, id: string, what: string): T {
   return found;
 }
 
+/** What a v2 list offers, without the sequence, date and changelog that describe a release of it. */
+export function curatedV2Content(v2: HubManifestInput) {
+  const { notesUrl, revokedKeyIds, policy, families, rankings, tiers, entries } = v2;
+  return { notesUrl, revokedKeyIds, policy, families, rankings, tiers, entries };
+}
+
 /**
  * The curated-v2 list the v3 list's `v2Channel` describes, for clients that read only v2. Works on the authored
  * input so defaults a v2 list leaves out stay out; throws when either list is invalid.

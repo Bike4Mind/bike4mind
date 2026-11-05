@@ -98,6 +98,16 @@ describe('curated v3 schema', () => {
       /the label for apache-2.0 is Apache 2.0/,
     ],
     [
+      'a known label on another license id',
+      d => Object.assign(entry(d, 'gemma-4-12b').license, { id: 'custom-terms', label: 'Apache 2.0' }),
+      /Apache 2.0 is the label for apache-2.0/,
+    ],
+    [
+      'a known build label on another license id',
+      d => Object.assign(entry(d, 'gemma-4-12b').builds[0].license, { id: 'custom-terms', label: 'MIT' }),
+      /MIT is the label for mit/,
+    ],
+    [
       'a quantized KV cache with flash attention off',
       d => (profile(d, 'qwen3-5-9b').settings.flashAttn = 'off'),
       /quantized KV cache needs flash attention/,
@@ -108,11 +118,6 @@ describe('curated v3 schema', () => {
       /invalid/i,
     ],
     ['a profile note over 160 characters', d => (profile(d, 'gemma-4-12b').note = 'x'.repeat(161)), /too big/i],
-    [
-      'a v2 channel with no hash for its sequence',
-      d => (d.v2Channel.contentSha256 = { '3': 'a'.repeat(64) }),
-      /no hash for sequence 4/,
-    ],
     [
       'a v2 channel hash for a later sequence',
       d => (d.v2Channel.contentSha256['5'] = 'a'.repeat(64)),
