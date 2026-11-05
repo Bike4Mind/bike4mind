@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { startFakeVllm } from '@bike4mind/local-models/testing';
 import { signedOutHeadlessCloudModelMessage } from '../bootstrap/signedOutLocal.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { handleHeadlessCommand } from './headlessCommand.js';
@@ -48,12 +49,15 @@ let stdout: string;
 let stderr: string;
 let exitCodes: (string | number | null | undefined)[];
 let nodeRequests: string[];
+let passThrough: string[];
 let fetchMock: ReturnType<typeof ollamaFetch>;
 const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+const realFetch = globalThis.fetch;
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(os.tmpdir(), 'b4m-headless-signed-out-'));
   vi.stubEnv('HOME', home);
+  vi.stubEnv('B4M_DESKTOP_USER_DATA', home);
   vi.stubEnv('B4M_OLLAMA_HOST', '');
   vi.stubEnv('B4M_ADDITIONAL_DIRS', '');
   Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
@@ -73,14 +77,18 @@ beforeEach(async () => {
     exitCodes.push(code);
     return undefined as never;
   });
-  const record =
-    (scheme: string) =>
-    (...args: unknown[]): never => {
-      nodeRequests.push(`${scheme}:${String(args[0])}`);
-      throw new Error('network is off in this test');
-    };
-  vi.spyOn(http, 'request').mockImplementation(record('http'));
-  vi.spyOn(https, 'request').mockImplementation(record('https'));
+  passThrough = [];
+  const realHttpRequest = http.request;
+  vi.spyOn(http, 'request').mockImplementation(((...args: Parameters<typeof http.request>) => {
+    const url = String(args[0]);
+    if (passThrough.some(origin => url.startsWith(`${origin}/`))) return realHttpRequest(...args);
+    nodeRequests.push(`http:${url}`);
+    throw new Error('network is off in this test');
+  }) as typeof http.request);
+  vi.spyOn(https, 'request').mockImplementation((...args: unknown[]): never => {
+    nodeRequests.push(`https:${String(args[0])}`);
+    throw new Error('network is off in this test');
+  });
 });
 
 afterEach(async () => {
@@ -92,13 +100,23 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-async function runSignedOut(config: { defaultModel: string; localDefaultModel?: string }, models: string[] | null) {
+/** `models` null means no Ollama answers; `local` origins (fake model servers) reach the real network. */
+async function runSignedOut(
+  config: { defaultModel: string; localDefaultModel?: string },
+  models: string[] | null,
+  local: string[] = []
+) {
+  passThrough = local;
   await new ConfigStore().save(config);
-  fetchMock = models
+  const ollama = models
     ? ollamaFetch(models)
     : vi.fn(async () => {
         throw new TypeError('fetch failed');
       });
+  fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    return passThrough.some(origin => url.startsWith(`${origin}/`)) ? realFetch(input, init) : ollama(input);
+  }) as unknown as typeof fetchMock;
   vi.stubGlobal('fetch', fetchMock);
   await handleHeadlessCommand({
     prompt: 'say hello',
@@ -108,7 +126,8 @@ async function runSignedOut(config: { defaultModel: string; localDefaultModel?: 
     addDirs: [],
   });
   const urls = fetchMock.mock.calls.map(([request]) => String(request instanceof Request ? request.url : request));
-  expect(urls.filter(url => !url.startsWith(`${OLLAMA}/`))).toEqual([]);
+  const allowed = [OLLAMA, ...local];
+  expect(urls.filter(url => !allowed.some(origin => url.startsWith(`${origin}/`)))).toEqual([]);
   expect(nodeRequests).toEqual([]);
   return JSON.parse(stdout) as { result?: string; error?: string };
 }
@@ -130,6 +149,50 @@ describe('b4m -p while signed out', () => {
     expect(output.error).toBe(signedOutHeadlessCloudModelMessage(CLOUD_MODEL));
     expect(exitCodes).toEqual([1]);
   }, 30_000);
+
+  it.each([
+    ['Ollama is not running', null],
+    ['Ollama has other models', [LOCAL_MODEL]],
+  ])(
+    'answers on a saved local default on a saved model server when %s',
+    async (_case, ollamaModels) => {
+      const vllm = await startFakeVllm();
+      try {
+        await writeFile(
+          path.join(home, 'model-servers.json'),
+          JSON.stringify({
+            version: 1,
+            servers: [
+              {
+                id: 's1',
+                name: 'box',
+                kind: 'openai-compatible',
+                transport: { type: 'http', baseUrl: vllm.baseUrl },
+                access: 'chat',
+                auth: { type: 'none' },
+                models: [],
+                addedAt: '2026-10-01T00:00:00.000Z',
+              },
+            ],
+          })
+        );
+
+        const output = await runSignedOut(
+          { defaultModel: CLOUD_MODEL, localDefaultModel: 'local:srv-s1:qwen-small' },
+          ollamaModels,
+          [vllm.baseUrl]
+        );
+
+        expect(output.error).toBeUndefined();
+        expect(output.result).toContain('Hello.');
+        expect(exitCodes).toEqual([0]);
+        expect(vllm.requests.map(request => request.model)).toEqual(['qwen-small']);
+      } finally {
+        await vllm.close();
+      }
+    },
+    30_000
+  );
 
   it('says how to start or install Ollama, or sign in, when no local model answers', async () => {
     const output = await runSignedOut({ defaultModel: LOCAL_MODEL, localDefaultModel: LOCAL_MODEL }, null);

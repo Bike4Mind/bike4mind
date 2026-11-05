@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiClient } from '../auth/ApiClient.js';
 import { createMockConfig } from '../test-utils/mocks.js';
 import { buildLlmBackend, defaultLlmBackendDeps, type BuildLlmBackendDeps } from './buildLlmBackend.js';
-import { NoLocalModelsError, signedOutCloudModelMessage, signedOutNoMatchMessage } from './signedOutLocal.js';
+import {
+  NoLocalModelsError,
+  signedOutCloudModelMessage,
+  signedOutCommandMessage,
+  signedOutNoMatchMessage,
+} from './signedOutLocal.js';
 
 const CLOUD = 'https://cloud.example.test';
 const OLLAMA = 'http://127.0.0.1:11434';
@@ -104,6 +109,20 @@ describe('signed-out start', () => {
     expect(input.startupLog.join('\n')).toContain('Default model claude-opus-4 is not a local model; using qwen3.5:4b');
   });
 
+  it('starts on the saved local default in place of a cloud default when it is listed', async () => {
+    vi.stubGlobal('fetch', ollamaFetch([LOCAL_MODEL, 'llama3.2:3b']));
+    const config = createMockConfig({ defaultModel: 'claude-opus-4', localDefaultModel: 'llama3.2:3b' });
+    const input = signedOutInput({ config });
+
+    const { llm, modelInfo } = await buildLlmBackend(input, deps);
+
+    expect(modelInfo.id).toBe('llama3.2:3b');
+    expect(llm.currentModel).toBe('llama3.2:3b');
+    expect(input.startupLog.join('\n')).toContain(
+      'Default model claude-opus-4 is not a local model; using llama3.2:3b'
+    );
+  });
+
   it('refuses every Bike4Mind request on the signed-out client without sending it', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
@@ -133,6 +152,15 @@ describe('picking a cloud model while signed out', () => {
     expect(signedOutCloudModelMessage('claude-opus-4')).toBe(
       'claude-opus-4 is a Bike4Mind cloud model and needs you to be signed in. Run /login to sign in and use Bike4Mind cloud models.'
     );
+  });
+
+  it('turns away /usage with how to sign in, and leaves local commands alone', () => {
+    expect(signedOutCommandMessage('usage')).toBe(
+      '/usage shows Bike4Mind credits, so it needs you to be signed in. Run /login to sign in and use Bike4Mind cloud models.'
+    );
+    for (const command of ['help', 'model', 'whoami', 'login', 'logout', 'constructor', 'toString']) {
+      expect(signedOutCommandMessage(command)).toBeNull();
+    }
   });
 
   it('says how to sign in when /model names nothing local', () => {

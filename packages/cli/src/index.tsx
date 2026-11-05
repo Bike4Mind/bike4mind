@@ -190,7 +190,13 @@ import { createBuiltinModules } from './features/createBuiltinModules.js';
 import { PluginStore, type PluginDescriptor } from './plugins/PluginStore.js';
 import { bridgePresence } from './features/bridgePresence/index.js';
 import { buildLlmBackend, type BuildLlmBackendResult } from './bootstrap/buildLlmBackend.js';
-import { NoLocalModelsError, SIGNED_OUT_BANNER, signedOutNoMatchMessage } from './bootstrap/signedOutLocal.js';
+import {
+  LOCAL_SESSION_CONTINUES,
+  NoLocalModelsError,
+  SIGNED_OUT_BANNER,
+  signedOutCommandMessage,
+  signedOutNoMatchMessage,
+} from './bootstrap/signedOutLocal.js';
 import { extractErrorMessage } from '@bike4mind/utils';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
@@ -202,7 +208,7 @@ import {
   hostInertNotice,
   isHostLaunchWithQueuedPrompt,
   shouldPromptMcpApproval,
-  shouldShowEndpointPicker,
+  signInStart,
 } from './bootstrap/startupTrustGates.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
@@ -742,12 +748,11 @@ function CliApp() {
         // none resolves (an unbranded fork), instead of dead-ending on an empty URL.
         const endpoint = resolveApiEndpoint(config.apiConfig);
         if (
-          endpoint.status === 'unconfigured' ||
-          shouldShowEndpointPicker({
-            endpointSource: endpoint.source,
+          signInStart({
+            endpoint,
             endpointChosen: !!config.apiConfig?.endpointChosen,
             hasAuthTokens: !!authTokens,
-          })
+          }) === 'endpoint-picker'
         ) {
           setState(prev => ({ ...prev, showEnvironmentPicker: true, config }));
           return;
@@ -765,7 +770,7 @@ function CliApp() {
         // Make the target backend obvious before login - especially the
         // source-mode default, which would otherwise silently point contributors
         // at localhost when they might have expected production.
-        if (endpoint.source === 'dev-default') {
+        if (endpoint.status === 'configured' && endpoint.source === 'dev-default') {
           console.log(
             `🔧 No endpoint configured; defaulting to the local dev server (${endpoint.url}).\n` +
               '   Use `b4m --prod` or `b4m --api-url <url>` to target a different backend.\n'
@@ -2395,6 +2400,13 @@ function CliApp() {
     });
     if (handledByRegistry) return;
 
+    // Tokens saved by another b4m process do not sign this session in, so its cloud-only commands stay off.
+    const signedOutRefusal = state.signedOutLocal ? signedOutCommandMessage(command) : null;
+    if (signedOutRefusal) {
+      console.log(`\n${signedOutRefusal}\n`);
+      return;
+    }
+
     // Handle built-in commands
     switch (command) {
       case 'exit':
@@ -2723,10 +2735,21 @@ function CliApp() {
         break;
       }
 
-      case 'login':
+      case 'login': {
         // Login flow will be handled by rendering LoginFlow component
-        setState(prev => ({ ...prev, showLoginFlow: true }) as any);
+        const loginConfig = await state.configStore.get();
+        const start = signInStart({
+          endpoint: resolveApiEndpoint(loginConfig.apiConfig),
+          endpointChosen: !!loginConfig.apiConfig?.endpointChosen,
+          hasAuthTokens: !!(await state.configStore.getAuthTokens()),
+        });
+        setState(prev => ({
+          ...prev,
+          config: loginConfig,
+          ...(start === 'endpoint-picker' ? { showEnvironmentPicker: true } : { showLoginFlow: true }),
+        }));
         break;
+      }
 
       case 'logout':
         usageCache = null; // Clear cached usage data to prevent data leakage
@@ -4127,6 +4150,9 @@ function CliApp() {
     );
   }
 
+  // A /login from a signed-out local session returns to that session when it does not complete.
+  const localSessionRunning = isInitialized && state.signedOutLocal;
+
   // Backend picker, checked before the login flow since a backend must be chosen first.
   if (state.showEnvironmentPicker) {
     return (
@@ -4137,6 +4163,12 @@ function CliApp() {
             try {
               const result = await state.configStore.switchApiEnvironment(choice.target);
               console.log(`\n✅ Connecting to ${result.envName} (${result.url})\n`);
+              if (localSessionRunning) {
+                // init() would start on local models again, so /login goes straight to signing in.
+                const config = await state.configStore.get();
+                setState(prev => ({ ...prev, config, showLoginFlow: true }));
+                return;
+              }
               // Re-run init now that an endpoint is configured; it will proceed
               // into the login flow.
               init().catch(err => {
@@ -4145,7 +4177,8 @@ function CliApp() {
               });
             } catch (err) {
               console.error(`\n❌ Failed to save endpoint: ${err instanceof Error ? err.message : String(err)}\n`);
-              exit();
+              if (localSessionRunning) console.log(`${LOCAL_SESSION_CONTINUES}\n`);
+              else exit();
             }
           })();
         }}
@@ -4184,6 +4217,10 @@ function CliApp() {
         onError={error => {
           setState(prev => ({ ...prev, showLoginFlow: false }));
           console.error(`\n❌ Login failed: ${error.message}`);
+          if (localSessionRunning) {
+            console.log(`${LOCAL_SESSION_CONTINUES}\n`);
+            return;
+          }
           console.log("Run b4m again when you're ready to authenticate.\n");
           exit();
         }}

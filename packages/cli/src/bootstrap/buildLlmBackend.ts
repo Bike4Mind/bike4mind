@@ -304,6 +304,22 @@ export function resolveSignedOutHeadlessModel(
   throw new Error(signedOutHeadlessCloudModelMessage(defaultModel));
 }
 
+/**
+ * Signed out, a cloud default gives way to the saved local default, which may be on a saved model server still
+ * answering; this waits for those servers (each under its own deadline) only when that is the case.
+ */
+export async function withSignedOutLocalDefault(
+  attached: Pick<LocalModelsAttachment, 'llm' | 'models' | 'later'>,
+  config: Pick<CliConfig, 'defaultModel' | 'localDefaultModel'>
+): Promise<ModelInfo[]> {
+  const listed = (id: string | undefined) => id !== undefined && attached.models.some(model => model.id === id);
+  if (listed(config.defaultModel) || !config.localDefaultModel || listed(config.localDefaultModel)) {
+    return attached.models;
+  }
+  await attached.later;
+  return attached.llm.getModelInfo();
+}
+
 export interface LocalModelsAttachment {
   llm: CliLlmBackend;
   models: ModelInfo[];
@@ -703,7 +719,8 @@ export async function buildLlmBackend(
     },
     deps
   );
-  const { llm, models, later } = attached;
+  const { llm, later } = attached;
+  const models = signedOut ? await withSignedOutLocalDefault(attached, config) : attached.models;
   startupLog.push(...attached.warnings);
   if (attached.ollamaHost) {
     startupLog.push(`\u{1f999} Self-hosted Ollama: ${attached.ollamaModelCount} model(s) added to picker`);
@@ -715,7 +732,11 @@ export async function buildLlmBackend(
   logger.debug(`📋 Available models: ${models.map(m => m.id).join(', ')}`);
 
   requireLocalDefaultListed(models, config.defaultModel);
-  const modelInfo = resolveModelInfo(models, config.defaultModel);
+  const savedLocalDefault =
+    signedOut && !models.some(m => m.id === config.defaultModel)
+      ? models.find(m => m.id === config.localDefaultModel)
+      : undefined;
+  const modelInfo = savedLocalDefault ?? resolveModelInfo(models, config.defaultModel);
 
   if (signedOut && modelInfo.id !== config.defaultModel) {
     startupLog.push(signedOutDefaultReplacedMessage(config.defaultModel, modelInfo.id));

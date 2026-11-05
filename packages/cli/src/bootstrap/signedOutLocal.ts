@@ -20,6 +20,17 @@ export function signedOutDefaultReplacedMessage(defaultModel: string, localModel
   return `Default model ${clean(defaultModel)} is not a local model; using ${clean(localModel)}. If it is a Bike4Mind cloud model, sign in with /login to use it.`;
 }
 
+export const LOCAL_SESSION_CONTINUES = 'Still signed out; chatting with local models. Run /login to try again.';
+
+/** Slash commands that only talk to Bike4Mind, with what each one is for. */
+const CLOUD_ONLY_COMMANDS = new Map([['usage', 'shows Bike4Mind credits']]);
+
+/** The answer to a cloud-only slash command in a signed-out local session; null for any other command. */
+export function signedOutCommandMessage(command: string): string | null {
+  const purpose = CLOUD_ONLY_COMMANDS.get(command);
+  return purpose ? `/${command} ${purpose}, so it needs you to be signed in. ${SIGN_IN_HINT}` : null;
+}
+
 /** For headless and ACP runs, where /login cannot be typed. */
 export const SIGN_IN_OUTSIDE_HINT = 'To use Bike4Mind cloud models instead, sign in: run b4m, then /login.';
 

@@ -27,6 +27,7 @@ import {
   defaultLlmBackendDeps,
   resolveHeadlessModel,
   resolveSignedOutHeadlessModel,
+  withSignedOutLocalDefault,
   type CliLlmBackend,
 } from '../bootstrap/buildLlmBackend.js';
 import { SignedOutCloudBackend } from '../bootstrap/signedOutLocal.js';
@@ -254,14 +255,15 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       serverLlm,
       config,
       {
-        servers: 'default',
+        servers: signedOut ? 'all' : 'default',
         onNotice: text => process.stderr.write(`Notice: ${sanitizeTerminalText(text)}\n`),
         // Signed out there is no hosted model to fall back on, so an Ollama running unconfigured is looked for.
         ...(signedOut && { signedOut, detectOllama: defaultLlmBackendDeps.detectOllama }),
       },
       createHeadlessLlmBackendDeps(options.verbose)
     );
-    const { llm, models } = attached;
+    const { llm } = attached;
+    const models = signedOut ? await withSignedOutLocalDefault(attached, config) : attached.models;
     for (const warning of attached.warnings) process.stderr.write(`${sanitizeTerminalText(warning)}\n`);
     const { modelInfo, warning } = signedOut
       ? resolveSignedOutHeadlessModel(models, config, attached)
