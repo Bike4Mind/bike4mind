@@ -296,6 +296,24 @@ describe('createHttp2ApnsTransport', () => {
       );
     });
 
+    it('logs a session error once at warn', async () => {
+      const logger = { warn: vi.fn() };
+      const transport = createHttp2ApnsTransport(CONFIG, Date.now, logger);
+      hookStream(stream => {
+        queueMicrotask(() => {
+          sessions.get(APNS_HOSTS.production)!.emit('error', new Error('session broke'));
+          stream.emit('error', new Error('ECONNRESET'));
+        });
+      });
+
+      await expect(transport.send(request)).rejects.toThrow('ECONNRESET');
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith('[Push] APNs HTTP/2 session error', {
+        host: APNS_HOSTS.production,
+        error: 'session broke',
+      });
+    });
+
     it('survives a session error mid-flight, fails the stream, and opens a new session next', async () => {
       const transport = createHttp2ApnsTransport(CONFIG);
       const streamFailure = new Error('ECONNRESET');

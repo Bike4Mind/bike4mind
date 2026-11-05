@@ -1,6 +1,7 @@
 import http2 from 'node:http2';
 import { createHash, createPrivateKey, sign } from 'node:crypto';
 import type { PushTokenEnvironment } from '@bike4mind/database';
+import type { Logger } from '@bike4mind/observability';
 import { readApnsCredentials, type ApnsCredentials } from '@bike4mind/server-utils/utils/pushDelivery';
 
 /**
@@ -94,7 +95,8 @@ const SESSION_IDLE_MS = 4 * 60_000;
 /** One HTTP/2 session per gateway host, opened on first use and held until close() or idle expiry. */
 export function createHttp2ApnsTransport(
   config: ApnsConfig,
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  logger?: Pick<Logger, 'warn'>
 ): ApnsTransport {
   const sessions = new Map<string, http2.ClientHttp2Session>();
   const lastUsedMs = new Map<string, number>();
@@ -112,7 +114,13 @@ export function createHttp2ApnsTransport(
       if (sessions.get(host) === session) sessions.delete(host);
     };
     // A session-level error also fails each in-flight stream, which is where it is reported.
-    session.on('error', forget);
+    session.on('error', error => {
+      logger?.warn('[Push] APNs HTTP/2 session error', {
+        host,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      forget();
+    });
     session.on('close', forget);
     sessions.set(host, session);
     lastUsedMs.set(host, now());
