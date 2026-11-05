@@ -2,7 +2,7 @@ import type { AuthState } from '@shared/auth';
 import { localModelId, type ChatModelOption } from '@shared/chat';
 import type { ModelRuntimeStatus } from '@shared/models';
 import { describe, expect, it } from 'vitest';
-import { OLLAMA_NOT_RUNNING, OLLAMA_START_HINT } from '../models/localRuntimeCopy';
+import { OLLAMA_NOT_RUNNING } from '../models/localRuntimeCopy';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 
 const model: ChatModelOption = { id: localModelId('ollama', 'qwen2.5:0.5b'), name: 'qwen2.5:0.5b' };
@@ -29,9 +29,9 @@ describe('noLocalModels', () => {
     expect(noLocalModels({ models: [], loading: true, runtime: null })).toBeNull();
   });
 
-  it('says Ollama is not running, how to start it, and asks for a start rather than a screen', () => {
+  it('says Ollama is not running in the shared wording and asks for a start rather than a screen', () => {
     const state = noLocalModels({ models: [], loading: false, runtime: down });
-    expect(state?.reason).toBe(`${OLLAMA_NOT_RUNNING}. ${OLLAMA_START_HINT}`);
+    expect(state?.reason).toBe(OLLAMA_NOT_RUNNING);
     expect(state?.fix).toBe('start-ollama');
   });
 

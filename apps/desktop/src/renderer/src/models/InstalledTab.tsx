@@ -257,7 +257,7 @@ export function InstalledTab({
     ? null
     : status && !status.reachable
       ? target.local
-        ? `${OLLAMA_NOT_RUNNING}.`
+        ? OLLAMA_NOT_RUNNING
         : (status.error ?? `Desktop could not reach ${target.name}.`)
       : installed && !installed.ok
         ? installed.error.message

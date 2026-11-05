@@ -96,11 +96,10 @@ function NoLocalRuntime({
                 Point at a server
               </Button>
             )}
-            <Button size="sm" variant="plain" color="neutral" onClick={onRetry} data-testid="models-runtime-retry-btn">
-              Check again
-            </Button>
           </>
         }
+        onRetry={onRetry}
+        retryTestId="models-runtime-retry-btn"
       >
         <Typography level="body-sm" data-testid="models-no-runtime-text">
           Desktop got no answer from {address}.{launch?.canStart ? '' : ' If Ollama is not installed, install it.'} To

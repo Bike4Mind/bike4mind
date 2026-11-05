@@ -1415,6 +1415,26 @@ describe('ModelsScreen installed', () => {
     expect(calls.checkServers).toHaveBeenCalledWith('local');
   });
 
+  it('rechecks whether Desktop can start Ollama on Check again, and offers Start once it can', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
+    await mount(undefined, 'curated');
+    expect(q('ollama-start-btn')).toBeNull();
+    calls.checkServers.mockClear();
+    calls.getStatus.mockClear();
+    calls.checkServers.mockImplementation(async () => {
+      bridge.servers = [{ ...THIS_COMPUTER, launch: launchView() }];
+      act(() => pushServers(bridge.servers));
+      return bridge.servers;
+    });
+
+    await click(q('models-runtime-retry-btn'));
+    expect(calls.checkServers).toHaveBeenCalledWith('local');
+    expect(calls.getStatus).toHaveBeenCalled();
+    expect(q('ollama-start-btn')).not.toBeNull();
+    expect(q('models-install-ollama-btn')).toBeNull();
+  });
+
   it('hints at Ollama in WSL on Windows only', async () => {
     bridge.status = DOWN;
     platform.windows = false;

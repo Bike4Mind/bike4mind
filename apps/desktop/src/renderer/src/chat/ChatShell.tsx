@@ -39,7 +39,7 @@ import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
 import { ModelsScreen } from '../models/ModelsScreen';
-import { OllamaNotRunning } from '../models/OllamaNotRunning';
+import { ComposerOllamaNotice } from '../models/OllamaNotRunning';
 import { useModelServers } from '../models/useModelHub';
 import { GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
 import { MessageThread } from './MessageThread';
@@ -588,10 +588,10 @@ export function ChatShell({
   const reloadCatalog = catalog.reload;
   const blockedNotice =
     noLocal?.fix === 'start-ollama' ? (
-      <OllamaNotRunning
-        compact
+      <ComposerOllamaNotice
+        sessionId={activeId}
         launch={modelServers?.find(server => server.id === LOCAL_SERVER_ID)?.launch}
-        onStarted={() => void reloadCatalog()}
+        reload={() => void reloadCatalog()}
       />
     ) : null;
 

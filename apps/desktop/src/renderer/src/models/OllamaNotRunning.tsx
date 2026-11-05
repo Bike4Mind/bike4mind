@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import CircularProgress from '@mui/joy/CircularProgress';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { LOCAL_SERVER_ID, type ModelServerLaunchView } from '@shared/modelServers';
+import { LOCAL_SERVER_ID, type ModelServerLaunchView, type ModelServerMutationResult } from '@shared/modelServers';
 import { OLLAMA_NOT_RUNNING, OLLAMA_START_HINT } from './localRuntimeCopy';
 
 /** How long Start waits on main; `ollama serve` itself gives up after 30s. */
@@ -13,12 +14,15 @@ export const STARTED_SHOW_MS = 15_000;
 
 export type StartPhase = 'idle' | 'starting' | 'failed' | 'started';
 
+const errorText = (caught: unknown) => (caught instanceof Error ? caught.message : String(caught));
+
 /** Starts the Ollama Desktop runs on this computer. Its outcome belongs to the caller that clicked, not to every banner. */
 export function useStartLocalOllama(launch: ModelServerLaunchView | null | undefined, onStarted: () => void) {
   const [phase, setPhase] = useState<StartPhase>('idle');
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
   const live = useRef(true);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onStartedRef = useRef(onStarted);
   onStartedRef.current = onStarted;
 
@@ -26,59 +30,66 @@ export function useStartLocalOllama(launch: ModelServerLaunchView | null | undef
     live.current = true;
     return () => {
       live.current = false;
+      clearTimeout(timer.current);
     };
   }, []);
 
   useEffect(() => {
     if (phase !== 'started') return;
-    const timer = setTimeout(() => setPhase('idle'), STARTED_SHOW_MS);
-    return () => clearTimeout(timer);
+    const shown = setTimeout(() => setPhase('idle'), STARTED_SHOW_MS);
+    return () => clearTimeout(shown);
   }, [phase]);
 
   // Servers are health-checked once a minute, so a view from before Ollama stopped would hide Start.
+  const recheck = useCallback(() => {
+    window.b4m.modelServers.check(LOCAL_SERVER_ID).catch(() => undefined);
+  }, []);
   const rechecked = useRef(false);
   useEffect(() => {
     if (rechecked.current) return;
     rechecked.current = true;
-    window.b4m.modelServers.check(LOCAL_SERVER_ID).catch(() => undefined);
-  }, []);
+    recheck();
+  }, [recheck]);
+
+  const succeeded = () => {
+    setPhase('started');
+    setError(null);
+    onStartedRef.current();
+  };
 
   const start = async () => {
     if (inFlight.current) return;
     inFlight.current = true;
     setPhase('starting');
     setError(null);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const result = await Promise.race([
-        window.b4m.modelServers.launch(LOCAL_SERVER_ID, 'start'),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(`Ollama did not answer within ${START_WAIT_MS / 1000} seconds.`)),
-            START_WAIT_MS
-          );
-        }),
-      ]);
-      if (!live.current) return;
-      if (result.ok) {
-        setPhase('started');
-        onStartedRef.current();
-      } else {
-        setPhase('failed');
-        setError(result.error);
-      }
-    } catch (caught) {
+    const launched: Promise<ModelServerMutationResult> = window.b4m.modelServers
+      .launch(LOCAL_SERVER_ID, 'start')
+      .catch((caught: unknown) => ({ ok: false as const, error: errorText(caught) }));
+    const waited = new Promise<'timeout'>(resolve => {
+      timer.current = setTimeout(() => resolve('timeout'), START_WAIT_MS);
+    });
+    const first = await Promise.race([launched, waited]);
+    clearTimeout(timer.current);
+    inFlight.current = false;
+    if (first === 'timeout') {
       if (!live.current) return;
       setPhase('failed');
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      clearTimeout(timer);
-      inFlight.current = false;
+      setError(`no answer within ${START_WAIT_MS / 1000} seconds.`);
+      // Main may still finish the start; a late success counts.
+      const late = await launched;
+      if (late.ok && live.current) succeeded();
+      return;
+    }
+    if (!live.current) return;
+    if (first.ok) succeeded();
+    else {
+      setPhase('failed');
+      setError(first.error);
     }
   };
 
   const shown: StartPhase = phase === 'starting' || launch?.busy === 'starting' ? 'starting' : phase;
-  return { phase: shown, error, canStart: launch?.canStart === true, start };
+  return { phase: shown, error, canStart: launch?.canStart === true, start, recheck };
 }
 
 /**
@@ -88,6 +99,8 @@ export function useStartLocalOllama(launch: ModelServerLaunchView | null | undef
 export function OllamaNotRunning({
   launch,
   onStarted,
+  onRetry,
+  retryTestId = 'ollama-recheck-btn',
   compact = false,
   icon,
   actions,
@@ -97,51 +110,74 @@ export function OllamaNotRunning({
   launch: ModelServerLaunchView | null | undefined;
   /** After a start that succeeded: reload whatever lists models. */
   onStarted: () => void;
+  /** Adds Check again, which also rechecks whether Desktop can start Ollama. */
+  onRetry?: () => void;
+  retryTestId?: string;
   compact?: boolean;
   icon?: ReactNode;
-  /** More buttons after Start. */
+  /** More buttons between Start and Check again. */
   actions?: ReactNode;
   /** Detail lines under the status. */
   children?: ReactNode;
 }) {
-  const { phase, error, canStart, start } = useStartLocalOllama(launch, onStarted);
-  const offerStart = canStart && (phase === 'idle' || phase === 'failed');
+  const { phase, error, canStart, start, recheck } = useStartLocalOllama(launch, onStarted);
+  const starting = phase === 'starting';
   const textLevel = compact ? 'body-xs' : 'body-sm';
 
-  const status =
-    phase === 'starting' ? (
-      <Stack direction="row" alignItems="center" spacing={1} data-testid="ollama-start-progress">
-        <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
-        <Typography level={textLevel}>Starting Ollama...</Typography>
-      </Stack>
-    ) : phase === 'started' ? (
-      <Typography level={textLevel} data-testid="ollama-start-done">
-        Ollama started. Loading models...
-      </Typography>
-    ) : (
-      <>
-        {phase === 'failed' && (
-          <Typography level={textLevel} color="danger" data-testid="ollama-start-error">
-            Ollama did not start: {error}
-          </Typography>
-        )}
-        {!canStart && (
-          <Typography level={textLevel} data-testid="ollama-start-hint">
-            {OLLAMA_START_HINT}
-          </Typography>
-        )}
-      </>
-    );
+  const status = (
+    <Box role="status" aria-live="polite">
+      {starting ? (
+        <Typography level={textLevel} data-testid="ollama-start-progress">
+          Starting Ollama...
+        </Typography>
+      ) : phase === 'started' ? (
+        <Typography level={textLevel} data-testid="ollama-start-done">
+          Ollama started. Loading models...
+        </Typography>
+      ) : (
+        <>
+          {phase === 'failed' && (
+            <Typography level={textLevel} color="danger" data-testid="ollama-start-error">
+              Ollama did not start: {error}
+            </Typography>
+          )}
+          {!canStart && (
+            <Typography level={textLevel} data-testid="ollama-start-hint">
+              {OLLAMA_START_HINT}
+            </Typography>
+          )}
+        </>
+      )}
+    </Box>
+  );
 
-  const startButton = offerStart && (
+  const startButton = (starting || (canStart && phase !== 'started')) && (
     <Button
       size="sm"
       color={compact ? 'warning' : 'primary'}
       variant={compact ? 'soft' : 'solid'}
+      loading={starting}
+      loadingPosition="start"
+      loadingIndicator={<CircularProgress size="sm" aria-label="Starting Ollama" />}
       onClick={() => void start()}
       data-testid="ollama-start-btn"
     >
       Start Ollama
+    </Button>
+  );
+
+  const retryButton = onRetry && (
+    <Button
+      size="sm"
+      variant="plain"
+      color="neutral"
+      onClick={() => {
+        recheck();
+        onRetry();
+      }}
+      data-testid={retryTestId}
+    >
+      Check again
     </Button>
   );
 
@@ -156,10 +192,11 @@ export function OllamaNotRunning({
         data-phase={phase}
       >
         <Stack spacing={0.25} sx={{ flex: 1, minWidth: 0 }}>
-          <Typography level="body-sm">{OLLAMA_NOT_RUNNING}.</Typography>
+          <Typography level="body-sm">{OLLAMA_NOT_RUNNING}</Typography>
           {status}
         </Stack>
         {startButton}
+        {retryButton}
       </Stack>
     );
 
@@ -171,12 +208,27 @@ export function OllamaNotRunning({
       </Stack>
       {status}
       {children}
-      {(startButton || actions) && (
+      {(startButton || actions || retryButton) && (
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ pt: 0.5 }}>
           {startButton}
           {actions}
+          {retryButton}
         </Stack>
       )}
     </Stack>
   );
+}
+
+/** The composer's banner, keyed by conversation so a failed start does not follow the user into another one. */
+export function ComposerOllamaNotice({
+  sessionId,
+  launch,
+  reload,
+}: {
+  sessionId: string | null;
+  launch: ModelServerLaunchView | null | undefined;
+  /** Reloads the chat model list, after a start and on Check again. */
+  reload: () => void;
+}) {
+  return <OllamaNotRunning key={sessionId ?? ''} compact launch={launch} onStarted={reload} onRetry={reload} />;
 }

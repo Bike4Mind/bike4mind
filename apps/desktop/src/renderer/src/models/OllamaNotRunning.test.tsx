@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ModelServerLaunchView, ModelServerMutationResult } from '@shared/modelServers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { OLLAMA_NOT_RUNNING, OLLAMA_START_HINT } from './localRuntimeCopy';
-import { OllamaNotRunning, START_WAIT_MS, STARTED_SHOW_MS } from './OllamaNotRunning';
+import { ComposerOllamaNotice, OllamaNotRunning, START_WAIT_MS, STARTED_SHOW_MS } from './OllamaNotRunning';
 
 // jsdom ships no matchMedia, and Joy's colour-scheme provider asks for one on mount.
 window.matchMedia ??= ((query: string) => ({
@@ -43,17 +43,16 @@ const check = vi.fn(async () => []);
 let host: HTMLDivElement | null = null;
 let root: Root | null = null;
 
-const q = (testId: string) => document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+const q = (testId: string, within: ParentNode = document) =>
+  within.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
 const flush = () => act(async () => new Promise(resolve => setTimeout(resolve, 0)));
 
+function show(node: ReactNode) {
+  act(() => root?.render(<CssVarsProvider theme={desktopTheme}>{node}</CssVarsProvider>));
+}
+
 function render(view: ModelServerLaunchView | null, onStarted = vi.fn(), compact = false) {
-  act(() =>
-    root?.render(
-      <CssVarsProvider theme={desktopTheme}>
-        <OllamaNotRunning launch={view} onStarted={onStarted} compact={compact} />
-      </CssVarsProvider>
-    )
-  );
+  show(<OllamaNotRunning launch={view} onStarted={onStarted} compact={compact} />);
   return onStarted;
 }
 
@@ -102,7 +101,16 @@ describe('OllamaNotRunning', () => {
     expect(check).toHaveBeenCalledTimes(1);
   });
 
-  it('shows progress while starting and starts once however often Start is clicked', async () => {
+  it('rechecks on Check again and runs the caller retry', () => {
+    const onRetry = vi.fn();
+    show(<OllamaNotRunning launch={launchView({ canStart: false })} onStarted={vi.fn()} onRetry={onRetry} />);
+    check.mockClear();
+    act(() => q('ollama-recheck-btn')?.click());
+    expect(check).toHaveBeenCalledWith('local');
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Start mounted and loading while starting, and starts once however often it is clicked', async () => {
     const pending = deferred<ModelServerMutationResult>();
     launch.mockReturnValue(pending.promise);
     const onStarted = render(launchView());
@@ -113,8 +121,10 @@ describe('OllamaNotRunning', () => {
     });
     expect(launch).toHaveBeenCalledTimes(1);
     expect(launch).toHaveBeenCalledWith('local', 'start');
-    expect(q('ollama-start-progress')).not.toBeNull();
-    expect(q('ollama-start-btn')).toBeNull();
+    expect(q('ollama-start-btn')).toBe(button);
+    expect(button?.hasAttribute('disabled')).toBe(true);
+    expect(document.querySelector('[aria-label="Starting Ollama"]')).not.toBeNull();
+    expect(q('ollama-start-progress')?.closest('[role="status"]')?.getAttribute('aria-live')).toBe('polite');
     expect(onStarted).not.toHaveBeenCalled();
 
     pending.resolve({ ok: true, servers: [] });
@@ -123,10 +133,10 @@ describe('OllamaNotRunning', () => {
     expect(onStarted).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a start running from elsewhere as progress, without a Start button', () => {
+  it('shows a start running from elsewhere as progress', () => {
     render(launchView({ busy: 'starting', canStart: false }));
     expect(q('ollama-start-progress')).not.toBeNull();
-    expect(q('ollama-start-btn')).toBeNull();
+    expect(q('ollama-start-btn')?.hasAttribute('disabled')).toBe(true);
   });
 
   it('shows the error of a failed start, never success, and offers Start again', async () => {
@@ -134,10 +144,12 @@ describe('OllamaNotRunning', () => {
     const onStarted = render(launchView());
     act(() => q('ollama-start-btn')?.click());
     await flush();
-    expect(q('ollama-start-error')?.textContent).toContain('Desktop could not find Ollama on this computer.');
+    const failed = q('ollama-start-error');
+    expect(failed?.textContent).toBe('Ollama did not start: Desktop could not find Ollama on this computer.');
+    expect(failed?.closest('[role="status"]')).not.toBeNull();
     expect(q('ollama-start-done')).toBeNull();
     expect(onStarted).not.toHaveBeenCalled();
-    expect(q('ollama-start-btn')).not.toBeNull();
+    expect(q('ollama-start-btn')?.hasAttribute('disabled')).toBe(false);
   });
 
   it('fails a start that rejects', async () => {
@@ -149,17 +161,56 @@ describe('OllamaNotRunning', () => {
     expect(onStarted).not.toHaveBeenCalled();
   });
 
-  it('gives up waiting after START_WAIT_MS', async () => {
+  it('gives up waiting after START_WAIT_MS, and still counts a start main finishes later', async () => {
     vi.useFakeTimers();
-    launch.mockReturnValue(new Promise(() => {}));
+    const pending = deferred<ModelServerMutationResult>();
+    launch.mockReturnValue(pending.promise);
     const onStarted = render(launchView());
     act(() => q('ollama-start-btn')?.click());
     await act(async () => {
       await vi.advanceTimersByTimeAsync(START_WAIT_MS);
     });
-    expect(q('ollama-start-error')?.textContent).toContain(`${START_WAIT_MS / 1000} seconds`);
+    expect(q('ollama-start-error')?.textContent).toBe(
+      `Ollama did not start: no answer within ${START_WAIT_MS / 1000} seconds.`
+    );
     expect(onStarted).not.toHaveBeenCalled();
-    expect(q('ollama-start-btn')).not.toBeNull();
+
+    pending.resolve({ ok: true, servers: [] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(q('ollama-start-error')).toBeNull();
+    expect(q('ollama-start-done')).not.toBeNull();
+    expect(onStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('never shows success for a start that fails after the wait ran out', async () => {
+    vi.useFakeTimers();
+    const pending = deferred<ModelServerMutationResult>();
+    launch.mockReturnValue(pending.promise);
+    const onStarted = render(launchView());
+    act(() => q('ollama-start-btn')?.click());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(START_WAIT_MS);
+    });
+    pending.resolve({ ok: false, error: 'port 11434 is in use' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(q('ollama-start-done')).toBeNull();
+    expect(q('ollama-start-error')).not.toBeNull();
+    expect(onStarted).not.toHaveBeenCalled();
+  });
+
+  it('clears the wait timer when the banner goes away mid-start', () => {
+    vi.useFakeTimers();
+    launch.mockReturnValue(new Promise(() => {}));
+    render(launchView());
+    act(() => q('ollama-start-btn')?.click());
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    act(() => root?.unmount());
+    root = null;
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('offers Start again a while after a start, should Ollama still look down', async () => {
@@ -171,6 +222,7 @@ describe('OllamaNotRunning', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(q('ollama-start-done')).not.toBeNull();
+    expect(q('ollama-start-btn')).toBeNull();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(STARTED_SHOW_MS);
     });
@@ -178,18 +230,26 @@ describe('OllamaNotRunning', () => {
     expect(q('ollama-start-btn')).not.toBeNull();
   });
 
-  it('keeps an outcome to the banner that started it', async () => {
+  it('keeps an outcome to the banner that started it, with another banner on screen', async () => {
     launch.mockResolvedValue({ ok: false, error: 'port 11434 is in use' });
-    render(launchView());
-    act(() => q('ollama-start-btn')?.click());
+    const view = launchView();
+    show(
+      <>
+        <div data-testid="first">
+          <OllamaNotRunning launch={view} onStarted={vi.fn()} />
+        </div>
+        <div data-testid="second">
+          <OllamaNotRunning launch={view} onStarted={vi.fn()} compact />
+        </div>
+      </>
+    );
+    const first = q('first') as HTMLElement;
+    const second = q('second') as HTMLElement;
+    act(() => q('ollama-start-btn', first)?.click());
     await flush();
-    expect(q('ollama-start-error')).not.toBeNull();
-
-    act(() => root?.unmount());
-    root = createRoot(host as HTMLDivElement);
-    render(launchView({ problem: 'port 11434 is in use' }));
-    expect(q('ollama-start-error')).toBeNull();
-    expect(q('ollama-start-btn')).not.toBeNull();
+    expect(q('ollama-start-error', first)).not.toBeNull();
+    expect(q('ollama-start-error', second)).toBeNull();
+    expect(q('ollama-start-btn', second)?.hasAttribute('disabled')).toBe(false);
   });
 
   it('drops a start that settles after the banner is gone', async () => {
@@ -204,9 +264,33 @@ describe('OllamaNotRunning', () => {
     expect(onStarted).not.toHaveBeenCalled();
   });
 
-  it('fits the composer in one row with the same wording', () => {
+  it('fits the composer in one row with the same title', () => {
     render(launchView(), vi.fn(), true);
-    expect(q('ollama-not-running')?.textContent).toContain(`${OLLAMA_NOT_RUNNING}.`);
+    expect(q('ollama-not-running')?.textContent).toContain(OLLAMA_NOT_RUNNING);
     expect(q('ollama-start-btn')).not.toBeNull();
+  });
+});
+
+describe('ComposerOllamaNotice', () => {
+  it('drops a failed start on a switch to another conversation', async () => {
+    launch.mockResolvedValue({ ok: false, error: 'port 11434 is in use' });
+    const reload = vi.fn();
+    show(<ComposerOllamaNotice sessionId="a" launch={launchView()} reload={reload} />);
+    act(() => q('ollama-start-btn')?.click());
+    await flush();
+    expect(q('ollama-start-error')).not.toBeNull();
+
+    show(<ComposerOllamaNotice sessionId="b" launch={launchView()} reload={reload} />);
+    expect(q('ollama-start-error')).toBeNull();
+    expect(q('ollama-start-btn')).not.toBeNull();
+  });
+
+  it('reloads the chat model list on Check again', () => {
+    const reload = vi.fn();
+    show(<ComposerOllamaNotice sessionId="a" launch={launchView({ canStart: false })} reload={reload} />);
+    check.mockClear();
+    act(() => q('ollama-recheck-btn')?.click());
+    expect(check).toHaveBeenCalledWith('local');
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

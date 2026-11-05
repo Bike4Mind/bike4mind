@@ -1,7 +1,7 @@
 import type { AuthState } from '@shared/auth';
 import type { ChatModelOption } from '@shared/chat';
 import type { ModelRuntimeStatus } from '@shared/models';
-import { OLLAMA_NOT_RUNNING, OLLAMA_START_HINT } from '../models/localRuntimeCopy';
+import { OLLAMA_NOT_RUNNING } from '../models/localRuntimeCopy';
 
 export interface NoLocalModels {
   reason: string;
@@ -26,7 +26,7 @@ export function noLocalModels(catalog: {
   const { models, loading, runtime } = catalog;
   if (models.some(model => model.server && (!model.unavailable || model.pending))) return null;
   const down = (): NoLocalModels => ({
-    reason: `${OLLAMA_NOT_RUNNING}. ${OLLAMA_START_HINT}`,
+    reason: OLLAMA_NOT_RUNNING,
     fix: 'start-ollama',
   });
   if (runtime && !runtime.reachable) return down();
