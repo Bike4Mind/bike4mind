@@ -1,10 +1,12 @@
 import { EventEmitter } from 'node:events';
 import { generateKeyPairSync, verify } from 'node:crypto';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 const h = vi.hoisted(() => ({
   connect: vi.fn(),
   responses: new Map<string, { status: number; body: string }>(),
+  // Replaces the canned response for a path; the stream is left for the test to drive.
+  streamHooks: new Map<string, (stream: EventEmitter & { setTimeout: Mock; close: Mock }) => void>(),
 }));
 
 vi.mock('node:http2', () => {
@@ -40,6 +42,11 @@ function fakeSession(host: string) {
         close: vi.fn(),
         end: (body: string) => {
           session.requests.push({ headers, body });
+          const hook = h.streamHooks.get(headers[':path']);
+          if (hook) {
+            hook(stream);
+            return;
+          }
           const response = h.responses.get(`${host} ${headers[':path']}`) ?? { status: 200, body: '' };
           queueMicrotask(() => {
             stream.emit('response', { ':status': response.status });
@@ -139,6 +146,7 @@ describe('createHttp2ApnsTransport', () => {
   beforeEach(() => {
     sessions.clear();
     h.responses.clear();
+    h.streamHooks.clear();
     h.connect.mockReset().mockImplementation((host: string) => {
       const session = fakeSession(host);
       sessions.set(host, session);
@@ -250,5 +258,59 @@ describe('createHttp2ApnsTransport', () => {
     await expect(
       transport.send({ environment: 'production', deviceToken: 'gone', headers: {}, payload: '{}' })
     ).resolves.toEqual({ status: 410, reason: 'Unregistered' });
+  });
+
+  describe('failure paths', () => {
+    const request = { environment: 'production' as const, deviceToken: 'tok', headers: {}, payload: '{}' };
+    const hookStream = (hook: Parameters<typeof h.streamHooks.set>[1]) => h.streamHooks.set('/3/device/tok', hook);
+
+    it('rejects with the error a stream emits', async () => {
+      const failure = new Error('stream reset');
+      hookStream(stream => queueMicrotask(() => stream.emit('error', failure)));
+
+      await expect(createHttp2ApnsTransport(CONFIG).send(request)).rejects.toBe(failure);
+    });
+
+    it('cancels the stream on timeout and rejects once it closes without a response', async () => {
+      let captured: Parameters<Parameters<typeof h.streamHooks.set>[1]>[0] | undefined;
+      hookStream(stream => {
+        captured = stream;
+      });
+      const sent = createHttp2ApnsTransport(CONFIG).send(request);
+      const settled = expect(sent).rejects.toThrow('APNs stream closed without a response');
+      await Promise.resolve();
+
+      const [timeoutMs, onTimeout] = captured!.setTimeout.mock.calls[0];
+      expect(timeoutMs).toBe(10_000);
+      onTimeout();
+      expect(captured!.close).toHaveBeenCalledWith(8);
+      captured!.emit('close');
+      await settled;
+    });
+
+    it('rejects when a stream closes with no response', async () => {
+      hookStream(stream => queueMicrotask(() => stream.emit('close')));
+
+      await expect(createHttp2ApnsTransport(CONFIG).send(request)).rejects.toThrow(
+        'APNs stream closed without a response'
+      );
+    });
+
+    it('survives a session error mid-flight, fails the stream, and opens a new session next', async () => {
+      const transport = createHttp2ApnsTransport(CONFIG);
+      const streamFailure = new Error('ECONNRESET');
+      hookStream(stream => {
+        queueMicrotask(() => {
+          sessions.get(APNS_HOSTS.production)!.emit('error', new Error('session broke'));
+          stream.emit('error', streamFailure);
+        });
+      });
+
+      await expect(transport.send(request)).rejects.toBe(streamFailure);
+
+      h.streamHooks.clear();
+      await expect(transport.send(request)).resolves.toEqual({ status: 200, reason: undefined });
+      expect(h.connect).toHaveBeenCalledTimes(2);
+    });
   });
 });
