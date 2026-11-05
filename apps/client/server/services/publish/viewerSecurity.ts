@@ -67,19 +67,9 @@ export function publicIdFromUsercontentHost(hostHeader?: string | string[]): str
  *    inject extra CSP directives.
  */
 
-/**
- * Escape a string for safe interpolation into HTML text or a double-quoted attribute.
- * Shared by the viewer pages (wrapper, reply, loader shell) so title/URL interpolation
- * can't break out of its context.
- */
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+// Re-exported so the viewer pages (wrapper, reply, loader shell) keep escaping
+// title/URL interpolation through this module; the implementation is shared monorepo-wide.
+export { escapeHtml } from '@bike4mind/utils/escapeHtml';
 
 /**
  * Sanitize marked-rendered reply HTML before injecting it into the viewer.

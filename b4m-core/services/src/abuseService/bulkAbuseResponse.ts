@@ -371,12 +371,21 @@ type StepResult = { outcome: BulkAbuseStepOutcome; revokedApiKeys?: number; claw
 async function banStep(user: IUser, { db, audit }: BulkAbuseExecuteAdapters): Promise<StepResult> {
   const current = await db.users.findById(user.id);
   if (!current || current.isBanned) return { outcome: 'skipped' };
-  await db.users.update({ id: user.id, isBanned: true });
+  // Settles a signup risk review too, so the risk sweep (findRiskScoringCandidateIds) stops refreshing it.
+  const unsettled = current.riskScore?.reviewState !== 'banned' ? current.riskScore : null;
+  await db.users.update({
+    id: user.id,
+    isBanned: true,
+    ...(unsettled ? { riskScore: { ...unsettled, reviewState: 'banned' } } : {}),
+  });
   await audit({
     action: 'abuse.bulk.ban',
     user,
     summary: 'banned in a bulk abuse response',
-    changes: [{ field: 'isBanned', before: false, after: true }],
+    changes: [
+      { field: 'isBanned', before: false, after: true },
+      ...(unsettled ? [{ field: 'riskScore.reviewState', before: unsettled.reviewState, after: 'banned' }] : []),
+    ],
   });
   return { outcome: 'applied' };
 }
