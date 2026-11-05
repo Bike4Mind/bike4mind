@@ -836,6 +836,14 @@ Confirm both registrations include the `put` event and webhook target. If one is
 
 The FabFile safety-net filter in `apps/workers/src/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
+To run that proof as one command, mint an API key (`b4m_live_...`) with the `notebooks:read` scope and run the history-import check. It uploads a small Claude-format export through the app's upload proxy, so MinIO's webhook starts the import exactly as a UI upload does. It then waits for the new import job to reach `completed` and reads the conversations back through `GET /api/v1/sessions` and `GET /api/v1/sessions/{id}/quests`. It passes only when the conversation count and every prompt and reply match the export:
+
+```sh
+BASE_URL=https://your-host B4M_API_KEY=b4m_live_... pnpm --filter @bike4mind/scripts smoke:selfhost-history-import
+```
+
+Set `BROKEN_EXPORT=bad-json` or `BROKEN_EXPORT=invalid-conversation` to upload a deliberately broken export; the check must then fail. `invalid-conversation` is the case a job status alone misses: the importer skips conversations that do not match the export schema and still marks the job `completed`. The check refuses to start while another import of the key owner is pending or processing, because the webhook drops a second upload. A timeout with no job means the upload landed but the webhook never reached the app; use the checks above. Optional: `RUN_TIMEOUT_MS` (default 300000), `POLL_INTERVAL_MS` (default 3000). Exit code 0 is pass, 1 is fail, 2 is bad configuration. Each passing run leaves two small conversations named after its run token in the key owner's history.
+
 ## Security notes
 
 The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit, and OpenSearch if the optional `opensearch` profile is enabled) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
