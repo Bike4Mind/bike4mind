@@ -51,8 +51,8 @@ async function reserve(key: string, amount: number, limit: number): Promise<Invi
 /**
  * Charges an invite's recipients against the user's hourly budgets, and throws when they do not
  * fit. Call it after the request is validated and before the invite is created, and release the
- * reservation if creation fails. `chargeTypedAddresses` is for project invites only: they are the
- * one type the sharing service lets name an address with no account (sharingService/create.ts);
+ * reservation if creation fails. `chargeTypedAddresses` applies to project and organization invites, which may
+ * name an address with no account (sharingService/create.ts);
  * every other type refuses or drops such an address, so charging it there would only fail bulk
  * shares to existing users.
  */

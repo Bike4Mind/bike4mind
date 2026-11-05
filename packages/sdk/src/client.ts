@@ -135,16 +135,16 @@ function buildUrl(baseUrl: string, path: string, params?: object, query?: object
   return qs ? `${url}${url.includes('?') ? '&' : '?'}${qs}` : url;
 }
 
-function assertBaseUrl(baseUrl: string): void {
+export function assertBaseUrl(baseUrl: string, caller = 'createClient'): void {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
   } catch {
-    throw new Error(`createClient: baseUrl must be an absolute http(s) URL, got ${JSON.stringify(baseUrl)}`);
+    throw new Error(`${caller}: baseUrl must be an absolute http(s) URL, got ${JSON.stringify(baseUrl)}`);
   }
   if (!/^https?:$/.test(parsed.protocol) || parsed.search || parsed.hash) {
     throw new Error(
-      `createClient: baseUrl must be an http(s) URL with no query or fragment, got ${JSON.stringify(baseUrl)}`
+      `${caller}: baseUrl must be an http(s) URL with no query or fragment, got ${JSON.stringify(baseUrl)}`
     );
   }
 }

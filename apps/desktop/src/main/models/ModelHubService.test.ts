@@ -24,11 +24,16 @@ import {
   type OllamaRegistryLayers,
   type PullOptions,
 } from '@bike4mind/local-models';
-import { ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
+import { estimateFit, ollamaBuildBytes, type HubBuild, type HubManifest } from '@bike4mind/common';
 import { AUTO_LOCAL_CONTEXT, type LocalContextSetting } from '@shared/localContextSetting';
 import { pullKey, type ModelPull } from '@shared/models';
 import type { ModelServerSpecs } from '@shared/modelServers';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@bike4mind/common', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/common')>();
+  return { ...actual, estimateFit: vi.fn(actual.estimateFit) };
+});
 import { LOCAL_CONTEXT_TARGET_TOKENS } from '../chat/localContext';
 import { fitFromArch } from './fit';
 import { ServerUnreachableError } from '../modelServers/errors';
@@ -199,7 +204,14 @@ function harness(
     token?: string | null;
     deps?: Pick<
       ModelHubServiceDeps,
-      'onPullStarted' | 'freeSpace' | 'defaultStoreDir' | 'pathExists' | 'wslHost' | 'integratedGpu' | 'specs'
+      | 'onPullStarted'
+      | 'freeSpace'
+      | 'defaultStoreDir'
+      | 'pathExists'
+      | 'modelSettings'
+      | 'wslHost'
+      | 'integratedGpu'
+      | 'specs'
     >;
   } = {}
 ) {
@@ -1265,7 +1277,10 @@ describe('ModelHubService entered hardware', () => {
   };
 
   /** This computer is a 62 GB CPU-only box with chat fixed at 32K; server `a` has whatever `specs.a` says. */
-  function rated(specs: Record<string, ModelServerSpecs | null>) {
+  function rated(
+    specs: Record<string, ModelServerSpecs | null>,
+    setting: LocalContextSetting = { mode: 'fixed', tokens: 32768 }
+  ) {
     const local = harness({ hardware: machine('cpu', 62) });
     const remote = harness();
     const service = new ModelHubService({
@@ -1276,7 +1291,7 @@ describe('ModelHubService entered hardware', () => {
       libraryLayers: local.libraryLayers,
       hardware: local.hardware,
       specs: id => specs[id] ?? null,
-      localContext: async () => ({ mode: 'fixed', tokens: 32768 }),
+      localContext: async () => setting,
       curated: () => CURATED,
       onPullsChanged: () => {},
       onInstalledChanged: () => {},
@@ -1410,6 +1425,34 @@ describe('ModelHubService entered hardware', () => {
     expect(curatedFit(list, 'gemma-4-12b')?.detail).toContain('Replies at about 51 tokens/s early in a chat.');
     expect(curatedFit(list, 'gemma-4-26b')?.detail).toContain('system RAM');
     expect(curatedFit(list, 'gemma-4-26b')?.detail).not.toContain('Replies');
+  });
+
+  it('sizes the KV cache with the type entered for the server, this computer included', async () => {
+    const blank = { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
+    const need = (detail = '') => Number(/about (\d+(?:\.\d+)?) GiB/.exec(detail)?.[1]);
+    const f16 = await rated({}).service.curated();
+    const q8 = await rated({ local: { ...blank, kvCacheType: 'q8_0' } }).service.curated();
+    expect(q8.rating).toBe('probe');
+    expect(curatedFit(f16, 'qwen3-8-27b')?.detail).not.toContain('KV cache');
+    expect(curatedFit(q8, 'qwen3-8-27b')?.detail).toContain('the 32K context chat will use with a q8_0 KV cache');
+    expect(need(curatedFit(q8, 'qwen3-8-27b')?.detail)).toBeLessThan(need(curatedFit(f16, 'qwen3-8-27b')?.detail));
+    const server = rated({ a: { ...GPU_16, kvCacheType: 'q4_0' } });
+    expect(curatedFit(await server.service.curated('a'), 'gemma-4-12b')?.detail).toContain('with a q4_0 KV cache');
+    server.remote.runtime.list.mockResolvedValue([installedModel]);
+    const installed = await server.service.installed('a');
+    expect(installed.ok && installed.models[0].fit?.detail).toContain('with a q4_0 KV cache');
+  });
+
+  it("rates the larger context Auto gives chat on this computer's GPU with a quantized KV cache", async () => {
+    const gpu = { ramGiB: 64, gpuMemoryGiB: 16, bandwidthGBps: null, unified: false };
+    const contexts = async (specs: ModelServerSpecs) =>
+      (await rated({ local: specs }, AUTO_LOCAL_CONTEXT).service.curated()).entries.map(
+        entry => entry.builds[0].fit?.context ?? 0
+      );
+    const f16 = await contexts(gpu);
+    const q8 = await contexts({ ...gpu, kvCacheType: 'q8_0' });
+    expect(q8.every((tokens, index) => tokens >= f16[index])).toBe(true);
+    expect(q8.some((tokens, index) => tokens > f16[index])).toBe(true);
   });
 });
 
@@ -1560,6 +1603,75 @@ describe('ModelHubService fit', () => {
       ['huge:latest', 16384],
       ['long:latest', 16384],
       ['small:latest', 16384],
+    ]);
+  });
+
+  it('rates an installed model at its own draft count', async () => {
+    const { service, runtime } = harness({
+      deps: {
+        modelSettings: async (modelId: string) => (modelId === 'local:ollama:mtp:latest' ? { draftTokens: 3 } : {}),
+      },
+    });
+    runtime.list.mockResolvedValue([installed({ name: 'mtp:latest' })]);
+    const base = await runtime.inspect('x');
+    runtime.inspect.mockResolvedValue({ ...base, arch: { ...SMALL_ARCH, mtpLayers: 1 } });
+    vi.mocked(estimateFit).mockClear();
+    await service.installed();
+    const runtimes = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime);
+    expect(runtimes.length).toBeGreaterThan(0);
+    expect(runtimes.every(fit => fit.draftMax === 3 && fit.speculative)).toBe(true);
+  });
+
+  it('rates an installed model for a DRAFT layer at Ollama default draft count', async () => {
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue([installed({ name: 'drafted:latest' })]);
+    const base = await runtime.inspect('x');
+    runtime.inspect.mockResolvedValue({
+      ...base,
+      contents: { template: null, license: null, modelBlob: SHA, draftBlobs: [SHA] },
+    });
+    vi.mocked(estimateFit).mockClear();
+    await service.installed();
+    const drafts = vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime.draftMax);
+    expect(drafts.length).toBeGreaterThan(0);
+    expect(drafts.every(draftMax => draftMax === 4)).toBe(true);
+  });
+
+  it('rates a curated row and the same installed model with the same draft count and context', async () => {
+    const entry = CURATED.entries.find(candidate => candidate.id === 'qwen3-5-0-8b');
+    const reviewed = entry?.builds[0];
+    const source = reviewed && libraryOf(reviewed);
+    if (!entry || !reviewed || !source) throw new Error('bundled catalog lost qwen3-5-0-8b');
+    const drafts = () => new Set(vi.mocked(estimateFit).mock.calls.map(([input]) => input.runtime.draftMax));
+
+    const curated = harness({ curated: { ...CURATED, entries: [entry] } });
+    vi.mocked(estimateFit).mockClear();
+    const row = (await curated.service.curated()).entries[0].builds[0];
+    expect(drafts()).toEqual(new Set([2]));
+
+    const { service, runtime } = harness();
+    runtime.list.mockResolvedValue([installed({ name: source.ref, sizeBytes: source.sizeBytes })]);
+    const base = await runtime.inspect(source.ref);
+    runtime.inspect.mockResolvedValue({ ...base, arch: entry.arch as ModelArch, parameters: 'draft_num_predict 2' });
+    vi.mocked(estimateFit).mockClear();
+    const result = await service.installed();
+    expect(drafts()).toEqual(new Set([2]));
+    expect(result.ok && result.models[0].fit?.context).toBe(row.fit.context);
+  });
+
+  it('rates an installed model at its own context from the Models screen, and the rest at the Settings one', async () => {
+    const { service, runtime } = harness({
+      setting: { mode: 'fixed', tokens: 32768 },
+      deps: {
+        modelSettings: async (modelId: string) =>
+          modelId === 'local:ollama:own:latest' ? { context: { mode: 'fixed', tokens: 16384 } } : {},
+      },
+    });
+    runtime.list.mockResolvedValue([installed({ name: 'own:latest' }), installed({ name: 'other:latest' })]);
+    const result = await service.installed();
+    expect(result.ok ? result.models.map(model => [model.name, model.fit?.context]) : []).toEqual([
+      ['other:latest', 32768],
+      ['own:latest', 16384],
     ]);
   });
 

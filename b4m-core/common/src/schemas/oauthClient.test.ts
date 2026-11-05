@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { createOAuthClientSchema, oauthRedirectUriSchema, resolveOAuthFederatedIdp } from './oauthClient';
+import {
+  createOAuthClientSchema,
+  oauthRedirectUriSchema,
+  resolveOAuthFederatedIdp,
+  updateOAuthClientSchema,
+} from './oauthClient';
+import { FEDERATED_ADMIN_STATUS_SCOPE, OAUTH_CLIENT_SCOPES } from '../constants/oauthClients';
 
 describe('oauthRedirectUriSchema', () => {
   it.each([
@@ -91,5 +97,60 @@ describe('resolveOAuthFederatedIdp', () => {
         'cid'
       )
     ).toMatchObject({ audience: 'cid', subjectSource: 'sub' });
+  });
+});
+
+describe('updateOAuthClientSchema', () => {
+  const trust = { subjectSource: 'sub', issuer: 'https://b4m.example.test' };
+
+  it('accepts allowedScopes with openid, including a legacy out-of-set scope', () => {
+    expect(updateOAuthClientSchema.parse({ allowedScopes: ['openid', 'legacy:x'] }).allowedScopes).toEqual([
+      'openid',
+      'legacy:x',
+    ]);
+  });
+
+  it.each([
+    ['without openid', ['email']],
+    ['with duplicates', ['openid', 'openid']],
+    ['empty', []],
+  ])('rejects allowedScopes %s', (_n, allowedScopes) => {
+    expect(updateOAuthClientSchema.safeParse({ allowedScopes }).success).toBe(false);
+  });
+
+  it('accepts a federatedIdp object and null', () => {
+    expect(updateOAuthClientSchema.safeParse({ federatedIdp: trust }).success).toBe(true);
+    expect(updateOAuthClientSchema.parse({ federatedIdp: null }).federatedIdp).toBeNull();
+  });
+
+  it('rejects a non-https issuer in federatedIdp', () => {
+    expect(
+      updateOAuthClientSchema.safeParse({ federatedIdp: { ...trust, issuer: 'http://b4m.example.test' } }).success
+    ).toBe(false);
+  });
+
+  it('still rejects unknown keys and an empty body', () => {
+    expect(updateOAuthClientSchema.safeParse({ name: 'x' }).success).toBe(false);
+    const empty = updateOAuthClientSchema.safeParse({});
+    expect(empty.success).toBe(false);
+    expect(!empty.success && empty.error.issues[0].message).toBe('Nothing to update');
+  });
+
+  it('accepts an ISO expectedUpdatedAt or null, rejects other strings', () => {
+    const iso = '2026-01-01T00:00:00.000Z';
+    expect(updateOAuthClientSchema.safeParse({ isActive: false, expectedUpdatedAt: iso }).success).toBe(true);
+    expect(updateOAuthClientSchema.safeParse({ isActive: false, expectedUpdatedAt: null }).success).toBe(true);
+    expect(updateOAuthClientSchema.safeParse({ isActive: false, expectedUpdatedAt: 'yesterday' }).success).toBe(false);
+  });
+
+  it('does not count expectedUpdatedAt as something to update', () => {
+    const r = updateOAuthClientSchema.safeParse({ expectedUpdatedAt: '2026-01-01T00:00:00.000Z' });
+    expect(!r.success && r.error.issues[0].message).toBe('Nothing to update');
+  });
+
+  it('OAUTH_CLIENT_SCOPES lists the grantable scopes', () => {
+    expect(OAUTH_CLIENT_SCOPES).toEqual(
+      expect.arrayContaining(['openid', 'ai:generate', 'me:read', FEDERATED_ADMIN_STATUS_SCOPE])
+    );
   });
 });

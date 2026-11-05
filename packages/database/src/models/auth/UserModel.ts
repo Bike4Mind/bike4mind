@@ -32,6 +32,7 @@ import {
   MFA_ATTEMPT_RESET_WINDOW_MS,
   PAYMENT_UNLOCK_REASONS,
   SIGNUP_GRANT_UNLOCK_REASONS,
+  SIGNUP_INVITE_SOURCES,
   SIGNUP_UNLOCK_FORFEIT_CAUSES,
   Collection,
   PaginatedResponse,
@@ -582,6 +583,14 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     const result = await this.model.updateOne(
       { _id: userId, $or: [{ totpLastStep: null }, { totpLastStep: { $lt: step } }] },
       { $set: { totpLastStep: step } }
+    );
+    return result.modifiedCount === 1;
+  }
+
+  async markInviteBonusPaid(userId: string, credits: number): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, signupGrant: { $type: 'object' }, 'signupGrant.inviteBonusPaid': { $exists: false } },
+      { $set: { 'signupGrant.inviteBonusPaid': credits } }
     );
     return result.modifiedCount === 1;
   }
@@ -1334,6 +1343,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
           dripCredits: { type: Number, min: 0 },
           lastDripDay: { type: String },
           lastDripPeriod: { type: String },
+          inviteBonusPaid: { type: Number, min: 0 },
           activity: {
             type: new Schema({ day: String, ms: Number, lastAt: Date, period: String }, { _id: false }),
             default: undefined,
@@ -1413,6 +1423,18 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     numReferralsAvailable: { type: Number, default: 0 },
     regInvites: [{ type: Schema.Types.ObjectId, ref: 'User' }],
     referredByUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },
+    signupInvite: {
+      type: new Schema(
+        {
+          source: { type: String, enum: SIGNUP_INVITE_SOURCES, required: true },
+          inviteId: { type: String, required: true },
+          organizationId: { type: String },
+          at: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     organizationId: { type: Schema.Types.ObjectId, ref: 'Organization' },
     loginRecords: [LoginRecordSchema],
     // reset password

@@ -29,6 +29,8 @@ import {
 } from './signupRisk';
 import { accountBlockReasons, isAiAccessRevoked } from './accountState';
 import { protectSignupCredits } from './signupProtection';
+import { payInviteBonus } from './inviteBonus';
+import { callerTransactionSession, inCallerTransaction } from './callerTransaction';
 import {
   queueHeadBlocks,
   reserveSignupGrantBudget,
@@ -51,6 +53,15 @@ export type SignupGrantValidator = (
 type DripEvidence = { drip: { day: string; dailyCredits: number; dripCap: number; period?: string } };
 
 const noGrant = (): GrantFreeCreditsResult => ({ creditsGranted: 0, currentCredits: null });
+
+/**
+ * The tranche is paid right after its caller read the account, so a missing one is a transaction that cannot
+ * see it (or a deleted account): fail loudly so releasePendingFreeCredits keeps the pending tag for a retry.
+ */
+function assertTrancheAccountVisible<U>(user: U | null | undefined, expected: SignupGrant['stage']) {
+  if (!user && expected === 'pending_email') throw new Error('Signup grant account not found');
+  return user;
+}
 
 /** The ledger description of an unlock tranche; the row's `reason` carries the machine label. */
 const SIGNUP_UNLOCK_DESCRIPTIONS: Readonly<Record<SignupGrantUnlockReason, string>> = {
@@ -135,7 +146,7 @@ async function releaseStage(
 ): Promise<GrantFreeCreditsResult> {
   const { db, audit } = adapters;
   if (db.signupProtection) {
-    const user = await db.users.findById(userId);
+    const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
     if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
     if (isForfeitedRelease(user.signupGrant, reason)) return noGrant();
     if (!user.emailVerified) {
@@ -153,8 +164,8 @@ async function releaseStage(
   const reservations: SignupGrantBudgetReservation[] = [];
   const releaseReservations = () => Promise.all(reservations.map(held => held.release()));
   try {
-    const result = await withTransaction<AssessedGrantResult>(async () => {
-      const user = await db.users.findById(userId);
+    const result = await inCallerTransaction<AssessedGrantResult>(async () => {
+      const user = assertTrancheAccountVisible(await db.users.findById(userId), expected);
       if (!isReleaseEligible(user, expected)) return ineligibleResult(user, expected);
       if (isForfeitedRelease(user.signupGrant, reason)) return noGrant();
       const grant = user.signupGrant;
@@ -367,6 +378,13 @@ async function releaseStage(
       } catch {
         console.warn('[signup-risk] Band telemetry failed after grant commit');
       }
+    }
+    // A later paying release retries a bonus an exhausted pool or a failure left unpaid. Inside a caller's
+    // transaction a failed bonus write would abort the caller's commit, so it waits for that later release.
+    if ((expected === 'pending_email' || grantResult.creditsGranted > 0) && !callerTransactionSession()) {
+      await payInviteBonus(userId, adapters).catch(() => {
+        console.warn('[signup-grant] Invite bonus payout failed; a later release retries it');
+      });
     }
     return grantResult;
   } catch (error) {
