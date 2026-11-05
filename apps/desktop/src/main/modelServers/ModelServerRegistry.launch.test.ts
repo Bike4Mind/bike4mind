@@ -30,6 +30,7 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
 const refused = () => new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+const timedOut = () => new DOMException('The operation was aborted due to timeout', 'TimeoutError');
 
 interface FakeHandle extends ServerHandle {
   request: LaunchRequest;
@@ -40,8 +41,15 @@ interface FakeHandle extends ServerHandle {
  * Origins answer only while `up` holds them: Ollama on any port but 8090, a keyed llama-server router on 8090.
  * Starting a server puts its origin up; stopping or crashing takes it down.
  */
-function setup(options: { readOllamaEnv?: (url: string) => Promise<OllamaEnvironment | null> } = {}) {
+function setup(
+  options: {
+    readOllamaEnv?: (url: string) => Promise<OllamaEnvironment | null>;
+    portFree?: (port: number) => Promise<boolean>;
+  } = {}
+) {
   const up = new Set<string>();
+  /** Origins whose connections time out instead of being refused. */
+  const silent = new Set<string>();
   const calls: { origin: string; path: string; credentials: Record<string, string> | null }[] = [];
   const answer = (origin: string, path: string, credentials: Record<string, string> | null): Response => {
     if (origin.endsWith(':8090')) {
@@ -62,6 +70,7 @@ function setup(options: { readOllamaEnv?: (url: string) => Promise<OllamaEnviron
       const url = new URL(String(input));
       const credentials = endpoint.credentialHeaders();
       calls.push({ origin: url.origin, path: url.pathname, credentials });
+      if (silent.has(url.origin)) throw timedOut();
       if (!up.has(url.origin)) throw refused();
       return answer(url.origin, url.pathname, credentials);
     };
@@ -117,10 +126,11 @@ function setup(options: { readOllamaEnv?: (url: string) => Promise<OllamaEnviron
     edited,
     changed,
     readOllamaEnv: options.readOllamaEnv,
+    portFree: options.portFree ?? (async port => !up.has(`http://127.0.0.1:${port}`)),
   });
   const saved = vi.fn();
   registry.onServerSaved(saved);
-  return { registry, up, calls, handles, launchers, store, localSpecsChanged, edited, saved, changed };
+  return { registry, up, silent, calls, handles, launchers, store, localSpecsChanged, edited, saved, changed };
 }
 
 const none = { type: 'none' as const };
@@ -255,6 +265,34 @@ describe('ModelServerRegistry launching servers', () => {
     await expect(registry.update(added.id, { launch: { kvCacheType: 'q8_0' } })).rejects.toThrow(
       'applies to Ollama servers only'
     );
+  });
+
+  it('offers to start a server at a loopback port that times out instead of refusing, when the port is free', async () => {
+    const { registry, silent, launchers } = setup();
+    silent.add('http://127.0.0.1:8090');
+    const address = { address: 'http://127.0.0.1:8090', credential: none };
+    expect(await registry.probe(address)).toMatchObject({ ok: false, launchable: true });
+    const [, added] = await registry.add({
+      ...address,
+      name: 'router',
+      kind: 'openai-compatible',
+      access: 'chat',
+      launch: true,
+    });
+    expect(added.launch).toMatchObject({ runtime: 'llama-server', owner: 'none' });
+    expect(launchers.start).not.toHaveBeenCalled();
+  });
+
+  it('does not offer a start at a loopback port something holds without answering', async () => {
+    const portFree = vi.fn(async () => false);
+    const { registry, silent } = setup({ portFree });
+    silent.add('http://127.0.0.1:8090');
+    const address = { address: 'http://127.0.0.1:8090', credential: none };
+    expect((await registry.probe(address)).launchable).toBeUndefined();
+    expect(portFree).toHaveBeenCalledWith(8090);
+    await expect(
+      registry.add({ ...address, name: 'router', kind: 'openai-compatible', access: 'chat', launch: true })
+    ).rejects.toThrow('did not answer in time');
   });
 
   it('refuses a launch add for an address that is not on this computer', async () => {

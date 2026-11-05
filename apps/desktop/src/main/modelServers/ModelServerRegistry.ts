@@ -66,6 +66,7 @@ import type { ModelHubServer } from '../models/ModelHubService';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
+import { loopbackPortFree } from './loopbackPort';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
 import { observedKvCacheType, observedLaunchVars } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
@@ -162,6 +163,8 @@ export interface ModelServerRegistryDeps {
   launchers?: Launchers;
   /** The launch variables of the Ollama at `url` on this computer; null when they cannot be read, as without this. */
   readOllamaEnv?(url: string): Promise<OllamaEnvironment | null>;
+  /** Whether Desktop could start a server on 127.0.0.1:port now; defaults to trying to bind it (loopbackPortFree). */
+  portFree?(port: number): Promise<boolean>;
 }
 
 /** Where Desktop can start a server for a saved address, and what it runs there. */
@@ -370,7 +373,9 @@ export class ModelServerRegistry {
       const hint = outcome.forbidden && !headers ? ' If this server needs an API key, enter it and test again.' : '';
       // The system code tells a declined macOS Local Network permission (EHOSTUNREACH) apart from a down server.
       if (outcome.code) this.deps.logger.warn(`MODEL SERVERS: testing ${label} (${scope}) failed with ${outcome.code}`);
-      const launchable = outcome.code === 'ECONNREFUSED' && launchPort(parsed) !== null;
+      const port = launchPort(parsed);
+      // A closed port may time out instead of refusing (WSL mirrored networking), so binding it decides.
+      const launchable = port !== null && (await (this.deps.portFree ?? loopbackPortFree)(port));
       return failed(
         withLocalNetworkHint(
           `${outcome.error ?? `${label} did not answer as Ollama or an OpenAI-compatible server.`}${hint}`,
