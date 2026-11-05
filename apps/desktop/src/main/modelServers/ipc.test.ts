@@ -47,6 +47,16 @@ describe('specsInput', () => {
   });
 });
 
+describe('registerModelServersIpc check', () => {
+  it('marks a check the renderer asks for as a user check, so Desktop looks for Ollama again', async () => {
+    const { registry, invoke } = register();
+    await invoke(IPC_CHANNELS.modelServersCheck, 'local');
+    await invoke(IPC_CHANNELS.modelServersCheck);
+    expect(registry.check).toHaveBeenNthCalledWith(1, 'local', { lookAgain: true });
+    expect(registry.check).toHaveBeenNthCalledWith(2, undefined, { lookAgain: true });
+  });
+});
+
 describe('registerModelServersIpc launch', () => {
   it('passes launch settings through their shape and drops anything else', async () => {
     const { registry, invoke } = register();

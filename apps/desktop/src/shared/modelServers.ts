@@ -323,6 +323,8 @@ export function serverManagement(server: Pick<ModelServerView, 'local' | 'kind' 
 
 export const LOCAL_SERVER_ID = 'local';
 export const LOCAL_SERVER_NAME = 'This computer';
+/** The one wording for "no Ollama answers on this computer", in main and the renderer alike; a title, so no period. */
+export const OLLAMA_NOT_RUNNING = 'Ollama is not running on this computer';
 
 /** Runtime ids of saved servers, inside `local:<runtime>:<model>` model ids. */
 export const SERVER_RUNTIME_PREFIX = 'srv-';

@@ -47,6 +47,7 @@ import {
   serverIdOfRuntime,
   serverManagement,
   sizesWithSavedLaunch,
+  OLLAMA_NOT_RUNNING,
   serverRuntimeId,
   WINDOWS_ORPHAN_HINT,
   type FlashAttention,
@@ -208,6 +209,8 @@ interface LaunchState {
   programAt: number;
   /** Counts looks, so one that settles after a newer one started is dropped. */
   programLook: number;
+  /** When the look still running started; null when none runs. */
+  lookingSince: number | null;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -587,11 +590,14 @@ export class ModelServerRegistry {
   }
 
   /** Rechecks one server, or every server and this computer when `id` is omitted. */
-  async check(id?: string): Promise<ModelServerView[]> {
+  /** `lookAgain`: a user asked, so look for the Ollama program now rather than waiting out PROGRAM_TTL_MS. */
+  async check(id?: string, options: { lookAgain?: boolean } = {}): Promise<ModelServerView[]> {
     await this.load();
     if (id === undefined) return this.checkAll();
-    if (id === LOCAL_SERVER_ID) await this.checkLocal();
-    else {
+    if (id === LOCAL_SERVER_ID) {
+      if (options.lookAgain) this.launchState(id).programAt = 0;
+      await this.checkLocal();
+    } else {
       const entry = this.entries.get(id);
       if (entry) await this.checkEntry(entry);
     }
@@ -908,7 +914,7 @@ export class ModelServerRegistry {
         version: null,
         latencyMs: null,
         checkedAt: new Date().toISOString(),
-        error: 'Ollama is not running on this computer.',
+        error: OLLAMA_NOT_RUNNING,
       };
     }
     await this.observe(LOCAL_SERVER_ID);
@@ -1045,17 +1051,23 @@ export class ModelServerRegistry {
       state.observedAt = Date.now();
       state.observedVersion = target.health.version;
     }
-    if (id === LOCAL_SERVER_ID && owner === 'none') await this.findOllama(id, state);
+    if (id === LOCAL_SERVER_ID && owner === 'none' && target.health.state === 'unreachable') {
+      await this.findOllama(id, state);
+    }
     this.sizingChanged(id);
   }
 
   /**
-   * Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS. The check emits what a look finds in
-   * time; a slower look emits once when it settles, unless a newer look has started since.
+   * Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS and one look at a time; a look stuck
+   * past PROGRAM_TTL_MS is given up on. The check emits what a look finds in time; a slower look emits once when it
+   * settles, unless a newer look has started since.
    */
   private async findOllama(id: string, state: LaunchState): Promise<void> {
-    if (Date.now() - state.programAt < PROGRAM_TTL_MS) return;
-    state.programAt = Date.now();
+    const now = Date.now();
+    if (state.lookingSince !== null && now - state.lookingSince < PROGRAM_TTL_MS) return;
+    if (now - state.programAt < PROGRAM_TTL_MS) return;
+    state.programAt = now;
+    state.lookingSince = now;
     const look = ++state.programLook;
     const settled = this.supervisor
       .program('ollama', this.launchSettings(id))
@@ -1064,6 +1076,7 @@ export class ModelServerRegistry {
         (error: unknown) => (error instanceof Error ? error.message : String(error))
       )
       .then(missing => {
+        if (look === state.programLook) state.lookingSince = null;
         if (look !== state.programLook || state.missingOllama === missing) return false;
         state.missingOllama = missing;
         return true;
@@ -1085,6 +1098,7 @@ export class ModelServerRegistry {
         missingOllama: undefined,
         programAt: 0,
         programLook: 0,
+        lookingSince: null,
       };
       this.launchStates.set(id, state);
     }

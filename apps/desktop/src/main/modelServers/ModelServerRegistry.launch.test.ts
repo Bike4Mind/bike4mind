@@ -500,6 +500,39 @@ describe('ModelServerRegistry launching servers', () => {
     }
   });
 
+  it('looks again at once on a user check, but never runs two looks at a time', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockResolvedValueOnce({
+        problem: 'Desktop could not find Ollama on this computer.',
+      });
+      await registry.check('local');
+      expect((await local(registry)).launch).toMatchObject({ canStart: false });
+
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(1);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      expect((await local(registry)).launch).toMatchObject({ canStart: true });
+
+      let found: (value: { path: string }) => void = () => {};
+      vi.mocked(launchers.program).mockReturnValueOnce(new Promise(resolve => (found = resolve)));
+      for (let click = 0; click < 4; click++) {
+        const checked = registry.check('local', { lookAgain: true });
+        await vi.advanceTimersByTimeAsync(2_000);
+        await checked;
+      }
+      expect(launchers.program).toHaveBeenCalledTimes(3);
+      found({ path: '/opt/fake/bin' });
+      await vi.advanceTimersByTimeAsync(0);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports a look that settles in time with the check, in one push', async () => {
     const { registry, changed } = setup();
     changed.mockClear();
