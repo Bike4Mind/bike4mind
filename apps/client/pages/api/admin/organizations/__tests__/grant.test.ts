@@ -71,9 +71,12 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
     return null;
   }),
 }));
+vi.mock('@server/entitlements/paidStanding', () => ({ priceAffectsEntitlements: vi.fn(() => true) }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import handler from '../grant';
 
 const BODY = {
@@ -124,6 +127,25 @@ describe('POST /api/admin/organizations/grant', () => {
     expect(mockOrgCreate).toHaveBeenCalled();
     expect(mockSubCreate).toHaveBeenCalled();
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', name: 'Acme Corp' });
+  });
+
+  it('wakes the owner entitlement cache when the org plan price affects entitlements', async () => {
+    const { run } = call({});
+    await run();
+    expect(sendToClient).toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
+  });
+
+  it('skips the entitlements push when the price does not affect entitlements', async () => {
+    vi.mocked(priceAffectsEntitlements).mockReturnValueOnce(false);
+    const { run } = call({});
+    await run();
+    expect(sendToClient).not.toHaveBeenCalledWith('owner-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
   });
 
   it('records org.credits.granted against the new organization', async () => {

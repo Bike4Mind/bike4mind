@@ -289,6 +289,56 @@ describe('UsersTab', () => {
     expect(screen.queryByTestId('admin-filter-verdict')).toBeNull();
   });
 
+  it('opens on the AI advisory link as a chip, asks the server for it, and badges the flagged rows', async () => {
+    apiGet.mockImplementation(async (url: string) => ({
+      data:
+        url === '/api/admin/shadow-detections/ai-advisory'
+          ? {
+              since: '2026-11-04T12:00:00.000Z',
+              advisories: [
+                {
+                  userId: 'u1',
+                  detectionId: 'd'.repeat(24),
+                  detector: 'accountCampaign',
+                  abuseProbability: 0.92,
+                  assessedAt: '2026-11-05T11:00:00.000Z',
+                },
+              ],
+              networks: [],
+              mailDomains: [],
+              truncated: false,
+            }
+          : respond(url),
+    }));
+    act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, aiVerdict: 'abuse' }));
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    expect(screen.getByTestId('admin-filter-aiVerdict').textContent).toBe('AI advisory:\u00a0Likely abuse');
+    expect(apiGet).toHaveBeenCalledWith(
+      '/api/admin/users',
+      expect.objectContaining({ params: expect.objectContaining({ aiVerdict: 'abuse' }) })
+    );
+    expect(await screen.findByTestId('admin-users-ai-advisory-u1')).toHaveTextContent('\u2726 AI');
+    expect(screen.queryByTestId('admin-users-ai-advisory-u2')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('admin-filter-clear-aiVerdict-btn'));
+    await waitFor(() => expect(fakeAdminRouter.search).not.toHaveProperty('aiVerdict'));
+  });
+
+  it('keeps the rows and shows no badge when the AI advisory fetch fails', async () => {
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/admin/shadow-detections/ai-advisory') throw new Error('forbidden');
+      return { data: respond(url) };
+    });
+    renderTab();
+    await screen.findByTestId('admin-users-row-u1');
+
+    await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/admin/shadow-detections/ai-advisory'));
+    expect(screen.getByTestId('admin-users-row-u2')).toBeInTheDocument();
+    expect(screen.queryByTestId('admin-users-ai-advisory-u1')).toBeNull();
+  });
+
   it('reads a single active day as one UTC day', async () => {
     act(() => fakeAdminRouter.reset({ tab: 'users', page: 1, activeFrom: '2026-10-03', activeTo: '2026-10-03' }));
     renderTab();

@@ -1180,6 +1180,23 @@ function type(input: HTMLInputElement, value: string) {
   });
 }
 
+describe('ModelsScreen WSL GPU memory warning', () => {
+  it.each(['curated', 'installed'] as const)('shows the warning main reports above the %s tab', async tab => {
+    bridge.installed = {
+      ok: true,
+      models: [],
+      gpuMemoryCap: { model: 'big:q8_0', sizeBytes: 36 * GIB, gpuBytes: 22 * GIB },
+    };
+    await mount(undefined, tab);
+    expect(q('models-gpu-cap-warning')?.textContent).toContain('big:q8_0 loaded with 22 GiB of its 36 GiB on the GPU');
+  });
+
+  it('shows no warning when main reports none', async () => {
+    await mount();
+    expect(q('models-gpu-cap-warning')).toBeNull();
+  });
+});
+
 describe('ModelsScreen installed', () => {
   it('shows the empty state and leads to Explore', async () => {
     await mount();

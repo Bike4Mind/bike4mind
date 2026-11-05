@@ -27,6 +27,7 @@ const SURFACES = [
   'chatbox.replyBg',
 ] as const;
 const AA_TEXT = 4.5;
+const AA_GRAPHICS = 3;
 
 type Rgba = [number, number, number, number];
 
@@ -122,6 +123,25 @@ describe('admin token contrast', () => {
     }
     for (const tone of [...Object.values(palette.status), palette.selection]) {
       expect(contrast(tone.foreground, tone.background), tone.foreground).toBeGreaterThanOrEqual(AA_TEXT);
+    }
+  });
+
+  // WCAG 1.4.11: a chart mark needs 3:1 against the card behind it. These are the solid series colors the
+  // admin charts paint (components/admin/Revenue/chartParts.tsx); comparisons and plan bands are lighter
+  // by design and are labeled in the legend, tooltip and "View as table".
+  it.each(MODES)('%s: admin chart series reach 3:1 on the card surface', mode => {
+    const palette = theme.colorSchemes[mode].palette.admin;
+    const series = {
+      accent: palette.accent,
+      ink: palette.ink,
+      good: palette.status.good.foreground,
+      bad: palette.status.bad.foreground,
+      warn: palette.status.warn.foreground,
+    };
+    for (const [name, color] of Object.entries(series)) {
+      for (const surface of [palette.surface, palette.surfaceSubtle]) {
+        expect(contrast(color, surface), `${name} on ${surface}`).toBeGreaterThanOrEqual(AA_GRAPHICS);
+      }
     }
   });
 

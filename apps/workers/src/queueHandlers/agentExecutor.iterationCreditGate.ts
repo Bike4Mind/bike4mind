@@ -97,11 +97,7 @@ export async function stopUnfundedIteration(
       requiredCredits: uncoveredCredits,
       iterationIndex: args.iterationIndex,
     });
-    await stopRun(args, deps, {
-      message: 'Insufficient credits to continue agent execution',
-      failureReason: 'insufficient_credits',
-      stopped: 'Stopped: out of credits.',
-    });
+    await stopOutOfCredits(args, deps);
     return true;
   }
 
@@ -114,6 +110,21 @@ export async function stopUnfundedIteration(
     stopped: `Stopped: ${spendCapMessage}`,
   });
   return true;
+}
+
+/**
+ * Ends the run as out of credits: the per-iteration gate's stop, also used when the round output
+ * cap (agentExecutor.roundOutputCap.ts) finds the balance cannot buy even a short answer.
+ */
+export async function stopOutOfCredits(
+  args: Pick<IterationCreditGateArgs, 'executionId' | 'snapshot'>,
+  deps: IterationCreditGateDeps
+): Promise<void> {
+  await stopRun(args, deps, {
+    message: 'Insufficient credits to continue agent execution',
+    failureReason: 'insufficient_credits',
+    stopped: 'Stopped: out of credits.',
+  });
 }
 
 export interface IterationAccountGateArgs {

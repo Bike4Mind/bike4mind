@@ -51,7 +51,7 @@ describe('admin block signup grant', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
-    h.findById.mockResolvedValue({ id: 'user-1' });
+    h.findById.mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
     h.block.mockResolvedValue({ outcome: 'applied', credits: 0, rewardsAffected: 2 });
   });
 
@@ -103,7 +103,23 @@ describe('admin block signup grant', () => {
       expect.objectContaining({
         action: 'user.credits.grant_blocked',
         reason: 'Confirmed farming ring',
-        target: { kind: 'user', id: 'user-1', displayName: 'user-1' },
+        target: { kind: 'user', id: 'user-1', displayName: 'user@example.com' },
+      })
+    );
+  });
+
+  it('uses the canonical target id for the lookup, block and audit', async () => {
+    const userId = 'ABCDEF012345678901234567';
+    await h.handler!(request({ query: { userId } }), { json: vi.fn() });
+
+    const canonicalUserId = userId.toLowerCase();
+    expect(h.findById).toHaveBeenCalledExactlyOnceWith(canonicalUserId);
+    expect(h.block).toHaveBeenCalledExactlyOnceWith(canonicalUserId, expect.anything());
+    await h.block.mock.calls[0][1].audit();
+    expect(h.audit).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({
+        target: { kind: 'user', id: canonicalUserId, displayName: 'user@example.com' },
       })
     );
   });

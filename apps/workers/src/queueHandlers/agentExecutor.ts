@@ -97,7 +97,13 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import { CreditHolderType, type AttachmentLakeAccess, type IAgent, type IUserDocument } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  PAID_PLAN_ENTITLEMENT_KEY,
+  type AttachmentLakeAccess,
+  type IAgent,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -212,8 +218,10 @@ import {
   shouldGateIteration,
   stopBlockedAccountIteration,
   stopCappedIteration,
+  stopOutOfCredits,
   stopUnfundedIteration,
 } from './agentExecutor.iterationCreditGate';
+import { capAgentRoundOutput, capsRoundOutput, outOfCreditsOutcome } from './agentExecutor.roundOutputCap';
 import { buildAgentVideoToolConfig, getAgentVideoToolConfigDeps } from './agentExecutor.videoToolConfig';
 import { buildAgentMusicToolConfig, getAgentMusicToolConfigDeps } from './agentExecutor.musicToolConfig';
 import { publishRunGenerationJobs } from './agentExecutor.generationJobs';
@@ -2417,6 +2425,25 @@ async function processExecution(
       readPromptSetting: () => adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt'),
     });
 
+    // Each agent round's output is capped at what the payer can afford; the loop below turns the
+    // cap on for the iterations the credit gate checks.
+    let roundCapActive = false;
+    const capsRounds = await capsRoundOutput({
+      enforceCredits: enforceCredits && Boolean(modelInfo),
+      billedToOrganization: Boolean(organization),
+      readHasPaidPlan: async () => (await getUserEntitlements(user)).includes(PAID_PLAN_ENTITLEMENT_KEY),
+    });
+    const agentLlm =
+      capsRounds && modelInfo
+        ? capAgentRoundOutput(llm, {
+            modelInfo,
+            readBalance: () => readPayerBalance({ userId: (user as IUserDocument).id }),
+            lastInputTokens: () => lastInputTokens,
+            isActive: () => roundCapActive,
+            logger,
+          })
+        : llm;
+
     // Create or restore ReActAgent. LLM runtime knobs are merged via
     // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
     // temperature / maxTokens / thinking so they only override the agent's
@@ -2426,7 +2453,7 @@ async function processExecution(
     const agent = new ReActAgent({
       userId: execution.userId,
       logger,
-      llm,
+      llm: agentLlm,
       model: agentModel,
       ...(shadowModelInfo ? { modelIdentityId: execution.model, modelDisplayName: modelInfo?.name } : {}),
       tools,
@@ -3048,6 +3075,7 @@ async function processExecution(
         iterationIndex,
         wakeStartIteration: aggregationWakeStartIteration,
       });
+      roundCapActive = gateThisIteration;
       if (gateThisIteration && modelInfo) {
         const stopped = await stopUnfundedIteration(
           {
@@ -3282,7 +3310,31 @@ async function processExecution(
             }),
         },
         { selfDispatchContinuation }
-      );
+      ).catch(outOfCreditsOutcome);
+      if (deadlineOutcome.kind === 'out-of-credits') {
+        logger.warn('[Credits] Balance cannot pay for even a short answer this round; stopping execution', {
+          balance: deadlineOutcome.error.balance,
+          requiredCredits: deadlineOutcome.error.minimumCredits,
+          iterationIndex,
+        });
+        await stopOutOfCredits(
+          {
+            executionId,
+            snapshot: () => {
+              const checkpoint = agent.toCheckpoint();
+              return { steps: checkpoint.steps, partialAnswer: extractFinalAnswer(checkpoint.steps) };
+            },
+          },
+          {
+            markFailed: (id, error) => agentExecutionRepository.markFailed(id, error),
+            sendWs,
+            persistRunAsQuest: (id, message) =>
+              persistRunAsQuest(id, message, logger, generatedImages, undefined, allSideEffects, retrievalSummary),
+            logger,
+          }
+        );
+        return;
+      }
       if (deadlineOutcome.kind === 'handed-off') {
         logger.info('[Timeout] Iteration deadline hit mid-call, self-dispatched to continuation queue');
         return;

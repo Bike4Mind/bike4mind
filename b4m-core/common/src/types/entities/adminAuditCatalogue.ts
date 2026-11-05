@@ -54,6 +54,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
+  'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
+  'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
 
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
@@ -345,6 +347,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // info, not critical: a sign-off row must never itself enter the review queue. The review document is the source of truth.
+  'audit.reviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'audit.unreviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
 
   'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

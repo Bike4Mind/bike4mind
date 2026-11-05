@@ -154,7 +154,8 @@ void app.whenReady().then(async () => {
     loopMerge: (sessionId, prUrl) => loops.runner.merge(sessionId, prUrl),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
-    catalogSampling: name => models.catalogSampling(name),
+    catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
+      models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
   const loops = registerLoopRunner(auth, chat, background);
   const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);

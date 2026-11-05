@@ -123,6 +123,7 @@ const ownerMatches = (doc: Record<string, unknown> | undefined, owner: { ownerKe
 const repo = vi.hoisted(() => ({
   createWithinUserCap: vi.fn(),
   findByIdForOwner: vi.fn(),
+  findByIdWithCredentials: vi.fn(),
   listAllForUser: vi.fn(),
   updateSettings: vi.fn(),
   setStatus: vi.fn(),
@@ -143,6 +144,9 @@ function installRepo(): void {
     return defaultRead(h.store.get(id));
   });
   repo.findByIdForOwner.mockImplementation(async (id: string, owner: { ownerKey: string }) =>
+    ownerMatches(h.store.get(id), owner) ? defaultRead(h.store.get(id)) : null
+  );
+  repo.findByIdWithCredentials.mockImplementation(async (id: string, owner: { ownerKey: string }) =>
     ownerMatches(h.store.get(id), owner) ? defaultRead(h.store.get(id)) : null
   );
   repo.listAllForUser.mockImplementation(async (userId: string) =>

@@ -17,6 +17,16 @@ vi.mock('./MrrTrendChart', () => ({
     <div data-testid="admin-revenue-chart">{points.map(point => point.date).join(',')}</div>
   ),
 }));
+vi.mock('./RevenueCharts', () => ({
+  MrrMovementChart: ({ periods }: { periods: { label: string }[] }) => (
+    <div data-testid="admin-revenue-movement-chart">{periods.map(period => period.label).join(',')}</div>
+  ),
+  MrrByPlanChart: ({ series }: { series: { label: string }[] }) => (
+    <div data-testid="admin-revenue-by-plan-chart">{series.map(entry => entry.label).join(',')}</div>
+  ),
+  PayingByOwnerChart: () => <div data-testid="admin-revenue-by-owner-chart" />,
+  AtRiskChart: () => <div data-testid="admin-revenue-at-risk-chart" />,
+}));
 
 import { fakeAdminRouter } from '../__tests__/fakeAdminRouter';
 import AdminRevenue from './index';
@@ -76,6 +86,7 @@ const revenue = (overrides: Partial<AdminRevenueData> = {}): AdminRevenueData =>
   },
   startOfRange: null,
   trend: [],
+  trendPlans: [],
   trendStartsOn: '2026-10-30',
   byPlan: [
     {
@@ -104,6 +115,19 @@ const revenue = (overrides: Partial<AdminRevenueData> = {}): AdminRevenueData =>
     total: 2,
     mrr: usd(6_800),
   },
+  ...overrides,
+});
+
+const trendPoint = (overrides: Partial<RevenueTrendPoint> & Pick<RevenueTrendPoint, 'date'>): RevenueTrendPoint => ({
+  mrr: 0,
+  payingCount: 0,
+  newMrr: 0,
+  churnedMrr: 0,
+  pastDueMrr: 0,
+  cancelingMrr: 0,
+  payingUsers: 0,
+  payingOrgs: 0,
+  mrrByPlan: {},
   ...overrides,
 });
 
@@ -148,13 +172,13 @@ describe('AdminRevenue', () => {
 
   it('charts the snapshots with a takeaway, compares MRR with the start of the range, and offers a table', async () => {
     const trend = [
-      { date: '2026-10-01', mrr: 1_000_000, payingCount: 40 },
-      { date: '2026-10-29', mrr: 1_100_000, payingCount: 41 },
+      trendPoint({ date: '2026-10-01', mrr: 1_000_000, payingCount: 40 }),
+      trendPoint({ date: '2026-10-29', mrr: 1_100_000, payingCount: 41 }),
     ];
     response = revenue({ trend, startOfRange: trend[0], trendStartsOn: '2026-09-01' });
     renderTab();
     expect((await screen.findByTestId('admin-revenue-chart')).textContent).toBe('2026-10-01,2026-10-29');
-    expect(screen.getByTestId('admin-revenue-chart-caption').textContent).toBe(
+    expect(screen.getByTestId('admin-revenue-trend-caption').textContent).toBe(
       'MRR is up 10.0% since Oct 1: $11,000.00 MRR from 41 paying.'
     );
     expect(tiles()[0]).toContain('+$2,345.00 since Oct 1');
@@ -164,6 +188,79 @@ describe('AdminRevenue', () => {
     expect(within(table).getByText('October 29, 2026')).toBeTruthy();
     expect(within(table).getByText('$11,000.00')).toBeTruthy();
     expect(screen.queryByTestId('admin-revenue-chart')).toBeNull();
+  });
+
+  it('says when every revenue chart starts collecting, before the first snapshot', async () => {
+    renderTab();
+    await screen.findByText('Trend starts collecting on October 30, 2026');
+    for (const id of ['movement', 'plan-trend', 'by-owner', 'at-risk-trend']) {
+      expect(screen.getByTestId(`admin-revenue-${id}-empty`).textContent).toBe(
+        'Trend starts collecting on October 30, 2026.'
+      );
+      expect(screen.queryByTestId(`admin-revenue-${id}-table-toggle-btn`)).toBeNull();
+    }
+  });
+
+  it('charts movement, plans, owners and at-risk MRR with takeaways and a table for each', async () => {
+    const trend = [
+      trendPoint({
+        date: '2026-10-28',
+        newMrr: 5_000,
+        churnedMrr: 1_900,
+        payingCount: 3,
+        payingUsers: 2,
+        payingOrgs: 1,
+        mrrByPlan: { price_team: 3_000, none: 1_000 },
+      }),
+      trendPoint({
+        date: '2026-10-29',
+        payingCount: 4,
+        payingUsers: 3,
+        payingOrgs: 1,
+        pastDueMrr: 1_900,
+        cancelingMrr: 4_900,
+        mrrByPlan: { price_team: 3_000, none: 1_000 },
+      }),
+    ];
+    response = revenue({
+      trend,
+      startOfRange: trend[0],
+      trendStartsOn: '2026-09-01',
+      trendPlans: [
+        { key: 'price_team', plan: { priceId: 'price_team', name: 'Team', interval: 'monthly' } },
+        { key: 'none', plan: { priceId: null, name: null, interval: null } },
+      ],
+    });
+    renderTab();
+    expect((await screen.findByTestId('admin-revenue-movement-chart')).textContent).toBe('Oct 28,Oct 29');
+    expect(screen.getByTestId('admin-revenue-movement-caption').textContent).toBe(
+      'Net +$31.00 MRR in this range: $50.00 new, $19.00 churned.'
+    );
+    expect(screen.getByTestId('admin-revenue-by-plan-chart').textContent).toBe('Team,Unknown plan');
+    expect(screen.getByTestId('admin-revenue-plan-trend-caption').textContent).toBe('Team is 75% of MRR on Oct 29.');
+    expect(screen.getByTestId('admin-revenue-by-owner-caption').textContent).toBe(
+      '4 paying on Oct 29: 3 individuals, 1 organization.'
+    );
+    expect(screen.getByTestId('admin-revenue-at-risk-trend-caption').textContent).toBe(
+      '$19.00 past due and $49.00 canceling on Oct 29. A row can be both.'
+    );
+
+    fireEvent.click(screen.getByTestId('admin-revenue-movement-table-toggle-btn'));
+    const movement = screen.getByTestId('admin-revenue-movement-table');
+    expect(within(movement).getByText('$50.00')).toBeTruthy();
+    expect(within(movement).getByText('-$19.00')).toBeTruthy();
+    expect(screen.queryByTestId('admin-revenue-movement-chart')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('admin-revenue-plan-trend-table-toggle-btn'));
+    const plans = screen.getByTestId('admin-revenue-plan-trend-table');
+    expect(within(plans).getByText('Team (USD)')).toBeTruthy();
+    expect(within(plans).getAllByText('$40.00')).toHaveLength(2);
+
+    fireEvent.click(screen.getByTestId('admin-revenue-by-owner-table-toggle-btn'));
+    expect(within(screen.getByTestId('admin-revenue-by-owner-table')).getByText('Organizations')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('admin-revenue-at-risk-trend-table-toggle-btn'));
+    expect(within(screen.getByTestId('admin-revenue-at-risk-trend-table')).getByText('$49.00')).toBeTruthy();
   });
 
   it('asks for the picked range', async () => {

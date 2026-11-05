@@ -1,8 +1,10 @@
 import {
+  ANALYTICS_ACCOUNTS,
   ANALYTICS_COMPARE,
   ANALYTICS_DEFAULTS,
   ANALYTICS_RANGES,
   ANALYTICS_SIGNUPS,
+  type AnalyticsAccounts,
   type AnalyticsCompare,
   type AnalyticsOverviewQuery,
   type AnalyticsRange,
@@ -14,7 +16,7 @@ import {
 export const ANALYTICS_SEARCH_KEYS = {
   query: 'analyticsQuery',
   view: 'analyticsView',
-  filters: { range: 'range', from: 'start', to: 'end', compare: 'compare', signups: 'signups' },
+  filters: { range: 'range', from: 'start', to: 'end', compare: 'compare', signups: 'signups', accounts: 'accounts' },
 } as const;
 export const ANALYTICS_TAB_PARAMS = Object.values(ANALYTICS_SEARCH_KEYS.filters);
 
@@ -31,6 +33,7 @@ export function readAnalyticsFilters(filters: Record<string, string>): Analytics
     ...(range === 'custom' && DAY.test(filters.to ?? '') ? { to: filters.to } : {}),
     compare: pick<AnalyticsCompare>(ANALYTICS_COMPARE, filters.compare, ANALYTICS_DEFAULTS.compare),
     signups: pick<AnalyticsSignupsMode>(ANALYTICS_SIGNUPS, filters.signups, ANALYTICS_DEFAULTS.signups),
+    accounts: pick<AnalyticsAccounts>(ANALYTICS_ACCOUNTS, filters.accounts, ANALYTICS_DEFAULTS.accounts),
   };
 }
 
@@ -42,5 +45,6 @@ export function writeAnalyticsFilters(query: AnalyticsOverviewQuery): Record<str
     to: query.range === 'custom' ? (query.to ?? '') : '',
     compare: query.compare === ANALYTICS_DEFAULTS.compare ? '' : query.compare,
     signups: query.signups === ANALYTICS_DEFAULTS.signups ? '' : query.signups,
+    accounts: query.accounts === ANALYTICS_DEFAULTS.accounts ? '' : query.accounts,
   };
 }

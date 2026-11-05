@@ -12,6 +12,12 @@ const routerMock = vi.hoisted(() => ({
   navigate: vi.fn(),
 }));
 
+vi.mock('./InviteCenter/Packages/GrantPackagesTab', () => ({
+  default: ({ embedded }: { embedded?: boolean }) => (
+    <div data-testid="grant-packages-tab-stub" data-embedded={String(embedded)} />
+  ),
+}));
+
 vi.mock('@tanstack/react-router', () => ({
   useSearch: () => routerMock.search,
   useNavigate: () => routerMock.navigate,
@@ -77,7 +83,6 @@ describe('InviteCenterShell', () => {
   });
 
   it.each([
-    ['packages', 'Packages are coming here'],
     ['schedule', 'The signup credit schedule is coming here'],
     ['pending', 'Pending grants are coming here'],
     ['rewards', 'Rewards are coming here'],
@@ -85,6 +90,15 @@ describe('InviteCenterShell', () => {
     routerMock.search = { inviteSection: id };
     renderShell();
     expect(screen.getByText(title)).toBeInTheDocument();
+  });
+
+  it('renders the grant packages table, not a stub, in the packages section', () => {
+    routerMock.search = { inviteSection: 'packages' };
+    renderShell();
+    const tab = screen.getByTestId('grant-packages-tab-stub');
+    expect(screen.getByTestId('invite-center-section-packages')).toContainElement(tab);
+    expect(tab).toHaveAttribute('data-embedded', 'true');
+    expect(screen.queryByTestId('admin-empty-state')).not.toBeInTheDocument();
   });
 
   it('has no action buttons on the schedule and rewards stubs', () => {

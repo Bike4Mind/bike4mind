@@ -153,7 +153,7 @@ export enum AdminTab {
 export type SidebarGate = 'userMigration' | 'liveOpsTriage';
 
 /** Special-cased end decorators (e.g. the waiting-subscribers badge). */
-export type SidebarBadge = 'waitingSubscribers' | 'newSubscriptions';
+export type SidebarBadge = 'waitingSubscribers' | 'newSubscriptions' | 'unreviewedAudit';
 
 export type SidebarItem = {
   /** A lucide stroke icon; the sidebar renders it at 16 px with a 2 px stroke. */
@@ -258,7 +258,13 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         label: 'Moderation review',
         testid: 'admin-moderation-incidents-btn',
       },
-      { Icon: ScrollText, tab: AdminTab.AuditLog, label: 'Audit log', testid: 'admin-audit-log-btn' },
+      {
+        Icon: ScrollText,
+        tab: AdminTab.AuditLog,
+        label: 'Audit log',
+        testid: 'admin-audit-log-btn',
+        badge: 'unreviewedAudit',
+      },
       { Icon: Fingerprint, tab: AdminTab.IdentityProviders, label: 'Identity providers' },
       { Icon: KeyRound, tab: AdminTab.OAuthClients, label: 'OAuth clients', testid: 'admin-oauth-clients-btn' },
       { Icon: Key, tab: AdminTab.ApiKeyScopePreflight, label: 'API key scopes', testid: 'admin-scope-preflight-btn' },

@@ -850,6 +850,42 @@ describe('parseNvidiaSmi', () => {
       { name: 'Orin', memoryBytes: null },
     ]);
   });
+
+  it('skips the NPU row Windows lists beside an RTX Spark GPU', () => {
+    expect(parseNvidiaSmi(N1X_WINDOWS_SMI)).toEqual([{ name: N1X, memoryBytes: 81920 * MiB }]);
+  });
+});
+
+const N1X = 'NVIDIA RTX Spark N1X (6144-core Blackwell RTX GPU)';
+// nvidia-smi.exe on Windows on Arm lists the NPU as a device with no memory figures.
+const N1X_WINDOWS_SMI = `${N1X}, 81920\r\nNVIDIA NPU, [N/A]\r\n`;
+
+describe('probeHardware with an NVIDIA GPU that shares the CPU memory', () => {
+  it('reports the RTX Spark dedicated memory on Windows, where nvidia-smi also lists the NPU', async () => {
+    const exec = execFrom({ 'nvidia-smi': N1X_WINDOWS_SMI });
+    const profile = await probeHardware({ exec, os: os(46 * GiB), platform: 'win32', arch: 'arm64', env: {} });
+    expect(profile).toMatchObject({
+      memoryKind: 'discrete',
+      gpuMemoryBytes: 81920 * MiB,
+      gpuName: N1X,
+      gpuCount: 1,
+      gpuVendor: 'nvidia',
+      confidence: 'high',
+    });
+    expect(exec).not.toHaveBeenCalledWith(POWERSHELL, expect.anything());
+  });
+
+  it('reports the same for the RTX Spark in WSL, where nvidia-smi lists no NPU', async () => {
+    const exec = execFrom({ 'nvidia-smi': `${N1X}, 81920\n` });
+    const profile = await probeHardware({ exec, os: os(29 * GiB), platform: 'linux', arch: 'arm64', env: {} });
+    expect(profile).toMatchObject({ memoryKind: 'discrete', gpuMemoryBytes: 81920 * MiB, gpuName: N1X, gpuCount: 1 });
+  });
+
+  it('still reports GB10, which has no NPU row and no dedicated memory, as unified memory', async () => {
+    const exec = execFrom({ 'nvidia-smi': 'NVIDIA GB10, [N/A]\n' });
+    const profile = await probeHardware({ exec, os: os(128 * GiB), platform: 'linux', arch: 'arm64', env: {} });
+    expect(profile).toMatchObject({ memoryKind: 'unified', gpuMemoryBytes: null, gpuName: 'NVIDIA GB10', gpuCount: 1 });
+  });
 });
 
 describe('memory in use', () => {
@@ -873,6 +909,18 @@ describe('memory in use', () => {
       { totalBytes: 17163091968, usedBytes: 2048 },
     ]);
     expect(parseRocmSmiVram('not json')).toEqual([]);
+  });
+
+  it('skips the NPU row in nvidia-smi usage on Windows on Arm', () => {
+    expect(parseNvidiaSmiUsage(`${N1X}, 81920, 27512\r\nNVIDIA NPU, [N/A], [N/A]\r\n`)).toEqual([
+      { vendor: 'nvidia', name: N1X, memoryBytes: 81920 * MiB, memoryUsedBytes: 27512 * MiB },
+    ]);
+  });
+
+  it('reports no NPU among the GPUs in use on Windows', async () => {
+    const exec = execFrom({ 'nvidia-smi': `${N1X}, 81920, 27512\r\nNVIDIA NPU, [N/A], [N/A]\r\n` });
+    const usage = await probeMemoryUsage({ exec, platform: 'win32', env: {} });
+    expect(usage.gpus.map(gpu => gpu.name)).toEqual([N1X]);
   });
 
   it('reads available RAM and NVIDIA usage on Linux', async () => {

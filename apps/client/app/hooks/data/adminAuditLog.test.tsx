@@ -6,12 +6,34 @@ import { api } from '@client/app/contexts/ApiContext';
 import { downloadUrl } from '@client/app/utils/download';
 import { AxiosError, AxiosHeaders } from 'axios';
 import { makeAuditEntry } from '@client/app/components/admin/AuditLog/shared/auditTestFixtures';
-import { downloadAuditLogCsv, useAuditEntry, useAuditLog } from './adminAuditLog';
+import {
+  downloadAuditLogCsv,
+  useAuditEntry,
+  useAuditLog,
+  useAuditReview,
+  useAuditReviewQueue,
+  useMarkAuditReviewed,
+  useUnmarkAuditReviewed,
+  useUnreviewedAuditCount,
+} from './adminAuditLog';
 
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({
+  api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
+}));
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 vi.mock('@client/app/utils/download', () => ({ downloadUrl: vi.fn() }));
 
 const get = api.get as unknown as Mock;
+const post = api.post as unknown as Mock;
+const del = api.delete as unknown as Mock;
+
+const makeWrapper = () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper = ({ children }: { children: React.ReactNode }) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  return { queryClient, wrapper };
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -105,5 +127,150 @@ describe('useAuditEntry', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('review queue hooks', () => {
+  it('requests the queue with status, from and cursor, and revives entry and review dates', async () => {
+    const wireEntry = {
+      ...makeAuditEntry({ severity: 'critical' }),
+      occurredAt: '2026-10-01T00:00:00.000Z',
+      review: {
+        auditEntryId: 'entry-1',
+        reviewer: { userId: 'u2', name: 'Rita' },
+        reviewedAt: '2026-10-02T00:00:00.000Z',
+      },
+    };
+    get
+      .mockResolvedValueOnce({ data: { entries: [wireEntry], nextCursor: 'c1', total: 2 } })
+      .mockResolvedValueOnce({ data: { entries: [{ ...wireEntry, review: null }], nextCursor: null, total: 2 } });
+    const { wrapper } = makeWrapper();
+
+    const { result } = renderHook(() => useAuditReviewQueue('all', { from: '2026-09-01T00:00:00.000Z', limit: 10 }), {
+      wrapper,
+    });
+
+    await waitFor(() => expect(result.current.data?.pages[0].entries[0].review?.reviewedAt).toBeInstanceOf(Date));
+    expect(result.current.data?.pages[0].entries[0].occurredAt).toBeInstanceOf(Date);
+    expect(get).toHaveBeenCalledWith('/api/admin/audit-log/review-queue', {
+      params: { status: 'all', limit: '10', from: '2026-09-01T00:00:00.000Z' },
+    });
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    expect((get.mock.calls[1][1] as { params: Record<string, string> }).params.cursor).toBe('c1');
+    await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
+    expect(result.current.data?.pages[1].entries[0].review).toBeNull();
+  });
+
+  it('counts unreviewed entries from the total of a one-row page, and stays idle when disabled', async () => {
+    get.mockResolvedValue({ data: { entries: [], nextCursor: null, total: 7 } });
+    const { wrapper } = makeWrapper();
+
+    const idle = renderHook(() => useUnreviewedAuditCount({ enabled: false }), { wrapper });
+    expect(idle.result.current.fetchStatus).toBe('idle');
+    expect(get).not.toHaveBeenCalled();
+
+    const { result } = renderHook(() => useUnreviewedAuditCount({ enabled: true }), { wrapper });
+    await waitFor(() => expect(result.current.data).toBe(7));
+    expect(get).toHaveBeenCalledWith('/api/admin/audit-log/review-queue', {
+      params: { status: 'unreviewed', limit: '1' },
+    });
+  });
+
+  it('looks up one review by entry id and revives reviewedAt; null id does not fetch', async () => {
+    get.mockResolvedValue({
+      data: {
+        review: { auditEntryId: 'e1', reviewer: { userId: 'u', name: 'N' }, reviewedAt: '2026-10-02T00:00:00.000Z' },
+      },
+    });
+    const { wrapper } = makeWrapper();
+
+    const idle = renderHook(() => useAuditReview(null), { wrapper });
+    expect(idle.result.current.fetchStatus).toBe('idle');
+
+    const { result } = renderHook(() => useAuditReview('e1'), { wrapper });
+    await waitFor(() => expect(result.current.data?.reviewedAt).toBeInstanceOf(Date));
+    expect(get).toHaveBeenCalledWith('/api/admin/audit-log/reviews', { params: { entryId: 'e1' } });
+  });
+
+  it('posts a review and invalidates the review queries', async () => {
+    post.mockResolvedValue({ data: { reviewed: ['e1'], skipped: [] } });
+    const { wrapper, queryClient } = makeWrapper();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+
+    const { result } = renderHook(() => useMarkAuditReviewed(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ entryIds: ['e1'], note: 'ok' });
+    });
+
+    expect(post).toHaveBeenCalledWith('/api/admin/audit-log/reviews', { entryIds: ['e1'], note: 'ok' });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'audit-log', 'review-queue'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'audit-log', 'review'] });
+  });
+
+  it('sends the unmark ids as the DELETE body', async () => {
+    del.mockResolvedValue({ data: { unreviewed: ['e1'], skipped: [] } });
+    const { wrapper } = makeWrapper();
+
+    const { result } = renderHook(() => useUnmarkAuditReviewed(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ entryIds: ['e1'] });
+    });
+
+    expect(del).toHaveBeenCalledWith('/api/admin/audit-log/reviews', { data: { entryIds: ['e1'] } });
+  });
+
+  describe.each([
+    [
+      'marking',
+      () => useMarkAuditReviewed(),
+      () => post.mockResolvedValue({ data: { reviewed: ['e1'], skipped: [] } }),
+    ],
+    [
+      'unmarking',
+      () => useUnmarkAuditReviewed(),
+      () => del.mockResolvedValue({ data: { unreviewed: ['e1'], skipped: [] } }),
+    ],
+  ])('%s a review', (_label, useMutationHook, mockSuccess) => {
+    it('invalidates the queue pages, the unreviewed count and the per-entry review', async () => {
+      mockSuccess();
+      const { wrapper, queryClient } = makeWrapper();
+      const keys = {
+        queue: ['admin', 'audit-log', 'review-queue', 'unreviewed', undefined, 50],
+        count: ['admin', 'audit-log', 'review-queue', 'count'],
+        review: ['admin', 'audit-log', 'review', 'e1'],
+      };
+      Object.values(keys).forEach(queryKey => queryClient.setQueryData(queryKey, { seeded: true }));
+      queryClient.setQueryData(['unrelated'], { seeded: true });
+      queryClient.setQueryData(['admin', 'audit-log', 'list', {}, 50], { seeded: true });
+
+      const { result } = renderHook(() => useMutationHook(), { wrapper });
+      await act(async () => {
+        await result.current.mutateAsync({ entryIds: ['e1'] });
+      });
+
+      expect(queryClient.getQueryState(keys.queue)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(keys.count)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(keys.review)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(['unrelated'])?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryState(['admin', 'audit-log', 'list', {}, 50])?.isInvalidated).toBe(false);
+    });
+  });
+
+  it('keeps the real queue and count hooks under the invalidated review-queue prefix', async () => {
+    get.mockResolvedValue({ data: { entries: [], nextCursor: null, total: 1 } });
+    const { wrapper, queryClient } = makeWrapper();
+    renderHook(() => useAuditReviewQueue('unreviewed'), { wrapper });
+    renderHook(() => useUnreviewedAuditCount({ enabled: true }), { wrapper });
+    await waitFor(() =>
+      expect(queryClient.getQueryCache().findAll({ queryKey: ['admin', 'audit-log', 'review-queue'] })).toHaveLength(2)
+    );
+    expect(
+      queryClient
+        .getQueryCache()
+        .findAll({ queryKey: ['admin', 'audit-log', 'review-queue'] })
+        .every(query => query.state.status === 'success' || query.state.fetchStatus === 'fetching')
+    ).toBe(true);
   });
 });

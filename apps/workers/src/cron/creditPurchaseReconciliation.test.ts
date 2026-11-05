@@ -65,6 +65,7 @@ const NOW = new Date('2026-10-11T07:00:00Z');
 const TX_CREATED_AT = new Date('2026-10-11T06:00:05Z');
 const purchaseRow = (overrides: Record<string, unknown> = {}) => ({
   id: 'tx_1',
+  type: 'purchase',
   ownerId: 'user_1',
   ownerType: 'User',
   createdAt: TX_CREATED_AT,
@@ -244,6 +245,15 @@ describe('creditPurchaseReconciliation cron', () => {
       expect(result.ungranted).toEqual([]);
     });
 
+    it('does not flag a refunded or lost-dispute purchase whose stamp was revoked', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(purchaseRow({ reversedAt: new Date(), reversalReason: 'refunded' }));
+      mockFindUserById.mockResolvedValue({ lastCreditsPurchasedAt: null });
+
+      const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+      expect(result.ungranted).toEqual([]);
+    });
+
     it('fails loudly when the owner lookup rejects, without emitting a partial result', async () => {
       mockFindUserById.mockRejectedValueOnce(new Error('db'));
 
@@ -335,6 +345,45 @@ describe('creditPurchaseReconciliation cron', () => {
 
     expect(JSON.parse(response.body)).toEqual({ skipped: true });
     expect(mockList).not.toHaveBeenCalled();
+    expect(mockConnectDB).not.toHaveBeenCalled();
+  });
+
+  it('the run itself skips without touching Stripe, the database, metrics or Slack when Stripe is not configured', async () => {
+    mockIsStripeConfigured.mockReturnValue(false);
+
+    const result = await runCreditPurchaseReconciliation(undefined, NOW);
+
+    expect(result).toEqual({ checked: 0, ungranted: [], ownerDeleted: 0, truncated: false, skipped: true });
+    expect(mockList).not.toHaveBeenCalled();
+    expect(mockFindByPaymentIntentId).not.toHaveBeenCalled();
+    expect(mockEmitMetric).not.toHaveBeenCalled();
+    expect(mockPostMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('emitMetrics: false suppresses only the metric', async () => {
+    mockList.mockResolvedValue({ data: [intent('pi_missing')], has_more: false });
+    mockFindByPaymentIntentId.mockResolvedValue(null);
+
+    const result = await runCreditPurchaseReconciliation(undefined, NOW, { emitMetrics: false });
+
+    expect(result.ungranted).toHaveLength(1);
+    expect(mockEmitMetric).not.toHaveBeenCalled();
+    expect(mockLoggerError).toHaveBeenCalled();
+    expect(mockPostMessageToSlack).toHaveBeenCalledTimes(1);
+  });
+
+  it('the stage option decides which intents count', async () => {
+    mockList.mockResolvedValue({
+      data: [intent('pi_selfhost', {}, { environment: 'selfhost' })],
+      has_more: false,
+    });
+    mockFindByPaymentIntentId.mockResolvedValue(null);
+
+    expect((await runCreditPurchaseReconciliation(undefined, NOW)).checked).toBe(0);
+    const result = await runCreditPurchaseReconciliation(undefined, NOW, { stage: 'selfhost' });
+
+    expect(result.checked).toBe(1);
+    expect(result.ungranted.map(p => p.paymentIntentId)).toEqual(['pi_selfhost']);
     expect(mockConnectDB).not.toHaveBeenCalled();
   });
 

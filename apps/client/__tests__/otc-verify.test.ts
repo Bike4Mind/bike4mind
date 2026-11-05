@@ -74,6 +74,10 @@ vi.mock('@server/auth/networkMeta', () => ({
   recordLoginEvent: vi.fn(),
   readNetworkMeta: vi.fn(() => ({})),
 }));
+// The purge lock is exercised by its own unit and Mongo suites; this route fixture mocks its database.
+vi.mock('@server/auth/withAccountNotPurging', () => ({
+  withAccountNotPurging: async <T>(_userId: string, operation: () => Promise<T>) => operation(),
+}));
 // The per-network signup caps are covered in signupNetworkLimits.test.ts and pages/api/otc/__tests__/verify.test.ts.
 vi.mock('@server/auth/signupNetworkLimits', () => ({
   assertSignupNetworkWithinLimits: vi.fn().mockResolvedValue(undefined),

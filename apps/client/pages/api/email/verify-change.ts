@@ -12,6 +12,7 @@ import { logAuthAudit } from '@server/utils/authAudit';
 import { entitlementsForEmail } from '@bike4mind/server-utils/lib/entitlements/registry';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { isEligibleForFreeCredits, releaseVerifiedPendingFreeCredits } from '@server/auth/emailVerifiedGrants';
+import { accountDeletionPendingError } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { z } from 'zod';
 
 const VerifyEmailChangeRequestSchema = z.object({
@@ -45,6 +46,8 @@ const handler = baseApi({ auth: false })
       if (!user) {
         return res.status(400).json({ error: 'Invalid or expired email change token' });
       }
+      // Unauthenticated, so the session gate never sees it: a frozen account's sign-in identity stays put.
+      if (user.deletion) throw accountDeletionPendingError(user.deletion);
 
       const oldEmail = user.email;
       const newEmail = user.pendingEmail?.trim().toLowerCase();

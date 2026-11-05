@@ -14,6 +14,7 @@ import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcce
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import {
   API_KEY_ACCESS_DENIED_MESSAGE,
   assertCliSessionAllowed,
@@ -148,6 +149,7 @@ export async function verifyJwtToken(
     // WS/CLI completion surfaces fall back to this primitive, so apply the same gate
     // verifyApiKey applies via assertOwnerAccountUsable - user is already loaded here.
     assertAccountStateUsable(user);
+    assertNoPendingDeletion(user);
 
     // enforceMFA binds sessions minted before it applied, on these surfaces as on REST (auth.ts).
     // ForbiddenError so a transport that maps error classes (the Function-URL adapter, the

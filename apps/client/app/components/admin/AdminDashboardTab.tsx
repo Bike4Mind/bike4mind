@@ -9,6 +9,7 @@ import { AnalyticsTermHelp } from './EventMetrics/components/AnalyticsTermHelp';
 import { OverviewTab } from './EventMetrics/components/OverviewTab';
 import { useAdminActivitySummary } from './useAdminActivitySummary';
 import { NewSignupsTile } from './Signups/NewSignupsTile';
+import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
 
 const DASHBOARD_SHORTCUTS = [
   {
@@ -66,6 +67,8 @@ export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps
           See how Bike4Mind is being used and jump into the tools behind the numbers.
         </Typography>
       </Box>
+
+      <AiAdvisoryStrip />
 
       {additionalDashboards.length > 0 && (
         <Box>

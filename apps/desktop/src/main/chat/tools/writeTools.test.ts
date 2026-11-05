@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PathAccessDenied } from './paths';
+import { PathAccessDenied, withRealPath } from './paths';
 import type { ToolContext } from './types';
 import { fileEdit, fileWrite } from './writeTools';
 
@@ -91,6 +91,16 @@ describe('write tools', () => {
     it('refuses a protected path even though it sits inside a granted root', async () => {
       const input = { path: join(root, 'vault', 'tokens.json'), content: '{}' };
       await expect(fileWrite.run(input, context)).rejects.toThrow(/protected location/);
+    });
+
+    it('refuses the real path of a protected folder whose own path runs through a symlink', async () => {
+      await mkdir(join(root, 'config', 'App'), { recursive: true });
+      await symlink(join(root, 'config'), join(root, 'cfg-link'));
+      const guarded = { ...context, protectedPaths: withRealPath(join(root, 'cfg-link', 'App')) };
+      const input = { path: join(root, 'config', 'App', 'tokens.json'), content: '{}' };
+
+      await expect(fileWrite.run(input, guarded)).rejects.toThrow(/protected location/);
+      await expect(readFile(input.path, 'utf8')).rejects.toThrow();
     });
 
     // The containment check runs again in `run`, against the resolved real path: the prompt the

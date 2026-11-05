@@ -38,11 +38,15 @@ function isNcmecConfigured(creds: ReturnType<typeof resolveNcmecCredentials>): b
  *
  * Normal verdicts (incident in pending_review/absent):
  *   confirmed_csam  -> submit an NCMEC CyberTip and mark the incident 'reported'.
- *   false_positive  -> mark the incident 'false_positive' (no NCMEC submission).
+ *   false_positive  -> mark the incident 'false_positive': the classifier was wrong (no NCMEC
+ *                      submission).
+ *   no_action       -> mark the incident 'no_action': the block was right and nothing suggests
+ *                      a minor, so there is nothing to report. Only from pending_review.
  *   record_manual_report -> the admin filed the CyberTip by hand on the NCMEC web form; mark
  *                      the incident 'reported' with that report id. Needs no NCMEC API
  *                      credentials, so it works before ESP API access is provisioned. Also
- *                      overrides a 'false_positive' verdict, since the tip already exists.
+ *                      overrides a 'false_positive' or 'no_action' verdict, since the tip
+ *                      already exists.
  *
  * Recovery verdicts (incident stuck in confirmed_csam after unknown NCMEC outcome; only
  * claims older than STALE_CONFIRMED_CSAM_MS are resolvable, so a live submission is safe):
@@ -71,6 +75,7 @@ const ncmecReportIdSchema = z
 const bodySchema = z.union([
   z.object({ verdict: z.literal('confirmed_csam') }),
   z.object({ verdict: z.literal('false_positive') }),
+  z.object({ verdict: z.literal('no_action') }),
   z.object({ verdict: z.literal('mark_reported'), ncmecReportId: ncmecReportIdSchema }),
   z.object({ verdict: z.literal('requeue') }),
   z.object({ verdict: z.literal('retry_finish') }),
@@ -419,6 +424,22 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
     return res.status(200).json({ ok: true, ncmecReportId, ...(auditRecorded ? {} : { auditRecorded: false }) });
   }
 
+  if (body.verdict === 'no_action') {
+    const adminId = req.user.id;
+    const updated = await withTransaction(async () => {
+      const reviewed = await imageModerationIncidentRepository.markNoAction(incidentId, adminId);
+      if (reviewed) await recordVerdict(req, { incidentId, userId: reviewed.userId }, body.verdict);
+      return reviewed;
+    });
+    if (!updated) {
+      const incident = await imageModerationIncidentRepository.findById(incidentId);
+      if (!incident) return res.status(404).json({ error: 'Incident not found' });
+      return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });
+    }
+    req.logger.info(`[Moderation] incident ${incidentId} marked no_action by admin=${req.user.id}`);
+    return res.status(200).json({ ok: true });
+  }
+
   // false_positive: no NCMEC submission, just update the status.
   const adminId = req.user.id;
   const updated = await withTransaction(async () => {
@@ -434,7 +455,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req
   if (!updated) {
     const incident = await imageModerationIncidentRepository.findById(incidentId);
     if (!incident) return res.status(404).json({ error: 'Incident not found' });
-    return res.status(409).json({ error: 'Incident already reported or being processed' });
+    return res.status(409).json({ error: `Incident is already ${incident.reviewStatus}` });
   }
 
   req.logger.info(`[Moderation] incident ${incidentId} marked false_positive by admin=${req.user.id}`);

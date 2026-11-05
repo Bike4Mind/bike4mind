@@ -286,8 +286,13 @@ import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes
 import GrantPackagesFromInvites from './20260921238400_grant-packages-from-invites';
 import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-indexes';
 import AllowGpt4oMiniTtsWhereTts1IsFree from './20260921238800_allow-gpt-4o-mini-tts-where-tts-1-is-free';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureAdminAuditReviewIndexesAndBaseline from './20260921239100_ensure-adminauditreview-indexes-and-baseline';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
+import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
+import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
+import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
@@ -500,8 +505,12 @@ const coreMigrations: MigrationFile[] = [
   GrantPackagesFromInvites,
   EnsureGrantPackageIndexes,
   AllowGpt4oMiniTtsWhereTts1IsFree,
+  EnsureAdminAuditReviewIndexesAndBaseline,
   EnsureReferralInviterIndexes,
   EnsureHeldCreditRewardUserStatusIndex,
+  DropRetiredUnlockSettings,
+  EnsureOverwatchUserDayInternalIndex,
+  EnsureUserDeletionScheduledForIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

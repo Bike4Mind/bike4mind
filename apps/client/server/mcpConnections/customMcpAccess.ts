@@ -11,6 +11,7 @@ import {
 } from '@bike4mind/common';
 import { adminSettingsRepository, organizationRepository, scopedSettingsRepository } from '@bike4mind/database';
 import { buildPrivateAddressAdmission } from '@bike4mind/fab-pipeline/ssrf';
+import type { RemoteMcpNetworkOptions } from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
 import { isIP } from 'net';
 import { scopedSettingsService } from '@bike4mind/services';
 import { isFeatureEnabled } from '@server/middlewares/featureFlag';
@@ -21,13 +22,7 @@ import { isFeatureEnabled } from '@server/middlewares/featureFlag';
  * effect on the next one without a sweep.
  */
 
-/** Network options handed to `validateRemoteMcpUrl` and `RemoteMcpClient` (`@bike4mind/mcp/remote`). */
-export interface RemoteMcpNetworkOptions {
-  ownHosts: string[];
-  /** Self-host only, from `customMcpAllowPrivateNetworks`. */
-  allowPrivateCidrs?: string[];
-  allowHttp?: boolean;
-}
+export type { RemoteMcpNetworkOptions };
 
 export interface CustomMcpContext {
   /**

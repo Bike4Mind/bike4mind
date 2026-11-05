@@ -15,6 +15,7 @@ import {
   type AdminUsersSortField,
 } from '@client/app/utils/adminUsersFilter';
 import { oneOf, parseObjectId, parsePage, parseStringList, toNumber } from '../adminSearchValues';
+import { USER_AI_VERDICT_FILTERS } from '@client/app/utils/aiAdvisory';
 
 /**
  * The Users tab's `/admin` search params and their coercion. Pure and React-free: adminTabParams.ts
@@ -64,6 +65,7 @@ export const USERS_FILTER_PARAMS = {
   activeFrom: 'activeFrom',
   activeTo: 'activeTo',
   funnelStep: 'funnelStep',
+  aiVerdict: 'aiVerdict',
 } as const satisfies Partial<Record<keyof UsersListView, string>>;
 export type UsersFilterKey = keyof typeof USERS_FILTER_PARAMS;
 export const USERS_FILTER_KEYS = Object.keys(USERS_FILTER_PARAMS) as UsersFilterKey[];
@@ -122,6 +124,7 @@ export type UsersSearch = {
   activeFrom?: string;
   activeTo?: string;
   funnelStep?: UsersListView['funnelStep'];
+  aiVerdict?: UsersListView['aiVerdict'];
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -193,6 +196,7 @@ export const USERS_SEARCH_PARSERS: {
   activeFrom: parseUtcDay,
   activeTo: parseUtcDay,
   funnelStep: oneOf(USER_FUNNEL_STEP_FILTERS),
+  aiVerdict: oneOf(USER_AI_VERDICT_FILTERS),
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView, UsersFilterKey> {
@@ -213,6 +217,7 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView,
     activeFrom: parseUtcDay(search.activeFrom),
     activeTo: parseUtcDay(search.activeTo),
     funnelStep: USERS_SEARCH_PARSERS.funnelStep(search.funnelStep),
+    aiVerdict: USERS_SEARCH_PARSERS.aiVerdict(search.aiVerdict),
   };
 }
 
@@ -288,7 +293,13 @@ export function usersViewToSearch(params: UsersListView): Omit<UsersSearch, type
     activeFrom: parseUtcDay(params.activeFrom),
     activeTo: parseUtcDay(params.activeTo),
     funnelStep: params.funnelStep,
+    aiVerdict: params.aiVerdict,
   };
+}
+
+/** The `/admin` search for the Users tab showing `filters` over the default view, for links from other tabs. */
+export function usersTabLinkSearch(filters: Partial<Pick<UsersListView, UsersFilterKey>>): Record<string, unknown> {
+  return { [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG, ...usersViewToSearch({ ...DEFAULT_USERS_PARAMS, ...filters }) };
 }
 
 /** Whether two param sets describe the same list view (the free-text search is not compared). */

@@ -28,6 +28,7 @@ import { FirecrawlError } from '@mendable/firecrawl-js';
 import {
   firecrawlFetch,
   truncationMarker,
+  UnreachableScrapeTargetError,
   UnsupportedContentTypeError,
   UnsupportedScrapeTargetError,
   validateWebFetchResult,
@@ -348,6 +349,73 @@ describe('firecrawlFetch unsupported file type', () => {
     const { result } = await runTool('https://example.com/big.pdf');
 
     expect(result).toContain('This PDF is too large to process via URL');
+  });
+});
+
+describe('firecrawlFetch page no engine could reach', () => {
+  // Production wording (trimmed): every engine Firecrawl tried failed to load the page.
+  const allEnginesFailed = () =>
+    new FirecrawlError(
+      'Failed to scrape URL. Status code: 500. Error: All scraping engines failed to retrieve content from this ' +
+        'URL. Engines tried: [fire-engine;chrome-cdp, fire-engine(retry);chrome-cdp]. This usually happens when: ' +
+        '(1) The URL is invalid',
+      500
+    );
+
+  it('rethrows it as a 422 UnreachableScrapeTargetError carrying the original', async () => {
+    const failure = allEnginesFailed();
+    scrapeUrl.mockRejectedValueOnce(failure);
+
+    const error = await firecrawlFetch(adapters, 'https://example.com/page').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UnreachableScrapeTargetError);
+    expect(error).toMatchObject({ statusCode: 422, cause: failure });
+  });
+
+  it('gives the web_fetch tool the unreachable hint and logs once at warn, not error', async () => {
+    scrapeUrl.mockRejectedValueOnce(allEnginesFailed());
+    const context = makeContext(vi.fn(async () => {}));
+
+    const result = (await webFetchTool
+      .implementation(context, {})
+      .toolFn({ url: 'https://example.com/page' })) as string;
+
+    expect(result).toContain('The page could not be reached');
+    expect(validateWebFetchResult(result)).toEqual({ confidence: 0.1, source: 'deterministic' });
+    expect(context.logger.warn).toHaveBeenCalledTimes(1);
+    expect(context.logger.warn).toHaveBeenCalledWith(
+      'WebFetch page unreachable',
+      expect.objectContaining({
+        url: 'https://example.com/page',
+        cause: expect.stringContaining('All scraping engines failed'),
+      })
+    );
+    expect(context.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('maps it for a PDF URL too and reports the page as unreachable', async () => {
+    scrapeUrl.mockRejectedValueOnce(allEnginesFailed());
+    const statusUpdate = vi.fn(async () => {});
+    const context = makeContext(statusUpdate);
+
+    const result = (await webFetchTool
+      .implementation(context, {})
+      .toolFn({ url: 'https://example.com/report.pdf' })) as string;
+
+    expect(result).toContain('The page could not be reached');
+    expect(statusUpdate).toHaveBeenCalledWith({}, 'WebFetch: page unreachable');
+    expect(context.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps a Firecrawl auth failure at error', async () => {
+    const failure = new FirecrawlError('Unauthorized: Invalid token', 401);
+    scrapeUrl.mockRejectedValueOnce(failure);
+    const context = makeContext(vi.fn(async () => {}));
+
+    await expect(webFetchTool.implementation(context, {}).toolFn({ url: 'https://example.com/page' })).rejects.toBe(
+      failure
+    );
+    expect(context.logger.error).toHaveBeenCalledTimes(1);
   });
 });
 

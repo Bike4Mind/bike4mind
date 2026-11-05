@@ -80,10 +80,10 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { STAGE: 'test' },
 }));
 
-// Fixture mapping: the real registry rows are covered by their own tests;
-// here we only need "mapped" vs "unmapped" prices.
-vi.mock('@bike4mind/server-utils/lib/entitlements/registry', () => ({
-  entitlementsForPriceIds: (priceIds: string[]) => new Set(priceIds.includes('price_pro') ? ['someproduct:pro'] : []),
+// Fixture mapping: the real registry rows and plan ladder are covered by their own tests;
+// here we only need "affects entitlements" (a registry-mapped price or a paid plan) vs "unmapped" prices.
+vi.mock('@server/entitlements/paidStanding', () => ({
+  priceAffectsEntitlements: (priceId: string) => priceId === 'price_pro' || priceId === 'price_paid_plan',
 }));
 
 vi.mock('sst', () => ({
@@ -214,6 +214,14 @@ describe('customerSubscriptionUpdated — entitlement reconcile', () => {
       1,
       expect.objectContaining({ priceId: 'price_pro', status: 'active' })
     );
+  });
+
+  it('pushes an entitlements invalidation for a paid plan that has no registry price row', async () => {
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildUserSub({ priceId: 'price_paid_plan' }));
+
+    await handler({ properties: { subscriptionId: 'sub_stripe_u' } } as any, logger as any);
+
+    expect(sendToClient).toHaveBeenCalledWith(...entitlementsPush('u1'));
   });
 
   it('also fires on a revoking transition (canceled) — gates must learn about access loss', async () => {
