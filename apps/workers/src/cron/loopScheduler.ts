@@ -209,10 +209,11 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
 
 /**
  * Event-driven dispatch, from the loop dispatch queue (apps/workers/src/queueHandlers/loopDispatch.ts): folds
- * the loop's finished run, then fills one free run slot through the tick's own `dispatchDue`. That claims the
- * longest-due loop (this one unless another has waited longer), so a run that frees a slot does not hand it
- * straight back to its own loop. The claim's lease is the only gate, so the tick and any number of events
- * never start one loop twice. A no-op when nothing is due.
+ * the loop's finished run, then fills free run slots one at a time through the tick's own `dispatchDue`, until
+ * this loop is claimed or the cap is reached. Each claim takes the longest-due loop, so a run that frees a slot
+ * does not hand it straight back to its own loop, and a loop that went due silently (its interval) does not
+ * keep this one waiting for the tick while slots are free. The claim's lease is the only gate, so the tick
+ * and any number of events never start one loop twice. A no-op when nothing is due.
  */
 export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger): Promise<void> {
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) return;
@@ -231,10 +232,14 @@ export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger)
 
   // ponytail: count-then-claim is not atomic, so concurrent events and the tick can overshoot the cap by the
   // consumer's concurrency (infra/cron.ts, loopDispatchQueue); an atomic in-flight counter is the upgrade.
-  const { claimed } =
-    (await loopRepository.countInFlight()) < MAX_ACTIVE_LOOP_RUNS
-      ? await dispatchDue(now, 1, logger)
-      : { claimed: [] as string[] };
+  const claimed: string[] = [];
+  for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS && !claimed.includes(loopId); i++) {
+    if ((await loopRepository.countInFlight()) >= MAX_ACTIVE_LOOP_RUNS) break;
+    const result = await dispatchDue(now, 1, logger);
+    claimed.push(...result.claimed);
+    // Nothing started: nothing else is startable now.
+    if (!result.capped) break;
+  }
 
   // dispatchDue already pushed for every loop it claimed.
   if (folded && !claimed.includes(loopId)) await pushLoopChanged(loop.userId, loop.id, logger);

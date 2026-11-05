@@ -1980,6 +1980,19 @@ describe('dispatchLoopNow', () => {
     expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
   });
 
+  it('with free slots, still starts this loop after an older due loop takes the first one', async () => {
+    const waiting = await createLoop({ userId: 'user-2', nextRunAt: new Date(PAST.getTime() - 60_000) });
+    const loop = await createLoop();
+    const ticket = await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(2);
+    expect((await reload(waiting.id)).activeExecutionId).toBe('exec-1');
+    expect((await reload(loop.id)).activeExecutionId).toBe('exec-2');
+    expect(await ticketOf(ticket.id)).toMatchObject({ status: 'in_progress', executionId: 'exec-2' });
+  });
+
   it('is a no-op for a loop that does not exist', async () => {
     await dispatchLoopNow(new mongoose.Types.ObjectId().toString(), NOW, logger);
     expect(h.startAgentExecution).not.toHaveBeenCalled();
