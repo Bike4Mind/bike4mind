@@ -150,6 +150,7 @@ export type StartAgentExecutionInput = {
   ticketPriority?: IAgentExecution['ticketPriority'];
   escalated?: boolean;
   loopRunKind?: IAgentExecution['loopRunKind'];
+  triageWorkItemIds?: string[];
   /** Caller's per-request artifact intent. Absent means "no preference" (the admin
    * `EnableArtifacts` setting decides); only an explicit `false` opts out. */
   enableArtifacts?: boolean;
@@ -377,6 +378,7 @@ export async function startAgentExecution(
     ticketPriority: input.ticketPriority,
     escalated: input.escalated,
     loopRunKind: input.loopRunKind,
+    triageWorkItemIds: input.triageWorkItemIds,
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,

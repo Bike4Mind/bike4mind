@@ -190,7 +190,13 @@ export async function syncLoopNotices(logger: Logger): Promise<void> {
     if (heldKeys.has(notice.sourceKey)) continue;
     if (await inboxRepository.createKeyedNotice({ ...notice, userId: 'SYSTEM', type: InboxType.LOOP })) created++;
   }
-  const stale = held.filter(notice => !desiredKeys.has(notice.sourceKey)).map(notice => notice.id);
+  // A full urgent read may have left a breaching ticket out; its overdue notice then waits for a later sweep
+  // rather than flapping resolved and re-opened.
+  const urgentTruncated = urgent.length >= MAX_URGENT_TICKETS_READ;
+  const stale = held
+    .filter(notice => !desiredKeys.has(notice.sourceKey))
+    .filter(notice => !(urgentTruncated && notice.sourceKey.endsWith(':stale')))
+    .map(notice => notice.id);
   await inboxRepository.resolveKeyed(stale);
 
   if (created > 0 || stale.length > 0) {

@@ -1983,6 +1983,29 @@ describe('runLoopSchedulerTick - priority policy', () => {
       expect(folded.lastRunAt).toEqual(NOW);
     });
 
+    it('sets p2 at the fold on a ticket the triage run was shown but left, so ticket work goes on', async () => {
+      const loop = await createLoop({ stages: STAGES, activeExecutionId: 'exec-t' });
+      const skipped = await createTicket(loop.id, { priority: undefined, prioritySetBy: undefined });
+      const unseen = await createTicket(loop.id, { priority: undefined, prioritySetBy: undefined });
+      const owned = await createTicket(loop.id, { priority: 'p1', prioritySetBy: 'owner' });
+      executions['exec-t'] = {
+        status: 'completed',
+        loopRunKind: 'triage',
+        triageWorkItemIds: [skipped.id, owned.id],
+        createdAt: minutesAgo(5),
+        completedAt: NOW,
+        result: { answer: 'Could not decide.' },
+      };
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(skipped.id)).toMatchObject({ priority: 'p2', prioritySetBy: 'agent' });
+      expect(await ticketOf(owned.id)).toMatchObject({ priority: 'p1', prioritySetBy: 'owner' });
+      expect(await ticketOf(unseen.id)).not.toHaveProperty('priority');
+      // It set nothing itself, so it still folds as idle.
+      expect((await reload(loop.id)).idleStreak).toBe(1);
+    });
+
     it('dispatches ticket work unchanged when nothing is untriaged', async () => {
       const loop = await createLoop({ stages: STAGES, triageModel: 'cheap' });
       const ticket = await createTicket(loop.id, { priority: 'p1' });
@@ -2031,6 +2054,19 @@ describe('runLoopSchedulerTick - priority policy', () => {
       await makeDueIfReady(await reload(loop.id), NOW);
       await runLoopSchedulerTick(new Date(NOW.getTime() + 60_000), logger);
       expect(h.startAgentExecution.mock.calls[0][0]).toMatchObject({ workItemId: p1.id });
+      expect((await reload(loop.id)).hold).toBeUndefined();
+    });
+
+    it('runs the goal, not a hold, when the only ready cloud ticket over the cap is a p0 at its run limit', async () => {
+      const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1 });
+      const spent = await createTicket(loop.id, { priority: 'p0', runCount: 6 });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(spent.id)).toMatchObject({ status: 'blocked' });
+      expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+      expect(h.startAgentExecution.mock.calls[0][0]).not.toHaveProperty('workItemId');
       expect((await reload(loop.id)).hold).toBeUndefined();
     });
 

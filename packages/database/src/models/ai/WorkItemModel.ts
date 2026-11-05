@@ -161,6 +161,15 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     return results.map(doc => doc.toJSON());
   }
 
+  async defaultUntriaged(ids: string[], now: Date): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.workItemModel.updateMany(
+      { _id: { $in: ids }, deletedAt: null, status: 'open', priority: { $exists: false }, epic: { $ne: true } },
+      { $set: { priority: 'p2', prioritySetAt: now, prioritySetBy: 'agent' } }
+    );
+    return result.modifiedCount;
+  }
+
   async demoteIfAgentSet(id: string, now: Date): Promise<boolean> {
     const result = await this.workItemModel.updateOne(
       { _id: id, priority: 'p2', prioritySetBy: { $ne: 'owner' }, deletedAt: null },

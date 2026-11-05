@@ -23,6 +23,7 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: {} }));
 vi.mock('@server/utils/startAgentExecution', () => ({ startAgentExecution: vi.fn() }));
 
 import { runLoopSchedulerTick, USER_BUDGET_PAUSE_REASON } from './loopScheduler';
+import { MAX_URGENT_TICKETS_READ } from './loopNotices';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -315,6 +316,21 @@ describe('loop notices', () => {
       await tick();
 
       expect(await keys()).toEqual([`loop:${loop.id}:ticket:${blocked.id}`, staleKey(loop.id, parked.id)].sort());
+    });
+
+    it('keeps an overdue notice while the urgent read is full, instead of resolving it', async () => {
+      const loop = await createLoop({ status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) });
+      const late = await urgent(loop.id);
+      await tick();
+      expect(await keys()).toEqual([staleKey(loop.id, late.id)]);
+
+      // A full read that leaves the breaching ticket out (others filled the window).
+      const fresh = await urgent(loop.id, { prioritySetAt: new Date() });
+      vi.spyOn(workItemRepository, 'listUrgentForLoops').mockResolvedValue(
+        Array.from({ length: MAX_URGENT_TICKETS_READ }, () => fresh)
+      );
+      await tick();
+      expect(await keys()).toEqual([staleKey(loop.id, late.id)]);
     });
   });
 

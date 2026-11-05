@@ -218,6 +218,12 @@ export interface IWorkItemRepository extends IBaseRepository<IWorkItem> {
   /** The loop's open, non-epic tickets with no priority (any stage), oldest first: what a triage run sets. */
   listUntriagedForLoop(userId: string, loopId: string, limit: number): Promise<IWorkItem[]>;
 
+  /**
+   * Sets p2 (agent-set) on those of `ids` still untriaged: what a triage run was shown but left, so one ticket the
+   * triage model skips (or cannot set) does not hold every later dispatch on triage. Returns how many changed.
+   */
+  defaultUntriaged(ids: string[], now: Date): Promise<number>;
+
   /** Sets a p2 that its owner did not set to p3 (`prioritySetBy: 'demote'`); false when it no longer matched. */
   demoteIfAgentSet(id: string, now: Date): Promise<boolean>;
 

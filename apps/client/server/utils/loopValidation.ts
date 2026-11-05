@@ -7,6 +7,8 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { adminSettingsRepository, loopRepository } from '@bike4mind/database';
 import {
   LOOP_MERGE_POLICIES,
+  LOOP_P2_RUNS_PER_DAY_MAX,
+  LOOP_SERVICE_LEVEL_HOURS_MAX,
   LOOP_STAGE_RUNNERS,
   type ILoop,
   type ILoopStageConfig,
@@ -214,9 +216,6 @@ export function validateLoopBudget(value: unknown): number {
   return value;
 }
 
-const SERVICE_LEVEL_HOURS_MAX = 720;
-const P2_RUNS_PER_DAY_MAX = 1000;
-
 type LoopPriorityPolicy = Pick<ILoop, 'serviceLevelHours' | 'p2RunsPerDay' | 'triageModel' | 'escalationModel'>;
 
 /**
@@ -238,9 +237,14 @@ export function validateLoopPriorityPolicy(body: Record<string, unknown>): {
       for (const key of ['p0', 'p1'] as const) {
         const value = (serviceLevelHours as Record<string, unknown>)[key];
         if (value === undefined || value === null) continue;
-        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > SERVICE_LEVEL_HOURS_MAX) {
+        if (
+          typeof value !== 'number' ||
+          !Number.isFinite(value) ||
+          value <= 0 ||
+          value > LOOP_SERVICE_LEVEL_HOURS_MAX
+        ) {
           throw new BadRequestError(
-            `serviceLevelHours.${key} must be a number above 0 and up to ${SERVICE_LEVEL_HOURS_MAX}`
+            `serviceLevelHours.${key} must be a number above 0 and up to ${LOOP_SERVICE_LEVEL_HOURS_MAX}`
           );
         }
         hours[key] = value;
@@ -254,9 +258,9 @@ export function validateLoopPriorityPolicy(body: Record<string, unknown>): {
       (typeof p2RunsPerDay !== 'number' ||
         !Number.isInteger(p2RunsPerDay) ||
         p2RunsPerDay < 0 ||
-        p2RunsPerDay > P2_RUNS_PER_DAY_MAX)
+        p2RunsPerDay > LOOP_P2_RUNS_PER_DAY_MAX)
     ) {
-      throw new BadRequestError(`p2RunsPerDay must be an integer from 0 to ${P2_RUNS_PER_DAY_MAX}`);
+      throw new BadRequestError(`p2RunsPerDay must be an integer from 0 to ${LOOP_P2_RUNS_PER_DAY_MAX}`);
     }
     result.p2RunsPerDay = p2RunsPerDay;
   }

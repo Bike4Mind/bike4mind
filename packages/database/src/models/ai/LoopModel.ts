@@ -8,6 +8,8 @@ import {
   LOOP_ALARM_KINDS,
   LOOP_AUTO_RESUME_KINDS,
   LOOP_HOLD_KINDS,
+  LOOP_P2_RUNS_PER_DAY_MAX,
+  LOOP_SERVICE_LEVEL_HOURS_MAX,
   LOOP_MERGE_POLICIES,
   LOOP_STAGE_RUNNERS,
   LOOP_STATUSES,
@@ -329,11 +331,18 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     },
     // Kept in sync with validateLoopPriorityPolicy (apps/client/server/utils/loopValidation.ts).
     serviceLevelHours: {
-      type: new Schema({ p0: { type: Number, min: 0 }, p1: { type: Number, min: 0 } }, { _id: false }),
+      type: new Schema(
+        {
+          p0: { type: Number, min: 0, max: LOOP_SERVICE_LEVEL_HOURS_MAX },
+          p1: { type: Number, min: 0, max: LOOP_SERVICE_LEVEL_HOURS_MAX },
+        },
+        { _id: false }
+      ),
     },
     p2RunsPerDay: {
       type: Number,
       min: 0,
+      max: LOOP_P2_RUNS_PER_DAY_MAX,
       validate: { validator: Number.isInteger, message: 'p2RunsPerDay must be an integer' },
     },
     triageModel: { type: String },

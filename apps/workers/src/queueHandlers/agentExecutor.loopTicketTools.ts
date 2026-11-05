@@ -286,7 +286,11 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
 
           const movesLoop = params.loopId !== undefined && params.loopId !== existing.loopId;
           const current = await ownLoop(existing.loopId);
-          assertCloudRunMayChange(current, existing);
+          // Setting only the priority does not work the ticket, so a triage run may set it in a desktop stage too.
+          const onlyPriority = Object.entries(params).every(
+            ([key, v]) => v === undefined || ['id', 'priority'].includes(key)
+          );
+          if (!onlyPriority) assertCloudRunMayChange(current, existing);
           const loop = movesLoop ? await ownLoop(params.loopId) : current;
           if (params.status !== undefined && !['open', 'blocked', 'closed'].includes(params.status as string)) {
             throw new BadRequestError('status must be one of: open, blocked, closed');
@@ -441,17 +445,23 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
               validateWorkItemDependencies(
                 Array.isArray(child.dependencies) ? refs.filter(dep => !isSibling(dep)) : child.dependencies
               ) ?? [];
+            const move = ticketMovePatch(loop, undefined, { stage: child.stage });
+            // A child placed in the last stage would be closed on arrival, so the epic's split would mean nothing.
+            if (move.status === 'closed') {
+              throw new BadRequestError(`children[${index}] cannot start in the last stage`);
+            }
             return {
               title: validateWorkItemTitle(child.title),
               description: validateWorkItemDescription(child.description),
-              stage: ticketMovePatch(loop, undefined, { stage: child.stage }).stage!,
+              stage: move.stage!,
               priority,
               siblings,
               // The epic's own dependencies still hold for the work it is split into.
               external: [...new Set([...existing.dependencies, ...dependencies])],
             };
           });
-          await assertDependenciesUsable(userId, [...new Set(children.flatMap(child => child.external))]);
+          // With the epic's id, so a child cannot depend on the epic it unblocks (directly or through another ticket).
+          await assertDependenciesUsable(userId, [...new Set(children.flatMap(child => child.external))], existing.id);
 
           creates += children.length;
           const ids: string[] = [];
@@ -489,7 +499,8 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
             return { epic: summarize(epic), children: ids };
           } catch (error) {
             // ponytail: not a transaction; a crash between the creates and the epic write leaves the children behind.
-            await Promise.all(ids.map(id => workItemRepository.softDeleteForUser(id, userId)));
+            // Best effort, so a failed cleanup does not hide why the split failed.
+            await Promise.all(ids.map(id => workItemRepository.softDeleteForUser(id, userId))).catch(() => undefined);
             throw error;
           }
         }),

@@ -22,7 +22,9 @@ import {
 } from '@mui/joy';
 import {
   DEFAULT_LOOP_STAGES,
+  LOOP_P2_RUNS_PER_DAY_MAX,
   LOOP_SERVICE_LEVEL_HOURS,
+  LOOP_SERVICE_LEVEL_HOURS_MAX,
   type ILoop,
   type ILoopStageConfig,
   type LoopMergePolicy,
@@ -48,8 +50,6 @@ const INTERVAL_MIN = 5;
 const INTERVAL_MAX = 10_080;
 // Mirrors validateLoopStages (apps/client/server/utils/loopValidation.ts): the last stage means closed.
 const STAGES_MIN = 2;
-const SERVICE_LEVEL_HOURS_MAX = 720;
-const P2_RUNS_PER_DAY_MAX = 1000;
 
 const UNIT_MINUTES = { minutes: 1, hours: 60, days: 1440 } as const;
 type IntervalUnit = keyof typeof UNIT_MINUTES;
@@ -153,12 +153,12 @@ export function validateLoopForm(
       .filter(([, value]) => value)
       .map(([key, value]) => [key, Number(value)])
   ) as NonNullable<ILoop['serviceLevelHours']>;
-  if (Object.values(serviceLevelHours).some(hours => !(hours > 0 && hours <= SERVICE_LEVEL_HOURS_MAX))) {
-    errors.sla = `Hours must be above 0 and up to ${SERVICE_LEVEL_HOURS_MAX}`;
+  if (Object.values(serviceLevelHours).some(hours => !(hours > 0 && hours <= LOOP_SERVICE_LEVEL_HOURS_MAX))) {
+    errors.sla = `Hours must be above 0 and up to ${LOOP_SERVICE_LEVEL_HOURS_MAX}`;
   }
   const p2Cap = Number(values.p2Cap);
-  if (values.p2Cap.trim() && !(Number.isInteger(p2Cap) && p2Cap >= 0 && p2Cap <= P2_RUNS_PER_DAY_MAX)) {
-    errors.p2Cap = `Must be a whole number from 0 to ${P2_RUNS_PER_DAY_MAX}`;
+  if (values.p2Cap.trim() && !(Number.isInteger(p2Cap) && p2Cap >= 0 && p2Cap <= LOOP_P2_RUNS_PER_DAY_MAX)) {
+    errors.p2Cap = `Must be a whole number from 0 to ${LOOP_P2_RUNS_PER_DAY_MAX}`;
   }
 
   // Mirrors validateLoopStageConfig (apps/client/server/utils/loopValidation.ts): blank fields are unset,

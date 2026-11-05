@@ -357,6 +357,8 @@ export interface IAgentExecution {
   escalated?: boolean;
   /** A triage run sets the priority of untriaged tickets; it works no ticket and leaves the loop memory alone. */
   loopRunKind?: 'triage';
+  /** The untriaged tickets a triage run was shown; its fold sets p2 on any it left without a priority. */
+  triageWorkItemIds?: string[];
   /**
    * Set on a loop run a desktop runner works (apps/client/server/utils/loopRunner.ts). No executor runs it:
    * the runner posts its progress and outcome, and its lease (`runnerLeaseUntil`) keeps it alive.
@@ -843,6 +845,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     ticketPriority: { type: String, enum: WORK_ITEM_PRIORITIES },
     escalated: { type: Boolean },
     loopRunKind: { type: String, enum: ['triage'] },
+    triageWorkItemIds: { type: [String], default: undefined },
     runner: { type: String, enum: ['desktop'] },
     runnerLeaseUntil: { type: Date },
     runnerDurationMs: { type: Number },

@@ -84,6 +84,9 @@ export const nextUtcMidnight = (now: Date): Date => new Date(startOfUtcDay(now).
 
 /** Hours a p0/p1 ticket may wait (open, running or parked on deps) before it is flagged stale; `ILoop.serviceLevelHours` overrides. */
 export const LOOP_SERVICE_LEVEL_HOURS = { p0: 4, p1: 24 } as const;
+/** Upper bounds of a loop's `serviceLevelHours` and `p2RunsPerDay`: the API, the form and LoopModel share them. */
+export const LOOP_SERVICE_LEVEL_HOURS_MAX = 720;
+export const LOOP_P2_RUNS_PER_DAY_MAX = 1000;
 
 /**
  * Hours a p0/p1 ticket has waited past its loop's service level, counted from when its priority was last set

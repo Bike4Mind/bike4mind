@@ -6,7 +6,6 @@ import {
   loopRunModel,
   nextUtcMidnight,
   stageConfigOf,
-  startOfUtcDay,
   type ILoop,
   type ILoopEvent,
   type IWorkItem,
@@ -90,8 +89,6 @@ export const LOOP_TRIAGE_BATCH = 20;
 export const MAX_DEMOTES_PER_LOOP_TICK = 50;
 
 const MINUTE_MS = 60 * 1000;
-const HOUR_MS = 60 * MINUTE_MS;
-const DAY_MS = 24 * HOUR_MS;
 export const BUDGET_PAUSE_REASON = 'Daily budget reached; resumes 00:00 UTC';
 export { USER_BUDGET_PAUSE_REASON };
 export { TICKET_RUNS_PER_STAGE, ticketRunLimit } from '@server/utils/loopTickets';
@@ -448,6 +445,8 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
       $inc: { runCount: 1 },
       $unset: { statusReason: '' },
     });
+    // After the idle check, so a triage run that set nothing still backs off.
+    if (triage) await workItemRepository.defaultUntriaged(execution.triageWorkItemIds ?? [], now);
     if (ticket) await makeDueIfReady(loop, now);
     return;
   }
@@ -629,7 +628,7 @@ async function pauseClaimed(loop: ILoop, patch: Record<string, unknown>): Promis
 async function admit(loop: ILoop, model: string, now: Date, logger: Logger): Promise<{ creditCap?: number } | null> {
   const admission = await loopAdmission(loop, model, now);
   if (admission.ok) return { creditCap: admission.creditCap };
-  const tomorrow = new Date(startOfUtcDay(now).getTime() + DAY_MS);
+  const tomorrow = nextUtcMidnight(now);
   switch (admission.kind) {
     case 'credits':
       await pauseClaimed(loop, { statusReason: 'Out of credits', autoResume: 'credits' });
@@ -677,7 +676,7 @@ async function nextRunModel(loop: ILoop, onlyPriorities?: WorkItemPriority[]): P
 /**
  * The loop's p2 daily cap (`p2RunsPerDay`), applied before a claim: the ready p2s beyond today's remaining p2 runs
  * are demoted to p3, newest first and never an owner-set one, and once none remain the pick is limited to p0/p1.
- * `cloudReady` says whether any ticket was ready for a cloud run before that limit.
+ * `cloudReady` says whether a p2/p3 ticket the limit now holds back was ready for a cloud run.
  */
 async function applyP2Cap(
   loop: ILoop,
@@ -698,7 +697,9 @@ async function applyP2Cap(
   const desktopStages = desktopStagesOf(loop);
   return {
     onlyPriorities: PRIORITIES_OVER_P2_CAP,
-    cloudReady: ready.some(ticket => !desktopStages.includes(ticket.stage ?? '')),
+    cloudReady: ready.some(
+      ticket => !PRIORITIES_OVER_P2_CAP.includes(ticket.priority!) && !desktopStages.includes(ticket.stage ?? '')
+    ),
   };
 }
 
@@ -818,7 +819,8 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boo
 /**
  * A triage run: shown up to LOOP_TRIAGE_BATCH untriaged tickets, it sets their priorities (or splits them) with the
  * loop ticket tools, which every loop run gets from its `loopId`. It claims no ticket, runs on `triageModel`, and its
- * fold keeps the loop's memory; one that sets nothing touches no ticket, so it folds as idle and backs off.
+ * fold keeps the loop's memory. Its fold sets p2 on any ticket it was shown but left untriaged, so a skipped ticket
+ * cannot hold the loop on triage; one that set nothing still folds as idle and backs off.
  */
 async function dispatchTriage(loop: ILoop, untriaged: IWorkItem[], now: Date, logger: Logger): Promise<boolean> {
   const model = loop.triageModel ?? loop.model;
@@ -840,6 +842,7 @@ async function dispatchTriage(loop: ILoop, untriaged: IWorkItem[], now: Date, lo
         enabledTools: [],
         loopId: loop.id,
         loopRunKind: 'triage',
+        triageWorkItemIds: untriaged.map(ticket => ticket.id),
         ...(admission.creditCap !== undefined && { creditCap: admission.creditCap }),
       },
       logger
