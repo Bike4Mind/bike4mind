@@ -185,7 +185,9 @@ describe('LoopRepository', () => {
     const earlier = new Date(now.getTime() - 60_000);
     const alreadyDue = await create({ status: 'live', nextRunAt: earlier });
 
-    for (const loop of [live, paused, alreadyDue]) await loopRepository.makeDueNow(loop.id, now);
+    expect(await loopRepository.makeDueNow(live.id, now)).toBe(true);
+    expect(await loopRepository.makeDueNow(paused.id, now)).toBe(false);
+    expect(await loopRepository.makeDueNow(alreadyDue.id, now)).toBe(true);
 
     expect((await loopRepository.findByIdAndUserId(live.id, USER))?.nextRunAt).toEqual(now);
     expect((await loopRepository.findByIdAndUserId(paused.id, USER))?.nextRunAt).toEqual(later);
@@ -353,7 +355,18 @@ describe('LoopRepository', () => {
       await create({ status: 'live', nextRunAt: now });
       await create({ status: 'live', nextRunAt: earlier, activeExecutionId: 'exec-1' });
       await create({ status: 'paused', nextRunAt: earlier });
-      expect((await loopRepository.listPastDueLive(earlier, 10)).map(loop => loop.id)).toEqual([older.id, old.id]);
+      await create({ status: 'live', nextRunAt: earlier, hold: { kind: 'capacity', at: now } });
+      await create({ status: 'live', nextRunAt: earlier, idleStreak: 2 });
+      const zeroStreak = await create({
+        status: 'live',
+        nextRunAt: new Date(earlier.getTime() - 30_000),
+        idleStreak: 0,
+      });
+      expect((await loopRepository.listPastDueLive(earlier, 10)).map(loop => loop.id)).toEqual([
+        older.id,
+        zeroStreak.id,
+        old.id,
+      ]);
     });
   });
 

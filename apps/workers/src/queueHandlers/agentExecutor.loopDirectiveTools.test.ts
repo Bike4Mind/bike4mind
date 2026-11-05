@@ -5,7 +5,7 @@ const loops = vi.hoisted(() => ({
   findByIdAndUserId: vi.fn(),
   updateForUser: vi.fn(),
   endBackoff: vi.fn().mockResolvedValue(undefined),
-  makeDueNow: vi.fn().mockResolvedValue(undefined),
+  makeDueNow: vi.fn().mockResolvedValue(true),
 }));
 const directives = vi.hoisted(() => ({
   create: vi.fn(),
@@ -244,6 +244,16 @@ describe('loop_oversee_status', () => {
     expect(directives.listToLoop).toHaveBeenCalledWith('u1', WORKER, 10);
   });
 
+  it("shows a worker's hold and alarm, without the alarm's run id", async () => {
+    const since = new Date('2026-11-05T10:00:00Z');
+    const hold = { kind: 'capacity', at: since };
+    const alarm = { kind: 'long_run', reason: 'Run going for 90 min', since, executionId: 'x-long' };
+    workerOverrides = { hold, alarm };
+    const { loops: result } = JSON.parse(await run(tools(), 'loop_oversee_status', { loopId: WORKER }));
+    expect(result[0].hold).toEqual({ kind: 'capacity', at: since.toISOString() });
+    expect(result[0].alarm).toEqual({ kind: 'long_run', reason: 'Run going for 90 min', since: since.toISOString() });
+  });
+
   it('defaults to every watched loop the owner still has', async () => {
     const { loops: result } = JSON.parse(await run(tools(), 'loop_oversee_status', {}));
     expect(result.map((loop: { loopId: string }) => loop.loopId)).toEqual([WORKER]);
@@ -343,6 +353,12 @@ describe('overseer actions', () => {
       expect(dispatch.pushLoopChanged).toHaveBeenCalledWith('u1', WORKER, expect.anything());
       expect(result.note).toMatch(/within seconds/);
       expect(result.note).not.toMatch(/5 minutes|scheduler tick/);
+    });
+
+    it('logs nothing when the loop stopped being live before the write', async () => {
+      loops.makeDueNow.mockResolvedValueOnce(false);
+      expect(await act('loop_run_now')).toBe('Error: loop changed before it could be run; it is no longer live');
+      expect(directives.create).not.toHaveBeenCalled();
     });
 
     it('still succeeds with a run in flight, and says so', async () => {

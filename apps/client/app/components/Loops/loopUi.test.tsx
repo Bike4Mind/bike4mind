@@ -15,6 +15,8 @@ describe('holdLabel', () => {
     const paced = { ...live, nextRunAt: until, hold: { kind: 'pacing' as const, until, at: new Date(now) } };
     expect(holdLabel(paced, now)).toBe(`Paced: next run at ${time} to spread the daily budget`);
     expect(holdLabel(paced, until.getTime() + 1)).toBeNull();
+    // The owner made it due (or rescheduled) since the defer: the hold no longer explains the wait.
+    expect(holdLabel({ ...paced, nextRunAt: new Date(now) }, now)).toBeNull();
   });
 
   it('explains a capacity hold, then falls back to the back-off', () => {

@@ -63,7 +63,11 @@ export const LOOP_LONG_RUN_FLOOR_MS = 60 * 60 * 1000;
 export const LOOP_LONG_RUN_FACTOR = 3;
 const LOOP_LONG_RUN_SAMPLE = 5;
 const LOOP_LONG_RUN_MIN_SAMPLES = 3;
-/** ponytail: loops or tickets each liveness sweep reads per tick, oldest first; the rest wait for later ticks. */
+/**
+ * ponytail: loops or tickets each liveness sweep reads per tick, oldest first; the rest wait for later ticks.
+ * 100+ long-held in_progress tickets (desktop runs, long cloud runs) would starve the stranded sweep; page past
+ * them if that ever happens.
+ */
 export const MAX_LIVENESS_SWEEP = 100;
 
 const MINUTE_MS = 60 * 1000;
@@ -104,8 +108,9 @@ export function idleAlarmCandidate(
 ): boolean {
   if (loop.status !== 'live' || loop.activeExecutionId || !loop.nextRunAt) return false;
   if (loop.leaseUntil && new Date(loop.leaseUntil) > now) return false;
-  // A capacity hold is rewritten every tick; a pacing hold lapses once its deferred run is due.
-  if (loop.hold?.kind === 'capacity' || (loop.hold?.until && new Date(loop.hold.until) > now)) return false;
+  // A capacity hold is rewritten every tick. A live pacing hold sets nextRunAt to its `until`, so the past-due
+  // check below excludes it; one left behind after an owner reschedule must not hide an idle loop.
+  if (loop.hold?.kind === 'capacity') return false;
   if (loop.idleStreak) return false;
   return new Date(loop.nextRunAt).getTime() <= now.getTime() - idleAlarmThresholdMin(loop.intervalMinutes) * MINUTE_MS;
 }

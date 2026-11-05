@@ -85,8 +85,9 @@ describe('loop liveness thresholds', () => {
     expect(idleAlarmCandidate({ ...base, idleStreak: 1 }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, hold: { kind: 'capacity', at: now } }, now)).toBe(false);
     const pacedUntil = (until: Date) => ({ ...base, hold: { kind: 'pacing' as const, until, at: ago(60) } });
-    expect(idleAlarmCandidate(pacedUntil(new Date(now.getTime() + MIN)), now)).toBe(false);
-    // A lapsed pacing hold (owner rescheduled since) no longer hides an idle loop.
+    // A pacing hold left behind after an owner reschedule (nextRunAt moved off `until`) or one that lapsed
+    // no longer hides an idle loop; a live one keeps nextRunAt in the future, so it is never past due.
+    expect(idleAlarmCandidate(pacedUntil(new Date(now.getTime() + MIN)), now)).toBe(true);
     expect(idleAlarmCandidate(pacedUntil(ago(50)), now)).toBe(true);
   });
 });
