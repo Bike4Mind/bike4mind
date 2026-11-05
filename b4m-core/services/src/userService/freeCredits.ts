@@ -7,7 +7,7 @@ import {
   IUserRepository,
   type IUserDocument,
   PENDING_FREE_CREDITS_TAG,
-  settingsMap,
+  resolveSignupGrantSchedule,
   type SignupProtection,
 } from '@bike4mind/common';
 import { addCredits, DuplicateCreditTransactionError } from '../creditService';
@@ -66,15 +66,16 @@ export type ReleasePendingFreeCreditsResult = {
   patch: { tags?: string[]; pendingCreditGrant?: null };
 };
 
-/** An explicit (invite-resolved) amount wins; the defaultFreeCredits setting is the open-registration fallback. */
+/**
+ * An explicit (invite-resolved) amount wins. Otherwise this is an account from before signup grants
+ * were enrolled, and it is paid the signup schedule's initial credits.
+ */
 export const resolveFreeCreditAmount = async (
   pendingCreditGrant: number | null | undefined,
   adminSettings: IAdminSettingsRepository
 ): Promise<number> => {
   if (pendingCreditGrant !== null && pendingCreditGrant !== undefined) return pendingCreditGrant;
-  const setting = await adminSettings.findBySettingName('defaultFreeCredits');
-  const parsed = settingsMap.defaultFreeCredits.schema.safeParse(setting?.settingValue);
-  return parsed.success ? parsed.data : 0;
+  return (await resolveSignupGrantSchedule(adminSettings)).initialCredits;
 };
 
 /**
