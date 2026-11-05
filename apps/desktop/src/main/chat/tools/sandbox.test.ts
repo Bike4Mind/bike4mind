@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeF
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildProfile, protectionFor, sandboxAvailable, sandboxCommand, secretPaths } from './sandbox';
 
 describe('buildProfile', () => {
@@ -143,5 +143,31 @@ describe('the Claude Code folder', () => {
       }
       expect(readFileSync(join(claude, 'settings.json'), 'utf8')).toBe('{}\n');
     });
+  });
+});
+
+describe('protectionFor on Windows', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  let home = '';
+  beforeEach(() => {
+    home = homedir();
+    process.env.HOME = 'C:\\Users\\me';
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+  });
+  afterEach(() => {
+    if (platform) Object.defineProperty(process, 'platform', platform);
+    process.env.HOME = home;
+  });
+
+  it.each([
+    '\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\.ssh\\id_rsa',
+    '\\\\wsl$\\Ubuntu\\mnt\\c\\Users\\me\\.ssh\\id_rsa',
+    '\\\\wsl.localhost\\Ubuntu\\mnt\\C\\users\\ME\\.ssh\\id_rsa',
+  ])('guards a drive path reached through the WSL share as %s', path => {
+    expect(protectionFor([path], 'read')).toMatch(/credentials/);
+  });
+
+  it('does not map a path in the distro itself', () => {
+    expect(protectionFor(['\\\\wsl.localhost\\Ubuntu\\Users\\me\\.ssh\\id_rsa'], 'read')).toBeUndefined();
   });
 });

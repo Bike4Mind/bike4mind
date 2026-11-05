@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
 import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
-import { isWithin, PathAccessDenied, physicalTarget, realpathNearest, resolveWithinRoots } from './paths';
+import { PathAccessDenied, physicalTarget, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { protectionFor } from './sandbox';
 import { recordSessionWrite } from './sessionScripts';
@@ -33,7 +33,7 @@ export async function resolveWritablePath(requested: string, context: ToolContex
   const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
   const real = await physicalTarget(target);
 
-  if ((context.protectedPaths ?? []).some(guarded => isWithin(guarded, real) || isWithin(guarded, target))) {
+  if (withinGuarded(context.protectedPaths ?? [], [target, real])) {
     throw new PathAccessDenied(
       requested,
       `Refused: ${requested} is a protected location and cannot be written to, ` +
