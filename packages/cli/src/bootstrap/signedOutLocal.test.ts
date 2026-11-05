@@ -165,7 +165,7 @@ describe('signed out with no local model', () => {
     expect(error.reason).toBe(
       'No local model found. Start Ollama (open the Ollama app or run "ollama serve"), or install it from https://ollama.com/download, then pull a model: ollama pull qwen3.5'
     );
-    expect(error.message).toContain('Run /login to sign in');
+    expect(error.message).toContain('sign in: run b4m, then /login');
     expect(nodeRequests).toEqual([]);
   });
 

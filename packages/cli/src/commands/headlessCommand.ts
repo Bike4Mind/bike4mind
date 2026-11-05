@@ -22,7 +22,14 @@ import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { createSseBackend } from '../bootstrap/sseTransport.js';
-import { attachLocalModels, resolveHeadlessModel } from '../bootstrap/buildLlmBackend.js';
+import {
+  attachLocalModels,
+  defaultLlmBackendDeps,
+  resolveHeadlessModel,
+  resolveSignedOutHeadlessModel,
+  type CliLlmBackend,
+} from '../bootstrap/buildLlmBackend.js';
+import { SignedOutCloudBackend } from '../bootstrap/signedOutLocal.js';
 import { createHeadlessLlmBackendDeps } from './headlessOllama.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
@@ -191,34 +198,36 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       // Ignore failure - custom commands are optional
     }
 
-    // Validate authentication
+    // Validate authentication. Signed out, the run uses local models only and sends nothing to Bike4Mind.
     const authTokens = await configStore.getAuthTokens();
-    if (!authTokens) {
-      process.stderr.write('Error: Not authenticated. Run `b4m /login` to authenticate.\n');
-      process.exit(1);
-    }
-    if (new Date(authTokens.expiresAt) <= new Date()) {
+    if (authTokens && new Date(authTokens.expiresAt) <= new Date()) {
       await configStore.clearAuthTokens();
       process.stderr.write('Error: Authentication token expired. Run `b4m /login` to re-authenticate.\n');
       process.exit(1);
     }
+    const signedOut = !authTokens;
 
-    // Initialize the LLM backend (HTTP+SSE).
-    // Fail loud when unconfigured rather than handing axios an empty baseURL.
-    let apiBaseURL: string;
-    try {
-      apiBaseURL = requireApiUrl(config.apiConfig);
-    } catch (error) {
-      process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(1);
+    let apiClient: ApiClient;
+    if (signedOut) {
+      apiClient = ApiClient.whileSignedOut(configStore);
+    } else {
+      // Initialize the LLM backend (HTTP+SSE).
+      // Fail loud when unconfigured rather than handing axios an empty baseURL.
+      let apiBaseURL: string;
+      try {
+        apiBaseURL = requireApiUrl(config.apiConfig);
+      } catch (error) {
+        process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.exit(1);
+      }
+      apiClient = new ApiClient(apiBaseURL, configStore);
     }
-    const apiClient = new ApiClient(apiBaseURL, configStore);
 
     // Layer B4M-web skills on top of the local files already loaded above.
     // Local always wins; remote only fills in unique names. Opt-out via the
     // `--no-remote-skills` CLI flag or `preferences.enableRemoteSkills: false`.
     const remoteSkillsEnabled =
-      process.env.B4M_NO_REMOTE_SKILLS !== '1' && config.preferences.enableRemoteSkills !== false;
+      !signedOut && process.env.B4M_NO_REMOTE_SKILLS !== '1' && config.preferences.enableRemoteSkills !== false;
     if (remoteSkillsEnabled) {
       try {
         customCommandStore.setRemoteSource(new RemoteSkillSource(apiClient));
@@ -233,19 +242,30 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // can't drift. Headless never opens the feature-event socket: no feature
     // modules are registered in a `-p` run.
     // `session` is declared below; the getter only runs once a completion is sent.
-    const sse = await createSseBackend({ apiClient, model: config.defaultModel, getSessionId: () => session.id });
+    let serverLlm: CliLlmBackend;
+    if (signedOut) {
+      setWebSocketToolExecutor(null);
+      serverLlm = new SignedOutCloudBackend(config.defaultModel);
+    } else {
+      serverLlm = (await createSseBackend({ apiClient, model: config.defaultModel, getSessionId: () => session.id }))
+        .llm;
+    }
     const attached = await attachLocalModels(
-      sse.llm,
+      serverLlm,
       config,
       {
         servers: 'default',
         onNotice: text => process.stderr.write(`Notice: ${sanitizeTerminalText(text)}\n`),
+        // Signed out there is no hosted model to fall back on, so an Ollama running unconfigured is looked for.
+        ...(signedOut && { signedOut, detectOllama: defaultLlmBackendDeps.detectOllama }),
       },
       createHeadlessLlmBackendDeps(options.verbose)
     );
     const { llm, models } = attached;
     for (const warning of attached.warnings) process.stderr.write(`${sanitizeTerminalText(warning)}\n`);
-    const { modelInfo, warning } = resolveHeadlessModel(models, config, attached);
+    const { modelInfo, warning } = signedOut
+      ? resolveSignedOutHeadlessModel(models, config, attached)
+      : resolveHeadlessModel(models, config, attached);
     if (warning) process.stderr.write(`Warning: ${sanitizeTerminalText(warning)}\n`);
     llm.currentModel = modelInfo.id;
 
@@ -397,9 +417,8 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const todoStore = createTodoStore();
     const writeTodosTool = createWriteTodosTool(todoStore);
     // Off by default - see the matching note in index.tsx.
-    const workItemTools = config.preferences.enableWorkItemTools
-      ? createWorkItemTools(new WorkItemsClient(apiClient))
-      : [];
+    const workItemTools =
+      config.preferences.enableWorkItemTools && !signedOut ? createWorkItemTools(new WorkItemsClient(apiClient)) : [];
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool

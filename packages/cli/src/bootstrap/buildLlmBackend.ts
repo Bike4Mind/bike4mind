@@ -37,6 +37,7 @@ import {
   NoLocalModelsError,
   SignedOutCloudBackend,
   signedOutDefaultReplacedMessage,
+  signedOutHeadlessCloudModelMessage,
 } from './signedOutLocal.js';
 
 /** The concrete backend types this builder can produce. */
@@ -269,6 +270,38 @@ export function resolveHeadlessModel(
     );
   }
   return { modelInfo, warning: `Model "${defaultModel}" is not available; using "${modelInfo.id}".` };
+}
+
+/**
+ * Headless model choice while signed out, when `models` are all local: the default if listed, else the saved local
+ * default (with a warning to print). A default that is itself the local default must be listed; any other is taken
+ * for a cloud model and answered with how to pick a local one or sign in.
+ */
+export function resolveSignedOutHeadlessModel(
+  models: ModelInfo[],
+  config: Pick<CliConfig, 'defaultModel' | 'localDefaultModel'>,
+  ollama: Pick<LocalModelsAttachment, 'ollamaHost'>
+): { modelInfo: ModelInfo; warning: string | null } {
+  const { defaultModel, localDefaultModel } = config;
+  requireLocalDefaultListed(models, defaultModel);
+  const listed = models.find(model => model.id === defaultModel);
+  if (listed) return { modelInfo: listed, warning: null };
+  if (localDefaultModel && defaultModel !== localDefaultModel) {
+    const saved = models.find(model => model.id === localDefaultModel);
+    if (saved) {
+      return {
+        modelInfo: saved,
+        warning: `Not signed in, so using the saved local model "${clean(saved.id)}" instead of "${clean(defaultModel)}".`,
+      };
+    }
+  }
+  if (defaultModel === localDefaultModel) {
+    throw new Error(
+      `Model "${clean(defaultModel)}" is not available from Ollama${ollama.ollamaHost ? ` at ${clean(ollama.ollamaHost)}` : ''}. ` +
+        'Start Ollama, or pick another model with: b4m models use <name>'
+    );
+  }
+  throw new Error(signedOutHeadlessCloudModelMessage(defaultModel));
 }
 
 export interface LocalModelsAttachment {
@@ -565,7 +598,7 @@ export async function attachLocalModels(
     throw new NoLocalModelsError(noLocalModelsReason(ollamaHost ?? ollama.emptyHost, ollama.error));
   }
 
-  if (serverModels.length === 0 && ollamaModels.length === 0 && !servers.owner) {
+  if (serverModels.length === 0 && ollamaModels.length === 0 && !servers.owner && joined.length === 0) {
     if (!ollamaHost) throw new Error('No models available from server.');
     throw new Error(
       ollama.error !== undefined

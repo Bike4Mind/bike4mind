@@ -152,3 +152,38 @@ describe('AcpServer agent stack', () => {
     expect(h.captured.tools?.map(t => t.toolSchema.name)).not.toContain('tool_search');
   });
 });
+
+describe('AcpServer agent stack while signed out', () => {
+  function signedOutServer(): { server: AcpServer; mergeRemoteSkills: ReturnType<typeof vi.fn> } {
+    const server = serverWithStubbedBootstrap();
+    const internals = server as unknown as StackInternals;
+    internals.configStore = { ...internals.configStore, getAuthTokens: async () => null };
+    const mergeRemoteSkills = vi.fn(async () => {});
+    internals.mergeRemoteSkills = mergeRemoteSkills;
+    return { server, mergeRemoteSkills };
+  }
+
+  it('builds on local models with a client that cannot reach Bike4Mind, and skips remote skills', async () => {
+    const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
+    vi.mocked(buildLlmBackend).mockClear();
+    const { server, mergeRemoteSkills } = signedOutServer();
+
+    await buildStack(server);
+
+    const input = vi.mocked(buildLlmBackend).mock.calls[0][0];
+    expect(input.apiClient.signedOut).toBe(true);
+    expect(input.detectOllama).toBe(true);
+    expect(mergeRemoteSkills).not.toHaveBeenCalled();
+  });
+
+  it('asks for sign-in with what to fix locally when no local model can chat', async () => {
+    const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
+    const { NoLocalModelsError } = await import('../bootstrap/signedOutLocal.js');
+    vi.mocked(buildLlmBackend).mockRejectedValueOnce(new NoLocalModelsError('No local model found. Start Ollama.'));
+
+    await expect(buildStack(signedOutServer().server)).rejects.toMatchObject({
+      code: -32000,
+      message: expect.stringContaining('No local model found. Start Ollama.'),
+    });
+  });
+});

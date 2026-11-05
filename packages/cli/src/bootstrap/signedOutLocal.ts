@@ -20,10 +20,21 @@ export function signedOutDefaultReplacedMessage(defaultModel: string, localModel
   return `Default model ${clean(defaultModel)} is not a local model; using ${clean(localModel)}. If it is a Bike4Mind cloud model, sign in with /login to use it.`;
 }
 
+/** For headless and ACP runs, where /login cannot be typed. */
+export const SIGN_IN_OUTSIDE_HINT = 'To use Bike4Mind cloud models instead, sign in: run b4m, then /login.';
+
+/**
+ * Headless (`-p`) runs signed out never swap a cloud default for a local model on their own, unless a local
+ * default was saved; this is the error when none was.
+ */
+export function signedOutHeadlessCloudModelMessage(model: string): string {
+  return `Not signed in, and the default model ${clean(model)} is not a local model. Pick a local model with: b4m models use <name>. ${SIGN_IN_OUTSIDE_HINT}`;
+}
+
 /** Signed out and nothing local can chat. `reason` says what was found and how to fix it. */
 export class NoLocalModelsError extends Error {
   constructor(readonly reason: string) {
-    super(`${reason}\n${SIGN_IN_HINT}`);
+    super(`${reason}\n${SIGN_IN_OUTSIDE_HINT}`);
     this.name = 'NoLocalModelsError';
   }
 }

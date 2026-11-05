@@ -19,6 +19,7 @@ import { loadModelServers } from '../models/modelServers.js';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
 import { attachLocalModels, type AttachLocalModelsOptions, type BuildLlmBackendDeps } from './buildLlmBackend.js';
+import { NoLocalModelsError, SignedOutCloudBackend } from './signedOutLocal.js';
 
 const TOKEN = 'tok-5e4d3c2b1a0f9e8d7c6b';
 const silent = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -530,5 +531,38 @@ describe('attachLocalModels with saved model servers', () => {
     );
     expect(load).not.toHaveBeenCalled();
     expect(attached.models).toEqual([hosted]);
+  });
+});
+
+describe('attachLocalModels with saved model servers while signed out', () => {
+  const signedOut = (opts: Partial<AttachLocalModelsOptions> = {}) =>
+    attach(
+      { defaultModel: 'claude-opus-4' },
+      { servers: 'all', signedOut: true, ...opts },
+      new SignedOutCloudBackend('claude-opus-4') as never
+    );
+
+  it('waits for the other saved servers at startup and lists the ones that answer', async () => {
+    const fake = await vllm();
+    const port = await closedPort();
+    await writeServers([vllmRecord('s1', 'vllm', fake), downRecord('o2', 'gone', port)]);
+
+    const attached = await signedOut();
+
+    expect(attached.servers).toEqual([{ name: 'vllm', modelCount: 2 }]);
+    expect(attached.models.map(model => model.id)).toEqual(VLLM_IDS);
+    expect(await chat(attached.llm, 'local:srv-s1:qwen-small')).toBe('Hello.');
+  });
+
+  it('stops waiting on a saved server that never answers, then says no local model was found', async () => {
+    const stalled = await silentServer();
+    await writeServers([record({ id: 'o1', name: 'gpu-box', transport: { type: 'http', baseUrl: stalled.baseUrl } })]);
+    const started = performance.now();
+
+    const failure = signedOut({ listingTimeoutMs: 300 });
+
+    await expect(failure).rejects.toBeInstanceOf(NoLocalModelsError);
+    await expect(failure).rejects.toThrow('No local model found. Start Ollama');
+    expect(performance.now() - started).toBeLessThan(2_000);
   });
 });
