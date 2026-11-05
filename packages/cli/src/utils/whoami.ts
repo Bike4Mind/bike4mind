@@ -13,7 +13,7 @@ export function whoamiReport(
   return [
     '\n\u{1f464} Current User:\n',
     `User ID: ${authTokens.userId}`,
-    `Status: ${expires <= now ? '⚠️  Token expired' : '✅ Authenticated'}`,
+    `Status: ${expires <= now ? `${String.fromCodePoint(0x26a0, 0xfe0f)}  Token expired` : `${String.fromCodePoint(0x2705)} Authenticated`}`,
     `Expires: ${expires.toLocaleString()}`,
     '',
   ].join('\n');

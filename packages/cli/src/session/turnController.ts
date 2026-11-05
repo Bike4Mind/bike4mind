@@ -262,7 +262,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
           activeSession = newSession;
         }
       } finally {
-        useCliStore.getState().setIsThinking(false);
+        if (!replaced()) useCliStore.getState().setIsThinking(false);
       }
     }
   }
@@ -466,7 +466,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       ?.metadata?.steps;
 
     // Clear pending messages on error
-    useCliStore.getState().clearPendingMessages();
+    if (!replaced()) useCliStore.getState().clearPendingMessages();
 
     // Handle abort (user pressed ESC)
     if (error instanceof Error && error.name === 'AbortError') {
@@ -541,8 +541,10 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     // the controller published via setAbortController is already null by now
     // because the ESC handler clears it eagerly.
     const wasAborted = abortController.signal.aborted;
-    setAbortController(null);
-    useCliStore.getState().setIsThinking(false);
+    if (!replaced()) {
+      setAbortController(null);
+      useCliStore.getState().setIsThinking(false);
+    }
     // Process-hook (host action_required signal): end of turn - clear any block
     // sentinel (covers a *denied* permission, which never reaches PostToolUse).
     void getProcessHooks()?.fireStop();

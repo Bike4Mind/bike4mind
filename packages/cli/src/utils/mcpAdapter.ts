@@ -255,7 +255,9 @@ export class McpManager {
     // disconnect() only closes clients it can see, so one that finishes connecting afterwards is closed here.
     if (this.disposed) {
       await client.disconnect().catch((error: unknown) => {
-        logger.debug(`⚠️  Error closing ${serverConfig.name} after shutdown: ${error}`);
+        logger.debug(
+          `${String.fromCodePoint(0x26a0, 0xfe0f)}  Error closing ${serverConfig.name} after shutdown: ${error}`
+        );
       });
       throw new Error(`MCP manager shut down while ${serverConfig.name} was connecting`);
     }

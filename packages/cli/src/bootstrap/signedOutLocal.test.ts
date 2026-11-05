@@ -5,11 +5,29 @@ import { ApiClient } from '../auth/ApiClient.js';
 import { createMockConfig } from '../test-utils/mocks.js';
 import { buildLlmBackend, defaultLlmBackendDeps, type BuildLlmBackendDeps } from './buildLlmBackend.js';
 import {
+  loginBlocked,
   NoLocalModelsError,
   signedOutCloudModelMessage,
   signedOutCommandMessage,
   signedOutNoMatchMessage,
 } from './signedOutLocal.js';
+
+describe('loginBlocked', () => {
+  const idle = { abortController: null, turnInFlight: false, isThinking: false, sessionHolds: 0 };
+
+  it('lets /login start when nothing is using the session', () => {
+    expect(loginBlocked(idle)).toBe(false);
+  });
+
+  it.each([
+    ['a reply can still be stopped', { abortController: new AbortController() }],
+    ['a turn or its queued follow-ups are running', { turnInFlight: true }],
+    ['a compaction or command is thinking', { isThinking: true }],
+    ['something holds the session', { sessionHolds: 1 }],
+  ])('refuses while %s', (_label, busy) => {
+    expect(loginBlocked({ ...idle, ...busy })).toBe(true);
+  });
+});
 
 const CLOUD = 'https://cloud.example.test';
 const OLLAMA = 'http://127.0.0.1:11434';

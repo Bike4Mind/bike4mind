@@ -532,6 +532,27 @@ describe('runTurn', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it("leaves the new session's pending reply, spinner and abort controller alone when the old turn fails", async () => {
+    seedSession([]);
+    let generation = 1;
+    const theirs: Message = { id: 'theirs', role: 'assistant', content: '', timestamp: ISO };
+    const run = vi.fn(async () => {
+      generation = 2;
+      useCliStore.setState({ pendingMessages: [theirs], isThinking: true });
+      throw new Error('boom');
+    });
+    const setAbortController = vi.fn((_controller: AbortController | null) => {});
+
+    await runTurn(
+      'do it',
+      makeCtx({ agent: { run } as unknown as ReActAgent, setAbortController, sessionGeneration: () => generation })
+    );
+
+    expect(useCliStore.getState().pendingMessages).toEqual([theirs]);
+    expect(useCliStore.getState().isThinking).toBe(true);
+    expect(setAbortController).not.toHaveBeenCalledWith(null);
+  });
+
   it('drops an auto-compaction that finishes after a sign-in restart replaced the session', async () => {
     seedSession(
       Array.from({ length: 6 }, (_, i) => ({

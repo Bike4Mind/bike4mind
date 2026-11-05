@@ -22,6 +22,18 @@ export function signedOutDefaultReplacedMessage(defaultModel: string, localModel
 
 export const SIGN_IN_DURING_TURN = 'Finish or stop the current reply (Esc) before running /login.';
 
+/** True while anything still reads or writes the session /login would replace. */
+export function loginBlocked(busy: {
+  abortController: AbortController | null;
+  turnInFlight: boolean;
+  isThinking: boolean;
+  sessionHolds: number;
+}): boolean {
+  return busy.abortController !== null || busy.turnInFlight || busy.isThinking || busy.sessionHolds > 0;
+}
+
+export const LOGGED_OUT_RESTART = 'Restart b4m to chat with local models while signed out.';
+
 export const LOCAL_SESSION_CONTINUES = 'Still signed out; chatting with local models. Run /login to try again.';
 
 /** Slash commands that only talk to Bike4Mind, with what each one is for. */

@@ -193,6 +193,8 @@ import { bridgePresence } from './features/bridgePresence/index.js';
 import { buildLlmBackend, type BuildLlmBackendResult } from './bootstrap/buildLlmBackend.js';
 import {
   LOCAL_SESSION_CONTINUES,
+  LOGGED_OUT_RESTART,
+  loginBlocked,
   NoLocalModelsError,
   SIGN_IN_DURING_TURN,
   SIGN_IN_EXPIRED,
@@ -202,7 +204,7 @@ import {
   signInUncheckedLoginMessage,
   signInUncheckedMessage,
 } from './bootstrap/signedOutLocal.js';
-import { checkSavedSignIn, settleSignInRefresh } from './auth/savedSignIn.js';
+import { checkSavedSignIn, settleSignInRefresh, startupMode } from './auth/savedSignIn.js';
 import { extractErrorMessage } from '@bike4mind/utils';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
@@ -671,7 +673,8 @@ function CliApp() {
 
       let apiClient: ApiClient;
       let backend: BuildLlmBackendResult;
-      if (signIn.status === 'signed-in') {
+      const mode = startupMode(signIn, signedOutBackend !== null);
+      if (mode === 'signed-in' && signIn.status === 'signed-in') {
         const expiresAt = new Date(signIn.tokens.expiresAt);
         const daysUntilExpiry = Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
         startupLog.push(
@@ -714,7 +717,7 @@ function CliApp() {
         }
 
         backend = await buildLlmBackend({ ...backendInput, apiClient });
-      } else if (signedOutClient && signedOutBackend) {
+      } else if (mode === 'local' && signedOutClient && signedOutBackend) {
         apiClient = signedOutClient;
         backend = signedOutBackend;
         if (signIn.status === 'expired') startupLog.unshift(SIGN_IN_EXPIRED);
@@ -1602,7 +1605,7 @@ function CliApp() {
       // Clear thinking state
       useCliStore.getState().setIsThinking(false);
     } catch (error: any) {
-      useCliStore.getState().setIsThinking(false);
+      if (!replaced()) useCliStore.getState().setIsThinking(false);
 
       // Handle abort (user pressed ESC)
       if (error instanceof Error && error.name === 'AbortError') {
@@ -1686,7 +1689,7 @@ function CliApp() {
       setStoreSession(sessionWithError);
     } finally {
       // Clean up abort controller and event handlers
-      setState(prev => ({ ...prev, abortController: null }));
+      setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
       state.agent.off('thought', stepHandler);
       state.agent.off('action', stepHandler);
       releaseSession();
@@ -2531,10 +2534,11 @@ function CliApp() {
         }
         const { url } = result;
 
-        await state.configStore.setCustomApiUrl(url);
-
-        // Clear authentication when changing API URL
-        await state.configStore.clearAuthTokens();
+        // Clear authentication when changing API URL; under the refresh lock so no refresh lands in between.
+        await state.configStore.withRefreshLock(async () => {
+          await state.configStore.setCustomApiUrl(url);
+          await state.configStore.clearAuthTokens();
+        });
 
         console.log(`\n✅ API URL updated: ${url}`);
         console.log('🔓 Authentication cleared');
@@ -2544,10 +2548,11 @@ function CliApp() {
       }
 
       case 'reset-api': {
-        await state.configStore.setCustomApiUrl(null);
-
-        // Clear authentication when resetting API URL
-        await state.configStore.clearAuthTokens();
+        // Clear authentication when resetting API URL; under the refresh lock so no refresh lands in between.
+        await state.configStore.withRefreshLock(async () => {
+          await state.configStore.setCustomApiUrl(null);
+          await state.configStore.clearAuthTokens();
+        });
 
         const resetEndpoint = resolveApiEndpoint();
         console.log('\n✅ Custom API URL cleared');
@@ -2744,7 +2749,7 @@ function CliApp() {
 
       case 'login': {
         const busy = useCliStore.getState();
-        if (abortControllerRef.current || busy.turnInFlight || busy.isThinking || busy.sessionHolds > 0) {
+        if (loginBlocked({ ...busy, abortController: abortControllerRef.current })) {
           console.log(SIGN_IN_DURING_TURN);
           break;
         }
@@ -2765,8 +2770,9 @@ function CliApp() {
 
       case 'logout':
         usageCache = null; // Clear cached usage data to prevent data leakage
-        await state.configStore.clearAuthTokens();
+        await state.configStore.withRefreshLock(() => state.configStore.clearAuthTokens());
         console.log('✅ Successfully logged out');
+        if (!state.signedOutLocal) console.log(LOGGED_OUT_RESTART);
         break;
 
       case 'whoami': {

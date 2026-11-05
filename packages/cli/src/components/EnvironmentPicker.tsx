@@ -125,7 +125,9 @@ export function EnvironmentPicker({ onSelect, onCancel, defaultUrl = getDefaultA
       />
 
       <Box marginTop={1}>
-        <Text dimColor>Use ↑↓ arrows to navigate, Enter to select, {cancelHint}</Text>
+        <Text dimColor>
+          Use {String.fromCodePoint(0x2191, 0x2193)} arrows to navigate, Enter to select, {cancelHint}
+        </Text>
       </Box>
     </Box>
   );
