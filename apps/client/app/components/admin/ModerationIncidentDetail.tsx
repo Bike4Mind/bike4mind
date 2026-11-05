@@ -178,11 +178,11 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
               <Stack component="ul" gap={0.5} sx={{ m: 0, pl: 2.5 }}>
                 {[...data.labels]
                   .sort((a, b) => b.confidence - a.confidence)
-                  .map(label => (
+                  .map((label, index) => (
                     <Typography
                       component="li"
                       level="body-sm"
-                      key={`${label.parentName}/${label.name}`}
+                      key={`${index}-${label.parentName}/${label.name}`}
                       data-testid="moderation-incident-label"
                     >
                       {label.parentName ? `${label.parentName} / ${label.name}` : label.name}
@@ -296,15 +296,17 @@ export const ModerationIncidentDetail: React.FC<Props> = ({ incidentId, onBack }
                   : 'A verdict has already been recorded for this incident.'}
             </Alert>
           )}
-          <Stack gap={0.5} data-testid="moderation-incident-verdict-help">
-            <Typography level="title-sm">What each verdict does</Typography>
-            <Typography level="body-sm">
-              <strong>Mark false positive:</strong> {VERDICT_EXPLANATIONS.false_positive}
-            </Typography>
-            <Typography level="body-sm">
-              <strong>Record report:</strong> {VERDICT_EXPLANATIONS.confirmed}
-            </Typography>
-          </Stack>
+          {canConfirm && (
+            <Stack gap={0.5} data-testid="moderation-incident-verdict-help">
+              <Typography level="title-sm">What each verdict does</Typography>
+              <Typography level="body-sm">
+                <strong>Mark false positive:</strong> {VERDICT_EXPLANATIONS.false_positive}
+              </Typography>
+              <Typography level="body-sm">
+                <strong>Record report:</strong> {VERDICT_EXPLANATIONS.confirmed}
+              </Typography>
+            </Stack>
+          )}
           <Stack direction="row" gap={1} flexWrap="wrap">
             <Button
               variant="outlined"

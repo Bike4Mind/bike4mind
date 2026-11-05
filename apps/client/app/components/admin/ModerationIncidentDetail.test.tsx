@@ -209,6 +209,22 @@ describe('ModerationIncidentDetail', () => {
     expect((screen.getByTestId('moderation-incident-false-positive-btn') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('moderation-incident-confirmed-btn') as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByTestId('moderation-incident-not-actionable')).toBeTruthy();
+    expect(screen.queryByTestId('moderation-incident-verdict-help')).toBeNull();
+  });
+
+  it('keeps distinct rows when the detector repeats a label', () => {
+    m.view.mockReturnValue(
+      loaded(
+        view({
+          labels: [
+            { name: 'Repeat', parentName: 'Parent', confidence: 90 },
+            { name: 'Repeat', parentName: 'Parent', confidence: 80 },
+          ],
+        })
+      )
+    );
+    renderDetail();
+    expect(screen.getAllByTestId('moderation-incident-label')).toHaveLength(2);
   });
 
   it('surfaces a load failure and still allows going back', () => {
