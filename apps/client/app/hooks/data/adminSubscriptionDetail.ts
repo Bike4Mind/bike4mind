@@ -1,4 +1,12 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  hashKey,
+  type QueryClient,
+  type QueryKey,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type {
@@ -44,6 +52,8 @@ const adminSubscriptionStripeKey = (id: string) => [...adminSubscriptionDetailKe
 const adminSubscriptionByStripeIdKey = (stripeSubscriptionId: string) =>
   ['admin', 'subscriptions', 'by-stripe', stripeSubscriptionId] as const;
 
+const isQueryKeyEqual = (a: QueryKey, b: QueryKey) => hashKey(a) === hashKey(b);
+
 const subscriptionPath = (id: string) => `/api/admin/subscriptions/${encodeURIComponent(id)}`;
 
 export const useAdminSubscriptionDetail = (id: string) =>
@@ -64,6 +74,18 @@ const retryStripeRead = (failureCount: number, error: unknown) =>
   !(isAxiosError(error) && (error.response?.status ?? 0) >= 500) &&
   failureCount < MAX_RETRIES;
 
+const readStripe = async (id: string, fresh: boolean): Promise<AdminSubscriptionStripe> =>
+  (
+    await api.get<AdminSubscriptionStripe>(`${subscriptionPath(id)}/stripe`, {
+      params: fresh ? { fresh: 1 } : undefined,
+    })
+  ).data;
+
+const refetchStripeFresh = (queryClient: QueryClient, id: string) =>
+  void queryClient
+    .fetchQuery({ queryKey: adminSubscriptionStripeKey(id), queryFn: () => readStripe(id, true), staleTime: 0 })
+    .catch(() => {});
+
 /** What the Stripe sections of the detail page need from the live read. */
 export type AdminSubscriptionStripeState = {
   data: AdminSubscriptionStripe | undefined;
@@ -81,15 +103,9 @@ export const useAdminSubscriptionStripe = (
 ): AdminSubscriptionStripeState => {
   const queryClient = useQueryClient();
   const queryKey = adminSubscriptionStripeKey(id);
-  const read = async (fresh: boolean): Promise<AdminSubscriptionStripe> =>
-    (
-      await api.get<AdminSubscriptionStripe>(`${subscriptionPath(id)}/stripe`, {
-        params: fresh ? { fresh: 1 } : undefined,
-      })
-    ).data;
   const query = useQuery({
     queryKey,
-    queryFn: () => read(false),
+    queryFn: () => readStripe(id, false),
     enabled: enabled && isSubscriptionObjectId(id),
     staleTime: STRIPE_STALE_MS,
     retry: retryStripeRead,
@@ -99,8 +115,7 @@ export const useAdminSubscriptionStripe = (
     isLoading: query.isLoading,
     isError: query.isError,
     isFetching: query.isFetching,
-    refetchFresh: () =>
-      void queryClient.fetchQuery({ queryKey, queryFn: () => read(true), staleTime: 0 }).catch(() => {}),
+    refetchFresh: () => refetchStripeFresh(queryClient, id),
   };
 };
 
@@ -205,8 +220,15 @@ const useAdminStripeWrite = (id: string, path: 'cancel' | 'resume') => {
       queryClient.setQueryData<AdminSubscriptionDetail>(adminSubscriptionDetailKey(id), current =>
         current ? { ...current, subscription, stripe } : current
       );
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });
+      // The Stripe read is excluded and refetched with fresh=1, since the server's 60 s cache would still
+      // show the pre-write state (e.g. an upcoming invoice on a subscription just set to cancel).
+      const stripeKey = adminSubscriptionStripeKey(id);
+      void queryClient.invalidateQueries({
+        queryKey: ['admin', 'subscriptions'],
+        predicate: query => !isQueryKeyEqual(query.queryKey, stripeKey),
+      });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'user-subscriptions'] });
+      if (queryClient.getQueryState(stripeKey)) refetchStripeFresh(queryClient, id);
     },
     // A 409 carries the server's plain-language message ("This subscription changed. Review and try again.").
     // Refetch so the retry reviews the current state instead of resending the stale token.

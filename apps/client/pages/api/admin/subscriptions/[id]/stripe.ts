@@ -36,7 +36,7 @@ const handler = adminApi({
       } catch (error) {
         if (!isStripeError(error)) throw error;
         req.logger?.error('Admin subscription Stripe read failed', error);
-        return res.status(502).json({ message: "Stripe request failed" });
+        return res.status(502).json({ message: 'Stripe request failed' });
       }
     })
   );
