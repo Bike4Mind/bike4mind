@@ -56,21 +56,6 @@ export async function logAuthAudit(
 }
 
 /**
- * logAuthAudit for an event no HTTP request carries (a scheduled job or queue worker): the actor
- * IP and user agent read 'system'. Best-effort the same way, but a failure is logged at warn.
- */
-export async function logSystemAuthAudit(
-  params: { userId: string; event: UserAuthAuditEvent; actorUserId?: string; metadata?: Record<string, unknown> },
-  logger: { warn: (message: string) => void } = console
-): Promise<void> {
-  try {
-    await userAuthAuditLogRepository.createLog({ ...params, actorIp: 'system', userAgent: 'system' });
-  } catch (err) {
-    logger.warn(`Failed to write UserAuthAuditLog (${params.event}) for user ${params.userId}: ${String(err)}`);
-  }
-}
-
-/**
  * Adds whether the reusing request came from the IP the session was issued to (`issuedIp`, set by
  * rotateSession). A match is the usual benign shape: a second client on the same network holding a
  * stale cookie. A mismatch is not proof of theft either - a session lives for weeks and IPs change -
