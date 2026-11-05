@@ -51,23 +51,24 @@ export function isLinuxStoreDir(path: string | null): boolean {
 
 const positiveFinite = (value: number) => Number.isFinite(value) && value > 0;
 
-/** A loaded model within `usableGpuBytes` that Ollama held partly on the CPU; null when there is none. */
+const onGpu = ({ sizeBytes, vramBytes }: LoadedModel) =>
+  positiveFinite(sizeBytes) && Number.isFinite(vramBytes) && vramBytes >= 0 && vramBytes >= sizeBytes * PARTIAL_SHARE;
+
+/** A loaded model within `usableGpuBytes` that Ollama held partly or wholly on the CPU; null when there is none. */
 export function partialLoad(loaded: readonly LoadedModel[], usableGpuBytes: number): GpuMemoryCap | null {
   if (!positiveFinite(usableGpuBytes)) return null;
   const found = loaded.find(
-    ({ sizeBytes, vramBytes }) =>
-      positiveFinite(sizeBytes) &&
-      positiveFinite(vramBytes) &&
-      sizeBytes <= usableGpuBytes &&
-      vramBytes < sizeBytes * PARTIAL_SHARE
+    model =>
+      positiveFinite(model.sizeBytes) &&
+      Number.isFinite(model.vramBytes) &&
+      model.vramBytes >= 0 &&
+      model.sizeBytes <= usableGpuBytes &&
+      !onGpu(model)
   );
   return found ? { model: found.name, sizeBytes: found.sizeBytes, gpuBytes: found.vramBytes } : null;
 }
 
-/** A model larger than the GPU part `cap` was held to now runs fully on the GPU, so the limit no longer applies. */
+/** A model larger than the GPU part `cap` was held to now runs on the GPU, so the limit no longer applies. */
 export function clearsCap(loaded: readonly LoadedModel[], cap: GpuMemoryCap): boolean {
-  return loaded.some(
-    ({ sizeBytes, vramBytes }) =>
-      positiveFinite(sizeBytes) && Number.isFinite(vramBytes) && vramBytes >= sizeBytes && sizeBytes > cap.gpuBytes
-  );
+  return loaded.some(model => onGpu(model) && model.sizeBytes > cap.gpuBytes);
 }

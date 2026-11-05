@@ -53,7 +53,8 @@ describe('GpuMemoryCapWarning', () => {
     await show('local', CAP);
     const text = warning()?.textContent ?? '';
     expect(text).toContain('qwen3.8:27b-q8_0 loaded with 19.2 GiB of its 38.4 GiB on the GPU');
-    expect(text).toContain("limits GPU memory to the WSL virtual machine's memory");
+    expect(text).toContain("looks like this Ollama limits GPU memory to the WSL virtual machine's memory");
+    expect(text).toContain('num_gpu');
     expect(text).toContain('run partly on the CPU');
     expect(text).toContain('.wslconfig');
     expect(text).not.toMatch(/[^\x20-\x7e]/);

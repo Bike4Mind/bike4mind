@@ -44,14 +44,15 @@ export function GpuMemoryCapWarning({ serverId, cap }: { serverId: string; cap: 
       }
     >
       <Box>
-        <Typography level="title-sm">Ollama in WSL is using less GPU memory than this computer has</Typography>
+        <Typography level="title-sm">Ollama in WSL may be using less GPU memory than this computer has</Typography>
         <Typography level="body-sm" sx={{ mt: 0.5 }}>
-          {loadedText(cap)}. This Ollama limits GPU memory to the WSL virtual machine's memory, so models larger than
-          that run partly on the CPU and reply slowly, even when their badge here says they fit.
+          {loadedText(cap)}. It looks like this Ollama limits GPU memory to the WSL virtual machine's memory, so models
+          larger than that run partly on the CPU and reply slowly, even when their badge here says they fit.
         </Typography>
         <Typography level="body-sm" sx={{ mt: 0.5 }}>
-          To use all of the GPU memory, update Ollama in WSL to a version that fixes this. Until then, give WSL more
-          memory (the memory setting in .wslconfig, then restart WSL), or pick models that fit in the memory WSL has.
+          If you did not set num_gpu for this model and no other app is using much GPU memory, update Ollama in WSL to a
+          version that fixes this. Until then, give WSL more memory (the memory setting in .wslconfig, then restart
+          WSL), or pick models that fit in the memory WSL has.
         </Typography>
       </Box>
     </Alert>

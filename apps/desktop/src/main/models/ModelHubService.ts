@@ -702,9 +702,12 @@ export class ModelHubService {
   readonly #pullWaiters = new Set<() => void>();
   #hardware: Promise<HardwareProfile> | null = null;
   #gpuCap: GpuMemoryCap | null = null;
+  /** A load that looks capped, held while nvidia-smi or the model folder is checked. */
+  #capCandidate: GpuMemoryCap | null = null;
   #gpuCapReads: Promise<void> = Promise.resolve();
-  /** nvidia-smi's answer, kept once it gave one. */
-  #integrated: boolean | null = null;
+  /** nvidia-smi's answer for the session, null included; undefined until it settles. */
+  #integrated: boolean | null | undefined = undefined;
+  #integratedAsked = false;
   #lastPush = 0;
   #pushTimer: ReturnType<typeof setTimeout> | null = null;
   #awake = false;
@@ -737,15 +740,17 @@ export class ModelHubService {
     };
   }
 
-  /** Applies `/api/ps` reads of this computer's Ollama to the WSL GPU memory warning one at a time, in read order. */
+  /** Applies `/api/ps` reads of this computer's Ollama to the WSL GPU memory warning one at a time, in call order. */
   #watchGpuCap(target: Target, loaded: readonly LoadedModel[]): Promise<void> {
     if (!target.local || !this.#deps.wslHost) return Promise.resolve();
-    this.#gpuCapReads = this.#gpuCapReads
-      .then(() => this.#checkGpuCap(target, loaded))
-      .catch(error => {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.#deps.warn(`MODELS: could not check for a WSL GPU memory limit: ${reason}`);
-      });
+    return this.#queueGpuCap(() => this.#checkGpuCap(target, loaded));
+  }
+
+  #queueGpuCap(step: () => Promise<void>): Promise<void> {
+    this.#gpuCapReads = this.#gpuCapReads.then(step).catch(error => {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.#deps.warn(`MODELS: could not check for a WSL GPU memory limit: ${reason}`);
+    });
     return this.#gpuCapReads;
   }
 
@@ -754,18 +759,39 @@ export class ModelHubService {
       this.#gpuCap = null;
       return;
     }
+    if (this.#capCandidate && clearsCap(loaded, this.#capCandidate)) this.#capCandidate = null;
     const { hardware } = await this.#localSizing();
     const budgets = memoryBudgets(hardware);
     if (budgets.cpuOnly) return;
     const found = partialLoad(loaded, budgets.gpu - fitMarginBytes(hardware));
     if (!found) return;
-    if (!this.#gpuCap) {
-      this.#integrated ??= (await this.#deps.integratedGpu?.()) ?? null;
-      if (this.#integrated !== true) return;
-      const store = await this.storeLocation(target.id);
-      if (store.source === 'default' || !isLinuxStoreDir(store.path)) return;
+    if (this.#gpuCap) {
+      this.#gpuCap = found;
+      return;
     }
-    this.#gpuCap = found;
+    this.#capCandidate = found;
+    await this.#confirmGpuCap(target);
+  }
+
+  /** nvidia-smi runs once per session, in the background; its answer is applied to the latest candidate. */
+  async #confirmGpuCap(target: Target): Promise<void> {
+    if (!this.#capCandidate) return;
+    if (this.#integrated === undefined) {
+      if (!this.#integratedAsked) {
+        this.#integratedAsked = true;
+        void Promise.resolve()
+          .then(() => this.#deps.integratedGpu?.())
+          .catch(() => null)
+          .then(answer => {
+            this.#integrated = answer ?? null;
+            return this.#queueGpuCap(() => this.#confirmGpuCap(target));
+          });
+      }
+      return;
+    }
+    const store = this.#integrated === true ? await this.storeLocation(target.id) : null;
+    if (store && store.source !== 'default' && isLinuxStoreDir(store.path)) this.#gpuCap = this.#capCandidate;
+    this.#capCandidate = null;
   }
 
   /** Null for a saved server without entered hardware: its models are not rated. */

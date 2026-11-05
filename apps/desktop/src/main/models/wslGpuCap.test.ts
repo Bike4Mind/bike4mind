@@ -82,8 +82,8 @@ describe.each([24, 64, 72, 80, 96])('partialLoad with %i GiB of usable GPU memor
     expect(partialLoad([model('huge:bf16', usableGib * 1.2, usableGib * 0.5)], usable)).toBeNull();
   });
 
-  it('ignores a model with nothing on the GPU, which is not this limit', () => {
-    expect(partialLoad([model('big:q8', usableGib * 0.6, 0)], usable)).toBeNull();
+  it('finds a model that fits the GPU held entirely on the CPU', () => {
+    expect(partialLoad([model('big:q8', usableGib * 0.6, 0)], usable)).toMatchObject({ model: 'big:q8', gpuBytes: 0 });
   });
 });
 
@@ -103,6 +103,10 @@ describe.each([24, 64, 96])('clearsCap after a %i GiB cap', capGib => {
   it('clears once a model larger than the capped GPU part runs fully on the GPU', () => {
     expect(clearsCap([model('big:q8', capGib * 1.5, capGib * 1.5)], capped)).toBe(true);
     expect(clearsCap([model('other', capGib + 1, capGib + 1)], capped)).toBe(true);
+  });
+
+  it('clears for a load short of the GPU only by rounding, as partialLoad tolerates', () => {
+    expect(clearsCap([model('big:q8', capGib * 1.5, capGib * 1.5 * 0.95)], capped)).toBe(true);
   });
 
   it('keeps it for a model the capped Ollama could hold anyway, or one still short', () => {
