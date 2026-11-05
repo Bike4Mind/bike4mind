@@ -253,7 +253,9 @@ describe('buildLlmBackend — Ollama multiplexing', () => {
       await ollama.complete('llama3:8b', [{ role: 'user', content: 'hi' }] as never, { stream: false }, async () => {});
 
       expect(warnToFile).toHaveBeenCalledOnce();
-      expect(warnToFile.mock.calls[0][0]).toContain('context change applies after restart');
+      expect(warnToFile.mock.calls[0][0]).toContain(
+        'context change applies after the model list is refreshed or the CLI restarts'
+      );
       expect(consoleWarn).not.toHaveBeenCalled();
     } finally {
       warnToFile.mockRestore();

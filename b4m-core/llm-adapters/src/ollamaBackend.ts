@@ -362,7 +362,7 @@ export class OllamaBackend implements ICompletionBackend {
     if (wanted !== listed && !this._numCtxChangeWarned.has(model)) {
       this._numCtxChangeWarned.add(model);
       this._settingsWarning(
-        `[OllamaBackend] ${model}: context size changed from ${listed} to ${wanted}; the context change applies after restart.`
+        `[OllamaBackend] ${model}: context size changed from ${listed} to ${wanted}; the context change applies after the model list is refreshed or the CLI restarts.`
       );
     }
     return listed;

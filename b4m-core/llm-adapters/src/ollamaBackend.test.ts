@@ -830,7 +830,9 @@ describe('OllamaBackend per-model request settings', () => {
       [16384, 1800],
     ]);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('context change applies after restart');
+    expect(warn.mock.calls[0][0]).toContain(
+      'context change applies after the model list is refreshed or the CLI restarts'
+    );
   });
 
   function listingBackend(read: OllamaRequestSettingsReader, listed: () => string[]) {
