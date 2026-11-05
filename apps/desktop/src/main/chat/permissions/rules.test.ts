@@ -423,6 +423,23 @@ describe('PermissionRuleSet', () => {
     expect(rules.coversFolder(join(PROJECT, 'prot'))).toBe(false);
   });
 
+  it('applies no allow rule while a protected folder is unresolved', () => {
+    let unresolved: readonly string[] = ['/home/someone/.claude'];
+    const rules = ['Edit(**)', 'Bash(git status:*)'].map(text => {
+      const compiled = compileRule(parsed(text, true), 'allow', SOURCE, { home: HOME, root: PROJECT, cwd: PROJECT });
+      if (!compiled) throw new Error('Expected the rule to compile');
+      return compiled;
+    });
+    const set = new PermissionRuleSet(rules, [], () => unresolved);
+    const edit: PermissionSubject = { tool: 'file_edit', paths: [join(PROJECT, 'file')] };
+    const bash = shell('git status', ['git status'], [PROJECT]);
+    expect(decide(set, edit)).toBeNull();
+    expect(decide(set, bash)).toBeNull();
+    unresolved = [];
+    expect(decide(set, edit)).toBe('allow');
+    expect(decide(set, bash)).toBe('allow');
+  });
+
   describe('when a path cannot be resolved', () => {
     let base: string;
     let rules: PermissionRuleSet;

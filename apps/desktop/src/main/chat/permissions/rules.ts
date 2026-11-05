@@ -349,7 +349,8 @@ export class PermissionRuleSet {
 
   constructor(
     readonly rules: readonly CompiledRule[],
-    protectedRoots: ProtectedRoots = []
+    protectedRoots: ProtectedRoots = [],
+    private readonly unresolvedProtected: () => readonly string[] = () => []
   ) {
     this.protectedRoots = typeof protectedRoots === 'function' ? protectedRoots : () => protectedRoots;
     for (const rule of rules) {
@@ -435,6 +436,7 @@ export class PermissionRuleSet {
   /** allow: EVERY part of the call is covered, and no floor applies. The first covering rule, for the report. */
   private allowing(rules: readonly CompiledRule[], subject: PermissionSubject): CompiledRule | null {
     if (rules.length === 0) return null;
+    if (this.unresolvedProtected().length > 0) return null;
     if (subject.shell) {
       const { script, commands, directories } = subject.shell;
       const folded = caseFolded(script);

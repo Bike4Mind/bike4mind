@@ -461,6 +461,7 @@ export function registerChat(
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
     protectedRoots: () => permissionProtected.paths(),
+    unresolvedProtected: () => permissionProtected.unresolved(),
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
