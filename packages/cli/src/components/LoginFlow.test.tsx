@@ -397,6 +397,34 @@ describe('LoginFlow', () => {
     expect(store.setAuthTokens).not.toHaveBeenCalled();
   });
 
+  it('finishes signing in when Esc arrives after the token, while it is being saved', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    identify.mockResolvedValue({});
+    let saved!: () => void;
+    const store = {
+      setAuthTokens: vi.fn(() => new Promise<void>(resolve => (saved = resolve))),
+    } as unknown as ConfigStore;
+    const onSuccess = vi.fn();
+    const onCancel = vi.fn();
+    const { stdin } = render(
+      <LoginFlow
+        apiUrl="https://app.example.com"
+        configStore={store}
+        onSuccess={onSuccess}
+        onError={vi.fn()}
+        onCancel={onCancel}
+      />
+    );
+    await vi.waitFor(() => expect(store.setAuthTokens).toHaveBeenCalledOnce());
+
+    stdin.write('\x1b');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    saved();
+
+    await vi.waitFor(() => expect(onSuccess).toHaveBeenCalledOnce(), { timeout: 3000 });
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
   it('aborts the poll when unmounted', async () => {
     oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));

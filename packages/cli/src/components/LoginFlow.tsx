@@ -125,6 +125,7 @@ export function LoginFlow({
   const callbacks = useRef({ onSuccess, onError, onCancel });
   callbacks.current = { onSuccess, onError, onCancel };
   const abortRef = useRef<AbortController | null>(null);
+  const tokenIssued = useRef(false);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -155,6 +156,8 @@ export function LoginFlow({
           abort.signal
         );
         if (abort.signal.aborted) return;
+        // The server has issued the token, so Esc no longer cancels: it is saved and the session restarts.
+        tokenIssued.current = true;
 
         // Step 3: Decode access token to get userId
         const decoded = jwt.decode(tokens.access_token) as JwtPayload | null;
@@ -245,7 +248,7 @@ export function LoginFlow({
   const copying = useRef(false);
   useInput(
     (input, key) => {
-      if (key.escape && callbacks.current.onCancel) {
+      if (key.escape && callbacks.current.onCancel && !tokenIssued.current) {
         abortRef.current?.abort(new Error('Sign-in cancelled'));
         callbacks.current.onCancel();
         return;
