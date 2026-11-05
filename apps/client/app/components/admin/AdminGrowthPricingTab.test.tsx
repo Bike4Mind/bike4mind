@@ -110,12 +110,12 @@ describe('AdminGrowthPricingTab', () => {
     expect(warnings.some(text => text?.includes('Team Plan Minimum Seats (20) is above the maximum (10)'))).toBe(true);
   });
 
-  it('warns that starter credits are inert while open registration is off', () => {
+  it('warns that a stored Default Free Credits is retired', () => {
     serverSettings = [{ settingName: 'defaultFreeCredits', settingValue: 5000 }];
     renderTab();
 
     const warnings = screen.getAllByTestId('admin-growth-pricing-warning').map(el => el.textContent);
-    expect(warnings.some(text => text?.includes('no effect while Allow Open Registration is off'))).toBe(true);
+    expect(warnings.some(text => text?.includes('Default Free Credits is retired'))).toBe(true);
   });
 
   it('shows no warnings at defaults', () => {

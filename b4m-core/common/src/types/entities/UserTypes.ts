@@ -415,8 +415,8 @@ export interface IUser extends ICreditHolder {
    * registration alongside PENDING_FREE_CREDITS_TAG; released (and nulled) by
    * userService.releasePendingFreeCredits on OTC registration, email-link verify, first
    * OTC login, OAuth signup/link, or the backfillPendingFreeCredits script. Null when
-   * nothing is pending - the open-registration path leaves it null and grants
-   * `defaultFreeCredits` instead.
+   * nothing is pending - an enrolled signup leaves it null and is paid by its `signupGrant`;
+   * an older account with neither is paid the signup schedule's initial credits.
    */
   pendingCreditGrant?: number | null;
   /** GrantPackage this account redeemed at signup; its grant claims the inbox like the default grant. */

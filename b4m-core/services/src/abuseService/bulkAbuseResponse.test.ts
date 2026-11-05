@@ -8,6 +8,7 @@ import {
   userIdUpperBound,
   previewBulkAbuseCounts,
   resolveBulkAbuseCohort,
+  signupGrantTransactionIds,
   type BulkAbuseCohortAdapters,
   type BulkAbuseExecuteAdapters,
 } from './bulkAbuseResponse';
@@ -298,6 +299,12 @@ describe('clawbackAmount', () => {
     expect(clawbackAmount(20, 50)).toBe(20);
     expect(clawbackAmount(-10, 50)).toBe(0);
     expect(clawbackAmount(100, 0)).toBe(0);
+  });
+});
+
+describe('signupGrantTransactionIds', () => {
+  it('recognises the shared verify-grant id and the legacy otc-register-grant id', () => {
+    expect(signupGrantTransactionIds(id(7))).toEqual([`verify-grant:${id(7)}`, `otc-register-grant:${id(7)}`]);
   });
 });
 
