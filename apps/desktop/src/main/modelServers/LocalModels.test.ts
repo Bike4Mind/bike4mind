@@ -47,8 +47,14 @@ describe('LocalModels', () => {
       name: 'x',
       modelBlob: 'b'.repeat(64),
       modelParameters: 'top_k 1',
+      hasAdapter: true,
     });
-    expect(hook).toHaveBeenCalledWith({ name: 'x', modelBlob: 'b'.repeat(64), parameters: 'top_k 1' });
+    expect(hook).toHaveBeenCalledWith({
+      name: 'x',
+      modelBlob: 'b'.repeat(64),
+      parameters: 'top_k 1',
+      hasAdapter: true,
+    });
     expect(() => optionCatalogSampling(undefined)({ id: 'local:ollama:x', name: 'x' })).not.toThrow();
   });
 

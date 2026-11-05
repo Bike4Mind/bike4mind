@@ -36,8 +36,9 @@ function setsOtherSampling(parameters: string | undefined, family: HubFamily): b
 
 /**
  * The family sampling for the curated build a server lists as `name` with weights blob `modelBlob`, matched as
- * curatedBuildForInstalled does (a pull ref seeds even when the weights differ from the pin); undefined for any other model, or a family that states none. A model keeps its
- * own sampling PARAMETERs over the seed when it sets any that differ, whichever way it was matched.
+ * curatedBuildForInstalled does (a pull ref seeds even when the weights differ from the pin); undefined for any
+ * other model, or a family that states none. A model keeps its own sampling PARAMETERs over the seed when it sets
+ * any that differ, whichever way it was matched.
  */
 export function catalogSampling(
   manifest: HubManifest,
