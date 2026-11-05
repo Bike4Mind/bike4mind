@@ -193,6 +193,54 @@ describe('part pivots and parents', () => {
     });
   });
 
+  describe('as a slide', () => {
+    // A drawer under the body that pulls out toward the front (model -Y); no pivot needed.
+    const slid = (): ModelPartMesh[] => [
+      box('body', 60, 40, 30),
+      {
+        ...box('drawer', 50, 40, 10),
+        parent: 'body',
+        motion: 'slide',
+        axis: [0, -2, 0],
+        range: [0, 30],
+      },
+    ];
+
+    it('poses the drawer along its axis by model units and back to rest', () => {
+      const root = buildModelObject(slid(), 'mm');
+      root.getObjectByName('model')!.rotation.set(0, 0, 0);
+      poseJoints(root, { drawer: 30 });
+      root.updateMatrixWorld(true);
+      const open = new THREE.Box3().setFromObject(root.getObjectByName('drawer')!);
+      // The axis is normalized: 30 units along it is 30 mm, however long the axis was written.
+      expect(open.min.y).toBeCloseTo(-30);
+      expect(open.max.y).toBeCloseTo(10);
+      poseJoints(root, {});
+      root.updateMatrixWorld(true);
+      expect(new THREE.Box3().setFromObject(root.getObjectByName('drawer')!).min.y).toBeCloseTo(0);
+    });
+
+    it('exports at rest with a position clip that pulls it out, in metres and Y-up', async () => {
+      const root = buildModelObject(slid(), 'mm');
+      poseJoints(root, { drawer: 20 });
+      const loaded = await new GLTFLoader().parseAsync((await exportGlb(root)).slice().buffer, '');
+      const drawer = loaded.scene.getObjectByName('drawer')!;
+      loaded.scene.updateMatrixWorld(true);
+      // Model y 0..40 is glTF z 0..-0.04 at rest.
+      expect(new THREE.Box3().setFromObject(drawer).max.z).toBeCloseTo(0);
+      expect(loaded.animations.map(clip => clip.name)).toEqual(['drawer']);
+      const mixer = new THREE.AnimationMixer(loaded.scene);
+      const action = mixer.clipAction(loaded.animations[0]);
+      action.clampWhenFinished = true;
+      action.setLoop(THREE.LoopOnce, 1).play();
+      mixer.update(1);
+      loaded.scene.updateMatrixWorld(true);
+      const open = new THREE.Box3().setFromObject(drawer);
+      expect(open.max.z).toBeCloseTo(0.03);
+      expect(open.min.z).toBeCloseTo(-0.01);
+    });
+  });
+
   it('reports joints in the summary', () => {
     expect(summarizeParts(parts(), {}, 'mm').joints).toEqual(['lid: pivot (0, 40, 30), in body']);
   });

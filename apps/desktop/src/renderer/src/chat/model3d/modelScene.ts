@@ -49,7 +49,6 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
     material.name = part.name;
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = part.name;
-    if (part.axis && part.range) mesh.userData.joint = { axis: part.axis, range: part.range } satisfies JointData;
     return mesh;
   });
   const byName = new Map(parts.map((part, index) => [part.name, { mesh: meshes[index], pivot: part.pivot ?? origin }]));
@@ -58,8 +57,16 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
     const pivot = part.pivot ?? origin;
     const parent = part.parent === undefined ? undefined : byName.get(part.parent);
     const offset = parent?.pivot ?? origin;
-    meshes[index].position.set(pivot[0] - offset[0], pivot[1] - offset[1], pivot[2] - offset[2]);
-    (parent?.mesh ?? model).add(meshes[index]);
+    const mesh = meshes[index];
+    mesh.position.set(pivot[0] - offset[0], pivot[1] - offset[1], pivot[2] - offset[2]);
+    if (part.axis && part.range) {
+      const motion = part.motion ?? 'turn';
+      // A slide moves by `step` per range unit from `rest`; both are rewritten by the GLB bake.
+      const step = new THREE.Vector3(...part.axis).normalize().toArray();
+      const rest = mesh.position.toArray();
+      mesh.userData.joint = { motion, axis: part.axis, range: part.range, step, rest } satisfies JointData;
+    }
+    (parent?.mesh ?? model).add(mesh);
   });
   model.rotation.x = -Math.PI / 2;
   const root = new THREE.Group();
@@ -69,7 +76,14 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
   return root;
 }
 
-type JointData = Omit<ModelJoint, 'name'>;
+type Vec3 = [number, number, number];
+
+type JointData = Omit<ModelJoint, 'name'> & {
+  /** Slides only: the node's offset per range unit, in its parent's frame (unit length until baked). */
+  step: Vec3;
+  /** The node's position in the modelled pose; a slide adds to it, a turn keeps it. */
+  rest: Vec3;
+};
 
 function jointNodes(root: THREE.Object3D): { node: THREE.Object3D; joint: JointData }[] {
   const found: { node: THREE.Object3D; joint: JointData }[] = [];
@@ -85,13 +99,21 @@ function jointRotation(joint: JointData, degrees: number): THREE.Quaternion {
   return new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(degrees));
 }
 
+function jointPosition(joint: JointData, amount: number): THREE.Vector3 {
+  return new THREE.Vector3(...joint.rest).addScaledVector(new THREE.Vector3(...joint.step), amount);
+}
+
 /**
- * Turns each joint to its angle in degrees (0, the modelled pose, when absent). Joint nodes sit
- * unrotated under unrotated parents, so a node's own rotation about the model-axis direction is
- * the turn the model describes.
+ * Moves each joint to its value: degrees for a turn, model units for a slide (0, the modelled pose,
+ * when absent). Joint nodes sit unrotated under unrotated parents, so a node's own rotation about,
+ * or offset along, the model-axis direction is the motion the model describes.
  */
 export function poseJoints(root: THREE.Object3D, angles: Record<string, number>): void {
-  for (const { node, joint } of jointNodes(root)) node.quaternion.copy(jointRotation(joint, angles[node.name] ?? 0));
+  for (const { node, joint } of jointNodes(root)) {
+    const amount = angles[node.name] ?? 0;
+    if (joint.motion === 'slide') node.position.copy(jointPosition(joint, amount));
+    else node.quaternion.copy(jointRotation(joint, amount));
+  }
 }
 
 /** Each joint at the far end of its range: what `model_screenshot` shows as the open pose. */
@@ -100,12 +122,19 @@ export function openPose(root: THREE.Object3D): Record<string, number> {
 }
 
 /**
- * One clip per joint, named after the part, turning it from the first angle of its range to the
- * second over a second. Keys every 90 degrees at most, since a quaternion track takes the short way.
+ * One clip per joint, named after the part, moving it from the first value of its range to the
+ * second over a second. A turn keys every 90 degrees at most, since a quaternion track takes the
+ * short way; a slide is straight, so its two ends are enough.
  */
 function jointClips(root: THREE.Object3D): THREE.AnimationClip[] {
   return jointNodes(root).map(({ node, joint }) => {
     const [from, to] = joint.range;
+    if (joint.motion === 'slide') {
+      const values = [...jointPosition(joint, from).toArray(), ...jointPosition(joint, to).toArray()];
+      return new THREE.AnimationClip(node.name, 1, [
+        new THREE.VectorKeyframeTrack(`${node.uuid}.position`, [0, 1], values),
+      ]);
+    }
     const steps = Math.max(1, Math.ceil(Math.abs(to - from) / 90));
     const times: number[] = [];
     const values: number[] = [];
@@ -202,14 +231,22 @@ function bakeTopTransforms(root: THREE.Object3D): void {
         node.geometry = (node.geometry as THREE.BufferGeometry).clone().applyMatrix4(bake);
       if (node === top) return;
       const joint = node.userData.joint as JointData | undefined;
-      if (joint) {
-        // The bake turns node frames by M, so a turn about a becomes a turn about M a.
-        const axis = new THREE.Vector3(...joint.axis).transformDirection(bake);
-        node.userData.joint = { ...joint, axis: axis.toArray() } satisfies JointData;
-      }
       node.updateMatrix();
       bake.clone().multiply(node.matrix).multiply(unbake).decompose(node.position, node.quaternion, node.scale);
       snapUnitScale(node.scale);
+      if (joint) {
+        // The bake turns node frames by M, so a turn about a becomes a turn about M a, and a slide's
+        // step (a parent-frame offset) picks up M's turn and its unit scale.
+        const axis = new THREE.Vector3(...joint.axis).transformDirection(bake);
+        const step = new THREE.Vector3(...joint.step).applyMatrix3(new THREE.Matrix3().setFromMatrix4(bake));
+        // Exports pose every joint at rest before the bake, so the baked position is the rest one.
+        node.userData.joint = {
+          ...joint,
+          axis: axis.toArray(),
+          step: step.toArray(),
+          rest: node.position.toArray(),
+        } satisfies JointData;
+      }
     });
     top.position.set(0, 0, 0);
     top.quaternion.identity();

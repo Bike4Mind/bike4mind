@@ -139,6 +139,7 @@ function partsOf(result, Manifold) {
       if (typeof entry.parent === 'string') part.parent = entry.parent;
       if (Array.isArray(entry.axis)) part.axis = entry.axis.map(Number);
       if (Array.isArray(entry.range)) part.range = entry.range.map(Number);
+      if (entry.motion !== undefined) part.motion = String(entry.motion);
     }
     return part;
   });

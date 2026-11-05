@@ -14,14 +14,25 @@ export function swingAngles(joints: ModelJoint[], phase: number): Record<string,
   return Object.fromEntries(joints.map(({ name, range: [from, to] }) => [name, from + (to - from) * open]));
 }
 
+/** The slider readout: whole degrees for a turn, a distance in model units for a slide. */
+export function jointReadout(joint: ModelJoint, value: number, units: string): string {
+  if (joint.motion === 'turn') return `${Math.round(value)}\u00b0`;
+  // Two significant figures of the range's span: 40 mm reads in whole mm, 0.04 m in mm-sized steps.
+  const span = Math.abs(joint.range[1] - joint.range[0]);
+  const decimals = Math.max(0, 1 - Math.floor(Math.log10(span)));
+  return `${Number(value.toFixed(decimals))} ${units}`;
+}
+
 type Props = {
   joints: ModelJoint[];
+  /** The model's units, for a slide's readout. */
+  units: string;
   angles: Record<string, number>;
   onChange(angles: Record<string, number>): void;
 };
 
-/** Sliders that pose the viewer's joints, and a play button that swings them all open and shut. */
-export function ModelJoints({ joints, angles, onChange }: Props) {
+/** Sliders that pose the viewer's joints, and a play button that moves them all open and shut. */
+export function ModelJoints({ joints, units, angles, onChange }: Props) {
   const [playing, setPlaying] = useState(false);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -52,7 +63,12 @@ export function ModelJoints({ joints, angles, onChange }: Props) {
           {playing ? 'Stop' : 'Play'}
         </Button>
       </Stack>
-      {joints.map(({ name, range: [from, to] }) => {
+      {joints.map(joint => {
+        const {
+          name,
+          motion,
+          range: [from, to],
+        } = joint;
         const angle = angles[name] ?? 0;
         return (
           <Stack key={name} direction="row" alignItems="center" spacing={1.25}>
@@ -63,18 +79,19 @@ export function ModelJoints({ joints, angles, onChange }: Props) {
               size="sm"
               min={Math.min(from, to)}
               max={Math.max(from, to)}
-              step={1}
+              // A slide's range can be a few mm or a fraction of a metre: a hundred steps along it either way.
+              step={motion === 'turn' ? 1 : Math.abs(to - from) / 100}
               value={angle}
               onChange={(_event, value) => {
                 if (typeof value !== 'number') return;
                 setPlaying(false);
                 onChange({ ...angles, [name]: value });
               }}
-              slotProps={{ input: { 'aria-label': `${name} angle` } }}
+              slotProps={{ input: { 'aria-label': `${name} position` } }}
               data-testid={`model-pane-joint-${name}`}
             />
             <Typography level="body-xs" sx={{ width: 44, flexShrink: 0, textAlign: 'right' }}>
-              {Math.round(angle)}&deg;
+              {jointReadout(joint, angle, units)}
             </Typography>
           </Stack>
         );

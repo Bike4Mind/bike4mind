@@ -35,6 +35,8 @@ type Props = {
   onClose: () => void;
   /** Puts an example prompt in the composer. */
   onExamplePrompt: (text: string) => void;
+  /** Adds a mention of a clicked part to the end of the composer's draft. */
+  onPickPart: (text: string) => void;
   /** The column the pane trades width with; it bounds how wide a drag may take the pane. */
   conversation?: RefObject<HTMLElement | null>;
 };
@@ -46,7 +48,12 @@ function formatSize(size: [number, number, number], units: string): string {
   return `${size.map(value => Number(value.toFixed(value < 10 ? 2 : 1))).join(' x ')} ${units}`;
 }
 
-export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation }: Props) {
+/** How a clicked part reads in the draft: its name as the model file and the agent know it. */
+export function partMention(name: string): string {
+  return `the \`${name}\` part `;
+}
+
+export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, conversation }: Props) {
   const [width, setWidth] = useState(readModelPaneWidth);
   const [dragging, setDragging] = useState(false);
   const [limit, setLimit] = useState(() => modelPaneMaxWidth(window.innerWidth, Number.POSITIVE_INFINITY));
@@ -74,6 +81,18 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation
 
   const { state, status, error, object, summary, params, unsaved, joints, jointAngles } = engine;
   const [wireframe, setWireframe] = useState(false);
+  // Keyed to the file, so opening another model never keeps a stale highlight.
+  const [picked, setPicked] = useState<{ path: string | null; name: string } | null>(null);
+  const pickedName = picked && picked.path === state.path ? picked.name : null;
+  const pickPart = (part: string | null) => {
+    // A second click on the picked part, or a click on empty space, clears it without adding text.
+    if (part === null || part === pickedName) {
+      setPicked(null);
+      return;
+    }
+    setPicked({ path: state.path, name: part });
+    onPickPart(partMention(part));
+  };
   const [exportNote, setExportNote] = useState('');
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
@@ -179,6 +198,8 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation
               dimmed={status === 'error'}
               frameKey={state.path}
               pose={jointAngles}
+              picked={pickedName}
+              onPick={pickPart}
             />
             {status === 'building' && !object && (
               <Stack alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0 }}>
@@ -193,6 +214,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation
               >
                 {formatSize(summary.size, summary.units)}
                 {state.kind === 'stl' ? ' (assumed)' : ''} - {summary.triangles} tris
+                {summary.parts.length > 1 && (pickedName ? ` - ${pickedName}` : ' - click a part to mention it')}
               </Typography>
             )}
           </>
@@ -268,7 +290,14 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, conversation
         </Stack>
       )}
 
-      {joints.length > 0 && <ModelJoints joints={joints} angles={jointAngles} onChange={engine.setJointAngles} />}
+      {joints.length > 0 && (
+        <ModelJoints
+          joints={joints}
+          units={summary?.units ?? 'mm'}
+          angles={jointAngles}
+          onChange={engine.setJointAngles}
+        />
+      )}
 
       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 1.5, py: 1.25 }}>
         <Button

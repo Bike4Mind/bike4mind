@@ -34,6 +34,8 @@ const MODEL_FILE_CONTRACT = [
   'Make it a joint with `axis: [x, y, z]` (the direction it turns about, model axes, right-hand rule) and `range: [from, to]`',
   '(degrees from the modelled pose, e.g. [0, 110]). The user gets a slider and a play button per joint, and the GLB gets an',
   'animation clip named after the part. Check the open pose with model_screenshot pose "open": if the part swings the wrong way, negate the axis.',
+  "A part that slides instead (a drawer, a sliding door) adds `motion: 'slide'`: `axis` is the direction it slides along and `range`",
+  'is in model units (e.g. [0, 40]); it needs no pivot.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {
@@ -122,7 +124,7 @@ export const modelScreenshot: ToolDefinition = {
         pose: {
           type: 'string',
           enum: [...MODEL_POSES],
-          description: 'rest (default) shows the model as written; open turns every joint to the end of its range.',
+          description: 'rest (default) shows the model as written; open moves every joint to the end of its range.',
         },
       },
     },

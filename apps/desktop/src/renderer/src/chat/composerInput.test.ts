@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { addDirPath, matchCommands, parseCommandInvocation } from './commands';
 import {
+  appendToDraft,
   attachShortcut,
   COMPOSER_BUTTON_LABELS,
   composerButtonAction,
@@ -325,5 +326,13 @@ describe('/add-dir', () => {
   it('is not a path starting with /add-dir', () => {
     expect(parseCommandInvocation('/add-dirs', 'code')).toBeNull();
     expect(composerSubmitAction('/add-dir/x', 'code')).toEqual({ kind: 'send' });
+  });
+});
+
+describe('appendToDraft', () => {
+  it('adds the text after the draft with one space between', () => {
+    expect(appendToDraft('', 'the `lid` part ')).toBe('the `lid` part ');
+    expect(appendToDraft('make', 'the `lid` part ')).toBe('make the `lid` part ');
+    expect(appendToDraft('make ', 'the `lid` part ')).toBe('make the `lid` part ');
   });
 });

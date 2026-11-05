@@ -41,6 +41,7 @@ import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import type { ModelsInUse } from '../models/InstalledTab';
+import type { ComposerFill } from './composerInput';
 import { ModelsScreen } from '../models/ModelsScreen';
 import { useModelServers } from '../models/useModelHub';
 import { CubeIcon, GlobeIcon, PanelRightIcon, PhoneIcon, SearchIcon, TerminalIcon } from './icons';
@@ -376,9 +377,13 @@ export function ChatShell({
     conversation.session?.model
   );
   // Cleared once the composer takes it, or a composer remounted by another screen would take it again.
-  const [composerFill, setComposerFill] = useState<{ id: number; text: string } | null>(null);
+  const [composerFill, setComposerFill] = useState<ComposerFill | null>(null);
   const fillSeq = useRef(0);
   const fillComposer = useCallback((text: string) => setComposerFill({ id: ++fillSeq.current, text }), []);
+  const appendToComposer = useCallback(
+    (text: string) => setComposerFill({ id: ++fillSeq.current, text, append: true }),
+    []
+  );
   const clearComposerFill = useCallback(() => setComposerFill(null), []);
   const [composerFocus, setComposerFocus] = useState(0);
   // Only the conversation screen counts as showing one: main polls what is on screen faster.
@@ -1977,6 +1982,7 @@ export function ChatShell({
           dark={darkMode}
           onClose={toggleModel}
           onExamplePrompt={fillComposer}
+          onPickPart={appendToComposer}
           conversation={conversationColumn}
         />
       )}

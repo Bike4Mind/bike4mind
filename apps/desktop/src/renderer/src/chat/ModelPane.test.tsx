@@ -10,8 +10,26 @@ import { MODEL_EXAMPLE_PROMPTS, ModelPane } from './ModelPane';
 
 // jsdom has no WebGL; the viewport is covered by the live app, not here.
 vi.mock('./model3d/ModelViewport', () => ({
-  ModelViewport: ({ dimmed, pose }: { dimmed: boolean; pose: Record<string, number> }) => (
-    <div data-testid="model-pane-viewport" data-dimmed={String(dimmed)} data-pose={JSON.stringify(pose)} />
+  ModelViewport: ({
+    dimmed,
+    pose,
+    picked,
+    onPick,
+  }: {
+    dimmed: boolean;
+    pose: Record<string, number>;
+    picked: string | null;
+    onPick: (name: string | null) => void;
+  }) => (
+    <div
+      data-testid="model-pane-viewport"
+      data-dimmed={String(dimmed)}
+      data-pose={JSON.stringify(pose)}
+      data-picked={picked ?? ''}
+    >
+      <button data-testid="pick-lid" onClick={() => onPick('lid')} />
+      <button data-testid="pick-none" onClick={() => onPick(null)} />
+    </div>
   ),
 }));
 
@@ -76,7 +94,10 @@ afterEach(() => {
   host.remove();
 });
 
-function render(model: ModelEngine, props: { onClose?: () => void; onExamplePrompt?: (text: string) => void } = {}) {
+function render(
+  model: ModelEngine,
+  props: { onClose?: () => void; onExamplePrompt?: (text: string) => void; onPickPart?: (text: string) => void } = {}
+) {
   act(() =>
     root.render(
       <CssVarsProvider>
@@ -85,6 +106,7 @@ function render(model: ModelEngine, props: { onClose?: () => void; onExampleProm
           dark={false}
           onClose={props.onClose ?? (() => {})}
           onExamplePrompt={props.onExamplePrompt ?? (() => {})}
+          onPickPart={props.onPickPart ?? (() => {})}
         />
       </CssVarsProvider>
     )
@@ -145,7 +167,14 @@ describe('ModelPane', () => {
 
   it('poses the viewer from a joint slider and stops playback when dragged', () => {
     const setJointAngles = vi.fn();
-    const joints = [{ name: 'lid', axis: [1, 0, 0] as [number, number, number], range: [0, 110] as [number, number] }];
+    const joints = [
+      {
+        name: 'lid',
+        motion: 'turn' as const,
+        axis: [1, 0, 0] as [number, number, number],
+        range: [0, 110] as [number, number],
+      },
+    ];
     render(engine({ ...BUILT, joints, jointAngles: { lid: 40 }, setJointAngles }));
     expect(byTestId('model-pane-viewport')?.dataset.pose).toBe('{"lid":40}');
     expect(byTestId('model-pane-joints')?.textContent).toContain('40\u00b0');
@@ -158,6 +187,32 @@ describe('ModelPane', () => {
     });
     expect(setJointAngles).toHaveBeenLastCalledWith({ lid: 75 });
     expect(byTestId('model-pane-joints-play-btn')?.textContent).toBe('Play');
+  });
+
+  it('highlights a clicked part and mentions it once in the draft', () => {
+    const onPickPart = vi.fn();
+    const twoParts = { ...BUILT, summary: { ...BUILT.summary!, parts: ['body', 'lid'] } };
+    render(engine(twoParts), { onPickPart });
+    expect(byTestId('model-pane-size')?.textContent).toContain('click a part to mention it');
+    act(() => byTestId('pick-lid')?.click());
+    expect(onPickPart).toHaveBeenCalledWith('the `lid` part ');
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    expect(byTestId('model-pane-size')?.textContent).toContain('- lid');
+    // Clicking it again clears the highlight without mentioning it twice; so does empty space.
+    act(() => byTestId('pick-lid')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
+    act(() => byTestId('pick-lid')?.click());
+    act(() => byTestId('pick-none')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
+    expect(onPickPart).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops the highlight when another file opens', () => {
+    render(engine(BUILT));
+    act(() => byTestId('pick-lid')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('lid');
+    render(engine({ ...BUILT, state: { ...BUILT.state!, path: '/project/door.model.js' } }));
+    expect(byTestId('model-pane-viewport')?.dataset.picked).toBe('');
   });
 
   it('resizes from its left edge and remembers the width', () => {

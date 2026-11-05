@@ -28,8 +28,10 @@ import { AttachmentRow } from './Attachments';
 import { findCommand, matchCommands, type ComposerCommand } from './commands';
 import { ComposerHighlight, type HighlightToken } from './ComposerHighlight';
 import {
+  appendToDraft,
   attachShortcut,
   COMPOSER_BUTTON_LABELS,
+  type ComposerFill,
   composerButtonAction,
   composerEscapeAction,
   composerKeyAction,
@@ -185,10 +187,11 @@ export function Composer({
   returned?: { id: number; messages: ChatQueuedMessage[] } | null;
   onReturnedConsumed?: () => void;
   /**
-   * Text to put in the box in place of the draft, focused with the caret at its end - a blank
-   * chat's suggestion. Taken once per id, like `returned`, so picking the same card twice works.
+   * Text to put in the box in place of the draft (or after it, with `append`), focused with the
+   * caret at its end - a blank chat's suggestion, or a part picked in the model pane. Taken once per
+   * id, like `returned`, so picking the same card twice works.
    */
-  fill?: { id: number; text: string } | null;
+  fill?: ComposerFill | null;
   onFillConsumed?: () => void;
   /** Bumped to move the keyboard into the box, caret at the end, without touching the draft. */
   focusRequest?: number;
@@ -338,7 +341,7 @@ export function Composer({
   useEffect(() => {
     if (!fill || consumedFill.current === fill.id) return;
     consumedFill.current = fill.id;
-    setText(fill.text);
+    setText(current => (fill.append ? appendToDraft(current, fill.text) : fill.text));
     setCaretRequest(request => request + 1);
     onFillConsumed?.();
   }, [fill, onFillConsumed]);

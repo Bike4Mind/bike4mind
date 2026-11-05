@@ -14,7 +14,26 @@ type Props = {
   frameKey: string | null;
   /** Joint angles in degrees by part name; posed on the viewer's own copy, so exports stay at rest. */
   pose: Record<string, number>;
+  /** The part to highlight, by name. */
+  picked: string | null;
+  /** A click (not an orbit drag) on a part, or on empty space (null). */
+  onPick: (name: string | null) => void;
 };
+
+/** Pointer travel, in CSS px, under which a press and release is a click rather than an orbit. */
+const CLICK_SLOP = 4;
+const PICK_GLOW = new THREE.Color('#2f7cf6');
+
+/** Tints the picked part's (cloned, per-view) material so it reads as selected; clears the rest. */
+function highlightPart(root: THREE.Object3D, name: string | null): void {
+  root.traverse(child => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const material = child.material as THREE.MeshStandardMaterial;
+    const picked = name !== null && child.name === name;
+    material.emissive.copy(picked ? PICK_GLOW : new THREE.Color(0x000000));
+    material.emissiveIntensity = picked ? 0.45 : 1;
+  });
+}
 
 type Viewer = {
   renderer: THREE.WebGLRenderer;
@@ -45,7 +64,7 @@ function gridFor(object: THREE.Object3D, dark: boolean): THREE.GridHelper {
 }
 
 /** The interactive three.js view: orbit (drag), zoom (wheel) and pan (right drag), rendered on demand. */
-export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose }: Props) {
+export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose, picked, onPick }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<Viewer | null>(null);
   const framedFor = useRef<string | null>(null);
@@ -53,6 +72,10 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose 
   const shownCopy = useRef<THREE.Group | null>(null);
   const poseRef = useRef(pose);
   poseRef.current = pose;
+  const pickedRef = useRef(picked);
+  pickedRef.current = picked;
+  const onPickRef = useRef(onPick);
+  onPickRef.current = onPick;
   // Set by the user orbiting, zooming or panning; until then a resize re-frames, because the first
   // frame is often taken before the pane has its size and a tall pane would crop the model.
   const userMoved = useRef(false);
@@ -90,12 +113,36 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose 
       reframe();
       render();
     };
+    let pressedAt: { x: number; y: number } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      pressedAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      const start = pressedAt;
+      pressedAt = null;
+      if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) > CLICK_SLOP) return;
+      const shown = shownCopy.current;
+      if (!shown) return;
+      const bounds = renderer.domElement.getBoundingClientRect();
+      const pointer = new THREE.Vector2(
+        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((event.clientY - bounds.top) / bounds.height) * 2 + 1
+      );
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObject(shown, true).find(entry => entry.object instanceof THREE.Mesh);
+      onPickRef.current(hit ? hit.object.name : null);
+    };
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerup', onPointerUp);
     const observer = new ResizeObserver(resize);
     observer.observe(element);
     viewer.current = { renderer, scene, camera, controls, content, render, reframe };
     resize();
     return () => {
       observer.disconnect();
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerup', onPointerUp);
       controls.dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -124,6 +171,7 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose 
           child.material = material;
         }
       });
+      highlightPart(shown, pickedRef.current);
       current.content.add(shown, gridFor(object, dark));
       // Re-frame only when a different model opens, so a rebuild keeps the user's camera.
       if (framedFor.current !== frameKey) {
@@ -142,6 +190,12 @@ export function ModelViewport({ object, wireframe, dark, dimmed, frameKey, pose 
     poseJoints(shownCopy.current, pose);
     viewer.current.render();
   }, [pose]);
+
+  useEffect(() => {
+    if (!viewer.current || !shownCopy.current) return;
+    highlightPart(shownCopy.current, picked);
+    viewer.current.render();
+  }, [picked]);
 
   return <Box ref={host} sx={{ position: 'absolute', inset: 0 }} data-testid="model-pane-viewport" />;
 }

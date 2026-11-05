@@ -25,14 +25,30 @@ export type ModelPartMesh = {
   pivot?: [number, number, number];
   /** The name of the part this one is nested under in the GLB, so it moves with it. */
   parent?: string;
-  /** Makes the part a joint: the direction it turns about through its pivot, in model axes (right-hand rule). */
+  /**
+   * Makes the part a joint: the direction it turns about through its pivot (right-hand rule), or
+   * slides along with `motion: 'slide'`, in model axes.
+   */
   axis?: [number, number, number];
-  /** With `axis`: how far it turns, in degrees from the modelled pose (0), e.g. [0, 110] for a lid. */
+  /**
+   * With `axis`: how far it moves from the modelled pose (0). Degrees for a turn, e.g. [0, 110] for
+   * a lid; model units for a slide, e.g. [0, 40] for a drawer.
+   */
   range?: [number, number];
+  /** How a joint moves: turns about its pivot (the default) or slides along its axis. */
+  motion?: ModelMotion;
 };
 
-/** A part that turns: what the pane's joint sliders and the GLB's animation clips are made from. */
-export type ModelJoint = { name: string; axis: [number, number, number]; range: [number, number] };
+export const MODEL_MOTIONS = ['turn', 'slide'] as const;
+export type ModelMotion = (typeof MODEL_MOTIONS)[number];
+
+/** A part that moves: what the pane's joint sliders and the GLB's animation clips are made from. */
+export type ModelJoint = {
+  name: string;
+  motion: ModelMotion;
+  axis: [number, number, number];
+  range: [number, number];
+};
 
 export type ModelBuildOutcome =
   | { ok: true; parts: ModelPartMesh[]; params: Record<string, ModelParam>; units: ModelUnits }
@@ -169,14 +185,19 @@ const isNumbers = (value: unknown, length: number): boolean =>
 
 function partJointError(part: ModelPartMesh): string | null {
   const name = `Part "${part.name}"`;
-  if (part.axis === undefined && part.range === undefined) return null;
-  if (part.axis === undefined) return `${name} has a range but no axis to turn about.`;
+  if (part.axis === undefined && part.range === undefined && part.motion === undefined) return null;
+  if (part.motion !== undefined && !MODEL_MOTIONS.includes(part.motion))
+    return `${name} has a motion that is not one of: ${MODEL_MOTIONS.join(', ')}.`;
+  const slides = part.motion === 'slide';
+  if (part.axis === undefined) return `${name} has a ${part.range ? 'range' : 'motion'} but no axis to move along.`;
   if (!isNumbers(part.axis, 3) || part.axis.every(value => value === 0))
     return `${name} has an axis that is not a direction [x, y, z], e.g. [1, 0, 0].`;
-  if (part.range === undefined) return `${name} has an axis but no range [from, to] in degrees.`;
+  const unit = slides ? 'model units' : 'degrees';
+  if (part.range === undefined) return `${name} has an axis but no range [from, to] in ${unit}.`;
   if (!isNumbers(part.range, 2) || part.range[0] === part.range[1])
-    return `${name} has a range that is not two different angles [from, to] in degrees.`;
-  if (!part.pivot) return `${name} has an axis but no pivot to turn about.`;
+    return `${name} has a range that is not two different values [from, to] in ${unit}.`;
+  // A slide moves the whole part, so it needs no pivot; a turn without one would spin about the model origin.
+  if (!slides && !part.pivot) return `${name} has an axis but no pivot to turn about.`;
   return null;
 }
 
@@ -217,20 +238,29 @@ export function partTreeError(parts: ModelPartMesh[]): string | null {
 /** The parts that turn, in part order. Assumes the parts passed partTreeError. */
 export function jointsOf(parts: ModelPartMesh[]): ModelJoint[] {
   return parts.flatMap(part =>
-    part.axis && part.range ? [{ name: part.name, axis: part.axis, range: part.range }] : []
+    part.axis && part.range
+      ? [{ name: part.name, motion: part.motion ?? 'turn', axis: part.axis, range: part.range }]
+      : []
   );
 }
 
 /** The joint lines for ModelSummary: parts with a pivot or a parent, in model units. */
 export function describeJoints(parts: ModelPartMesh[]): string[] {
   return parts
-    .filter(part => part.pivot || part.parent)
+    .filter(part => part.pivot || part.parent || part.axis)
     .map(part => {
-      const pivot = part.pivot ? `pivot (${part.pivot.map(formatNumber).join(', ')})` : 'pivot at origin';
-      const turns =
-        part.axis && part.range
-          ? `, turns about (${part.axis.map(formatNumber).join(', ')}) from ${formatNumber(part.range[0])} to ${formatNumber(part.range[1])} deg`
-          : '';
+      const pivot = part.pivot
+        ? `pivot (${part.pivot.map(formatNumber).join(', ')})`
+        : part.motion === 'slide'
+          ? 'no pivot'
+          : 'pivot at origin';
+      const [from, to] = (part.range ?? [0, 0]).map(formatNumber);
+      const direction = `(${(part.axis ?? []).map(formatNumber).join(', ')})`;
+      const turns = !(part.axis && part.range)
+        ? ''
+        : part.motion === 'slide'
+          ? `, slides along ${direction} from ${from} to ${to}`
+          : `, turns about ${direction} from ${from} to ${to} deg`;
       return `${part.name}: ${pivot}${part.parent ? `, in ${part.parent}` : ''}${turns}`;
     });
 }
