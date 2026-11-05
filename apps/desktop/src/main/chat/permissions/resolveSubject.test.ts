@@ -52,6 +52,19 @@ describe('resolveSubject', () => {
     expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
   });
 
+  it('follows a dangling link past PATH_MAX reached through links that shrink the path', async () => {
+    const loop = 'L'.repeat(250);
+    await mkdir(join(root, 'prot'));
+    await symlink('.', join(root, loop));
+    await symlink(join('prot', 'new'), join(root, 'dang'));
+    const long = join(root, ...Array.from({ length: 17 }, () => loop), 'dang');
+    expect(Buffer.byteLength(long)).toBeGreaterThan(4096);
+    expect((await resolveSubject({ tool: 'file_write', paths: [long] })).paths).toEqual([
+      long,
+      join(root, 'prot', 'new'),
+    ]);
+  });
+
   it('retries the JS realpath on win32 when the async realpath throws EISDIR', async () => {
     const platform = Object.getOwnPropertyDescriptor(process, 'platform');
     Object.defineProperty(process, 'platform', { value: 'win32' });

@@ -311,6 +311,18 @@ describe('realpathSyncNearest', () => {
     expect(realpathSyncNearest(join(tmpdir(), name, 'x'))).toBe(join(native(tmpdir()), name, 'x'));
   });
 
+  it('follows a dangling link past PATH_MAX reached through links that shrink the path', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    const loop = 'L'.repeat(250);
+    await mkdir(join(base, 'prot'));
+    await symlink('.', join(base, loop));
+    await symlink(join('prot', 'new'), join(base, 'dang'));
+    const long = join(base, ...Array.from({ length: 17 }, () => loop), 'dang');
+    expect(Buffer.byteLength(long)).toBeGreaterThan(4096);
+    expect(realpathSyncNearest(long)).toBe(join(base, 'prot', 'new'));
+    expect(withRealPath(long)).toEqual([long, join(base, 'prot', 'new')]);
+  });
+
   it('returns null on ENAMETOOLONG from total length with short components', () => {
     const native = realpathSync.native;
     const deep = join(tmpdir(), ...Array.from({ length: 40 }, () => 'd'.repeat(100)));

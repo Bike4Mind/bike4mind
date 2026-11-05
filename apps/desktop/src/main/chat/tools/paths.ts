@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { readlinkSync, realpathSync } from 'node:fs';
 import { readlink, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, parse, posix, resolve, sep } from 'node:path';
 import {
@@ -354,10 +354,31 @@ export function realpathSyncNearest(path: string): string | null {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (!isMissingPathError(code, path)) return null;
+    const absent = code === 'ENOENT' || code === 'ENOTDIR';
+    let tooLong = false;
+    // A dangling link is still followed by a write, which creates its target.
+    try {
+      const target = readlinkSync(path);
+      return realpathSyncNearest(isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`);
+    } catch (linkError) {
+      const linkCode = (linkError as NodeJS.ErrnoException).code;
+      tooLong = absent && linkCode === 'ENAMETOOLONG';
+      if (linkCode !== 'EINVAL' && !tooLong && !isMissingPathError(linkCode, path)) return null;
+    }
     const parent = dirname(path);
     if (parent === path) return path;
     const real = realpathSyncNearest(parent);
-    return real === null ? null : join(real, basename(path));
+    if (real === null) return null;
+    const resolved = join(real, basename(path));
+    if (!tooLong) return resolved;
+    // readlink cannot read a name past PATH_MAX: a shorter physical spelling may expose a link there.
+    if (resolved !== path) return realpathSyncNearest(resolved);
+    try {
+      nativeOrJsRealpath(parent);
+      return null;
+    } catch {
+      return resolved;
+    }
   }
 }
 

@@ -20,24 +20,32 @@ export async function physicalPath(path: string): Promise<string> {
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && isMissingPathError(error.code, path))) throw error;
     const absent = error.code === 'ENOENT' || error.code === 'ENOTDIR';
+    let tooLong = false;
     // realpath cannot follow a dangling link, but a write will still follow it to create its target.
     try {
       const target = await readlink(path);
       return physicalPath(isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`);
     } catch (linkError) {
-      // After ENOENT a link name can no longer sit past PATH_MAX, so a too-long readlink means missing.
+      tooLong = absent && (linkError as NodeJS.ErrnoException).code === 'ENAMETOOLONG';
       if (!(
         linkError instanceof Error &&
         'code' in linkError &&
-        (linkError.code === 'EINVAL' ||
-          (absent && linkError.code === 'ENAMETOOLONG') ||
-          isMissingPathError(linkError.code, path))
+        (linkError.code === 'EINVAL' || tooLong || isMissingPathError(linkError.code, path))
       ))
         throw linkError;
     }
     const parent = dirname(path);
     if (parent === path) throw error;
-    return join(await physicalPath(parent), basename(path));
+    const resolved = join(await physicalPath(parent), basename(path));
+    if (!tooLong) return resolved;
+    // readlink cannot read a name past PATH_MAX: a shorter physical spelling may expose a link there.
+    if (resolved !== path) return physicalPath(resolved);
+    const parentExists = await realpathOrJs(parent).then(
+      () => true,
+      () => false
+    );
+    if (parentExists) throw error;
+    return resolved;
   }
 }
 
