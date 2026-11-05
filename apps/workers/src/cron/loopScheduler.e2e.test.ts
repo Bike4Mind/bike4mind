@@ -1848,7 +1848,13 @@ describe('runLoopSchedulerTick - liveness', () => {
     });
 
     it('reopens a ticket whose run is gone or finished; leaves the active, resumed and desktop runs alone', async () => {
-      const loop = await createLoop({ activeExecutionIds: ['exec-active'], nextRunAt: LATER });
+      // exec-active is the loop's second lane, so any lane id counts as live.
+      const loop = await createLoop({
+        maxConcurrent: 2,
+        activeExecutionIds: ['exec-other', 'exec-active'],
+        nextRunAt: LATER,
+      });
+      executions['exec-other'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
       executions['exec-active'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
       executions['exec-done'] = { status: 'completed' };
       executions['exec-resumed'] = { status: 'completed' };
