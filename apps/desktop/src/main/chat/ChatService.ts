@@ -1927,6 +1927,17 @@ export class ChatService {
     return [...this.loopRuns].filter(([, run]) => run === runId).map(([sessionId]) => sessionId);
   }
 
+  /**
+   * The run is over. Its sessions, which the runner keeps while their PR is open, become ordinary
+   * conversations the user can pick up: no runner guard, priority, credit tag or unattended cards.
+   */
+  endLoopRun(runId: string): void {
+    for (const sessionId of this.loopRunSessions(runId)) {
+      this.loopRuns.delete(sessionId);
+      this.deps.approvals?.setUnattended(sessionId, false);
+    }
+  }
+
   dispose(): void {
     // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
     // way out: each abort settles a reply, and settleQueue would otherwise send it.

@@ -98,6 +98,9 @@ function harness(
     removeWorktrees: vi.fn(async () => []),
     loopRunOf: (id: string) => runOf.get(id),
     loopRunSessions: (runId: string) => [...runOf].filter(([, run]) => run === runId).map(([id]) => id),
+    endLoopRun: vi.fn((runId: string) => {
+      for (const [id, run] of runOf) if (run === runId) runOf.delete(id);
+    }),
   };
 
   const file = { text: null as string | null };
@@ -145,6 +148,7 @@ function harness(
       loopName: 'Docs loop',
       approvalMode: 'auto',
       directory: '/repo',
+      repo: 'example-org/widgets',
       approvedAt: 'now',
     });
   const emit = (event: ChatStreamEvent) => runner.observe(event);
@@ -260,6 +264,7 @@ describe('LoopRunner runs', () => {
       { runId: 'run-1', outcome: { outcome: 'advanced', answer: 'All done.', durationMs: expect.any(Number) } },
     ]);
     expect(h.blocker.stop).toHaveBeenCalledWith(7);
+    expect(h.chat.endLoopRun).toHaveBeenCalledWith('run-1');
     await vi.waitFor(() => expect(h.chat.deleteSession).toHaveBeenCalledWith('s1', true));
     expect(await h.store.worktrees()).toEqual([]);
   });
@@ -320,7 +325,12 @@ describe('LoopRunner runs', () => {
 
   it('releases the ticket at the credit cap, shows it, and does not claim that loop again', async () => {
     await h.runner.tick();
-    h.emit({ type: 'error', sessionId: 's1', messageId: 'm', message: 'Insufficient credits (status 422)' });
+    h.emit({
+      type: 'error',
+      sessionId: 's1',
+      messageId: 'm',
+      message: 'The completion request failed with status 422.',
+    });
     await h.settled();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'released', reason: 'out of credits' });
     expect(h.runner.state().error).toMatch(/Out of credits/);
@@ -371,6 +381,9 @@ describe('LoopRunner runs', () => {
     await h.runner.tick();
     await h.runner.releaseAll();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'released' });
+    expect(h.chat.endLoopRun).toHaveBeenCalledWith('run-1');
+    // The GC waits for the next launch rather than holding the quit up.
+    expect(h.chat.deleteSession).not.toHaveBeenCalled();
   });
 });
 
@@ -405,6 +418,25 @@ describe('LoopRunner merges', () => {
     await h.settled();
     expect(h.completed[0].outcome).toMatchObject({ outcome: 'blocked', reason: 'awaiting human merge' });
     expect(h.github.merge).not.toHaveBeenCalled();
+  });
+
+  it("blocks a PR outside the loop's repository without reading it", async () => {
+    await started({ mergePolicy: 'green-ci' });
+    await expect(h.runner.merge('s1', 'https://github.com/someone-else/app/pull/9')).rejects.toThrow(
+      /not in this loop/
+    );
+    expect(h.github.snapshot).not.toHaveBeenCalled();
+    expect(h.github.merge).not.toHaveBeenCalled();
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'blocked' });
+  });
+
+  it('blocks rather than letting the turn finish unmerged when the PR cannot be read', async () => {
+    await started();
+    h.github.snapshot.mockRejectedValueOnce(new Error('gh: rate limited'));
+    await expect(h.runner.merge('s1', PR)).rejects.toThrow(/stop here/);
+    await h.settled();
+    expect(h.completed[0].outcome).toMatchObject({ outcome: 'blocked', reason: expect.stringMatching(/rate limited/) });
   });
 
   it('refuses a held PR in every mode', async () => {
