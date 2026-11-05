@@ -1,12 +1,38 @@
-import { Box, Button, Divider, Dropdown, ListDivider, Menu, MenuButton, MenuItem } from '@mui/joy';
+import { Box, Button, Divider, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Stack, Typography } from '@mui/joy';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import type { AdminUsersBulkActionType } from '@client/app/utils/adminUsersBulk';
 import { BulkActionBar, type AdminSelection } from '../../shared/BulkActionBar';
 import { adminFocus } from '../../shared/adminStyles';
+import { AnalyticsTermHelp } from '../../EventMetrics/components/AnalyticsTermHelp';
 import { USERS_BULK_ACTIONS, USERS_BULK_ACTION_COPY } from './UsersBulkActionDialog';
 
 const WIDE = { xs: 'none', md: 'inline-flex' } as const;
 const NARROW = { xs: 'inline-flex', md: 'none' } as const;
+
+/** What each bulk action does, from the same copy its dialog shows, so the two never drift. */
+export function UsersBulkActionsLegend() {
+  return (
+    <Stack gap={1} sx={{ py: 0.5 }} data-testid="admin-users-bulk-legend">
+      <Stack component="dl" gap={0.75} sx={{ m: 0 }}>
+        {USERS_BULK_ACTIONS.map(type => (
+          <div key={type} data-testid={`admin-users-bulk-legend-${type}`}>
+            <Typography component="dt" level="body-xs" fontWeight="lg" textColor="inherit">
+              {USERS_BULK_ACTION_COPY[type].label}
+            </Typography>
+            <Typography component="dd" level="body-xs" textColor="inherit" sx={{ m: 0 }}>
+              {USERS_BULK_ACTION_COPY[type].description}
+            </Typography>
+          </div>
+        ))}
+      </Stack>
+      <Typography level="body-xs" textColor="inherit" sx={{ opacity: 0.8 }}>
+        The admin who ran a batch can undo it for 30 seconds from its toast. Undo does not reopen connections or restore
+        canceled subscriptions, and unsuspending a user from their profile does not restore revoked keys or removed
+        credits.
+      </Typography>
+    </Stack>
+  );
+}
 
 /** The selection's count, "select all matching" and the bulk commands, docked under the table. */
 export function UsersBulkBar({
@@ -73,6 +99,12 @@ export function UsersBulkBar({
             ])}
           </Menu>
         </Dropdown>
+        <AnalyticsTermHelp
+          term="bulk actions"
+          testId="admin-users-bulk-help-btn"
+          maxWidth={380}
+          description={<UsersBulkActionsLegend />}
+        />
       </BulkActionBar>
     </Box>
   );

@@ -163,6 +163,13 @@ describe('buildAdminUsersMatch analytics cohorts', () => {
     );
   });
 
+  it('matches the accounts the AI advisory flags, with no window of its own', () => {
+    expect(conditionsOf(buildAdminUsersMatch({ aiVerdict: 'abuse' }, { ...context, aiAbuseUserIds: [id] }))).toEqual([
+      { _id: { $in: [{ objectId: id }] } },
+    ]);
+    expect(() => buildAdminUsersMatch({ aiVerdict: 'abuse' }, context)).toThrow('aiAbuseUserIds');
+  });
+
   it('refuses a cohort filter whose users were not resolved', () => {
     expect(() => buildAdminUsersMatch({ verdict: 'suspected', createdFrom, createdTo }, context)).toThrow(
       'verdictUserIds'
