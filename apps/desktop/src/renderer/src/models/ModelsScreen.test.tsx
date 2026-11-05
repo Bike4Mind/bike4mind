@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ModelServerLaunchView, ModelServerView } from '@shared/modelServers';
+import { OLLAMA_NOT_RUNNING, type ModelServerLaunchView, type ModelServerView } from '@shared/modelServers';
 import {
   pullKey,
   type CuratedBuildView,
@@ -1360,7 +1360,7 @@ describe('ModelsScreen installed', () => {
     bridge.status = DOWN;
     await mount();
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
-    expect(q('models-installed-runtime-down')?.textContent).toContain('Ollama is not running');
+    expect(q('models-installed-runtime-down')?.textContent).toContain(OLLAMA_NOT_RUNNING);
 
     await openExplore();
     await click(q('models-explore-result-row'));
@@ -1413,6 +1413,14 @@ describe('ModelsScreen installed', () => {
     expect(q('ollama-start-hint')).not.toBeNull();
     expect(q('models-install-ollama-btn')).not.toBeNull();
     expect(calls.checkServers).toHaveBeenCalledWith('local');
+  });
+
+  it('shows neither Install nor Start while Desktop is still looking for Ollama', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false, programPending: true }) }];
+    await mount(undefined, 'curated');
+    expect(q('ollama-start-btn')).toBeNull();
+    expect(q('models-install-ollama-btn')).toBeNull();
   });
 
   it('rechecks whether Desktop can start Ollama on Check again, and offers Start once it can', async () => {
@@ -1831,7 +1839,7 @@ describe('ModelsScreen explore', () => {
     await click(q('models-explore-result-row'));
     calls.pull.mockResolvedValue({
       ok: false,
-      error: { kind: 'runtime-unavailable', message: 'Ollama is not running. Start it, then retry.' },
+      error: { kind: 'runtime-unavailable', message: `${OLLAMA_NOT_RUNNING}. Start it, then retry.` },
       listed: false,
     });
     bridge.status = DOWN;
@@ -1839,7 +1847,7 @@ describe('ModelsScreen explore', () => {
     await click(q('models-build-pull-btn'));
     await click(q('models-pull-dialog-confirm-btn'));
 
-    expect(q('models-detail-pull-error')?.textContent).toContain('Ollama is not running');
+    expect(q('models-detail-pull-error')?.textContent).toContain(OLLAMA_NOT_RUNNING);
     expect(calls.getStatus.mock.calls.length).toBeGreaterThan(checks);
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
     expect(q('models-build-pull-btn')?.hasAttribute('disabled')).toBe(true);
@@ -1862,12 +1870,12 @@ describe('ModelsScreen explore', () => {
           completedBytes: 0,
           totalBytes: null,
           expectedBytes: 1,
-          error: { kind: 'runtime-unavailable', message: 'Ollama is not running. Start it, then retry.' },
+          error: { kind: 'runtime-unavailable', message: `${OLLAMA_NOT_RUNNING}. Start it, then retry.` },
         },
       ])
     );
     await flush();
-    expect(q('models-pull-status')?.textContent).toContain('Ollama is not running');
+    expect(q('models-pull-status')?.textContent).toContain(OLLAMA_NOT_RUNNING);
     expect(q('models-runtime-status')?.dataset.state).toBe('down');
   });
 

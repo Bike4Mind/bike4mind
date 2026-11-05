@@ -136,6 +136,17 @@ describe('OllamaNotRunning', () => {
     expect(onStarted).toHaveBeenCalledTimes(1);
   });
 
+  it('starts once for two clicks in the same tick, before a render can mark the button', () => {
+    launch.mockReturnValue(new Promise(() => {}));
+    render(launchView());
+    const button = q('ollama-start-btn');
+    act(() => {
+      button?.click();
+      button?.click();
+    });
+    expect(launch).toHaveBeenCalledTimes(1);
+  });
+
   it('shows a start running from elsewhere as progress', () => {
     render(launchView({ busy: 'starting', canStart: false }));
     expect(q('ollama-start-progress')).not.toBeNull();

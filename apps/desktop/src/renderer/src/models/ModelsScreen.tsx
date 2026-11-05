@@ -76,7 +76,8 @@ function NoLocalRuntime({
         icon={dot('danger.500')}
         actions={
           <>
-            {!launch?.canStart && (
+            {/* Not before the list loads or the program look settles, or Install flashes ahead of Start. */}
+            {launch !== undefined && !launch?.canStart && !launch?.programPending && (
               <Button
                 size="sm"
                 onClick={() => void window.b4m.shell.openExternal(OLLAMA_DOWNLOAD_URL)}
