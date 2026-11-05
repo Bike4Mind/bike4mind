@@ -15,8 +15,6 @@ import {
   AdminSettings,
 } from '@bike4mind/database';
 import { unlockSignupGrantFromActivity } from './activityUnlock';
-import { unlockSignupGrantFromOrgInvite } from './orgInviteUnlock';
-import { checkSignupGrantEligibility } from './signupGrantEligibility';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -343,47 +341,6 @@ describe('staged signup ledger', () => {
     expect((await User.findById(user.id))?.currentCredits).toBe(0);
     expect((await User.findById(user.id))?.signupGrant?.stage).toBe('pending_email');
     expect(await CreditTransaction.countDocuments({})).toBe(0);
-  });
-
-  it('recovers a failed organization acceptance release through persisted evidence and never mints twice', async () => {
-    const user = await createUser();
-    const email = 'NAME+TAG@example.test';
-    await User.updateOne({ _id: user.id }, { email });
-    await userService.releaseSignupTranche(user.id, adapters);
-    const organization = await Organization.create({
-      name: 'Synthetic organization',
-      userId: 'owner',
-      users: [{ userId: user.id, permissions: ['read'] }],
-    });
-    // A regexp-like address must not earn credits for someone else's acceptance.
-    await Invite.create({
-      type: 'Organization',
-      documentId: organization.id,
-      recipients: { pending: [], accepted: ['nameeeetag@exampleXtest'], refused: [] },
-      remaining: 0,
-    });
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    const acceptedInvite = await Invite.create({
-      type: 'Organization',
-      documentId: organization.id,
-      recipients: { pending: [], accepted: [email.toLowerCase()], refused: [] },
-      remaining: 0,
-    });
-    // Existing accepted invites cannot pay until an operator explicitly enables this source.
-    expect((await unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).creditsGranted).toBe(0);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.currentCredits).toBe(12);
-    await AdminSettings.create({ settingName: 'signupGrantOrgInviteEnabled', settingValue: 'true' });
-    const update = vi.spyOn(userRepository, 'update').mockRejectedValueOnce(new Error('temporary grant write failure'));
-    await expect(unlockSignupGrantFromOrgInvite(user.id, acceptedInvite.id)).rejects.toThrow(
-      'temporary grant write failure'
-    );
-    update.mockRestore();
-    expect((await User.findById(user.id))?.currentCredits).toBe(12);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(28);
-    expect((await checkSignupGrantEligibility(user.id)).creditsGranted).toBe(0);
-    expect((await User.findById(user.id))?.currentCredits).toBe(40);
-    expect(await CreditTransaction.countDocuments({ transactionId: `unlock-grant:${user.id}` })).toBe(1);
   });
 
   it.each(['malformed policy', 'invalid policy', 'invalid enabled policy'])(

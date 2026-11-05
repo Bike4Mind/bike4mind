@@ -4,6 +4,7 @@ import type { Logger } from '@bike4mind/observability';
 const mocks = vi.hoisted(() => ({
   findUser: vi.fn(),
   findOrgs: vi.fn(),
+  organizationOptions: vi.fn(),
   isStripeConfigured: vi.fn(),
   subscriptionsList: vi.fn(),
   subscriptionsCancel: vi.fn(),
@@ -12,7 +13,17 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mocks.findUser },
-  organizationRepository: { find: mocks.findOrgs },
+  Organization: {
+    find: (filter: unknown) => {
+      const rows = { lean: () => mocks.findOrgs(filter) };
+      return {
+        setOptions: (options: unknown) => {
+          mocks.organizationOptions(options);
+          return rows;
+        },
+      };
+    },
+  },
 }));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   isStripeConfigured: mocks.isStripeConfigured,
@@ -22,7 +33,7 @@ vi.mock('@bike4mind/server-utils/integrations/stripe/dunning', () => ({
   voidOpenSubscriptionInvoices: mocks.voidOpenSubscriptionInvoices,
 }));
 
-import { cancelAccountSubscriptions } from './cancelAccountSubscriptions';
+import { cancelAccountSubscriptions, readAccountSubscriptionCustomerIds } from './cancelAccountSubscriptions';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 
@@ -37,6 +48,49 @@ describe('cancelAccountSubscriptions', () => {
     mocks.subscriptionsList.mockResolvedValue(subs());
     mocks.subscriptionsCancel.mockResolvedValue({});
     mocks.voidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
+  });
+
+  it('captures all billed customer IDs before a deletion', async () => {
+    mocks.findOrgs.mockResolvedValue([{ stripeCustomerId: 'cus_org' }, { stripeCustomerId: 'cus_user' }]);
+
+    await expect(readAccountSubscriptionCustomerIds('user-1')).resolves.toEqual(['cus_user', 'cus_org']);
+    expect(mocks.organizationOptions).toHaveBeenCalledWith({ includeDeleted: true });
+    expect(mocks.subscriptionsList).not.toHaveBeenCalled();
+    expect(mocks.subscriptionsCancel).not.toHaveBeenCalled();
+  });
+
+  it('cancels captured customers after the user row is gone without looking it up again', async () => {
+    mocks.findUser.mockResolvedValue(null);
+    mocks.subscriptionsList.mockResolvedValue(subs(['sub_captured', 'active']));
+
+    await expect(
+      cancelAccountSubscriptions(
+        {
+          userId: 'user-1',
+          reason: 'account_deleted',
+          customerIds: ['cus_captured'],
+        },
+        logger
+      )
+    ).resolves.toEqual({ canceled: ['sub_captured'], failed: [] });
+    expect(mocks.findUser).not.toHaveBeenCalled();
+    expect(mocks.findOrgs).not.toHaveBeenCalled();
+    expect(mocks.subscriptionsList).toHaveBeenCalledWith({ customer: 'cus_captured', limit: 100 }, expect.anything());
+  });
+
+  it('does not resolve current customers when the captured list is explicitly empty', async () => {
+    await expect(
+      cancelAccountSubscriptions(
+        {
+          userId: 'user-1',
+          reason: 'account_deleted',
+          customerIds: [],
+        },
+        logger
+      )
+    ).resolves.toEqual({ canceled: [], failed: [] });
+    expect(mocks.findUser).not.toHaveBeenCalled();
+    expect(mocks.subscriptionsList).not.toHaveBeenCalled();
   });
 
   it('cancels every live subscription on the user and owned-org customers, without proration', async () => {

@@ -3,6 +3,7 @@ import { ApiKeyScope, ApiKeyScopeValue } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
+import { assertNoPendingDeletion } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { isTokenTypeAcceptable, isTokenVersionCurrent } from '@bike4mind/services';
 import { verifyApiKey } from '@server/cli/auth';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
@@ -192,6 +193,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2 & APIGa
       throw new UnauthorizedError('Session expired');
     }
     assertAccountStateUsable(user);
+    assertNoPendingDeletion(user);
     await assertRealtimeSessionActive(auth.sid);
     // Completions and agent runs stream over this socket, so an admin's `all` IP block refuses the connection.
     if (!user.isAdmin) {

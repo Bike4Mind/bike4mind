@@ -35,6 +35,7 @@ import {
 import { userApiKeyService, API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
 import { ApiKeyScope, ApiKeyStatus, BadRequestError } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@bike4mind/server-utils/auth/consentGate';
+import { isAccountDeletionPending } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -204,6 +205,10 @@ const handler = baseApi({ auth: false })
     if (!hasAcceptedPolicy(user)) {
       logError('access_denied', 403);
       return res.status(403).json({ error: 'access_denied', error_description: 'Policy acceptance required' });
+    }
+    if (isAccountDeletionPending(user)) {
+      logError('access_denied', 403);
+      return res.status(403).json({ error: 'access_denied', error_description: 'Account is scheduled for deletion' });
     }
 
     // 6.5. The admin paid-only switch; the same gate re-runs on every use of the key.

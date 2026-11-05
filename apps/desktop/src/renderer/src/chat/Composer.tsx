@@ -231,6 +231,28 @@ export function Composer({
   // A caret position to restore once a programmatic draft change has rendered.
   const pendingCaret = useRef<number | null>(null);
 
+  // Per-conversation draft: this component is not keyed on the session (unlike the thread beside
+  // it), so it saves and restores text across switches. Cmd+1-9 (SessionList) has no text-field
+  // guard, so switching mid-draft is routine. Attachments deliberately do not work this way; see
+  // useAttachmentDraft.
+  const drafts = useRef(new Map<string, string>());
+  const latest = useRef(text);
+  latest.current = text;
+
+  useLayoutEffect(() => {
+    const kept = (sessionId && drafts.current.get(sessionId)) || '';
+    setText(kept);
+    setCaret(kept.length);
+    pendingCaret.current = null;
+    // Reads the text through a ref: this runs with the session it is leaving, one render after
+    // the last keystroke that went into it.
+    return () => {
+      if (!sessionId) return;
+      if (latest.current) drafts.current.set(sessionId, latest.current);
+      else drafts.current.delete(sessionId);
+    };
+  }, [sessionId]);
+
   /** Replace the draft and put the caret at `at` (the end by default), as typing would have. */
   const replaceDraft = (next: string, at: number = next.length) => {
     setText(next);

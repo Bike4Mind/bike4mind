@@ -109,13 +109,6 @@ several windows and verify one payout per window, then stop at the configured li
 Turning the switch off restores daily earning; a day already paid in test mode stays paid.
 A settings change needs a tab reload to discard the browser's previous next-earning time.
 
-Organization invitation unlocks have their own `signupGrantOrgInviteEnabled` rollout
-flag, disabled by default. Each organization can unlock at most its seat count
-over its lifetime; removing a member or deleting a recipient account does not
-replenish this budget. When enabled, Billing checks also retry persisted
-accepted organization invitations, so a failed credit release after successful
-acceptance remains recoverable after the invite leaves the pending inbox, even when
-activity unlocks are disabled.
 Card and phone integrations must supply their own trusted validators; declaring a
 reason does not enable a verification flow. Admin releases require an audit writer.
 The admin HTTP route rejects grants to the acting admin or their original account
