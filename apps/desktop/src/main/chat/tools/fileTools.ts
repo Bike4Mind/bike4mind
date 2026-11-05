@@ -448,7 +448,7 @@ export const globFiles: ToolDefinition = {
       (listing.complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were considered.`) +
       droppedNote(listing.dropped);
     const header =
-      found.length === 0
+      found.length === 0 && pattern !== '*'
         ? `Only folders matched ${pattern} in ${base}:${partial}`
         : `${found.length} file(s) in ${base}, sorted by ${bySize ? 'size' : 'modification time'}${shown}:${partial}`;
     const tail = folders.length > 0 ? ['', 'Folders:', ...folders] : [];

@@ -298,6 +298,15 @@ describe('file tools', () => {
       expect(result.split('\n')[0]).toContain('Only folders matched');
     });
 
+    it('keeps the file-count header for a plain * when only folders exist', async () => {
+      const foldersOnly = await realpath(await mkdtemp(join(tmpdir(), 'b4m-folders-')));
+      await mkdir(join(foldersOnly, 'sub'), { recursive: true });
+      await writeFile(join(foldersOnly, 'sub', 'a.txt'), 'a', 'utf8');
+      const result = await globFiles.run({ pattern: '*' }, { ...context, roots: [foldersOnly] });
+      expect(result.split('\n')[0]).toMatch(/^0 file\(s\)/);
+      expect(result).toContain('Folders:');
+    });
+
     it('finds a folder when the pattern ends in a slash', async () => {
       await mkdir(join(root, 'sub', 'inner'), { recursive: true });
       await writeFile(join(root, 'sub', 'inner', 'a.txt'), 'a', 'utf8');
