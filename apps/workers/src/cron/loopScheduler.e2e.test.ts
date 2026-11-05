@@ -248,6 +248,7 @@ describe('runLoopSchedulerTick', () => {
     expect(after.leaseUntil).toBeUndefined();
     expect(after.nextRunAt).toEqual(PAST);
     expect(after.status).toBe('live');
+    expect(after.hold).toMatchObject({ kind: 'capacity', limit: 'user' });
   });
 
   it('does not let a loop that could not start block the other due loops', async () => {
@@ -1933,6 +1934,39 @@ describe('runLoopSchedulerTick - parallel lanes', () => {
       return { ok: true, executionId: doc.id };
     });
   const caps = () => h.startAgentExecution.mock.calls.map(call => call[0].creditCap as number);
+
+  it('waits an interval after an unconfirmed dispatch on a multi-lane loop', async () => {
+    const { loop } = await loopWithTickets(2);
+    h.startAgentExecution.mockResolvedValue({
+      ok: false,
+      reason: 'dispatch_failed',
+      message: 'unconfirmed',
+      executionId: 'exec-7',
+    });
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    const after = await reload(loop.id);
+    expect(after.activeExecutionIds).toEqual(['exec-7']);
+    expect(after.nextRunAt).toEqual(new Date(NOW.getTime() + 15 * 60_000));
+  });
+
+  it('holds a loop with a lane running on budget when the all-loops budget runs out', async () => {
+    settings({ LoopsDailyCreditsPerUser: 50 });
+    vi.mocked(userRepository.findById).mockResolvedValue({ currentCredits: 1000, loopsDailyCredits: 30 } as never);
+    vi.spyOn(agentExecutionRepository, 'sumLoopCreditsForUser').mockResolvedValue(30);
+    const { loop } = await loopWithTickets(1, { activeExecutionIds: ['exec-0'] });
+    executions['exec-0'] = { status: 'running', updatedAt: NOW, createdAt: NOW };
+
+    await runLoopSchedulerTick(NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    const after = await reload(loop.id);
+    expect(after).toMatchObject({ status: 'live', activeExecutionIds: ['exec-0'] });
+    expect(after.hold).toMatchObject({ kind: 'capacity', limit: 'budget' });
+    expect(after.leaseUntil).toBeUndefined();
+  });
 
   it('opens a lane per ready ticket up to the per-user lane limit, never two runs on one ticket', async () => {
     const { loop, tickets } = await loopWithTickets(3);

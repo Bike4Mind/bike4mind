@@ -190,6 +190,14 @@ describe('LoopDetailPage run drawer', () => {
     expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'run-a' } }));
   });
 
+  it('labels an active run "Run" until the tickets load', () => {
+    loopState.data = loop({ status: 'live', activeExecutionIds: ['run-a'] });
+    ticketsState.data = undefined;
+    renderPage();
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).toContain('Run');
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).not.toContain('Goal run');
+  });
+
   it('links an errored loop to its failed run, and only an errored loop', () => {
     loopState.data = loop({ status: 'error', statusReason: 'Run failed' });
     const { unmount } = renderPage();

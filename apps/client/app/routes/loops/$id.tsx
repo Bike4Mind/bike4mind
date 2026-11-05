@@ -143,7 +143,7 @@ export default function LoopDetailPage() {
                 alignItems="center"
                 data-testid={`loop-detail-active-run-${executionId}`}
               >
-                <Typography level="body-sm">{ticketTitle(executionId) ?? 'Goal run'}</Typography>
+                <Typography level="body-sm">{ticketTitle(executionId) ?? (tickets ? 'Goal run' : 'Run')}</Typography>
                 <Link
                   component="button"
                   level="body-sm"

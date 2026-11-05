@@ -656,7 +656,8 @@ async function admit(
         autoResume: 'budget',
         nextRunAt: tomorrow,
       });
-      await loopRepository.releaseLease(loop.id);
+      // The pause above leaves a loop with a lane running live; it shows the budget hold instead.
+      await loopRepository.holdForCapacity(loop.id, 'budget', now);
       logger.info(`[Loops] User ${loop.userId} reached the all-loops daily budget; paused ${paused} loops`);
       break;
     }
@@ -743,19 +744,18 @@ async function dispatchLoop(
   lanes: { lanesPerUser: number; allowanceLeft: number }
 ): Promise<LaneOpened> {
   const activeLanes = activeLaneCount(loop);
-  const userLanes = await loopRepository.countLanesForUser(loop.userId);
-  if (userLanes >= lanes.lanesPerUser) {
-    await loopRepository.holdForCapacity(loop.id, 'user', now);
-    logger.info(`[Loops] Loop ${loop.id} not started: its owner has ${userLanes} cloud loop runs in flight`);
-    return false;
-  }
-
   let ticket: IWorkItem | null = null;
   let index = -1;
   let ready: IWorkItem[] = [];
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   let creditCap: number | undefined;
   try {
+    const userLanes = await loopRepository.countLanesForUser(loop.userId);
+    if (userLanes >= lanes.lanesPerUser) {
+      await loopRepository.holdForCapacity(loop.id, 'user', now);
+      logger.info(`[Loops] Loop ${loop.id} not started: its owner has ${userLanes} cloud loop runs in flight`);
+      return false;
+    }
     ready = await listReady(loop);
     const ticketsLeft = claimable(loop, ready).length;
     if (activeLanes > 0 && ticketsLeft === 0) {
@@ -852,7 +852,9 @@ async function dispatchLoop(
     // The execution doc exists. It may yet run (an unconfirmed self-host HTTP dispatch) or stay
     // pending (a rejected invoke); either way track it rather than risk an overlapping run.
     // Reconcile folds it once terminal or stale, and the loop retries right after.
-    await loopRepository.markDispatched(loop.id, result.executionId, now);
+    // A multi-lane loop waits an interval, so a systemic invoke failure can't fill every lane with pending runs.
+    const next = loopMaxConcurrent(loop) > 1 ? new Date(now.getTime() + loop.intervalMinutes * MINUTE_MS) : now;
+    await loopRepository.markDispatched(loop.id, result.executionId, next);
     if (ticket) await workItemRepository.setExecution(ticket.id, result.executionId);
     logger.warn(`[Loops] Dispatch of loop ${loop.id} unconfirmed; tracking ${result.executionId}`);
     return true;
