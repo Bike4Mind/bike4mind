@@ -9,7 +9,8 @@ import { getEntitlingPlanByPriceId } from '@client/lib/userSubscriptions/utils';
  * plan it holds a seat on - `getActiveSubscriptionsForUser` resolves which orgs count), or a credit
  * purchase ever made. `addCredits` with type `purchase` stamps `lastCreditsPurchasedAt`; an admin credit
  * grant re-stamps only an account that already has a purchase row (adminUpdate.ts), so it never confers
- * paid standing on its own. Sticky: a refund or dispute does not clear the stamp.
+ * paid standing on its own. A full refund or lost dispute marks the purchase row reversed and clears the
+ * stamp once no unreversed purchase remains (server/billing/purchaseReversal.ts); a partial refund keeps it.
  */
 export interface PaidStandingUser {
   lastCreditsPurchasedAt?: Date | null;
