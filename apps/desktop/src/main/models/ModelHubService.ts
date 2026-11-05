@@ -1807,15 +1807,18 @@ export class ModelHubService {
       });
     } catch (error) {
       if (signal.aborted) {
-        // Quitting aborts every pull; its parts stay so the next import resumes them.
-        if (!this.#disposed) await removeSplitStaging(root, plan, this.#partsOfOthers(entry));
-        this.#drop(key, entry);
+        // Quitting aborts every pull; its parts stay so the next import resumes them. A removed server's pull was
+        // already dropped, which cleared them.
+        if (!this.#disposed && this.#pulls.get(key) === entry)
+          await removeSplitStaging(root, plan, this.#partsOfOthers(entry));
+        this.#drop(key, entry, false);
         return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
       }
       return this.#fail(key, entry, diskFullError(error, target) ?? toModelHubError(error, token));
     }
     this.#deps.onInstalledChanged(target.id);
-    this.#drop(key, entry);
+    // runSplitImport removed the staging on success.
+    this.#drop(key, entry, false);
     return { ok: true, ref: plan.model, ...(entry.importNotice ? { notice: entry.importNotice } : {}) };
   }
 
@@ -1969,11 +1972,12 @@ export class ModelHubService {
     return { ok: false, error, listed: true };
   }
 
-  #drop(key: string, entry: PullEntry): void {
+  /** `clearStaging` false when the caller already removed an import's staged parts. */
+  #drop(key: string, entry: PullEntry, clearStaging = true): void {
     if (this.#pulls.get(key) !== entry) return;
     this.#pulls.delete(key);
     const root = this.#deps.importDir?.();
-    if (entry.import && root && !this.#disposed)
+    if (clearStaging && entry.import && root && !this.#disposed)
       void removeSplitStaging(root, entry.import, this.#partsOfOthers(entry));
     this.#push(true);
   }

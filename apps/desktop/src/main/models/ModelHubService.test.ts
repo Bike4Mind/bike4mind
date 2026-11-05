@@ -3530,9 +3530,12 @@ describe('ModelHubService split builds', () => {
     try {
       const stall = async (_file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
         await writeFile(`${destination}.partial`, 'half');
-        return new Promise<never>((_resolve, reject) =>
-          opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
-        );
+        return new Promise<never>((_resolve, reject) => {
+          const stop = () => reject(new DOMException('aborted', 'AbortError'));
+          // The test may abort while the partial is still being written.
+          if (opts?.signal?.aborted) stop();
+          else opts?.signal?.addEventListener('abort', stop);
+        });
       };
       t.hub.download.mockImplementationOnce(stall);
       const quit = t.service.pull(splitRequest);
@@ -3578,9 +3581,12 @@ describe('ModelHubService split builds', () => {
     try {
       t.hub.download.mockImplementationOnce(async (_file, destination, opts) => {
         await writeFile(`${destination}.partial`, 'half');
-        return new Promise<never>((_resolve, reject) =>
-          opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
-        );
+        return new Promise<never>((_resolve, reject) => {
+          const stop = () => reject(new DOMException('aborted', 'AbortError'));
+          // The test may abort while the partial is still being written.
+          if (opts?.signal?.aborted) stop();
+          else opts?.signal?.addEventListener('abort', stop);
+        });
       });
       const result = t.service.pull(splitRequest);
       await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
