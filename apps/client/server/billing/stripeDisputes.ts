@@ -17,7 +17,11 @@ import { adminAuditService } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
 import { applyActionToUser } from '@server/admin/usersBulk/execute';
 import { usersBulkSystemApplyDeps } from '@server/admin/usersBulk/adapters';
-import { UserUndoSnapshotSchema, type UserUndoSnapshot } from '@server/admin/usersBulk/ports';
+import {
+  SUBSCRIPTION_CANCEL_GRACE_MS,
+  UserUndoSnapshotSchema,
+  type UserUndoSnapshot,
+} from '@server/admin/usersBulk/ports';
 import type { BulkUser } from '@server/admin/usersBulk/resolve';
 import { revertUserSnapshot, type RevertDeps } from '@server/admin/usersBulk/undo';
 import { systemAuditActor } from '@server/utils/adminAudit';
@@ -141,8 +145,8 @@ const containOf = (snapshot: UserUndoSnapshot, batchId: string) => ({
 
 /**
  * Resolves a lost dispute on a user's payment and contains the account: suspended, credits to zero
- * and live API keys revoked, as the admin bulk Contain does, attributed to the system. The dispute
- * flag is set (or stays set). The Contain and the resolution commit in one transaction, so a redelivered close (or
+ * and live API keys revoked, and its Stripe subscriptions canceled, as the admin bulk Contain does,
+ * attributed to the system. The dispute flag is set (or stays set). The Contain and the resolution commit in one transaction, so a redelivered close (or
  * a concurrent one) finds the dispute resolved and changes nothing, and the record keeps the undo.
  * An admin account is never contained automatically; its dispute is resolved and left to a human.
  */
@@ -162,7 +166,13 @@ export async function resolveLostUserDispute(
     try {
       const snapshot = await applyActionToUser(
         user.id,
-        { action: { type: 'contain' }, actorId: DISPUTE_SYSTEM_ACTOR_ID, reason, batchId },
+        {
+          action: { type: 'contain' },
+          actorId: DISPUTE_SYSTEM_ACTOR_ID,
+          reason,
+          batchId,
+          cancelDeadline: Date.now() + SUBSCRIPTION_CANCEL_GRACE_MS,
+        },
         usersBulkSystemApplyDeps(SYSTEM_ACTOR_NAME, reason, logger),
         async snapshot => {
           contained.item = await stripeDisputeRepository.resolveBySystem(
@@ -177,6 +187,15 @@ export async function resolveLostUserDispute(
       );
       // A transaction retry can roll back an attempt that set the holder and then commit with no steps.
       if (!snapshot) contained.item = null;
+      // Canceled after the commit, so the undo snapshot written inside it does not hold them yet. Best-effort:
+      // the Contain stands, and a redelivered close would find the dispute resolved and never retry this.
+      if (contained.item && snapshot?.canceledSubscriptions) {
+        await stripeDisputeRepository
+          .recordContainCanceledSubscriptions(stripeDisputeId, snapshot.canceledSubscriptions)
+          .catch((error: unknown) =>
+            logger.error('Recording a dispute Contain canceled subscriptions failed', { stripeDisputeId, error })
+          );
+      }
     } catch (error) {
       if (error instanceof DisputeAlreadyResolved) return { status: 'already_resolved' };
       throw error;

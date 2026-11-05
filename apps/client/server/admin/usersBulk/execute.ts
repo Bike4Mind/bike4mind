@@ -108,7 +108,7 @@ export type ApplyContext = {
 /** What one user's steps need: the batch-level seams (resolve, domains, summary) are not used. */
 export type ApplyDeps = Pick<
   ExecuteDeps,
-  'db' | 'store' | 'withTransaction' | 'audit' | 'endRealtimeConnections' | 'logger'
+  'db' | 'store' | 'withTransaction' | 'audit' | 'endRealtimeConnections' | 'cancelSubscriptions' | 'logger'
 >;
 
 const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsersBulkResult } =>
@@ -234,7 +234,7 @@ async function cancelSubscriptionsOf(
   user: BulkUser,
   action: BanActionType,
   { batchId, cancelDeadline }: ApplyContext,
-  deps: ExecuteDeps,
+  deps: Pick<ExecuteDeps, 'cancelSubscriptions' | 'logger'>,
   snapshot: Pick<UserUndoSnapshot, 'canceledSubscriptions'>
 ): Promise<{ subscriptionCancelError?: string }> {
   try {
@@ -252,10 +252,11 @@ async function cancelSubscriptionsOf(
  * record instead of the batch's short-lived one. `onApplied` runs in the same transaction, so that
  * record commits with the change or not at all. Returns null when the user needed no change; throws
  * when the user's transaction fails. Its after-commit steps must stay in sync with applyToUser's.
+ * Subscriptions a ban action cancels after the commit are set on the returned snapshot.
  */
 export async function applyActionToUser(
   userId: string,
-  context: Omit<ApplyContext, 'cancelDeadline'>,
+  context: ApplyContext,
   deps: ApplyDeps,
   onApplied: (snapshot: UserUndoSnapshot) => Promise<void>
 ): Promise<UserUndoSnapshot | null> {
@@ -271,6 +272,18 @@ export async function applyActionToUser(
     } catch (error) {
       deps.logger?.error('Ending realtime connections failed after a committed action', { userId, error });
     }
+  }
+  const { type } = context.action;
+  if (!isBanAction(type)) return snapshot;
+  // As applyToUser: also for a user already suspended (null snapshot), so an older ban is caught up.
+  const user = await deps.db.findUser(userId).catch((error: unknown) => {
+    deps.logger?.error('Reading the user to cancel subscriptions failed after a committed action', { userId, error });
+    return null;
+  });
+  if (!user) return snapshot;
+  const { subscriptionCancelError } = await cancelSubscriptionsOf(user, type, context, deps, snapshot ?? {});
+  if (subscriptionCancelError) {
+    deps.logger?.error('Subscription cancel failed after a committed action', { userId, subscriptionCancelError });
   }
   return snapshot;
 }

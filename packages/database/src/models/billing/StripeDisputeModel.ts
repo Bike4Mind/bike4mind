@@ -246,6 +246,18 @@ class StripeDisputeRepository {
     return this.updateResult(input.id, updated);
   }
 
+  /**
+   * Adds the Stripe subscriptions the automatic Contain canceled to its undo snapshot. They are canceled
+   * after the Contain commits, so they cannot be part of the snapshot resolveBySystem writes; an undo
+   * reads them to report what it cannot restore. No-op once the Contain was undone.
+   */
+  async recordContainCanceledSubscriptions(stripeDisputeId: string, subscriptionIds: string[]): Promise<void> {
+    await StripeDisputeModel.updateOne(
+      { stripeDisputeId, contain: { $ne: null }, 'contain.undoneAt': null },
+      { $set: { 'contain.snapshot.canceledSubscriptions': subscriptionIds } }
+    );
+  }
+
   /** Newest first; `truncated` is true when more than `limit` records match. */
   async list(query: {
     state?: StripeDisputeState;

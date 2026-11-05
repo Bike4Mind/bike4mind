@@ -186,6 +186,37 @@ const endUserRealtimeConnections = (logger?: Logger) => (userId: string) =>
     { db: { realtimeConnections: realtimeConnectionRepository }, logger }
   );
 
+type SubscriptionCancelAuditEntry = NonNullable<ReturnType<typeof subscriptionCancellationAudit>> & {
+  target: { kind: 'user'; id: string; displayName: string };
+};
+
+/**
+ * The cancelSubscriptions dep shared by the admin bulk path and the system path; `record` writes the
+ * audit entry with that path's actor. Best-effort per the catalogue: the ban is committed, so a lost
+ * entry must not fail the user.
+ */
+const cancelUserSubscriptions =
+  (
+    logger: Logger | undefined,
+    record: (entry: SubscriptionCancelAuditEntry) => Promise<unknown>
+  ): ExecuteDeps['cancelSubscriptions'] =>
+  async (user, action, batchId, deadline) => {
+    const cancelReason = action === 'contain' ? 'contained' : 'suspended';
+    const result = await cancelAccountSubscriptions(
+      { userId: user.id, reason: cancelReason, deadline },
+      logger ?? console
+    );
+    const entry = subscriptionCancellationAudit(result, cancelReason);
+    if (entry) {
+      await record({
+        ...entry,
+        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
+        details: { ...entry.details, batchId },
+      });
+    }
+    return result;
+  };
+
 /**
  * Deps for one user's steps run by the platform itself (no request, see applyActionToUser): entries
  * carry a system actor named `actorName` and the given reason.
@@ -211,6 +242,12 @@ export function usersBulkSystemApplyDeps(actorName: string, reason: string, logg
         { db: { adminAuditLog: adminAuditLogRepository }, logger }
       ),
     endRealtimeConnections: endUserRealtimeConnections(logger),
+    cancelSubscriptions: cancelUserSubscriptions(logger, entry =>
+      adminAuditService.recordAdminAction(
+        { ...entry, actor: systemAuditActor(actorName), reason, context: { source: 'worker' } },
+        { db: { adminAuditLog: adminAuditLogRepository }, logger }
+      )
+    ),
     logger,
   };
 }
@@ -238,24 +275,9 @@ export function usersBulkExecuteDeps(req: AuditRequest, reason: string, logger?:
         added => `blocked signups from ${added.join(', ')} in bulk contain batch ${batchId}`
       ),
     endRealtimeConnections: endUserRealtimeConnections(logger),
-    cancelSubscriptions: async (user, action, batchId, deadline) => {
-      const cancelReason = action === 'contain' ? 'contained' : 'suspended';
-      const result = await cancelAccountSubscriptions(
-        { userId: user.id, reason: cancelReason, deadline },
-        logger ?? console
-      );
-      const entry = subscriptionCancellationAudit(result, cancelReason);
-      // Best-effort per the catalogue: the ban is committed, so a lost entry must not fail the user.
-      if (entry) {
-        await recordAdminActionFromRequest(req, {
-          ...entry,
-          target: { kind: 'user', id: user.id, displayName: user.email ?? user.username ?? user.id },
-          reason,
-          details: { ...entry.details, batchId },
-        });
-      }
-      return result;
-    },
+    cancelSubscriptions: cancelUserSubscriptions(logger, entry =>
+      recordAdminActionFromRequest(req, { ...entry, reason })
+    ),
     logger,
   };
 }

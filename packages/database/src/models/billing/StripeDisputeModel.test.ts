@@ -175,6 +175,40 @@ describe('StripeDisputeModel', () => {
     expect(twice.status).toBe('conflict');
   });
 
+  it('adds canceled subscriptions to the Contain snapshot until the Contain is undone', async () => {
+    const opened = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
+    await stripeDisputeRepository.resolveBySystem('dp_test_1', 'lost', {
+      batchId: 'b',
+      containedAt: new Date(),
+      suspended: true,
+      creditDelta: 0,
+      apiKeysRevoked: 0,
+      snapshot: { userId: 'u1', banned: true },
+    });
+
+    await stripeDisputeRepository.recordContainCanceledSubscriptions('dp_test_1', ['sub_a']);
+    expect((await stripeDisputeRepository.findById(opened.id))?.containSnapshot).toEqual({
+      userId: 'u1',
+      banned: true,
+      canceledSubscriptions: ['sub_a'],
+    });
+
+    await stripeDisputeRepository.markContainUndone({ id: opened.id, adminId: 'admin1' });
+    await stripeDisputeRepository.recordContainCanceledSubscriptions('dp_test_1', ['sub_b']);
+    expect((await stripeDisputeRepository.findById(opened.id))?.containSnapshot).toMatchObject({
+      canceledSubscriptions: ['sub_a'],
+    });
+  });
+
+  it('does not record canceled subscriptions on a dispute without a Contain', async () => {
+    const opened = await stripeDisputeRepository.recordOpened(facts({ subject: 'user', subjectId: 'u1' }));
+    await stripeDisputeRepository.resolveBySystem('dp_test_1', 'lost');
+
+    await stripeDisputeRepository.recordContainCanceledSubscriptions('dp_test_1', ['sub_a']);
+
+    expect((await stripeDisputeRepository.findById(opened.id))?.containSnapshot).toBeNull();
+  });
+
   it('lists newest first with filters and truncation', async () => {
     await stripeDisputeRepository.recordOpened(facts({ stripeDisputeId: 'dp_a', openedAt: new Date('2026-10-01') }));
     await stripeDisputeRepository.recordOpened(

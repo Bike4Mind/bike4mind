@@ -29,6 +29,21 @@ import {
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
+const noSubscriptions = () => ({
+  canceled: [] as string[],
+  failed: [] as { customerId: string; subscriptionId: string | null; reason: string }[],
+});
+const cancelAccountSubscriptions = vi.hoisted(() =>
+  vi.fn(async (_input: { userId: string; reason: string; deadline?: number }, _logger: unknown) => ({
+    canceled: [] as string[],
+    failed: [] as { customerId: string; subscriptionId: string | null; reason: string }[],
+  }))
+);
+vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/billing/cancelAccountSubscriptions')>()),
+  cancelAccountSubscriptions,
+}));
+
 // Real transactions need a replica set: the Contain and the dispute resolution commit together here.
 let replSet: MongoMemoryReplSet;
 
@@ -50,6 +65,8 @@ beforeEach(async () => {
 // The audit log refuses deletes through its model, so drop the database instead.
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
+  cancelAccountSubscriptions.mockReset();
+  cancelAccountSubscriptions.mockResolvedValue(noSubscriptions());
 });
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
@@ -141,6 +158,42 @@ describe('resolveLostUserDispute', () => {
 
     const ledger = await CreditTransaction.findOne({ ownerId: userId }).lean();
     expect(ledger?.metadata).toMatchObject({ actorId: DISPUTE_SYSTEM_ACTOR_ID });
+  });
+
+  it('cancels the Stripe subscriptions after the Contain and keeps them on the undo snapshot', async () => {
+    cancelAccountSubscriptions.mockResolvedValueOnce({ canceled: ['sub_paying'], failed: [] });
+    const userId = await seedUser();
+    const adminId = await seedUser({ isAdmin: true, disputePending: false });
+    const record = await closeFor(userId);
+
+    const outcome = await resolveLostUserDispute(record, { id: userId }, logger);
+
+    expect(outcome.status).toBe('contained');
+    expect(cancelAccountSubscriptions).toHaveBeenCalledWith(
+      expect.objectContaining({ userId, reason: 'contained' }),
+      expect.anything()
+    );
+    const dispute = await stripeDisputeRepository.findById(record.id);
+    expect(dispute?.containSnapshot).toMatchObject({ userId, canceledSubscriptions: ['sub_paying'] });
+    const cancelEntry = await AdminAuditLogModel.findOne({ action: 'user.subscriptions.canceled' }).lean();
+    expect(cancelEntry?.actor).toMatchObject({ kind: 'system', name: 'Stripe dispute' });
+    expect(cancelEntry?.details).toMatchObject({ canceledSubscriptions: ['sub_paying'] });
+
+    await undoDisputeContain(dispute!, adminId, usersBulkUndoDeps(adminReq(adminId), logger));
+    const undoEntry = await AdminAuditLogModel.findOne({ action: 'user.bulk.undone' }).lean();
+    expect(undoEntry?.details).toMatchObject({ subscriptionsNotRestored: ['sub_paying'] });
+  });
+
+  it('still cancels the subscriptions of an account that was already contained', async () => {
+    cancelAccountSubscriptions.mockResolvedValueOnce({ canceled: ['sub_paying'], failed: [] });
+    const userId = await seedUser({ isBanned: true, currentCredits: 0 });
+    const record = await closeFor(userId);
+
+    const outcome = await resolveLostUserDispute(record, { id: userId }, logger);
+
+    expect(outcome.status).toBe('resolved_without_contain');
+    expect(cancelAccountSubscriptions).toHaveBeenCalledTimes(1);
+    expect(await AdminAuditLogModel.countDocuments({ action: 'user.subscriptions.canceled' })).toBe(1);
   });
 
   it('acts once when the close is delivered again', async () => {
