@@ -13,7 +13,9 @@
  * row (beyond a small tolerance) means the increment never ran. A later purchase, or an admin grant to
  * an account with a purchase row (adminUpdate.ts), overwrites the stamp, so this can miss a failed increment; it is tuned not to flag an applied one.
  * A row repaired by packages/scripts/src/auditPartialCreditPurchases.ts carries metadata.balanceBackfilledAt
- * (that script does not stamp the user), so it is treated as applied.
+ * (that script does not stamp the user), so it is treated as applied. A row marked reversedAt (full refund
+ * or lost dispute, apps/client/server/billing/purchaseReversal.ts) had its stamp revoked on purpose, so it
+ * is treated as applied too.
  *
  * A row whose owner no longer exists is not an ungranted purchase: the grant's balance increment
  * throws when the user is missing, which aborts the transaction and the row with it, so the row
@@ -119,6 +121,7 @@ async function checkPurchase(intentId: string): Promise<PurchaseCheck> {
   if (!tx) return { status: 'ungranted', reason: 'no_transaction' };
   if (tx.ownerType !== CreditHolderType.User) return { status: 'granted' };
   if (tx.metadata?.balanceBackfilledAt) return { status: 'granted' };
+  if (tx.type === 'purchase' && tx.reversedAt) return { status: 'granted' };
   const owner = await userRepository.findById(tx.ownerId);
   if (!owner) return { status: 'owner_deleted', ownerId: tx.ownerId };
   const appliedAt = owner.lastCreditsPurchasedAt;

@@ -286,6 +286,8 @@ import EnsureSpendAlertIndexes from './20260921238300_ensure-spend-alert-indexes
 import GrantPackagesFromInvites from './20260921238400_grant-packages-from-invites';
 import EnsureGrantPackageIndexes from './20260921238500_ensure-grant-package-indexes';
 import AllowGpt4oMiniTtsWhereTts1IsFree from './20260921238800_allow-gpt-4o-mini-tts-where-tts-1-is-free';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import EnsureAdminAuditReviewIndexesAndBaseline from './20260921239100_ensure-adminauditreview-indexes-and-baseline';
 import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-inviter-indexes';
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
 import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
@@ -503,6 +505,7 @@ const coreMigrations: MigrationFile[] = [
   GrantPackagesFromInvites,
   EnsureGrantPackageIndexes,
   AllowGpt4oMiniTtsWhereTts1IsFree,
+  EnsureAdminAuditReviewIndexesAndBaseline,
   EnsureReferralInviterIndexes,
   EnsureHeldCreditRewardUserStatusIndex,
   DropRetiredUnlockSettings,

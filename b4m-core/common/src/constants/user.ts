@@ -84,7 +84,8 @@ export const isTurnstileOAuthProvider = (provider: unknown): provider is Turnsti
 
 /**
  * Entitlement key held by a user with paid standing: an active paid plan, ladder or standalone (org
- * seats included), or a credit purchase (`lastCreditsPurchasedAt`). Derived only from
+ * seats included), or a credit purchase not reversed by a full refund or lost dispute
+ * (`lastCreditsPurchasedAt`, cleared by apps/client/server/billing/purchaseReversal.ts). Derived only from
  * holdsPaidStanding (apps/client/server/entitlements/paidStanding.ts), never from a tag,
  * partner rule or contribution (reserved in isReservedContributionKey). The free-tier model gate in
  * b4m-core/services/src/llm/modelAdmission.ts reads it.

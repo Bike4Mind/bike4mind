@@ -28,6 +28,8 @@ export type PurchaseVerdict = 'granted' | 'ungranted' | 'unverifiable' | 'backfi
 export type PurchaseEvidence = {
   createdAt: Date;
   backfilledAt: Date | null;
+  /** Set when the purchase was fully refunded or lost a dispute; its stamp was revoked on purpose. */
+  reversedAt: Date | null;
   hasLot: boolean;
   lastCreditsPurchasedAt: Date | null;
   /** From when lastCreditsPurchasedAt is a reliable witness; null when it is none for this owner. */
@@ -35,10 +37,11 @@ export type PurchaseEvidence = {
 };
 
 // Mirrors the cron's findUngrantedReason (apps/workers/src/cron/creditPurchaseReconciliation.ts);
-// the balanceBackfilledAt and purchase-stamp witnesses must stay in sync with it.
+// the balanceBackfilledAt, reversedAt and purchase-stamp witnesses must stay in sync with it.
 export function classifyPurchase(evidence: PurchaseEvidence): { verdict: PurchaseVerdict; reason: string } {
   if (evidence.backfilledAt) return { verdict: 'backfilled', reason: 'repaired by an earlier run' };
   if (evidence.hasLot) return { verdict: 'granted', reason: 'pack lot exists' };
+  if (evidence.reversedAt) return { verdict: 'unverifiable', reason: 'purchase reversed by refund or lost dispute' };
   if (!evidence.stampSince || evidence.createdAt < evidence.stampSince) {
     return { verdict: 'unverifiable', reason: 'predates the purchase stamp and has no lot' };
   }
@@ -107,6 +110,7 @@ type PurchaseRow = {
   stripePaymentIntentId: string;
   createdAt: Date;
   metadata?: { balanceBackfilledAt?: Date } | null;
+  reversedAt?: Date | null;
 };
 
 /**
@@ -180,6 +184,7 @@ export async function auditPartialCreditPurchases(options: AuditOptions): Promis
     const { verdict, reason } = classifyPurchase({
       createdAt: row.createdAt,
       backfilledAt: row.metadata?.balanceBackfilledAt ?? null,
+      reversedAt: row.reversedAt ?? null,
       hasLot: (await CreditLot.exists({ stripeRef: row.stripePaymentIntentId })) !== null,
       // Purchases are only ever granted to users (webhook.ts resolves the buyer by Stripe customer).
       lastCreditsPurchasedAt: row.ownerType === CreditHolderType.User ? await stampOf(row.ownerId) : null,
