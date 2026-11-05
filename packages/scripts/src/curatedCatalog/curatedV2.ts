@@ -13,6 +13,7 @@ import { format, resolveConfig } from 'prettier';
 import { CATALOG_PATH, isEntry, REPO_ROOT } from './cli';
 
 export const CATALOG_V3_PATH = 'catalog/model-hub/curated-v3.json';
+const BUMP = 'pnpm --filter @bike4mind/scripts curated:v2 --bump';
 
 /** The hash `v2Channel.contentSha256` records for a v2 list: its content, not its sequence, date or changelog. */
 export const curatedV2Sha256 = (v2: HubManifestInput): string =>
@@ -34,21 +35,21 @@ async function formatJson(value: unknown, configFile: string): Promise<string> {
 /** The v2 file generated from the v3 list under `root`; rejects when the v3 file is unreadable or invalid. */
 export async function generateCuratedV2(root: string = REPO_ROOT): Promise<Generated> {
   const v3: HubManifestV3Input = JSON.parse(await readFile(path.join(root, CATALOG_V3_PATH), 'utf8'));
+  // A changelog item for the next sequence fails the v2 schema until --bump moves the sequence to it.
+  const channel = v3.v2Channel;
+  if (channel && typeof channel.sequence === 'number' && channel.changelog?.[0]?.sequence === channel.sequence + 1)
+    return { text: '', problem: `run ${BUMP} to move v2Channel to sequence ${channel.sequence + 1}` };
   const v2 = curatedV2FromV3(v3);
   const text = await formatJson(v2, path.join(root, CATALOG_PATH));
-  const channel = v3.v2Channel;
-  if (!channel) throw new Error('the v3 list has no v2Channel');
-  const key = String(channel.sequence);
-  const recorded = Object.hasOwn(channel.contentSha256, key) ? channel.contentSha256[key] : undefined;
+  const sequence = v2.sequence ?? 0;
+  const hashes = channel?.contentSha256 ?? {};
+  const recorded = Object.hasOwn(hashes, String(sequence)) ? hashes[String(sequence)] : undefined;
   if (recorded === curatedV2Sha256(v2)) return { text, problem: null };
   const what =
     recorded === undefined
-      ? `v2Channel.contentSha256 has no hash for sequence ${key}`
-      : `the v2 content no longer matches the hash recorded for v2Channel sequence ${key}`;
-  const problem =
-    `${what}; add a v2Channel.changelog item for sequence ${channel.sequence + 1}, ` +
-    'then run pnpm --filter @bike4mind/scripts curated:v2 --bump';
-  return { text, problem };
+      ? `v2Channel.contentSha256 has no hash for sequence ${sequence}`
+      : `the v2 content no longer matches the hash recorded for v2Channel sequence ${sequence}`;
+  return { text, problem: `${what}; add a v2Channel.changelog item for sequence ${sequence + 1}, then run ${BUMP}` };
 }
 
 /**
@@ -96,7 +97,8 @@ export async function checkCuratedV2(root: string = REPO_ROOT): Promise<string |
   const { text, problem } = await generateCuratedV2(root);
   if (problem) return problem;
   const committed = await readFile(path.join(root, CATALOG_PATH), 'utf8').catch((error: unknown) => {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    if (error instanceof Error && Object.hasOwn(error, 'code') && (error as NodeJS.ErrnoException).code === 'ENOENT')
+      return null;
     throw error;
   });
   if (committed === text) return null;

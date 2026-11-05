@@ -8,6 +8,17 @@ import { bumpCuratedV2, CATALOG_V3_PATH, checkCuratedV2, curatedV2Sha256, genera
 
 type Doc = Record<string, any>; // any: the fixtures edit arbitrary parts of a JSON document
 
+/** The lines between the common head and tail of two texts, from each side. */
+function changedLines(a: string, b: string): [string[], string[]] {
+  const x = a.split('\n');
+  const y = b.split('\n');
+  let head = 0;
+  while (head < x.length && head < y.length && x[head] === y[head]) head++;
+  let tail = 0;
+  while (tail < x.length - head && tail < y.length - head && x[x.length - 1 - tail] === y[y.length - 1 - tail]) tail++;
+  return [x.slice(head, x.length - tail), y.slice(head, y.length - tail)];
+}
+
 describe('checkCuratedV2', () => {
   const dirs: string[] = [];
 
@@ -67,6 +78,9 @@ describe('checkCuratedV2', () => {
     await expect(bumpCuratedV2(root)).rejects.toThrow(/add a v2Channel.changelog item for sequence 5 first/);
 
     await editV3(root, doc => doc.v2Channel.changelog.unshift(item(5)));
+    const pending = 'run pnpm --filter @bike4mind/scripts curated:v2 --bump to move v2Channel to sequence 5';
+    expect((await generateCuratedV2(root)).problem).toBe(pending);
+    expect(await checkCuratedV2(root)).toBe(pending);
     const before = await readFile(v3File, 'utf8');
     expect(await bumpCuratedV2(root)).toBe(5);
     expect(await checkCuratedV2(root)).toBeNull();
@@ -89,6 +103,68 @@ describe('checkCuratedV2', () => {
       Object.assign(doc.v2Channel.tiers[2].picks[0], { entry: 'gemma-4-12b', build: 'qat-q4-0' });
     });
     expect(await checkCuratedV2(root)).toMatch(/sequence 5; add a v2Channel.changelog item for sequence 6/);
+  });
+
+  it('bumps the hand-formatted v3 file by changing only the v2Channel sequence, hash and date lines', async () => {
+    const root = await scratchRoot();
+    await copyFile(path.join(REPO_ROOT, '.prettierrc.cjs'), path.join(root, '.prettierrc.cjs'));
+    const file = path.join(root, CATALOG_V3_PATH);
+    const source = await readFile(file, 'utf8');
+    const channelAt = source.indexOf('"v2Channel"');
+    const item = [
+      '      {',
+      '        "sequence": 5,',
+      '        "date": "2026-11-05",',
+      '        "added": [],',
+      '        "removed": [],',
+      '        "changed": ["qwen3-5-4b"],',
+      '        "notes": "Ranked the chat picks."',
+      '      },',
+      '',
+    ].join('\n');
+    const edited =
+      source.slice(0, channelAt) +
+      source
+        .slice(channelAt)
+        .replace('"changelog": [\n', `"changelog": [\n${item}`)
+        .replace('"rankings": {}', '"rankings": { "chat": ["qwen3-5-4b"] }');
+    expect(edited).not.toBe(source);
+    await writeFile(file, edited);
+
+    expect(await bumpCuratedV2(root)).toBe(5);
+    const bumped = await readFile(file, 'utf8');
+    const hashes: Record<string, string> = JSON.parse(bumped).v2Channel.contentSha256;
+    const [removed, added] = changedLines(edited, bumped);
+    expect(removed.map(line => line.trim())).toEqual([
+      '"sequence": 4,',
+      `"contentSha256": { "4": "${hashes['4']}" },`,
+      '"updatedAt": "2026-11-04T00:00:00Z",',
+    ]);
+    expect(added.map(line => line.trim())).toEqual([
+      '"sequence": 5,',
+      '"contentSha256": {',
+      `"4": "${hashes['4']}",`,
+      `"5": "${hashes['5']}"`,
+      '},',
+      '"updatedAt": "2026-11-05T00:00:00Z",',
+    ]);
+    expect(await checkCuratedV2(root)).toBeNull();
+  });
+
+  it('refuses to bump when the v2Channel fields cannot be edited in place, and writes nothing', async () => {
+    const root = await scratchRoot();
+    const file = path.join(root, CATALOG_V3_PATH);
+    await editV3(root, doc => {
+      doc.v2Channel.changelog.unshift({ ...doc.v2Channel.changelog[0], sequence: 5, changed: ['qwen3-5-4b'] });
+      doc.v2Channel.rankings = { chat: ['qwen3-5-4b'] };
+      // With changelog first, the first "sequence" after "v2Channel" is the changelog item's.
+      const { changelog, ...rest } = doc.v2Channel;
+      doc.v2Channel = { changelog, ...rest };
+    });
+    const before = await readFile(file, 'utf8');
+    await expect(bumpCuratedV2(root)).rejects.toThrow(/could not edit v2Channel in .* in place; bump it by hand/);
+    expect(await readFile(file, 'utf8')).toBe(before);
+    await expect(readFile(path.join(root, CATALOG_PATH))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('rejects a missing or invalid v3 file instead of generating from nothing', async () => {
