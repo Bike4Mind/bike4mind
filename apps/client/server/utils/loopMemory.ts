@@ -159,7 +159,9 @@ export function buildLoopQuery(
  */
 export function buildTriageQuery(
   loop: Pick<ILoop, 'goal' | 'stages'>,
-  tickets: Pick<IWorkItem, 'id' | 'title' | 'description' | 'stage'>[]
+  tickets: Pick<IWorkItem, 'id' | 'title' | 'description' | 'stage'>[],
+  /** The loop's desktop stages: their tickets can be given a priority but not split (loop_ticket_split refuses). */
+  desktopStages: string[] = []
 ): string {
   return [
     loop.goal,
@@ -182,6 +184,12 @@ export function buildTriageQuery(
     'For each ticket, call loop_ticket_update with { "id": "...", "priority": "p0" | "p1" | "p2" | "p3" }.',
     'If a ticket is too big for one pass through the stages, call loop_ticket_split instead, with 2-20 child',
     'tickets that each carry a priority; the ticket then waits on its children and closes when they do.',
+    ...(desktopStages.length > 0
+      ? [
+          `Tickets in the ${desktopStages.map(stage => JSON.stringify(stage)).join(', ')} stage(s) are worked by the`,
+          "owner's desktop app: only set their priority, never split them.",
+        ]
+      : []),
     'End with a one-line summary of what you set.',
   ].join('\n');
 }

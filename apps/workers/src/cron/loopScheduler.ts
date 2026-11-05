@@ -700,10 +700,15 @@ async function applyP2Cap(
   for (const ticket of overflow) await workItemRepository.demoteIfAgentSet(ticket.id, now);
   if (left > 0) return { cloudReady: false };
   const desktopStages = desktopStagesOf(loop);
+  const limit = ticketRunLimit(loop.stages);
   return {
     onlyPriorities: PRIORITIES_OVER_P2_CAP,
+    // A ticket out of runs is not held back: claimNextTicket blocks it for its owner this tick.
     cloudReady: ready.some(
-      ticket => !PRIORITIES_OVER_P2_CAP.includes(ticket.priority!) && !desktopStages.includes(ticket.stage ?? '')
+      ticket =>
+        !PRIORITIES_OVER_P2_CAP.includes(ticket.priority!) &&
+        !desktopStages.includes(ticket.stage ?? '') &&
+        (ticket.runCount ?? 0) < limit
     ),
   };
 }
@@ -711,7 +716,7 @@ async function applyP2Cap(
 /**
  * Claims the loop's next ready ticket for this run, never one in a desktop stage (and only of `onlyPriorities`
  * when given); null means a plain goal run. A ticket that has used up its runs (`ticketRunLimit`) is blocked for
- * its owner instead, and the next one is tried.
+ * its owner instead, whatever its priority, and the next one is tried.
  */
 async function claimNextTicket(loop: ILoop, onlyPriorities?: WorkItemPriority[]): Promise<IWorkItem | null> {
   const limit = ticketRunLimit(loop.stages);
@@ -719,8 +724,7 @@ async function claimNextTicket(loop: ILoop, onlyPriorities?: WorkItemPriority[])
     loop.userId,
     loop.id,
     loop.stages,
-    desktopStagesOf(loop),
-    { onlyPriorities }
+    desktopStagesOf(loop)
   )) {
     const runs = next.runCount ?? 0;
     if (runs >= limit) {
@@ -732,6 +736,7 @@ async function claimNextTicket(loop: ILoop, onlyPriorities?: WorkItemPriority[])
       );
       continue;
     }
+    if (onlyPriorities && !onlyPriorities.includes(next.priority!)) continue;
     const claimed = await workItemRepository.claimForRun(next.id, loop.id);
     if (claimed) return claimed;
   }
@@ -838,7 +843,7 @@ async function dispatchTriage(loop: ILoop, untriaged: IWorkItem[], now: Date, lo
         userId: loop.userId,
         sessionId: loop.sessionId,
         questId: loop.sessionId,
-        query: buildTriageQuery(loop, untriaged),
+        query: buildTriageQuery(loop, untriaged, desktopStagesOf(loop)),
         model,
         connectionId: HEADLESS_CONNECTION_ID,
         apiKeyInfo: undefined,

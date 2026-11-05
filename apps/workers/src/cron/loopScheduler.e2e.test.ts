@@ -1952,6 +1952,17 @@ describe('runLoopSchedulerTick - priority policy', () => {
       expect(await ticketOf(untriaged.id)).not.toHaveProperty('executionId');
     });
 
+    it("tells a triage run not to split the tickets in the loop's desktop stages", async () => {
+      const loop = await createLoop({ stages: STAGES, stageConfig: [{ stage: 'review', runner: 'desktop' }] });
+      await createTicket(loop.id, { priority: undefined, stage: 'review' });
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(h.startAgentExecution.mock.calls[0][0].query).toContain(
+        `Tickets in the "review" stage(s) are worked by the\nowner's desktop app: only set their priority, never split them.`
+      );
+    });
+
     it('prices a triage run on triageModel', async () => {
       h.getAvailableModels.mockResolvedValue([{ id: 'claude-sonnet-5' }, { id: 'cheap' }]);
       h.nextIterationCredits.mockImplementation((model: { id: string }) => (model.id === 'cheap' ? 20 : 1));
@@ -2060,6 +2071,19 @@ describe('runLoopSchedulerTick - priority policy', () => {
     it('runs the goal, not a hold, when the only ready cloud ticket over the cap is a p0 at its run limit', async () => {
       const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1 });
       const spent = await createTicket(loop.id, { priority: 'p0', runCount: 6 });
+      await p2RunToday(loop.id);
+
+      await runLoopSchedulerTick(NOW, logger);
+
+      expect(await ticketOf(spent.id)).toMatchObject({ status: 'blocked' });
+      expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+      expect(h.startAgentExecution.mock.calls[0][0]).not.toHaveProperty('workItemId');
+      expect((await reload(loop.id)).hold).toBeUndefined();
+    });
+
+    it('blocks a p2 at its run limit over the cap now, rather than holding the loop until 00:00 UTC', async () => {
+      const loop = await createLoop({ stages: STAGES, p2RunsPerDay: 1 });
+      const spent = await createTicket(loop.id, { prioritySetBy: 'owner', runCount: 6 });
       await p2RunToday(loop.id);
 
       await runLoopSchedulerTick(NOW, logger);
