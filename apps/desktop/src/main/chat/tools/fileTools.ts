@@ -1,8 +1,8 @@
 import { glob, lstat, readFile, stat } from 'node:fs/promises';
-import { basename, dirname, join, matchesGlob, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, matchesGlob, relative } from 'node:path';
 import { git } from '../project/git';
 import { envReadPrompt, readsEnvFile } from './envFiles';
-import { isWithin, resolveWithinRoots } from './paths';
+import { hostRealpath, isWithin, resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
 import { listDistroFiles } from './wslFiles';
@@ -318,23 +318,58 @@ export const fileRead: ToolDefinition = {
   },
 };
 
+// The Windows fallback walk lists paths with backslashes.
+const PATH_SEPARATOR = /[\\/]/;
+
+/** A pattern ending in `**` or `**` then `*` matches every path under its prefix, so folder rows add nothing. */
+const MATCH_ALL = /(^|\/)\*\*(\/\*)?$/;
+
 /** Top-level folders of a listing with how many files each holds, so "*" also shows the shape of a tree. */
 function summarizeFolders(files: readonly string[]): string[] {
   const counts = new Map<string, number>();
   for (const file of files) {
-    const slash = file.indexOf('/');
-    if (slash > 0) counts.set(file.slice(0, slash), (counts.get(file.slice(0, slash)) ?? 0) + 1);
+    const separator = file.search(PATH_SEPARATOR);
+    if (separator > 0) counts.set(file.slice(0, separator), (counts.get(file.slice(0, separator)) ?? 0) + 1);
   }
   return [...counts.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([folder, count]) => `  ${folder}/ (${count} file${count === 1 ? '' : 's'})`);
 }
 
+/** Every folder that holds a listed file, at any depth, with how many files lie beneath it. */
+function folderCounts(files: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const file of files) {
+    const parts = file.split(PATH_SEPARATOR);
+    for (let depth = 1; depth < parts.length; depth++) {
+      const folder = parts.slice(0, depth).join('/');
+      counts.set(folder, (counts.get(folder) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/** True when a glob-free `pattern` names an existing directory inside `base`. */
+async function isFolderWithoutListedFiles(base: string, pattern: string): Promise<boolean> {
+  if (/[*?[\]{}]/.test(pattern) || isAbsolute(pattern)) return false;
+  const absolute = listedPath(base, pattern);
+  if (absolute === null) return false;
+  try {
+    // Links on the way (or the target itself) may lead out of the base, so judge the real path.
+    const real = await hostRealpath(absolute);
+    return isWithin(await hostRealpath(base), real) && (await stat(real)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export const globFiles: ToolDefinition = {
   schema: {
     name: 'glob_files',
     description:
-      'List files matching a glob pattern, newest-modified first, with their sizes. Skips files ' +
+      'List files matching a glob pattern, newest-modified first, with their sizes; folders whose ' +
+      'path matches the pattern are listed after them with their file counts (a folder is found ' +
+      'through its listed files, so one with no listed files is not listed). Skips files ' +
       'ignored by .gitignore and dependency folders. "*" lists the top level of a folder, ' +
       'including its subfolders with file counts; "**/*.ts" matches at any depth. Use this to ' +
       'explore a project or find files by name, or to find the largest or most recent files. ' +
@@ -380,8 +415,18 @@ export const globFiles: ToolDefinition = {
     }
 
     const folders = pattern === '*' ? summarizeFolders(listing.files) : [];
+    const folderPattern = pattern.length > 1 && pattern.endsWith('/') ? pattern.slice(0, -1) : pattern;
+    const matchedFolders =
+      pattern === '*' || MATCH_ALL.test(folderPattern)
+        ? []
+        : [...folderCounts(listing.files)]
+            .filter(([folder]) => matchesGlob(folder, folderPattern) && listedPath(base, folder))
+            .sort(([a], [b]) => a.localeCompare(b));
 
-    if (found.length === 0 && folders.length === 0) {
+    if (found.length === 0 && folders.length === 0 && matchedFolders.length === 0) {
+      if (await isFolderWithoutListedFiles(base, folderPattern)) {
+        return `${folderPattern} is a folder in ${base} but holds no listed files: it is empty, holds only ignored files, or is a dependency folder the search skips.`;
+      }
       const hint = pattern.includes('/')
         ? ''
         : ` A pattern without a slash only matches the top level; try "**/${pattern}".`;
@@ -402,8 +447,22 @@ export const globFiles: ToolDefinition = {
     const partial =
       (listing.complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were considered.`) +
       droppedNote(listing.dropped);
-    const header = `${found.length} file(s) in ${base}, sorted by ${bySize ? 'size' : 'modification time'}${shown}:${partial}`;
+    const header =
+      found.length === 0 && pattern !== '*'
+        ? `Only folders matched ${pattern} in ${base}:${partial}`
+        : `${found.length} file(s) in ${base}, sorted by ${bySize ? 'size' : 'modification time'}${shown}:${partial}`;
     const tail = folders.length > 0 ? ['', 'Folders:', ...folders] : [];
+    if (matchedFolders.length > 0) {
+      const more =
+        matchedFolders.length > MAX_MATCHES ? `; showing the first ${MAX_MATCHES} folders, so narrow the pattern` : '';
+      tail.push(
+        '',
+        `Folders matching ${pattern}${more}:`,
+        ...matchedFolders
+          .slice(0, MAX_MATCHES)
+          .map(([folder, count]) => `  ${folder}/ (${count} file${count === 1 ? '' : 's'})`)
+      );
+    }
     return capOutput([header, ...rows, ...tail].join('\n'));
   },
 };
