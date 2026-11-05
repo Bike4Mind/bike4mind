@@ -64,7 +64,6 @@ import {
  */
 
 export {
-  createInProcessRemoteMcpRunner,
   type RemoteMcpAction,
   type RemoteMcpRunPayload,
   type RemoteMcpRunResult,
@@ -82,6 +81,10 @@ function remoteMcpHandlerName(): string | undefined {
   }
 }
 
+function inProcessAllowed(): boolean {
+  return isSelfHost() || process.env.IS_LOCAL === 'true' || process.env.NODE_ENV === 'development';
+}
+
 /**
  * Where a remote operation runs. A linked `remoteMcpHandler` (outside the VPC, no secrets) wins.
  * Without it, only self-host and local development run in-process; a hosted runtime fails closed
@@ -91,7 +94,7 @@ function remoteMcpHandlerName(): string | undefined {
 export function resolveRemoteMcpRunner(): RemoteMcpRunner {
   const functionName = remoteMcpHandlerName();
   if (functionName) return createLambdaRemoteMcpRunner(functionName);
-  if (isSelfHost() || process.env.IS_LOCAL === 'true' || process.env.NODE_ENV === 'development') return runInProcess;
+  if (inProcessAllowed()) return runInProcess;
   throw new Error('remoteMcpHandler is not linked on this runtime');
 }
 
@@ -465,7 +468,11 @@ export async function invokeRemoteMcp(
       limits: clampLimits(request.limits),
       network: context.network,
     };
-    const runner = options.runner ?? resolveRemoteMcpRunner();
+    // An injected runner is a test seam: on a hosted runtime it must not bypass the fail-closed guard.
+    const runner =
+      options.runner && (inProcessAllowed() || process.env.NODE_ENV === 'test')
+        ? options.runner
+        : resolveRemoteMcpRunner();
     // Only outages count against the breaker: a refused key or a blocked address says nothing
     // about whether the server is up, so those come back as values and are rethrown below.
     const outcome = await breaker.execute(async () => {

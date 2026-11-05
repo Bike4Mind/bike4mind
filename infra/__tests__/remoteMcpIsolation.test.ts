@@ -29,6 +29,23 @@ describe('remoteMcpHandler isolation', () => {
     expect(source).toMatch(/environment:\s*\{\s*\.\.\.DEFAULT_LAMBDA_ENVIRONMENT\s*\}/);
   });
 
+  it('inherits no VPC, link or secret-bearing env from the global Function transform or defaults', () => {
+    const config = stripComments(read('sst.config.ts'));
+    const start = config.indexOf('$transform(sst.aws.Function');
+    expect(start).toBeGreaterThan(-1);
+    const block = config.slice(start, config.indexOf('\n    });', start));
+    expect(block).not.toMatch(/\bvpc\b/i);
+    expect(block).not.toMatch(/\blink\b/);
+
+    const constants = stripComments(read('infra/constants.ts'));
+    const defStart = constants.indexOf('export const DEFAULT_LAMBDA_ENVIRONMENT');
+    expect(defStart).toBeGreaterThan(-1);
+    const defs = constants.slice(defStart, constants.indexOf('\n};', defStart));
+    const keys = [...defs.matchAll(/^ {2}([A-Za-z_][A-Za-z0-9_]*)\s*:/gm)].map(m => m[1]);
+    expect(keys.length).toBeGreaterThan(5);
+    expect(keys.filter(k => /secret|token|password|key|uri/i.test(k))).toEqual([]);
+  });
+
   it('is linked from web so it can be invoked', () => {
     expect(stripComments(read('infra/web.ts'))).toMatch(/link:\s*\[[^\]]*\bremoteMcpHandler\b/s);
   });

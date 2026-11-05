@@ -12,6 +12,7 @@ import {
   type RemoteMcpListToolsResult,
 } from '@bike4mind/mcp/remote';
 import {
+  createInProcessRemoteMcpRunner,
   createLambdaRemoteMcpRunner,
   deserializeRemoteMcpError,
   serializeRemoteMcpError,
@@ -54,6 +55,38 @@ describe('RemoteMcpError codec', () => {
     expect(() => deserializeRemoteMcpError({ code: 'boom', message: 'x' })).toThrow();
     expect(() => deserializeRemoteMcpError(null)).toThrow();
     expect(() => deserializeRemoteMcpError('auth_required')).toThrow();
+  });
+
+  it('rejects an unknown or non-string invalid_url reason and defaults an absent one', () => {
+    expect(() => deserializeRemoteMcpError({ code: 'invalid_url', message: 'x', reason: 'boom' })).toThrow(
+      'Unknown RemoteMcpError reason'
+    );
+    expect(() => deserializeRemoteMcpError({ code: 'invalid_url', message: 'x', reason: 5 })).toThrow(
+      'Unknown RemoteMcpError reason'
+    );
+    expect(deserializeRemoteMcpError({ code: 'invalid_url', message: 'x' })).toMatchObject({ reason: 'malformed' });
+  });
+});
+
+describe('createInProcessRemoteMcpRunner', () => {
+  it('lets network carry only the network options, never url, headers or limits', async () => {
+    const configs: Record<string, unknown>[] = [];
+    const client = { listTools: async () => listed };
+    const runner = createInProcessRemoteMcpRunner(config => {
+      configs.push(config as unknown as Record<string, unknown>);
+      return client as never;
+    });
+    const hostile = {
+      ownHosts: ['a.example.com'],
+      allowHttp: true,
+      url: 'https://evil.example.com',
+      headers: { Authorization: 'evil' },
+      limits: { maxBytes: 1 },
+    } as unknown as RemoteMcpRunPayload['network'];
+    await runner({ ...payload, network: hostile });
+    expect(configs[0]).toMatchObject({ url: payload.url, headers: payload.headers, ownHosts: ['a.example.com'] });
+    expect(configs[0].limits).toBeUndefined();
+    expect(configs[0].allowHttp).toBe(true);
   });
 });
 
@@ -102,6 +135,15 @@ describe('createLambdaRemoteMcpRunner', () => {
     expect(error).toBeInstanceOf(Error);
     expect(error).not.toBeInstanceOf(RemoteMcpError);
     expect((error as Error).message).toBe('Remote MCP handler invocation failed');
+  });
+
+  it('rejects a reply whose run action differs from the requested one', async () => {
+    const send = async () => ({
+      Payload: bytes({ ok: true, run: { action: 'callTool', result: { content: [] } } }),
+    });
+    await expect(createLambdaRemoteMcpRunner('fn', send)(payload)).rejects.toThrow(
+      'Remote MCP handler invocation failed'
+    );
   });
 
   it('keeps the invoke failure name as the cause, never its message', async () => {

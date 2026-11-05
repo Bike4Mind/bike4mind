@@ -17,6 +17,7 @@ import {
   RemoteMcpTimeoutError,
   type RemoteMcpErrorCode,
 } from '@bike4mind/mcp/remote';
+import { createInProcessRemoteMcpRunner } from '@bike4mind/server-utils/mcpConnections/remoteMcpRunner';
 // The c1 fixture server is test-only source, not part of the package's published surface.
 import {
   FIXTURE_RESOURCE_METADATA_URL,
@@ -111,13 +112,8 @@ vi.mock('./customMcpAccess', async importOriginal => ({
   }),
 }));
 
-const {
-  CustomMcpPolicyBlockedError,
-  CustomMcpUnavailableError,
-  createInProcessRemoteMcpRunner,
-  invokeRemoteMcp,
-  resolveRemoteMcpRunner,
-} = await import('./invokeRemoteMcp');
+const { CustomMcpPolicyBlockedError, CustomMcpUnavailableError, invokeRemoteMcp, resolveRemoteMcpRunner } =
+  await import('./invokeRemoteMcp');
 const { recordCircuitBreakerRejection, recordCircuitBreakerTransition } =
   await import('@bike4mind/server-utils/utils/cloudwatch');
 
@@ -853,6 +849,17 @@ describe('resolveRemoteMcpRunner', () => {
       expect(() => resolveRemoteMcpRunner()).toThrow(/not linked/);
     }
   );
+
+  it('refuses an injected runner on a hosted runtime without the link', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    vi.stubEnv('IS_LOCAL', 'false');
+    vi.stubEnv('NODE_ENV', 'production');
+    const id = seed('/mcp');
+    await expect(
+      invokeRemoteMcp({ action: 'listTools', connectionId: id, userId: 'user-1' }, { runner, context: context() })
+    ).rejects.toThrow(/not linked/);
+    expect(fixture.requests).toHaveLength(0);
+  });
 
   it('a failed invoke surfaces as an error and never runs in-process', async () => {
     state.resource.remoteMcpHandler = { name: 'remote-mcp-fn' };

@@ -65,7 +65,9 @@ export function createInProcessRemoteMcpRunner(
       transport: payload.transport,
       headers: payload.headers,
       limits: payload.limits,
-      ...payload.network,
+      ownHosts: payload.network.ownHosts,
+      allowPrivateCidrs: payload.network.allowPrivateCidrs,
+      allowHttp: payload.network.allowHttp,
     });
     if (payload.action === 'listTools') return { action: 'listTools', result: await client.listTools() };
     if (!payload.toolName) throw new Error('callTool needs a toolName');
@@ -95,6 +97,16 @@ const REMOTE_MCP_ERROR_CODES: ReadonlySet<string> = new Set<RemoteMcpErrorCode>(
   'upstream_5xx',
 ]);
 
+const REMOTE_MCP_URL_REJECTIONS: ReadonlySet<string> = new Set<RemoteMcpUrlRejection>([
+  'malformed',
+  'scheme',
+  'userinfo',
+  'ip_literal',
+  'internal_hostname',
+  'own_host',
+  'port',
+]);
+
 export function serializeRemoteMcpError(error: RemoteMcpError): SerializedRemoteMcpError {
   const serialized: SerializedRemoteMcpError = { code: error.code, message: error.message };
   if (error instanceof RemoteMcpUpstreamError) serialized.status = error.status;
@@ -118,8 +130,13 @@ export function deserializeRemoteMcpError(raw: unknown): RemoteMcpError {
   const message = typeof s.message === 'string' ? s.message : '';
   if (typeof code !== 'string' || !REMOTE_MCP_ERROR_CODES.has(code)) throw new Error('Unknown RemoteMcpError code');
   switch (code as RemoteMcpErrorCode) {
-    case 'invalid_url':
-      return new RemoteMcpInvalidUrlError((optionalString(s.reason) ?? 'malformed') as RemoteMcpUrlRejection, message);
+    case 'invalid_url': {
+      const reason = s.reason === undefined ? 'malformed' : s.reason;
+      if (typeof reason !== 'string' || !REMOTE_MCP_URL_REJECTIONS.has(reason)) {
+        throw new Error('Unknown RemoteMcpError reason');
+      }
+      return new RemoteMcpInvalidUrlError(reason as RemoteMcpUrlRejection, message);
+    }
     case 'ssrf_blocked':
       return new RemoteMcpSsrfBlockedError(message);
     case 'timeout':
@@ -161,6 +178,11 @@ export async function runForLambda(
   }
 }
 
+// A retry after a timeout or dropped connection could run a non-idempotent callTool twice.
+let defaultLambdaClient: LambdaClient | undefined;
+const sendWithDefaultClient = (command: InvokeCommand) =>
+  (defaultLambdaClient ??= new LambdaClient({ maxAttempts: 1 })).send(command);
+
 const FAILED_MESSAGE = 'Remote MCP handler invocation failed';
 
 /**
@@ -170,8 +192,7 @@ const FAILED_MESSAGE = 'Remote MCP handler invocation failed';
  */
 export function createLambdaRemoteMcpRunner(
   functionName: string,
-  send: (command: InvokeCommand) => Promise<{ FunctionError?: string; Payload?: Uint8Array }> = command =>
-    new LambdaClient({}).send(command)
+  send: (command: InvokeCommand) => Promise<{ FunctionError?: string; Payload?: Uint8Array }> = sendWithDefaultClient
 ): RemoteMcpRunner {
   // The cause is kept for operators (error name only, never payload or body); the message stays fixed.
   const failed = (cause?: unknown) => new Error(FAILED_MESSAGE, { cause });
