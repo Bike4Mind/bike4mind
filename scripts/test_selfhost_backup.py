@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -110,7 +111,8 @@ class Commands(unittest.TestCase):
     def test_user_db_commands_skip_exactly_the_system_databases(self):
         for cmd in (sb.mongo_user_dbs_cmd(self.compose), sb.mongo_drop_dbs_cmd(self.compose)):
             self.assertIn('!["admin", "config", "local"].includes(n)', cmd[-1])
-        self.assertIn('dropDatabase', sb.mongo_drop_dbs_cmd(self.compose)[-1])
+        self.assertIn(DROP_ACTION, sb.mongo_drop_dbs_cmd(self.compose)[-1])
+        self.assertIn('const names = m.getDBNames().filter(', sb.mongo_drop_dbs_cmd(self.compose)[-1])
         self.assertNotIn('dropDatabase', sb.mongo_user_dbs_cmd(self.compose)[-1])
 
     def test_uri_never_in_container_argv(self):
@@ -210,13 +212,31 @@ def make_backup_dir(test):
     return dest, buckets
 
 
+ENV = {sb.URI_ENV: 'mongodb://root:pw@mongo:27017/'}
+DROP_ACTION = 'names.forEach(n => m.getDB(n).dropDatabase())'
+
+
+def assert_mongo_steps_wired(test, cmds, kwargs_list):
+    """Every Mongo tool step streams redacted stderr and carries the URI in its environment."""
+    seen = 0
+    for cmd, kwargs in zip(cmds, kwargs_list):
+        if kind(cmd) in ('mongodump', 'mongorestore', 'mongosh'):
+            seen += 1
+            test.assertIs(kwargs.get('redact_stderr'), True, cmd[-1])
+            test.assertIn(sb.URI_ENV, kwargs.get('env') or {}, cmd[-1])
+    test.assertGreater(seen, 0)
+
+
 def recorder(user_dbs=''):
     calls = []
+    calls_kwargs = []
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        calls_kwargs.append(kwargs)
         return subprocess.CompletedProcess(cmd, 0, stdout=user_dbs if 'mongosh' in ' '.join(cmd) else '')
 
+    fake_run.kwargs = calls_kwargs
     return calls, fake_run
 
 
@@ -233,12 +253,13 @@ class Restore(unittest.TestCase):
         backup_dir, buckets = make_backup_dir(self)
         calls, fake_run = recorder(user_dbs)
         args = sb.parser().parse_args(['restore', '--from', str(dest or backup_dir), *flags])
-        with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, {})), \
+        with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, ENV)), \
                 mock.patch.object(sb, 'run', side_effect=fake_run):
             try:
                 sb.restore(args)
             finally:
                 self.calls = calls
+                self.kwargs = fake_run.kwargs
         return calls
 
     def test_fresh_target_call_order_and_no_drop(self):
@@ -246,17 +267,27 @@ class Restore(unittest.TestCase):
         self.assertEqual([kind(c) for c in calls], ['up', 'mongosh', 'mongorestore', 'createbuckets', 'mc mirror'])
         self.assertNotIn('--drop', calls[2][-1])
         self.assertNotIn('--remove', calls[4][-1])
+        self.assertIn('print(names.join', calls[1][-1])
+        self.assertNotIn('dropDatabase', calls[1][-1])
+        assert_mongo_steps_wired(self, calls, self.kwargs)
 
     def test_populated_target_aborts_before_any_write(self):
         with self.assertRaisesRegex(SystemExit, 'already has data'):
             self.restore('bike4mind\n')
         self.assertEqual([kind(c) for c in self.calls], ['up', 'mongosh'])
+        self.assertIn('print(names.join', self.calls[1][-1])
+        self.assertNotIn('dropDatabase', self.calls[1][-1])
+        assert_mongo_steps_wired(self, self.calls, self.kwargs)
 
     def test_yes_drops_user_databases_then_restores_without_drop(self):
         calls = self.restore('bike4mind\n', '--yes')
         self.assertEqual([kind(c) for c in calls],
                          ['up', 'mongosh', 'mongosh', 'mongorestore', 'createbuckets', 'mc mirror'])
-        self.assertIn('dropDatabase', calls[2][-1])
+        self.assertIn('print(names.join', calls[1][-1])
+        self.assertNotIn('dropDatabase', calls[1][-1])
+        self.assertIn(DROP_ACTION, calls[2][-1])
+        self.assertIn('new Mongo(process.env.' + sb.URI_ENV, calls[2][-1])
+        assert_mongo_steps_wired(self, calls, self.kwargs)
         self.assertNotIn('--drop', calls[3][-1])
         self.assertIn('--remove', calls[5][-1])
 
@@ -278,10 +309,12 @@ class Backup(unittest.TestCase):
         _, buckets = sb.resolve_targets(config())
         calls = []
         self.cmds = []
+        self.kwargs = []
 
         def fake_run(cmd, **kwargs):
             calls.append(kind(cmd))
             self.cmds.append(cmd)
+            self.kwargs.append(kwargs)
             if fail_on and kind(cmd) == fail_on:
                 raise subprocess.CalledProcessError(3, cmd)
             if kind(cmd) == 'mongodump':
@@ -289,7 +322,7 @@ class Backup(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0)
 
         args = sb.parser().parse_args(['backup', '--dest', str(dest)])
-        with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, {})), \
+        with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, ENV)), \
                 mock.patch.object(sb, 'run', side_effect=fake_run):
             try:
                 sb.backup(args)
@@ -305,6 +338,7 @@ class Backup(unittest.TestCase):
         dest = self.tempdir() / 'b'
         self.backup(dest)
         self.assertEqual(self.calls, ['mongodump', 'mc mirror'])
+        assert_mongo_steps_wired(self, self.cmds, self.kwargs)
         self.assertTrue((dest / 'manifest.json').is_file())
 
     def test_destination_is_private(self):
@@ -340,27 +374,55 @@ class Backup(unittest.TestCase):
 class Redaction(unittest.TestCase):
     URI_ERROR = 'Failed: can\'t create session: failed to connect to mongodb://root:p4ss@localhost:27017/?authSource=app: timeout\n'
 
+    def streamed(self, code, exit_code=0):
+        """Run a real child that writes `code`'s stderr; return (raised, stderr as printed)."""
+        script = f'import sys; sys.stderr.buffer.write({code}); sys.stderr.flush(); sys.exit({exit_code})'
+        with mock.patch('sys.stderr') as err:
+            try:
+                sb.step('mongodump', [sys.executable, '-c', script], redact_stderr=True)
+                raised = None
+            except SystemExit as error:
+                raised = str(error)
+        return raised, ''.join(c.args[0] for c in err.write.call_args_list)
+
     def test_redact_masks_password_keeps_the_rest(self):
         self.assertEqual(sb.redact(self.URI_ERROR),
                          'Failed: can\'t create session: failed to connect to mongodb://root:***@localhost:27017/?authSource=app: timeout\n')
         self.assertEqual(sb.redact(None), '')
 
     def test_failed_step_prints_redacted_stderr(self):
-        error = subprocess.CalledProcessError(1, ['x'], stderr=self.URI_ERROR)
-        with mock.patch.object(sb, 'run', side_effect=error), mock.patch('sys.stderr') as err:
-            with self.assertRaisesRegex(SystemExit, r'mongodump failed \(exit 1\)'):
-                sb.step('mongodump', ['x'], redact_stderr=True)
-        printed = ''.join(c.args[0] for c in err.write.call_args_list)
+        raised, printed = self.streamed(repr(self.URI_ERROR.encode()), 1)
+        self.assertRegex(raised, r'mongodump failed \(exit 1\)')
         self.assertIn('authSource=app', printed)
         self.assertNotIn('p4ss', printed)
 
     def test_successful_step_prints_redacted_stderr(self):
-        done = subprocess.CompletedProcess(['x'], 0, stderr='dumped 1 oplog entry ' + self.URI_ERROR)
-        with mock.patch.object(sb, 'run', return_value=done), mock.patch('sys.stderr') as err:
-            sb.step('mongodump', ['x'], redact_stderr=True)
-        printed = ''.join(c.args[0] for c in err.write.call_args_list)
+        raised, printed = self.streamed(repr(('dumped 1 oplog entry ' + self.URI_ERROR).encode()))
+        self.assertIsNone(raised)
         self.assertIn('dumped 1 oplog entry', printed)
         self.assertNotIn('p4ss', printed)
+
+    def test_non_utf8_output_does_not_raise(self):
+        raised, printed = self.streamed(repr(b'ok \xff\xfe done\n'))
+        self.assertIsNone(raised)
+        self.assertIn('done', printed)
+
+    def test_stderr_is_streamed_not_buffered_until_exit(self):
+        seen = []
+        # a line must reach the printer while the child is still running
+        with mock.patch('builtins.print', side_effect=lambda *a, **k: seen.append(a[0])) as printer:
+            proc = mock.MagicMock()
+            proc.stderr = iter(['one\n', 'two\n'])
+            proc.stdout = None
+
+            def wait():
+                self.assertEqual(seen, ['one\n', 'two\n'])  # printed before wait() returns
+                return 0
+            proc.wait.side_effect = wait
+            proc.__enter__.return_value = proc
+            with mock.patch.object(subprocess, 'Popen', return_value=proc):
+                sb.run(['x'], redact_stderr=True)
+        self.assertEqual(seen, ['one\n', 'two\n'])
 
 
 if __name__ == '__main__':

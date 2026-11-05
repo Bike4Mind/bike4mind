@@ -168,8 +168,22 @@ def check_manifest(dest, buckets):
     return manifest
 
 
-def run(cmd, env=None, **kwargs):
-    return subprocess.run(cmd, check=True, text=True, env=env, **kwargs)
+def run(cmd, env=None, redact_stderr=False, **kwargs):
+    """subprocess.run, or with redact_stderr, stream stderr line by line with URI passwords masked.
+
+    Streaming keeps progress visible and survives an interrupt. A PIPE stdout is read after
+    stderr closes, which is fine for the few bytes the mongosh helpers print.
+    """
+    if not redact_stderr:
+        return subprocess.run(cmd, check=True, text=True, env=env, **kwargs)
+    with subprocess.Popen(cmd, env=env, text=True, errors='replace', stderr=subprocess.PIPE, **kwargs) as proc:
+        for line in proc.stderr:
+            print(redact(line), end='', file=sys.stderr, flush=True)
+        stdout = proc.stdout.read() if proc.stdout else None
+        code = proc.wait()
+    if code:
+        raise subprocess.CalledProcessError(code, cmd, output=stdout)
+    return subprocess.CompletedProcess(cmd, code, stdout=stdout)
 
 
 URI_PASSWORD = re.compile(r'(mongodb(?:\+srv)?://[^:/@\s]+:)[^@\s]*@')
@@ -180,19 +194,11 @@ def redact(text):
     return URI_PASSWORD.sub(r'\1***@', text or '')
 
 
-def step(name, cmd, redact_stderr=False, **kwargs):
-    """redact_stderr: buffer stderr and print it with URI passwords masked."""
-    if redact_stderr:
-        kwargs['stderr'] = subprocess.PIPE
+def step(name, cmd, **kwargs):
     try:
-        result = run(cmd, **kwargs)
+        return run(cmd, **kwargs)
     except subprocess.CalledProcessError as error:
-        if redact_stderr:
-            print(redact(error.stderr), end='', file=sys.stderr)
         raise SystemExit(f'{name} failed (exit {error.returncode})') from None
-    if redact_stderr:
-        print(redact(result.stderr), end='', file=sys.stderr)
-    return result
 
 
 def load(args):

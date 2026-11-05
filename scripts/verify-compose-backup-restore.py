@@ -52,6 +52,17 @@ def sh(cmd, **kwargs):
     return subprocess.run(cmd, cwd=ROOT, check=True, **kwargs)
 
 
+def tool(cmd):
+    """Run the backup tool capturing stderr; echo it, and on failure show it before re-raising."""
+    try:
+        done = sh(cmd, stderr=subprocess.PIPE, text=True)
+    except subprocess.CalledProcessError as error:
+        print(error.stderr, end='', file=sys.stderr)
+        raise
+    print(done.stderr, end='', file=sys.stderr)
+    return done.stderr
+
+
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
@@ -134,12 +145,10 @@ def main(argv=None):
                                      cwd=ROOT, stdout=subprocess.DEVNULL)
             time.sleep(2)  # writes land in the oplog slice captured by --oplog
             try:
-                dumped = sh([*cli, '-p', projects['src'], 'backup', '--dest', str(backup_dir)],
-                            stderr=subprocess.PIPE, text=True).stderr
+                dumped = tool([*cli, '-p', projects['src'], 'backup', '--dest', str(backup_dir)])
             finally:
                 noise.terminate()
                 noise.wait()
-            print(dumped, end='', file=sys.stderr)
             require(oplog_entries(dumped, 'dumped') >= 1, 'The dump captured no oplog entries')
             objects = backup_dir / 'objects'
             for path in (objects / bucket, objects / bucket / key):
@@ -152,9 +161,7 @@ def main(argv=None):
             sh([*compose(projects['src']), 'down', '--volumes', '--remove-orphans'])
 
             def check_restored(label, restore_args):
-                restored = sh([*cli, '-p', projects['dst'], 'restore', '--from', str(backup_dir), *restore_args],
-                              stderr=subprocess.PIPE, text=True).stderr
-                print(restored, end='', file=sys.stderr)
+                restored = tool([*cli, '-p', projects['dst'], 'restore', '--from', str(backup_dir), *restore_args])
                 require(oplog_entries(restored, 'applied') >= 1, f'{label}: no oplog entries were replayed')
                 found = mongosh(projects['dst'],
                                 f'JSON.stringify(db.getSiblingDB("bike4mind").users.find({{email: {json.dumps(email)}}}).toArray().map(u => u._id.toString()))')
@@ -164,7 +171,20 @@ def main(argv=None):
                 print(f'PASS file sha256 ({label}):', expected)
 
             check_restored('fresh restore', [])
-            check_restored('restore --yes over existing data', ['--yes'])
+
+            # Make dst diverge from the backup, so --yes has a drop and a mirror --remove to prove.
+            stray_db, stray_key = f'drill_stray_{tag}', f'drill/stray-{tag}.bin'
+            mongosh(projects['dst'], f'db.getSiblingDB({json.dumps(stray_db)}).junk.insertOne({{x: 1}})')
+            mongosh(projects['dst'],
+                    f'db.getSiblingDB("bike4mind").users.updateOne({{_id: ObjectId({json.dumps(user_id)})}}, {{$set: {{email: "changed@example.invalid"}}}})')
+            mc(projects['dst'], f'mc pipe local/{shlex.quote(bucket)}/{shlex.quote(stray_key)}', input=b'stray')
+            check_restored('restore --yes over diverged data', ['--yes'])
+            dbs = mongosh(projects['dst'], 'db.getMongo().getDBNames().join(",")').split(',')
+            require(stray_db not in dbs, f'--yes left the stray database {stray_db} behind: {dbs}')
+            print('PASS stray database dropped by --yes')
+            listing = mc(projects['dst'], f'mc ls local/{shlex.quote(bucket)}/drill/', stdout=subprocess.PIPE, text=True).stdout
+            require(stray_key.rsplit('/', 1)[1] not in listing, f'--yes left the stray object behind: {listing}')
+            print('PASS stray object removed by --yes')
         finally:
             for project in projects.values():
                 subprocess.run([*compose(project), 'down', '--volumes', '--remove-orphans'], cwd=ROOT, check=False)

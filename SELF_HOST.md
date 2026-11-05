@@ -825,7 +825,7 @@ Restore starts `mongo` and `minio`, runs `mongorestore --oplogReplay`, runs the 
 
 Then bring up the rest of the stack with the same `-p`.
 
-To restore over the original project, stop every service except `mongo` and `minio` first (the workers and app also write, and the upload webhook re-queues every restored object), for example `docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps --services | grep -vx -e mongo -e minio | xargs docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop`, then pass `--yes`. This drops every non-system database (`admin`, `config` and `local` are kept) and removes objects that are not in the backup, so everything written since is lost. It needs the same Mongo credentials the backup was taken with.
+To restore over the original project, stop every service except `mongo` and `minio` first (the workers and app also write, and the upload webhook re-queues every restored object), for example `docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps --services | grep -vx -e mongo -e minio | xargs docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop`, then pass `--yes`. This drops every non-system database (`admin`, `config` and `local` are kept) and removes objects that are not in the backup, so everything written since is lost. It connects with the target's current `MONGODB_URI` credentials. Mongo users and roles are merged, not rolled back: users deleted since the backup are re-created with their old passwords, and users that exist keep their current credentials.
 
 ### Recovery point and retention
 
