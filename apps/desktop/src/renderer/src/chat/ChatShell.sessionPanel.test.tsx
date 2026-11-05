@@ -8,12 +8,14 @@ import type {
   ChatProject,
   ChatSession,
   ChatSessionSummary,
+  ChatStreamEvent,
   SendMessageResult,
 } from '@shared/chat';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -457,5 +459,95 @@ describe('the shell layout', () => {
     ] as ChatMessage[];
     await open('bound');
     expect(get('chat-thread').contains(get('session-panel'))).toBe(false);
+  });
+});
+
+describe('the reply stats rail in the shell', () => {
+  const at = '2026-10-01T00:00:00.000Z';
+  const stats = { totalMs: 4000, modelMs: 4000, toolMs: 0, generation: { tokens: 119, ms: 3000 } };
+
+  beforeEach(() => {
+    reloadReplyStatsPrefs();
+    transcript = [
+      { id: 'u1', role: 'user', content: 'A question', createdAt: at },
+      { id: 'a1', role: 'assistant', content: 'An answer', createdAt: at, stats, usage: { outputTokens: 120 } },
+    ] as ChatMessage[];
+  });
+
+  it('draws the rail and its header toggle while the rail fits, inside the scroller', async () => {
+    paneWidth(1600);
+    await open('chatting', 'chat');
+
+    expect(get('chat-toggle-reply-stats-btn').getAttribute('aria-pressed')).toBe('true');
+    expect(get('chat-thread').contains(get('chat-reply-stats-rail'))).toBe(true);
+    expect(find('chat-message-cost')).toBeNull();
+    expect(escapingAbsolutes()).toEqual([]);
+  });
+
+  it('drops the rail below the breakpoint, the stats going back to the hover footer, and keeps the toggle', async () => {
+    paneWidth(1175);
+    await open('chatting', 'chat');
+
+    expect(find('chat-reply-stats-rail')).toBeNull();
+    expect(get('chat-message-cost').textContent).toContain('4.0s total');
+    const toggle = get('chat-toggle-reply-stats-btn') as HTMLButtonElement;
+    expect(toggle.disabled).toBe(false);
+    await act(async () => toggle.click());
+    expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
+  });
+
+  it('disables the toggle while no conversation is open', async () => {
+    const chat = (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat;
+    chat.listSessions = async () => [];
+    // The first conversation the shell makes on arrival never comes back, so none is open.
+    chat.createSession = () => new Promise(() => undefined);
+    paneWidth(1600);
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <ChatShell />
+        </CssVarsProvider>
+      );
+    });
+    await act(async () => undefined);
+
+    expect(find('chat-reply-stats-rail')).toBeNull();
+    expect((get('chat-toggle-reply-stats-btn') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("draws the live figures on the reply being written, from the conversation's turn", async () => {
+    const listeners = new Set<(event: ChatStreamEvent) => void>();
+    const chat = (window as unknown as { b4m: { chat: Record<string, unknown> } }).b4m.chat;
+    chat.onStreamEvent = (next: (event: ChatStreamEvent) => void) => {
+      listeners.add(next);
+      return () => listeners.delete(next);
+    };
+    paneWidth(1600);
+    await open('chatting', 'chat');
+    const emit = (event: Record<string, unknown>) =>
+      act(() =>
+        listeners.forEach(next => next({ sessionId: 'chatting', messageId: 'a2', ...event } as ChatStreamEvent))
+      );
+
+    expect(find('chat-reply-stat-thinking')).toBeNull();
+    emit({ type: 'start' });
+    emit({ type: 'phase', phase: { kind: 'waiting' } });
+    emit({ type: 'phase', phase: { kind: 'thinking' } });
+
+    expect(find('chat-reply-stat-thinking')?.textContent).toContain('0s');
+  });
+
+  it('turns the rail off from the header and remembers it', async () => {
+    paneWidth(1600);
+    await open('chatting', 'chat');
+    await act(async () => get('chat-toggle-reply-stats-btn').click());
+
+    expect(find('chat-reply-stats-rail')).toBeNull();
+    expect(get('chat-toggle-reply-stats-btn').getAttribute('aria-pressed')).toBe('false');
+    expect(get('chat-message-cost').textContent).toContain('4.0s total');
+    expect(window.localStorage.getItem('b4m.chat.replyStats.rail')).toBe('0');
   });
 });

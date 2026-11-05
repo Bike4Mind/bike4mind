@@ -409,6 +409,15 @@ export function SlidersIcon() {
   );
 }
 
+/** Reply stats: a bar chart, for the rail of figures beside each reply. */
+export function StatsIcon() {
+  return (
+    <Glyph>
+      <path d="M2.5 13.5h11M4.75 11V8.5M8 11V4M11.25 11V6.5" />
+    </Glyph>
+  );
+}
+
 /** Models: a chip, for the models that run on this computer. */
 export function ModelsIcon() {
   return (

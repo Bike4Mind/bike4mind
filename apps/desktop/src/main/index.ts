@@ -20,7 +20,7 @@ import { isExternallyOpenable } from '@shared/externalLinks';
 import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
-import { registerUsage } from './usage';
+import { registerLocalUsage, registerUsage } from './usage';
 import { appWindows } from './windows';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
@@ -142,6 +142,7 @@ void app.whenReady().then(async () => {
     stopModelServers,
     localContext,
     capabilityLedger,
+    store: sessions,
   } = registerChat(auth, {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
@@ -150,6 +151,7 @@ void app.whenReady().then(async () => {
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: name => models.catalogSampling(name),
   });
+  registerLocalUsage(auth, sessions, modelServers);
   const models = registerModels(modelServers, { localContext: () => localContext.read() }, capabilityLedger);
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);

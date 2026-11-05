@@ -1,6 +1,7 @@
 import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ChatReplyStats } from '@shared/chat';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { deriveTitle, SessionStore } from './SessionStore';
 
@@ -216,6 +217,66 @@ describe('SessionStore', () => {
 
       expect(await store.updateProjectWorkspace(id, { workingDirectory: '/repo-wt' })).toBeNull();
       expect((await store.get(id))?.project).toBeUndefined();
+    });
+  });
+
+  describe('reply stats', () => {
+    const stats: ChatReplyStats = {
+      totalMs: 5_000,
+      modelMs: 4_800,
+      toolMs: 0,
+      firstTokenMs: 400,
+      reasoningMs: 1_500,
+      reasoningTokens: 60,
+      generation: { tokens: 89, ms: 4_000 },
+      derived: ['reasoningTokens'],
+    };
+
+    it('reads back the stats a reply was stored with, after a restart', async () => {
+      const { id } = await store.create();
+      await store.appendMessage(id, {
+        id: 'r1',
+        role: 'assistant',
+        content: 'done',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        stats,
+        usage: { outputTokens: 90, rate: { evalTokens: 90, evalMs: 3_000, totalMs: 4_900, cachedPromptTokens: 12 } },
+      });
+
+      const reopened = await new SessionStore(directory, MODEL).get(id);
+      expect(reopened?.messages[0]).toMatchObject({
+        stats,
+        usage: { rate: { totalMs: 4_900, cachedPromptTokens: 12 } },
+      });
+    });
+
+    it('loads a conversation stored before stats were kept exactly as it was written', async () => {
+      const messages = [
+        { id: 'u1', role: 'user', content: 'hi', createdAt: '2025-01-01T00:00:00.000Z' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: 'hello',
+          createdAt: '2025-01-01T00:00:01.000Z',
+          usage: { inputTokens: 5, outputTokens: 2, rate: { evalTokens: 2, evalMs: 40 } },
+          rounds: [{ text: 'hello', toolCallIds: [], timing: { startedAt: 1, firstTokenAt: 2, endedAt: 3 } }],
+        },
+      ];
+      await writeFile(
+        join(directory, 'old-session.json'),
+        JSON.stringify({
+          id: 'old-session',
+          title: 'Old',
+          model: MODEL,
+          createdAt: '2025-01-01T00:00:00.000Z',
+          messages,
+        }),
+        'utf8'
+      );
+
+      const loaded = await store.get('old-session');
+      expect(loaded?.messages).toEqual(messages);
+      expect(loaded?.messages[1]).not.toHaveProperty('stats');
     });
   });
 });

@@ -1,18 +1,77 @@
 import type { ChatRoundTiming } from '@shared/chat';
 
 /**
- * Times one request. `firstToken` is called for every streamed event that carries anything,
- * and only the first counts: a tool-only round still has a first token, which is the point.
+ * Times one request. `firstToken` is called for every streamed event that carries anything, a
+ * call starting included, and only the first counts: a tool-only round still has a first token.
+ * `reasoning` takes a thinking frame's text, '' for a bare marker; `text` is called on visible text.
  */
 export function startRoundTimer(now: () => number = Date.now) {
   const startedAt = now();
   let firstTokenAt: number | undefined;
+  let firstReasoningAt: number | undefined;
+  let lastReasoningAt: number | undefined;
+  let firstTextAt: number | undefined;
+  let reasoningFrames = 0;
+  // Bare markers wait for what follows them: readable thinking or text keeps them, while whitespace
+  // makes theirs an empty block, which is what a model with thinking off emits and is no thinking.
+  let markerFirstAt: number | undefined;
+  let markerLastAt: number | undefined;
+  let readSinceText = false;
+  let emptyBlockOpen = false;
+  const stamp = (at: number) => {
+    firstReasoningAt ??= at;
+    lastReasoningAt = at;
+  };
+  const keepMarkers = () => {
+    if (markerFirstAt === undefined || markerLastAt === undefined) return;
+    stamp(markerFirstAt);
+    stamp(markerLastAt);
+    markerFirstAt = markerLastAt = undefined;
+  };
   return {
     firstToken(): void {
       firstTokenAt ??= now();
     },
+    reasoning(text: string): void {
+      const at = now();
+      if (!text) {
+        if (emptyBlockOpen) emptyBlockOpen = false;
+        else {
+          markerFirstAt ??= at;
+          markerLastAt = at;
+        }
+        return;
+      }
+      if (!text.trim()) {
+        // Within readable thinking, whitespace is part of it.
+        if (!readSinceText) {
+          markerFirstAt = markerLastAt = undefined;
+          emptyBlockOpen = true;
+        }
+        return;
+      }
+      keepMarkers();
+      stamp(at);
+      reasoningFrames++;
+      readSinceText = true;
+      emptyBlockOpen = false;
+    },
+    text(): void {
+      firstTextAt ??= now();
+      keepMarkers();
+      readSinceText = false;
+      emptyBlockOpen = false;
+    },
+    reasoningFrames: () => reasoningFrames,
     end(): ChatRoundTiming {
-      return { startedAt, ...(firstTokenAt !== undefined ? { firstTokenAt } : {}), endedAt: now() };
+      keepMarkers();
+      return {
+        startedAt,
+        ...(firstTokenAt !== undefined ? { firstTokenAt } : {}),
+        ...(firstReasoningAt !== undefined ? { firstReasoningAt, lastReasoningAt } : {}),
+        ...(firstTextAt !== undefined ? { firstTextAt } : {}),
+        endedAt: now(),
+      };
     },
   };
 }

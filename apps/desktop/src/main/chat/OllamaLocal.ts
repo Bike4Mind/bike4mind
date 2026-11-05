@@ -792,6 +792,7 @@ function emitFrame(
     prompt_eval_duration?: unknown;
     eval_duration?: unknown;
     load_duration?: unknown;
+    total_duration?: unknown;
     message?: { content?: unknown; thinking?: unknown; tool_calls?: unknown[] };
   };
   if (typeof raw.error === 'string') throw new Error(redact(raw.error));

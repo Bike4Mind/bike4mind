@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
@@ -13,7 +13,6 @@ import {
   SERVER_CREDENTIALS_STOP,
   SESSION_EXPIRED_STOP,
   type ChatMessage,
-  type ChatUsage,
 } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
@@ -29,8 +28,10 @@ import { MentionedText, SessionLink } from './SessionLink';
 import { callsIn, roundsOf } from './replyRounds';
 import { skillChipColor, skillSourceLabel } from './skillMenu';
 import { useShowDollarCosts } from './costDisplay';
-import { describeReplyCost, formatCreditsSpent } from './statusLine';
-import { describeTokenRate, formatTokenRate, useShowTokenRate } from './tokenRate';
+import { describeReplyCost, formatCreditsSpent, type TurnProgress } from './statusLine';
+import { describeReplyStats, FOOTER_STATS, messageStats } from './replyStats';
+import { useReplyStatsPrefs } from './replyStatsPrefs';
+import { railGroupId, ReplyStatsRail, turnGridSx, useRailDrawn } from './ReplyStatsRail';
 import { clampWindow, extendWindow, initialWindow, WINDOW_STEP, type ThreadWindow } from './threadWindow';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 import { OrphanVideoJobs } from './VideoJobCard';
@@ -224,21 +225,34 @@ const REPLY_COST_CLASS = 'b4m-reply-cost';
  * thread above - is a render per mouse move across a transcript that can be hundreds of turns
  * long. The parent's `:hover` does the same job for nothing; see AssistantTurn.
  *
- * Credits show only when the server reported them. Absent is not zero - a turn that failed,
- * and every reply stored before credits were captured, would otherwise claim to have been free.
- * A self-hosted reply shows its generation speed in the same place. Nothing at all when neither
- * is there.
+ * Nothing at all when the server reported no credits and the reply has no stat to show. Absent is
+ * not zero - a turn that failed, and every reply stored before this was captured, would otherwise
+ * claim to have been free.
+ *
+ * Where the stats rail is off or does not fit, the reply's stats are here instead: speed, total and
+ * thinking time on the line where ticked in Settings, then the credits, and all of them in the title.
  */
-function ReplyCost({ usage }: { usage?: ChatUsage }) {
+function ReplyCost({ message }: { message: ChatMessage }) {
   const showDollars = useShowDollarCosts();
-  const showRate = useShowTokenRate();
-  const credits = formatCreditsSpent(usage);
-  const rate = showRate ? formatTokenRate(usage?.rate) : null;
-  if (!credits && !rate) return null;
-  const details = [
-    describeReplyCost(usage, showDollars),
-    rate ? describeTokenRate(usage?.rate, usage?.outputTokens) : null,
-  ].filter((line): line is string => line !== null);
+  const { hidden } = useReplyStatsPrefs();
+  const credits = formatCreditsSpent(message.usage);
+  const rows = messageStats(message);
+  const named = FOOTER_STATS.flatMap(([id, name]) => {
+    const row = hidden.has(id) ? undefined : rows.find(candidate => candidate.id === id);
+    return row ? [{ id, text: name(row.value) }] : [];
+  });
+  if (!credits && named.length === 0) return null;
+  const details = [describeReplyCost(message.usage, showDollars), describeReplyStats(rows)].filter(
+    (line): line is string => line !== null
+  );
+  const parts = [
+    ...named.map(({ id, text }) => (
+      <span key={id} data-testid={`chat-message-stat-${id}`}>
+        {text}
+      </span>
+    )),
+    ...(credits ? [<span key="credits">{credits}</span>] : []),
+  ];
 
   return (
     <Typography
@@ -248,12 +262,20 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
       // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
       // popper for every turn in the thread to serve the one the pointer is over.
       title={details.length > 0 ? details.join('\n') : undefined}
-      sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
+      sx={{
+        position: 'absolute',
+        top: '100%',
+        right: 0,
+        // Clear of Copy, which sits at the other end of the same gap.
+        maxWidth: 'calc(100% - 40px)',
+        mt: 0.5,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      }}
       data-testid="chat-message-cost"
     >
-      {credits}
-      {credits && rate && ' \xb7 '}
-      {rate && <span data-testid="chat-message-rate">{rate}</span>}
+      {parts.flatMap((part, index) => (index === 0 ? [part] : [' \xb7 ', part]))}
     </Typography>
   );
 }
@@ -272,6 +294,9 @@ function ReplyCost({ usage }: { usage?: ChatUsage }) {
  * under the turn. It copies `content`, the markdown source of every round's prose, and is not
  * offered while the reply is still being written.
  *
+ * With the stats rail on, the reply's stats sit left of it and the cost moves there with them,
+ * leaving Copy alone in the gap. The rail runs on beside what follows a short reply; see railRows.
+ *
  * Memoized, as every turn is: a streaming reply re-renders the thread once a frame, and only the
  * last turn's props change on those frames.
  */
@@ -283,6 +308,7 @@ const AssistantTurn = memo(function AssistantTurn({
   status,
   live = false,
   skipRounds = 0,
+  rail = false,
 }: {
   message: ChatMessage;
   onRespond: RespondToApproval;
@@ -296,7 +322,10 @@ const AssistantTurn = memo(function AssistantTurn({
   status?: ReactNode;
   /** Leading stored rounds not drawn yet, when the thread's window ends inside this reply. */
   skipRounds?: number;
+  /** MessageThread draws the stats rail beside the reply, so there is no hover footer. */
+  rail?: boolean;
 }) {
+  const railDrawn = useRailDrawn(message.id) && rail;
   const toolCalls = message.toolCalls ?? [];
   const rounds = roundsOf(message);
   // Hidden from the front of the WHOLE list rather than drawn from a slice of it, so a round
@@ -314,6 +343,9 @@ const AssistantTurn = memo(function AssistantTurn({
         ...revealCopyButtonSx,
       }}
       data-testid="chat-message-assistant"
+      data-reply
+      // The rail comes before the reply for the grid's placement; this reads it after the reply.
+      {...(railDrawn ? { 'aria-owns': railGroupId(message.id) } : {})}
     >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
@@ -365,7 +397,7 @@ const AssistantTurn = memo(function AssistantTurn({
           than of the answer being written. */}
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
 
-      <ReplyCost {...(message.usage ? { usage: message.usage } : {})} />
+      {!rail && <ReplyCost message={message} />}
 
       {!live && message.content.trim().length > 0 && (
         <Box sx={{ position: 'absolute', top: '100%', left: 0 }}>
@@ -585,11 +617,7 @@ function EarlierMessages({ count, children }: { count: number; children: ReactNo
           <ChevronIcon open={open} />
         </Box>
       </Stack>
-      {open && (
-        <Stack spacing={3} sx={{ pt: 2 }}>
-          {children}
-        </Stack>
-      )}
+      {open && <Box sx={{ pt: 2, ...turnGridSx }}>{children}</Box>}
     </Box>
   );
 }
@@ -602,7 +630,38 @@ const PIN_THRESHOLD_PX = 48;
  */
 const REVEAL_MARGIN_PX = 1500;
 
-type RenderTurn = (message: ChatMessage, index: number, skipRounds: number) => ReactNode;
+/** `end` is where the list the turn is drawn in ends, for a rail that runs on past its reply. */
+type RenderTurn = (message: ChatMessage, index: number, skipRounds: number, end: number) => ReactNode;
+
+/** The messages MessageThread's turn() draws as an AssistantTurn; must stay in step with it. */
+function isReplyTurn(message: ChatMessage): boolean {
+  return !message.boundary && !message.automatic && !message.relay && !message.system && message.role !== 'user';
+}
+
+/**
+ * How many grid rows the rail of the reply at `index` runs down: its own, and the one group of
+ * turns after it in the same list, if any come before the next reply. See turnGridSx.
+ */
+export function railRows(messages: readonly ChatMessage[], index: number, end: number): number {
+  const after = messages[index + 1];
+  return index + 1 < end && after && !isReplyTurn(after) ? 2 : 1;
+}
+
+/** The turns between two replies, one grid item so that their gap is theirs and not the rows'. */
+function TurnGroup({ children }: { children: ReactNode }) {
+  return (
+    <Stack spacing={3} sx={{ minWidth: 0 }} data-testid="chat-turn-group">
+      {children}
+    </Stack>
+  );
+}
+
+/** Keyed by the reply the run follows, so a group keeps its turns' state as the window grows over it or a turn joins it. */
+function groupKey(messages: readonly ChatMessage[], index: number): string {
+  let at = index - 1;
+  while (at >= 0 && !isReplyTurn(messages[at]!)) at--;
+  return `group-${at >= 0 ? messages[at]!.id : 'start'}`;
+}
 
 /**
  * messages[from..to), drawn from the end: the last WINDOW_STEP rounds on mount, and another
@@ -675,10 +734,30 @@ function WindowedTurns({
     root.scrollTop = root.scrollHeight - kept;
   });
 
+  const items: ReactNode[] = [];
+  let run: ReactNode[] = [];
+  let runKey = '';
+  const closeRun = () => {
+    if (run.length > 0) items.push(<TurnGroup key={runKey}>{run}</TurnGroup>);
+    run = [];
+  };
+  for (let index = start; index < to; index++) {
+    const message = messages[index]!;
+    const node = turn(message, index, index === start ? skip : 0, to);
+    if (isReplyTurn(message)) {
+      closeRun();
+      items.push(node);
+    } else {
+      if (run.length === 0) runKey = groupKey(messages, index);
+      run.push(node);
+    }
+  }
+  closeRun();
+
   return (
     <>
       {complete ? above : <div ref={sentinel} data-testid="chat-thread-older-sentinel" />}
-      {messages.slice(start, to).map((message, offset) => turn(message, start + offset, offset === 0 ? skip : 0))}
+      {items}
     </>
   );
 }
@@ -694,6 +773,8 @@ export function MessageThread({
   onContinue,
   status,
   footer,
+  statsRail = false,
+  liveTurn = null,
 }: {
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
@@ -726,6 +807,10 @@ export function MessageThread({
    * what this conversation set going, so it reads as the last thing that happened in it.
    */
   footer?: ReactNode;
+  /** Each reply's stats in a rail beside it: on, and wide enough. Off puts them in the hover footer. */
+  statsRail?: boolean;
+  /** The turn in flight, for the live figures on the reply it is writing. */
+  liveTurn?: TurnProgress | null;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
@@ -737,28 +822,40 @@ export function MessageThread({
   // Only the LAST boundary divides the thread. Earlier ones fall inside the folded section and
   // draw their own divider there, which is what a conversation compacted twice should look like.
   const boundary = lastBoundaryIndex(messages);
+  // By id: a queued prompt or a relayed message can land after the reply while it is still written.
+  const liveReplyId = streaming ? (liveTurn?.messageId ?? last?.id) : undefined;
 
   // One function for both sides of the divider, taking each message's index in the WHOLE thread,
   // so a turn drawn inside the disclosure is the same turn with the same Continue and status
   // rules rather than a second rendering path that can drift from this one.
-  const turn: RenderTurn = (message, index, skipRounds) => {
+  const turn: RenderTurn = (message, index, skipRounds, end) => {
     if (message.boundary) return <BoundaryRow key={message.id} message={message} />;
     if (message.automatic) return <AutomaticTurn key={message.id} message={message} />;
     if (message.relay) return <RelayTurn key={message.id} message={message} />;
     if (message.system) return <SystemTurn key={message.id} message={message} />;
     if (message.role === 'user') return <UserTurn key={message.id} message={message} sessionId={sessionId} />;
+    // One fragment whether or not the rail is drawn, so the reply keeps its state across the breakpoint.
     return (
-      <AssistantTurn
-        key={message.id}
-        message={message}
-        onRespond={onRespond}
-        {...(onMove ? { onMove } : {})}
-        // Only the last turn, and only while nothing is running: resuming writes back
-        // into its own message, so a Continue on an older one would edit history.
-        {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
-        {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
-        {...(skipRounds > 0 ? { skipRounds } : {})}
-      />
+      <Fragment key={message.id}>
+        {statsRail && (
+          <ReplyStatsRail
+            message={message}
+            {...(message.id === liveReplyId ? { turn: liveTurn } : {})}
+            span={railRows(messages, index, end)}
+          />
+        )}
+        <AssistantTurn
+          message={message}
+          onRespond={onRespond}
+          {...(onMove ? { onMove } : {})}
+          // Only the last turn, and only while nothing is running: resuming writes back
+          // into its own message, so a Continue on an older one would edit history.
+          {...(index === messages.length - 1 && !streaming ? { onContinue } : {})}
+          {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
+          {...(skipRounds > 0 ? { skipRounds } : {})}
+          {...(statsRail ? { rail: true } : {})}
+        />
+      </Fragment>
     );
   };
 
@@ -812,7 +909,7 @@ export function MessageThread({
     // Scrolling on the outer box, the column on the inner one: reversing the two would put the
     // scrollbar in the middle of the window rather than at the edge of the pane.
     <Box ref={host} onScroll={onScroll} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
-      <Stack ref={column} spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
+      <Box ref={column} sx={{ ...contentColumnSx, py: 3, ...turnGridSx }}>
         <WindowedTurns
           messages={messages}
           from={Math.max(boundary, 0)}
@@ -837,7 +934,7 @@ export function MessageThread({
         {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
             scrolled past rather than brought into view. */}
         <div ref={bottom} />
-      </Stack>
+      </Box>
     </Box>
   );
 }

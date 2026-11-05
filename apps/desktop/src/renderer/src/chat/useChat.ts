@@ -27,6 +27,7 @@ import { addDirPath } from './commands';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
+import { withPhase } from './replyStats';
 import { applyStatusEvents } from './sessionStatus';
 import { EVENT_STAMP_RESOLUTION_MS, REASONING_TAIL_CHARS, totalTokens, type TurnProgress } from './statusLine';
 import { applyWorkspaceEvent, preparingOnSend, type WorkspaceProgress } from './workspaceProgress';
@@ -632,7 +633,7 @@ export function useConversation(
         // to say so, the 'workspace' one went out before this window was looking.
         setPreparing(current => current ?? loaded?.preparingWorkspace ?? null);
         setStreaming(!!live);
-        setTurn(live ? { startedAt: live.startedAt, tokens: null } : null);
+        setTurn(live ? { startedAt: live.startedAt, tokens: null, messageId: live.messageId, requestAt: null } : null);
       });
     };
     load();
@@ -785,7 +786,11 @@ export function useConversation(
           });
         }
         // The call has arrived, so the tool's own status takes over; the next round sends a phase anew.
-        if (event.type === 'tool-start') setPhase(null);
+        if (event.type === 'tool-start') {
+          setPhase(null);
+          const at = Date.now();
+          setTurn(current => (current ? withPhase(current, { kind: 'waiting' }, at) : current));
+        }
         queued.push(event);
         frame ??= requestAnimationFrame(flushLive);
         // rAF is paused in a hidden or occluded window; without this the reply stalls until the
@@ -807,7 +812,8 @@ export function useConversation(
       if (event.type === 'phase') {
         setPhase(event.phase);
         // A sign of life like any other frame: a thinking marker carries no text to stamp it.
-        setTurn(current => (current ? { ...current, lastEventAt: Date.now() } : current));
+        const at = Date.now();
+        setTurn(current => (current ? { ...withPhase(current, event.phase, at), lastEventAt: at } : current));
         return;
       }
 
@@ -818,7 +824,13 @@ export function useConversation(
         setStreaming(true);
         reasoning = '';
         const startedAt = Date.now();
-        setTurn({ startedAt, tokens: null, lastEventAt: startedAt });
+        setTurn({
+          startedAt,
+          tokens: null,
+          lastEventAt: startedAt,
+          messageId: event.messageId,
+          ...(event.baseUsage ? { continued: true } : {}),
+        });
         setMessages(current => startReply(current, event.messageId));
         return;
       }
@@ -909,6 +921,7 @@ export function useConversation(
             error: event.message,
             contextSnapshot: event.contextSnapshot,
             ...(event.stopReason ? { stopReason: event.stopReason } : {}),
+            ...(event.stats ? { stats: event.stats } : {}),
           };
         });
       });

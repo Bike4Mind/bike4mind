@@ -103,6 +103,76 @@ describe('OpenAICompatibleChat', () => {
     });
   });
 
+  it("keeps llama-server's cache count from its timings over the usage details", async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ content: 'Hi' }, 'stop'),
+        {
+          choices: [],
+          usage: { prompt_tokens: 2500, completion_tokens: 3, prompt_tokens_details: { cached_tokens: 2000 } },
+          timings: { cache_n: 2400, prompt_n: 100, prompt_ms: 50, predicted_n: 3, predicted_ms: 120 },
+        },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toEqual({
+      type: 'content',
+      stopReason: 'stop',
+      usage: { inputTokens: 2500, outputTokens: 3 },
+      rate: { evalTokens: 3, evalMs: 120, promptTokens: 100, promptMs: 50, cachedPromptTokens: 2400 },
+    });
+  });
+
+  it('keeps the cached prompt count from the usage details on a reply too short to rate', async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ content: 'Hi' }, 'stop'),
+        {
+          choices: [],
+          usage: { prompt_tokens: 900, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 850 } },
+        },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toEqual({
+      type: 'content',
+      stopReason: 'stop',
+      usage: { inputTokens: 900, outputTokens: 1, cachedPromptTokens: 850 },
+    });
+  });
+
+  it('keeps the cached prompt count when a later usage chunk leaves the details out', async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ content: 'Hi' }),
+        {
+          choices: [],
+          usage: { prompt_tokens: 900, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 850 } },
+        },
+        delta({ content: '!' }, 'stop'),
+        { choices: [], usage: { prompt_tokens: 900, completion_tokens: 2 } },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toMatchObject({ usage: { inputTokens: 900, outputTokens: 2, cachedPromptTokens: 850 } });
+  });
+
+  it('keeps the reasoning count an OpenAI-compatible server reports', async () => {
+    const fetch: FetchLike = async () =>
+      sse([
+        delta({ reasoning_content: 'hmm' }),
+        delta({ content: 'Hi' }, 'stop'),
+        {
+          choices: [],
+          usage: { prompt_tokens: 20, completion_tokens: 30, completion_tokens_details: { reasoning_tokens: 25 } },
+          timings: { predicted_n: 30, predicted_ms: 300 },
+        },
+        '[DONE]',
+      ]);
+    const events = await collect(chat(fetch), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+    expect(events.at(-1)).toMatchObject({ usage: { inputTokens: 20, outputTokens: 30, reasoningTokens: 25 } });
+  });
+
   describe('without server timings', () => {
     /** One network read per group, each delivered with the clock at its `at`. */
     const reads = (...groups: { at: number; chunks: (object | string)[] }[]) => {
@@ -145,7 +215,7 @@ describe('OpenAICompatibleChat', () => {
         type: 'content',
         stopReason: 'stop',
         usage: { inputTokens: 5, outputTokens: 41 },
-        rate: { evalTokens: 40, evalMs: 2000, estimated: true },
+        rate: { evalTokens: 40, evalMs: 2000, estimated: true, untimedTokens: 1 },
       });
     });
 
@@ -159,6 +229,54 @@ describe('OpenAICompatibleChat', () => {
         );
       const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
       expect(events.at(-1)).toMatchObject({ rate: { evalTokens: 2, evalMs: 2000, estimated: true } });
+    });
+
+    it('estimates rather than take a server rate that timed nothing', async () => {
+      const fetch: FetchLike = async () =>
+        reads(
+          { at: 1000, chunks: [delta({ content: 'a' })] },
+          { at: 1500, chunks: [delta({ content: 'b' })] },
+          {
+            at: 3000,
+            chunks: [
+              delta({ content: 'c' }, 'stop'),
+              {
+                choices: [],
+                usage: { prompt_tokens: 5, completion_tokens: 41 },
+                timings: { predicted_n: 41, predicted_ms: 0 },
+              },
+              '[DONE]',
+            ],
+          }
+        );
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toMatchObject({ rate: { evalTokens: 40, evalMs: 2000, estimated: true } });
+    });
+
+    it('keeps the cached prompt count from the usage details beside the estimate', async () => {
+      const fetch: FetchLike = async () =>
+        reads(
+          { at: 1000, chunks: [delta({ content: 'a' })] },
+          { at: 1500, chunks: [delta({ content: 'b' })] },
+          {
+            at: 3000,
+            chunks: [
+              delta({ content: 'c' }, 'stop'),
+              {
+                choices: [],
+                usage: { prompt_tokens: 800, completion_tokens: 41, prompt_tokens_details: { cached_tokens: 600 } },
+              },
+              '[DONE]',
+            ],
+          }
+        );
+      const events = await collect(chat(fetch, null), { model: MODEL, messages: [{ role: 'user', content: 'hi' }] });
+      expect(events.at(-1)).toEqual({
+        type: 'content',
+        stopReason: 'stop',
+        usage: { inputTokens: 800, outputTokens: 41, cachedPromptTokens: 600 },
+        rate: { evalTokens: 40, evalMs: 2000, estimated: true, untimedTokens: 1 },
+      });
     });
 
     it('estimates nothing from a burst: a big first read and a few tiny ones right after', async () => {
