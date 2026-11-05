@@ -409,11 +409,18 @@ export async function sweepSplitImports(
   now: number = Date.now()
 ): Promise<void> {
   const names = await readdir(root).catch(() => [] as string[]);
+  // A part's file, partial, record and lock share a digest prefix and age together: a resume rewrites only the partial.
+  const groups = new Map<string, string[]>();
+  for (const name of names) {
+    const digest = name.split('.')[0];
+    groups.set(digest, [...(groups.get(digest) ?? []), name]);
+  }
   await Promise.all(
-    names.map(async name => {
-      const path = join(root, name);
-      const touched = await lastTouched(path).catch(() => null);
-      if (touched !== null && now - touched > maxAgeMs) await removeStaged(path);
+    [...groups.values()].map(async group => {
+      const paths = group.map(name => join(root, name));
+      const touched = await Promise.all(paths.map(path => lastTouched(path).catch(() => null)));
+      const newest = Math.max(...touched.map(time => time ?? -Infinity));
+      if (Number.isFinite(newest) && now - newest > maxAgeMs) await Promise.all(paths.map(removeStaged));
     })
   );
 }
