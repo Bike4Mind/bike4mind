@@ -49,6 +49,15 @@ const MODEL_FILE_CONTRACT = [
   'around it (a captive pin, a print-in-place hinge), or print it as its own file. Keep walls at least 1.2 mm and details at',
   'least 0.8 mm, keep overhangs within 45 degrees of vertical (chamfer the underside or split the model), put the largest',
   'flat face on z = 0, and say how big the print is and which parts need supports.',
+  'Modelling from an image (one generate_image made, or a file the user gave you): if the purpose is unclear, ask once',
+  'whether it is for printing, a game or just to look at, since that decides one solid vs coloured parts, detail and size.',
+  'When you generate the image to model from, ask for a single object on a plain background, three-quarter view, even light,',
+  'and save the one the user picks with save_generated_image beside the model so later edits can refer back to it.',
+  'Then read it as a set of parts: estimate the overall height-to-width-to-depth ratio, list the parts with their sizes',
+  'as fractions of that, and pick a real-world size (ask, or a sensible default). Build, then model_screenshot from the',
+  'angle the image shows and compare: fix the largest difference in proportion first, colours last.',
+  'CSG builds hard-surface shapes well; an organic subject (a creature, a person, a plant) comes out stylised, so say',
+  'that before you start rather than after.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {

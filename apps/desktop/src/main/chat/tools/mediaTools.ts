@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
+import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { dirname, extname } from 'node:path';
 import {
   ASPECT_RATIOS,
   ImageModels,
@@ -18,7 +21,7 @@ import {
 import { generateImage } from '../media/imageGeneration';
 import { MediaToolError } from '../media/MediaApiClient';
 import { planMusicRequest, type MusicPlan } from '../media/musicModels';
-import { resolveInputImage, uploadInputImage, type InputImage } from '../media/imageInput';
+import { locateGeneratedImage, resolveInputImage, uploadInputImage, type InputImage } from '../media/imageInput';
 import {
   describeVideoModel,
   planVideoRequest,
@@ -26,6 +29,9 @@ import {
   typicalRenderSeconds,
   type VideoPlan,
 } from '../media/videoModels';
+import { recordRecentFile } from './recentFiles';
+import { recordSessionWrite } from './sessionScripts';
+import { showImage, sniffImageType } from './toolImages';
 import {
   optionalNumber,
   requireString,
@@ -35,6 +41,7 @@ import {
   type ToolDefinition,
   type ToolSchema,
 } from './types';
+import { resolveWritablePath, withPathLock } from './writeTools';
 
 /**
  * Why every one of these is gated behind the approval the shell tools use.
@@ -127,8 +134,9 @@ export const generateImageTool: ToolDefinition = {
     name: 'generate_image',
     description:
       'Generate an image from a text prompt on the Bike4Mind server and show it to the user. ' +
-      'Costs the user credits and takes tens of seconds. The image is displayed to the USER; ' +
-      'you do not receive it and cannot see what it depicts.',
+      'Costs the user credits and takes tens of seconds. The result is attached for you to see too, when the ' +
+      'current model reads images, so you can check it against the request and build on it (model it in 3D, ' +
+      'animate it, save it into the project).',
     parameters: {
       type: 'object',
       properties: {
@@ -188,17 +196,154 @@ export const generateImageTool: ToolDefinition = {
       for (const item of outcome.media) context.report?.media(item);
 
       const sizes = outcome.media.map(item => formatBytes(item.byteLength)).join(', ');
-      const ids = outcome.media.map(item => item.url.split('/').pop()).join(', ');
-      return (
-        `Generated ${outcome.media.length} image(s) with ${model} (${sizes}) and displayed them to the user. ` +
-        'You cannot see the result, so do not describe what it depicts - ask the user if you need to know. ' +
-        `Image id(s): ${ids} (pass one as generate_video's inputGeneratedImage to animate it, when that tool is offered).`
-      );
+      const ids = outcome.media.map(item => item.url.split('/').pop() ?? '');
+      const seen = await showGenerated(context, media, ids);
+      return [
+        `Generated ${outcome.media.length} image(s) with ${model} (${sizes}) and displayed them to the user.`,
+        seen,
+        `Image id(s): ${ids.join(', ')}. Pass one as save_generated_image's id to keep it in the project (a modelling`,
+        "reference, say), or as generate_video's inputGeneratedImage to animate it, when those tools are offered.",
+      ].join(' ');
     });
   },
 };
 
 /** Shared by the three Audio-tag tools: report the media, then say what happened. */
+/**
+ * Attach each generated image for the model's next request, and say what it was shown.
+ *
+ * The bytes are already on disk in this conversation's media folder, so this is a local read.
+ * Seeing the result is what lets the model check it against the request and act on it (model
+ * it, pick between variations); a model that reads no images is told why, and that it must not
+ * describe what it has not seen.
+ */
+async function showGenerated(context: ToolContext, media: MediaContext, ids: readonly string[]): Promise<string> {
+  const failures: string[] = [];
+  const shown: string[] = [];
+  for (const id of ids) {
+    const stored = context.sessionId ? await media.store.read(context.sessionId, id) : null;
+    const type = stored ? sniffImageType(stored.bytes) : null;
+    if (!stored || !type) {
+      failures.push(`${id} could not be read back`);
+      continue;
+    }
+    const result = showImage(context, stored.bytes, type);
+    if (result.ok) shown.push(result.pixels ? `${id} (${result.pixels})` : id);
+    else failures.push(result.reason);
+  }
+  if (failures.length === 0) return `They are attached so you can see them too: ${shown.join(', ')}.`;
+  const reason = [...new Set(failures)].join('; ');
+  return (
+    `${shown.length > 0 ? `Attached for you: ${shown.join(', ')}. ` : ''}` +
+    `You could not be shown ${shown.length > 0 ? 'the rest' : 'the result'}: ${reason}. ` +
+    'Do not describe what you have not seen - ask the user if you need to know.'
+  );
+}
+
+/** The extensions a saved image may carry, by the type its bytes actually are. */
+const EXTENSIONS_BY_TYPE: Record<string, readonly string[]> = {
+  'image/png': ['.png'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/webp': ['.webp'],
+};
+
+interface SavePlan {
+  id: string;
+  source: string;
+  target: string;
+  size: number;
+  /** Set when the requested name was corrected to the image's real type. */
+  renamed?: string;
+}
+
+/**
+ * Worked out the same way at approval and at run time, like every write here: the target is
+ * proven inside a granted, unprotected folder, its extension is made to match the bytes (a viewer
+ * or slicer trusts the name), and an existing file is refused rather than replaced - a generated
+ * image never needs to overwrite anything, so the safe answer is the only one offered.
+ */
+async function planSave(input: Record<string, unknown>, context: ToolContext): Promise<SavePlan> {
+  const media = requireMedia(context);
+  const generated = await locateGeneratedImage(requireString(input, 'id'), context, media.store);
+  const requested = requireString(input, 'path');
+
+  const allowed = EXTENSIONS_BY_TYPE[generated.mimeType] ?? [];
+  const extension = extname(requested);
+  const matches = allowed.includes(extension.toLowerCase());
+  const corrected = matches
+    ? requested
+    : `${extension ? requested.slice(0, -extension.length) : requested}${allowed[0] ?? ''}`;
+
+  const target = await resolveWritablePath(corrected, context);
+  if (await exists(target)) {
+    throw new Error(`${target} already exists. Choose a new path; a generated image never replaces a file.`);
+  }
+  return {
+    id: generated.id,
+    source: generated.path,
+    target,
+    size: generated.size,
+    ...(matches ? {} : { renamed: corrected }),
+  };
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const saveGeneratedImageTool: ToolDefinition = {
+  schema: {
+    name: 'save_generated_image',
+    description: [
+      'Copy an image generate_image made in THIS conversation into the project, so it outlives the',
+      'conversation: a reference to model from, an asset, a texture. Free - nothing is generated again.',
+      "The extension is set to the image's real type, and an existing file is never replaced.",
+      'Save the one the user chose, not every variation. Read it back later with file_read to see it again.',
+    ].join('\n'),
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'An image id generate_image reported in this conversation.' },
+        path: {
+          type: 'string',
+          description: 'Where to save it, inside the shared folders, e.g. "refs/lantern.png". Must not exist yet.',
+        },
+      },
+      required: ['id', 'path'],
+      additionalProperties: false,
+    },
+  },
+
+  async approval(input, context) {
+    const plan = await planSave(input, context);
+    return {
+      detail: `Save the generated image ${plan.id} (${formatBytes(plan.size)}) as ${plan.target}.`,
+      key: `save_generated_image:${plan.id}:${plan.target}`,
+    } satisfies ApprovalPrompt;
+  },
+
+  async run(input, context) {
+    const plan = await planSave(input, context);
+    return withPathLock(plan.target, async () => {
+      if (context.signal.aborted) throw new Error('The turn was stopped before the image was saved.');
+      context.beginWrite?.();
+      // The target is proven inside a granted root, so every parent this creates is inside it too.
+      await mkdir(dirname(plan.target), { recursive: true });
+      // COPYFILE_EXCL fails on a file that appeared since planning, rather than replacing it.
+      await copyFile(plan.source, plan.target, constants.COPYFILE_EXCL);
+      recordRecentFile(context, plan.target);
+      await recordSessionWrite(context, plan.target);
+      const renamed = plan.renamed ? " The name was corrected to match the image's type." : '';
+      return `Saved ${plan.id} as ${plan.target} (${formatBytes(plan.size)}).${renamed}`;
+    });
+  },
+};
+
 function describeAudio(context: ToolContext, outcome: AudioOutcome, what: string): string {
   context.report?.media(outcome.media);
   if (outcome.notice) context.report?.notice(outcome.notice);

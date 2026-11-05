@@ -7361,8 +7361,9 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'Each of these SPENDS THE USER CREDITS and each asks them to approve it first, so use one only',
   'when the user has asked for that thing - never to check whether it works, and never as a',
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
-  'The result is shown or played to the USER and is never returned to you: you cannot see the',
-  'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+  'The result is shown or played to the USER. A generated image is also attached for you to see',
+  'when your model reads images (its result says whether it was); audio never is. Never describe',
+  'an image you were not shown or how audio sounds.',
 ];
 
 /**
