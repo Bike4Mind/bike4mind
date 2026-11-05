@@ -316,7 +316,8 @@ export function withRealPath(path: string): string[] {
 
 /**
  * Codes meaning no file by this name exists. ERR_INVALID_ARG_VALUE is a NUL in the name; ENAMETOOLONG
- * counts only when one component exceeds 255 characters (see isMissingPathError).
+ * counts only when one component exceeds 255 bytes on POSIX or 255 UTF-16 units on Windows
+ * (see isMissingPathError).
  */
 export const MISSING_PATH_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'ERR_INVALID_ARG_VALUE']);
 
@@ -325,7 +326,12 @@ const MAX_COMPONENT_LENGTH = 255;
 /** True when `code` from resolving `path` means no such file exists. A too-long total path could still hold a real link. */
 export function isMissingPathError(code: unknown, path: string): boolean {
   if (MISSING_PATH_CODES.has(String(code))) return true;
-  return code === 'ENAMETOOLONG' && path.split(/[\\/]/).some(part => part.length > MAX_COMPONENT_LENGTH);
+  if (code !== 'ENAMETOOLONG') return false;
+  // POSIX limits a component in bytes and allows a backslash in a name; Windows counts UTF-16 units.
+  const win = process.platform === 'win32';
+  return path
+    .split(win ? /[\\/]/ : '/')
+    .some(part => (win ? part.length : Buffer.byteLength(part, 'utf8')) > MAX_COMPONENT_LENGTH);
 }
 
 // Windows volumes outside the mount manager (RAM disks, some virtual drives) make native throw EISDIR.

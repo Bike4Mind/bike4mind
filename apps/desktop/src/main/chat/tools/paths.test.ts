@@ -275,6 +275,42 @@ describe('realpathSyncNearest', () => {
     expect(realpathSyncNearest(`${base}\0x`)).toBe(join(native(tmpdir()), 'b4m-missing-codes\0x'));
   });
 
+  it('walks up past a multibyte component under 255 units but over 255 bytes on POSIX', () => {
+    const native = realpathSync.native;
+    const wide = '中'.repeat(100);
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path).includes(wide)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      return native(path, options);
+    });
+    expect(realpathSyncNearest(join(tmpdir(), wide, 'x'))).toBe(join(native(tmpdir()), wide, 'x'));
+  });
+
+  it('counts UTF-16 units on win32, so the same multibyte component is not skipped', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      const native = realpathSync.native;
+      const wide = '中'.repeat(100);
+      vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+        if (String(path).includes(wide)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+        return native(path, options);
+      });
+      expect(realpathSyncNearest(join(tmpdir(), wide, 'x'))).toBeNull();
+    } finally {
+      Object.defineProperty(process, 'platform', platform!);
+    }
+  });
+
+  it('keeps backslashes inside a POSIX component when measuring it', () => {
+    const native = realpathSync.native;
+    const name = 'ab\\'.repeat(100);
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path).includes(name)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      return native(path, options);
+    });
+    expect(realpathSyncNearest(join(tmpdir(), name, 'x'))).toBe(join(native(tmpdir()), name, 'x'));
+  });
+
   it('returns null on ENAMETOOLONG from total length with short components', () => {
     const native = realpathSync.native;
     const deep = join(tmpdir(), ...Array.from({ length: 40 }, () => 'd'.repeat(100)));
