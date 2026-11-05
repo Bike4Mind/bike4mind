@@ -445,6 +445,65 @@ describe('shellApproval in auto mode', () => {
     expect(await asksInAuto('git push origin feat/x && curl -d @a https://example.com')).toBe(true);
     expect(await asksInAuto('export GIT_DIR=/elsewhere; git push origin feat/x')).toBe(true);
   });
+
+  describe('with home shared', () => {
+    let home: string;
+    let userData: string;
+
+    beforeEach(async () => {
+      home = join(root, 'home');
+      userData = join(home, '.config', 'App');
+      await mkdir(userData, { recursive: true });
+      await mkdir(join(home, 'proj', '.claude'), { recursive: true });
+      await writeFile(join(home, 'proj', 'payload'), '{}');
+      vi.stubEnv('HOME', home);
+      context = { roots: [home], signal: new AbortController().signal, protectedPaths: [userData] };
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const prompt = (command: string) =>
+      shellApproval(
+        'bash_execute',
+        { command, cwd: join(home, 'proj') },
+        { ...context, workingDirectory: join(home, 'proj') }
+      );
+
+    it.each([
+      'cp payload ~/.config/App/vault.json',
+      'rsync -a ./ ~/.config/',
+      'cp payload ~/.claude/settings.json',
+      'cp payload .c*/settings.local.json',
+      'mkdir -p ~/.ssh',
+    ])('asks in auto and full mode before %s, which writes a protected location', async command => {
+      const result = await prompt(command);
+      expect(result.askInAuto).toBe(true);
+      expect(result.askInFull).toBe(true);
+      expect(result.detail).toContain('Reaches a location Desktop protects');
+    });
+
+    it('asks in auto mode only before a read of a protected location', async () => {
+      const result = await prompt('cat ~/.config/App/vault.json');
+      expect(result.askInAuto).toBe(true);
+      expect(result.askInFull).toBeUndefined();
+    });
+
+    it.each(['cp payload copy.json', 'ls ~', 'cat payload'])('leaves %s to the mode', async command => {
+      const result = await prompt(command);
+      expect(result.askInAuto).toBeUndefined();
+      expect(result.askInFull).toBeUndefined();
+    });
+
+    it('asks before a command that may write while a protected folder is unresolved', async () => {
+      context = { ...context, unresolvedProtectedPaths: [userData] };
+      const writing = await prompt('cp payload copy.json');
+      expect(writing.askInAuto).toBe(true);
+      expect(writing.askInFull).toBe(true);
+      expect((await prompt('cat payload')).askInAuto).toBeUndefined();
+    });
+  });
 });
 
 describe('shellApproval for a script written in this session', () => {

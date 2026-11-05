@@ -4,9 +4,16 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
-import { isWithin, realpathNearest, resolveWithinRoots } from './paths';
+import { guardForm, isWithin, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
 import { writesOwnRepository } from './ownRepository';
-import { inUngrantedDistro, scanShell, SYSTEM_DISTRO, UNNAMED_DISTRO, WSL_MANAGEMENT } from './shellScan';
+import {
+  inUngrantedDistro,
+  scanShell,
+  SYSTEM_DISTRO,
+  UNNAMED_DISTRO,
+  WSL_MANAGEMENT,
+  type ShellScan,
+} from './shellScan';
 import {
   expectShellRun,
   gitRunsConfiguredProgram,
@@ -17,7 +24,8 @@ import {
 } from './sessionScripts';
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
-import type { SandboxedCommand } from './sandbox';
+import { protectionFor, type SandboxedCommand } from './sandbox';
+import { folderReaches } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   capOutputMiddle,
@@ -388,6 +396,25 @@ export async function resolveCwd(
   return roots[0];
 }
 
+const NAMES_CLAUDE_FOLDER = /[\\/]\.claude([\\/]|$)/i;
+
+/**
+ * Whether a scanned command reaches a protected location: the app's own folders, a path the file tools
+ * refuse to write (sandbox.ts `protectionFor`), or, for a command that may write, a `.claude` folder.
+ */
+function reachesProtected(scan: ShellScan, protectedPaths: readonly string[]): boolean {
+  const named = [...(scan.paths ?? []), ...scan.writes];
+  const roots = protectedPaths.map(path => guardForm(path));
+  const reached = (folder: string, dotless: boolean): boolean =>
+    roots.some(root => folderReaches(guardForm(folder), root, dotless));
+  return (
+    named.some(path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'write') !== undefined) ||
+    (!scan.readOnly && named.some(path => NAMES_CLAUDE_FOLDER.test(path))) ||
+    (scan.globFolders ?? []).some(folder => reached(folder, false)) ||
+    (scan.dotlessGlobFolders ?? []).some(folder => reached(folder, true))
+  );
+}
+
 /**
  * The prompt for a shell command, shared by bash_execute and bash_background.
  *
@@ -441,6 +468,8 @@ export async function shellApproval(
     return null;
   });
   const gitProgram = gitRunsConfiguredProgram(scan.commands);
+  const touchesProtected = reachesProtected(scan, context.protectedPaths ?? []);
+  const writesWhileUnresolved = (context.unresolvedProtectedPaths?.length ?? 0) > 0 && !scan.readOnly;
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const named = unreachable.filter(
     place => place !== UNNAMED_DISTRO && place !== SYSTEM_DISTRO && place !== WSL_MANAGEMENT
@@ -460,6 +489,12 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
+    ...(touchesProtected
+      ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
+      : []),
+    ...(writesWhileUnresolved
+      ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
+      : []),
     ...(named.length > 0
       ? [`Reaches ${named.map(shownPath).join(', ')}, in a WSL distro this project has no folder in.`]
       : []),
@@ -488,7 +523,9 @@ export async function shellApproval(
     !!script ||
     scriptCheckFailed ||
     !!gitProgram ||
-    unreachable.length > 0;
+    unreachable.length > 0 ||
+    touchesProtected ||
+    writesWhileUnresolved;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -496,6 +533,8 @@ export async function shellApproval(
     detail: [detail, ...reasons].join('\n\n'),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
+    // The file tools refuse these writes in every mode, so 'full' stops for one that may write.
+    ...((touchesProtected && !scan.readOnly) || writesWhileUnresolved ? { askInFull: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     always: {
