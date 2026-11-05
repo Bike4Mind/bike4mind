@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hang, json, startFakeServer, type FakeServer, type Handler } from '@bike4mind/local-models/testing';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { ApiClient } from './ApiClient.js';
-import { checkSavedSignIn } from './savedSignIn.js';
+import { checkSavedSignIn, settleSignInRefresh } from './savedSignIn.js';
 
 const HOUR = 3_600_000;
 const stale = {
@@ -110,6 +110,55 @@ describe('checkSavedSignIn', () => {
     expect(await onDisk()).toEqual(stale);
   });
 
+  it('shares one refresh between the startup checks of one process', async () => {
+    const fresh = { ...stale, accessToken: 'access-new', expiresAt: new Date(Date.now() + HOUR).toISOString() };
+    const refresh = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return fresh;
+    });
+    const store = await savedStore();
+
+    const results = await Promise.all([checkSavedSignIn(store, refresh), checkSavedSignIn(store, refresh)]);
+
+    expect(results).toEqual([
+      { status: 'signed-in', tokens: fresh },
+      { status: 'signed-in', tokens: fresh },
+    ]);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets exit wait for a refresh that outlived the startup wait', async () => {
+    let finished = false;
+    const refresh = vi.fn(async () => {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      finished = true;
+      return stale;
+    });
+
+    expect(await checkSavedSignIn(await savedStore(), refresh, 20)).toMatchObject({ status: 'unchecked' });
+    expect(finished).toBe(false);
+    await settleSignInRefresh(5_000);
+    expect(finished).toBe(true);
+  });
+
+  it('stops waiting at exit, after the bound, on a refresh that never settles', async () => {
+    let settle!: () => void;
+    const refresh = vi.fn(
+      () =>
+        new Promise<typeof stale>(resolve => {
+          settle = () => resolve(stale);
+        })
+    );
+    await checkSavedSignIn(await savedStore(), refresh, 20);
+    const started = performance.now();
+
+    await settleSignInRefresh(100);
+
+    expect(performance.now() - started).toBeLessThan(1_000);
+    settle();
+    await settleSignInRefresh(1_000);
+  });
+
   it('stops waiting on a refresh that never answers and keeps the tokens', async () => {
     const baseUrl = await refreshServer(hang);
     const started = performance.now();
@@ -211,5 +260,52 @@ describe('ConfigStore.reloadAuthTokens', () => {
 
     expect(await store.getAuthTokens()).toEqual(fresh);
     expect(await onDisk()).toEqual(fresh);
+  });
+});
+
+describe('concurrent refreshes across b4m processes', () => {
+  const lockPath = () => path.join(dir, 'auth-refresh.lock');
+
+  it('end signed in on the one rotation when two processes refresh the same expired sign-in', async () => {
+    await savedStore();
+    let exchanges = 0;
+    const baseUrl = await refreshServer(async (request, response) => {
+      exchanges++;
+      if (exchanges > 1) return json({ error: 'invalid_grant' }, 400)(request, response);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      json({ access_token: 'access-new', refresh_token: 'refresh-new', expires_in: 1800, token_type: 'Bearer' })(
+        request,
+        response
+      );
+    });
+    const first = new ConfigStore(configPath);
+    const second = new ConfigStore(configPath);
+    await first.getAuthTokens();
+    await second.getAuthTokens();
+
+    const results = await Promise.all([
+      new ApiClient(baseUrl, first).refreshSession(stale.accessToken),
+      new ApiClient(baseUrl, second).refreshSession(stale.accessToken),
+    ]);
+
+    expect(results.map(tokens => tokens.refreshToken)).toEqual(['refresh-new', 'refresh-new']);
+    expect(exchanges).toBe(1);
+    expect(await onDisk()).toMatchObject({ refreshToken: 'refresh-new' });
+  });
+
+  it('breaks a lock left behind longer than the stale limit', async () => {
+    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now() - 31_000, nonce: 'gone' }));
+
+    expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 1_000)).toBe('ran');
+    await expect(readFile(lockPath())).rejects.toThrow();
+  });
+
+  it('gives up after the wait bound, without running the work, while another process holds the lock', async () => {
+    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now(), nonce: 'other' }));
+    const work = vi.fn(async () => 'ran');
+
+    await expect(new ConfigStore(configPath).withRefreshLock(work, 300)).rejects.toThrow('still refreshing');
+    expect(work).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(lockPath(), 'utf-8'))).toMatchObject({ nonce: 'other' });
   });
 });

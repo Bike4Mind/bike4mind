@@ -35,7 +35,7 @@ import {
   SignedOutCloudBackend,
   signInUncheckedHeadlessMessage,
 } from '../bootstrap/signedOutLocal.js';
-import { checkSavedSignIn } from '../auth/savedSignIn.js';
+import { checkSavedSignIn, settleSignInRefresh } from '../auth/savedSignIn.js';
 import { createHeadlessLlmBackendDeps } from './headlessOllama.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
@@ -599,6 +599,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     setWebSocketToolExecutor(null);
     agent.removeAllListeners();
 
+    await settleSignInRefresh();
     process.exit(0);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -611,6 +612,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       process.stderr.write(`Error: ${sanitizeTerminalText(message)}\n`);
     }
 
+    await settleSignInRefresh();
     process.exit(1);
   }
 }

@@ -401,6 +401,11 @@ const ProjectLocalConfigSchema = z.object({
  * stops being capped by it. A value-keyed rule with no marker would instead make 4096
  * permanently unrepresentable, even though the /config select still offers it.
  */
+/** A refresh lock older than this (ms) is abandoned: its holder outlived the refresh request's own bound. */
+export const REFRESH_LOCK_STALE_MS = 30_000;
+export const REFRESH_LOCK_WAIT_MS = 40_000;
+const REFRESH_LOCK_POLL_MS = 100;
+
 const LEGACY_PINNED_MAX_TOKENS = 4096;
 
 /**
@@ -1706,6 +1711,66 @@ export class ConfigStore {
     this.globalConfig!.auth = auth;
     if (this.config) this.config.auth = auth;
     return auth ?? null;
+  }
+
+  /**
+   * Run `work` holding the sign-in refresh lock shared by every b4m process using this config
+   * directory. Waits at most `waitMs`, then rejects without running `work`.
+   */
+  async withRefreshLock<T>(work: () => Promise<T>, waitMs = REFRESH_LOCK_WAIT_MS): Promise<T> {
+    const lockPath = path.join(path.dirname(this.configPath), 'auth-refresh.lock');
+    const nonce = uuidv4();
+    const deadline = Date.now() + waitMs;
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+    for (;;) {
+      try {
+        const handle = await fs.open(lockPath, 'wx', 0o600);
+        try {
+          await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now(), nonce }));
+        } finally {
+          await handle.close();
+        }
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      if (await this.refreshLockIsStale(lockPath)) {
+        await fs.rm(lockPath, { force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Another b4m process is still refreshing the sign-in (${lockPath} is held)`);
+      }
+      await new Promise(resolve => setTimeout(resolve, REFRESH_LOCK_POLL_MS));
+    }
+    try {
+      return await work();
+    } finally {
+      if ((await this.readRefreshLock(lockPath))?.nonce === nonce) await fs.rm(lockPath, { force: true });
+    }
+  }
+
+  private async readRefreshLock(lockPath: string): Promise<{ at?: unknown; nonce?: unknown } | null> {
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
+      return typeof parsed === 'object' && parsed !== null ? (parsed as { at?: unknown; nonce?: unknown }) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async refreshLockIsStale(lockPath: string): Promise<boolean> {
+    const lock = await this.readRefreshLock(lockPath);
+    let at = typeof lock?.at === 'number' && Number.isFinite(lock.at) ? lock.at : null;
+    if (at === null) {
+      // Unreadable or still being written by its creator: age it by the file itself.
+      try {
+        at = (await fs.stat(lockPath)).mtimeMs;
+      } catch {
+        return false;
+      }
+    }
+    return Date.now() - at > REFRESH_LOCK_STALE_MS;
   }
 
   /** The sign-in `text` (the config file) holds for the environment keyed `envKey`, without echoing its bytes in errors. */

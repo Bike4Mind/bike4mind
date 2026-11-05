@@ -202,7 +202,7 @@ import {
   signInUncheckedLoginMessage,
   signInUncheckedMessage,
 } from './bootstrap/signedOutLocal.js';
-import { checkSavedSignIn } from './auth/savedSignIn.js';
+import { checkSavedSignIn, settleSignInRefresh } from './auth/savedSignIn.js';
 import { extractErrorMessage } from '@bike4mind/utils';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
@@ -428,6 +428,7 @@ function CliApp() {
   // Cleanup function to close all handles and allow natural process exit
   const performCleanup = useCallback(async () => {
     await releaseSession(sessionResources('cli_exit'), 500);
+    await settleSignInRefresh();
 
     // Force exit after a short delay if process hasn't exited naturally
     // This handles any remaining open handles we can't close
