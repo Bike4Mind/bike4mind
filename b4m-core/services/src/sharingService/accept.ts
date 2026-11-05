@@ -99,11 +99,6 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
     throw new UnprocessableEntityError('User has already accepted the invite');
   }
 
-  // The share page hides Accept on the caller's own invite; this holds for direct and bulk calls too.
-  if (invite.inviterId && invite.inviterId === userId) {
-    throw new UnprocessableEntityError('You cannot accept your own invite');
-  }
-
   // A named invite names specific recipients in `pending`; only they may consume a slot, or
   // `remaining` (now sized to the recipient count, not a flat 1) lets an unintended accepter claim
   // a share meant for someone else while a named recipient still hasn't accepted.

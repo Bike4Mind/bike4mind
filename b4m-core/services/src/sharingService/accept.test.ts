@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { InviteType, Permission } from '@bike4mind/common';
-import { NotFoundError, ForbiddenError, BadRequestError, UnprocessableEntityError } from '@bike4mind/utils';
+import { NotFoundError, ForbiddenError, BadRequestError } from '@bike4mind/utils';
 import { acceptInvite } from './accept';
 
 const shares = () => ({ updateUserShares: vi.fn(async () => ({})) });
@@ -391,15 +391,6 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
     adapters.db.invites.findById.mockResolvedValue({ ...makeInvite([], 5), isLinkOnly: true });
 
     await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).resolves.toBeDefined();
-  });
-
-  it('rejects the inviter redeeming their own link invite', async () => {
-    const adapters = makeAdapters();
-    adapters.db.users.findById.mockResolvedValue(makeUser('owner@x.com'));
-    adapters.db.invites.findById.mockResolvedValue({ ...makeInvite([], 5), isLinkOnly: true, inviterId: userId });
-
-    await expect(acceptInvite(userId, { id: inviteId }, adapters as any)).rejects.toThrow(UnprocessableEntityError);
-    expect(adapters.db.invites.acceptRecipient).not.toHaveBeenCalled();
   });
 
   it('rejects an accepter who is not among the still-pending named recipients', async () => {
