@@ -33,7 +33,7 @@ export type UserFlags = Parameters<typeof aiAccessDeniedMessage>[0] & {
 };
 
 export const USER_FLAG_FIELDS =
-  '_id email createdAt isAdmin isSystem isSynthetic username tags emailVerified isBanned isModerated disputePending moderation.status riskScore.reviewState';
+  '_id email createdAt isAdmin isSystem isSynthetic username tags emailVerified isBanned isModerated disputePending moderation.status riskScore.reviewState deletion.scheduledFor';
 
 /** What the eligibility predicates need, read once per run. */
 export type CountingContext = { staffRegex: RegExp | null; testDomains: readonly string[] };

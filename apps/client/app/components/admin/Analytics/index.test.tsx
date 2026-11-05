@@ -219,7 +219,7 @@ describe('AnalyticsTab', () => {
     });
     await renderPage('/admin?tab=analytics&accounts=internal');
     expect(await screen.findByTestId('analytics-footer')).toHaveTextContent(
-      'Active users count only admin, system, flagged test and staff-domain accounts; signups always exclude them.'
+      'Active users count only admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups always exclude them.'
     );
     expect(await screen.findByTestId('analytics-missing-rollup')).toHaveTextContent(
       'Rollup is missing for 1 day; those days show as gaps.'
@@ -265,7 +265,7 @@ describe('AnalyticsTab', () => {
     expect(within(strip).getByText('Coming soon')).toBeInTheDocument();
     expect(screen.getByTestId('analytics-last-updated')).toHaveTextContent('Last updated');
     expect(screen.getByTestId('analytics-footer')).toHaveTextContent(
-      /web app, CLI, Desktop or an agent run.*A signup is real when the email is verified.*banned or held ones included, is suspected.*API users are shown separately and not counted/
+      /web app, CLI, Desktop or an agent run.*A signup is real when the email is verified.*banned or held ones included, is suspected.*External API users are shown separately regardless of Accounts and not counted/
     );
     expect(screen.getByTestId('analytics-active-users-chart')).toHaveAttribute('aria-label');
   });
@@ -289,7 +289,8 @@ describe('AnalyticsTab', () => {
 
   it('offers the last 90 days when the range is empty', async () => {
     const empty = overview();
-    empty.activeUsers.days = empty.activeUsers.days.map(day => ({ ...day, dau: 0 }));
+    empty.activeUsers.days = empty.activeUsers.days.map(day => ({ ...day, dau: 0, wau: 0, mau: 0, apiDau: 0 }));
+    empty.activeUsers.bySource = empty.activeUsers.bySource.map(day => ({ ...day, counts: {} }));
     empty.signups.totals = { legit: 0, suspected: 0 };
     mocks.get.mockResolvedValue({ data: empty });
     const router = await renderPage('/admin?tab=analytics');
@@ -326,23 +327,56 @@ describe('AnalyticsTab', () => {
 
   it('drills into the clicked bar window regardless of the hovered column', async () => {
     const router = await renderPage('/admin?tab=analytics&range=7d');
-    const chart = await screen.findByTestId('analytics-signups-chart');
-    const bars = await waitFor(() => {
-      const found = chart.querySelectorAll('.recharts-bar-rectangle path');
-      expect(found.length).toBeGreaterThan(1);
-      return found;
-    });
-    // Rectangles render per series in bucket order: real (06-14, 06-15), then suspected (06-14, 06-15).
-    const lastBar = bars[bars.length - 1];
-    fireEvent.mouseMove(bars[0]);
-    fireEvent.click(lastBar);
+    const realBar = await screen.findByTestId('analytics-signups-legit-2026-06-14-bar');
+    const suspectedBar = screen.getByTestId('analytics-signups-suspected-2026-06-15-bar');
+    fireEvent.mouseMove(realBar);
+    fireEvent.click(suspectedBar);
     await waitFor(() =>
       expect(router.state.location.search).toMatchObject({
         tab: 'users',
         createdFrom: '2026-06-15T00:00:00.000Z',
         createdTo: '2026-06-16T00:00:00.000Z',
+        verdict: 'suspected',
       })
     );
+  });
+
+  it.each(['legit', 'suspected'] as const)('drills into the %s bar with its verdict', async verdict => {
+    const router = await renderPage('/admin?tab=analytics&range=7d');
+    fireEvent.click(await screen.findByTestId(`analytics-signups-${verdict}-2026-06-14-bar`));
+    await waitFor(() =>
+      expect(router.state.location.search).toMatchObject({
+        tab: 'users',
+        createdFrom: '2026-06-14T00:00:00.000Z',
+        createdTo: '2026-06-15T00:00:00.000Z',
+        verdict,
+      })
+    );
+  });
+
+  it('shows external API-only activity in both the users and surface views', async () => {
+    const apiOnly = overview();
+    apiOnly.activeUsers.days = apiOnly.activeUsers.days.map(day => ({ ...day, dau: 0, wau: 0, mau: 0 }));
+    apiOnly.activeUsers.bySource = apiOnly.activeUsers.bySource.map(day => ({ ...day, counts: { api: 5 } }));
+    apiOnly.activeUsers.sources = ['api'];
+    mocks.get.mockResolvedValue({ data: apiOnly });
+    await renderPage('/admin?tab=analytics');
+    expect(await screen.findByTestId('analytics-active-users-chart')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('analytics-active-users-table-toggle-btn'));
+    expect(await screen.findByTestId('analytics-active-users-table')).toHaveTextContent(
+      'External API users (not counted)'
+    );
+    fireEvent.click(screen.getByTestId('analytics-active-users-mode-surface'));
+    expect(await screen.findByTestId('analytics-surface-table')).toHaveTextContent('API (requests)');
+    expect(screen.getByTestId('analytics-active-users')).not.toHaveTextContent('No activity in this range');
+  });
+
+  it('keeps weekly and monthly activity visible on days without daily use', async () => {
+    const returningUsers = overview();
+    returningUsers.activeUsers.days = returningUsers.activeUsers.days.map(day => ({ ...day, dau: 0, apiDau: 0 }));
+    mocks.get.mockResolvedValue({ data: returningUsers });
+    await renderPage('/admin?tab=analytics');
+    expect(await screen.findByTestId('analytics-active-users-chart')).toBeInTheDocument();
   });
 
   it('labels signups Real and Suspected with no unclassified series, and shows the API line', async () => {
@@ -354,7 +388,9 @@ describe('AnalyticsTab', () => {
     fireEvent.click(screen.getByTestId('analytics-signups-table-toggle-btn'));
     expect(await screen.findByTestId('analytics-signups-table')).not.toHaveTextContent('Not classified');
     fireEvent.click(screen.getByTestId('analytics-active-users-table-toggle-btn'));
-    expect(await screen.findByTestId('analytics-active-users-table')).toHaveTextContent('API users (not counted)');
+    expect(await screen.findByTestId('analytics-active-users-table')).toHaveTextContent(
+      'External API users (not counted)'
+    );
   });
 
   it('lists the signup signals as inline bars', async () => {

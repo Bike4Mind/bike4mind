@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Box, Button, Stack, Typography, useTheme } from '@mui/joy';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { AnalyticsOverview, SignupBucket } from '@client/app/utils/analyticsOverview';
+import type { AdminUsersFilter } from '@client/app/utils/adminUsersFilter';
 import { SIGNUP_SIGNAL_LABELS, type SignupSignal } from '@client/app/utils/signupSignals';
 import { DataTable, InlineBar, type DataColumn } from '../shared';
 import { SIGNUP_STATUS_COLORS } from '../Signups/SignupChart';
@@ -10,6 +11,12 @@ import { formatCount, formatDayLabel } from './analyticsFormat';
 
 const BUCKET_UNIT = { day: 'UTC days', week: 'ISO weeks (Monday, UTC)', month: 'UTC months' } as const;
 
+export type SignupWindowSelection = {
+  createdFrom: string;
+  createdTo: string;
+  verdict?: AdminUsersFilter['verdict'];
+};
+
 type Props = {
   data: AnalyticsOverview | undefined;
   loading: boolean;
@@ -17,7 +24,7 @@ type Props = {
   onRetry: () => void;
   onShowDefaultRange?: () => void;
   /** Opens the Users list for accounts created in [createdFrom, createdTo). */
-  onSelectWindow: (window: { createdFrom: string; createdTo: string }) => void;
+  onSelectWindow: (window: SignupWindowSelection) => void;
 };
 
 const signalLabel = (signal: string) => SIGNUP_SIGNAL_LABELS[signal as SignupSignal]?.label ?? signal;
@@ -42,14 +49,15 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
   const axisTick = { fontSize: 12, fill: admin.inkMuted };
 
   // Bar entries carry the row they were drawn from, so the click resolves the bucket without tooltip state.
-  const selectBar = (entry: { payload?: { start?: string } }) => {
+  const selectBar = (entry: { payload?: { start?: string } }, verdict: NonNullable<AdminUsersFilter['verdict']>) => {
     const picked = buckets.find(b => b.start === entry.payload?.start);
-    if (picked) onSelectWindow(toWindow(picked));
+    if (picked) onSelectWindow({ ...toWindow(picked), verdict });
   };
 
-  const partialCell = (entry: SignupBucket, fill: string) => (
+  const partialCell = (entry: SignupBucket, fill: string, verdict: NonNullable<AdminUsersFilter['verdict']>) => (
     <Cell
       key={entry.start}
+      data-testid={`analytics-signups-${verdict}-${entry.start}-bar`}
       fill={fill}
       fillOpacity={entry.partial ? 0.45 : 1}
       stroke={entry.partial ? fill : admin.surface}
@@ -88,9 +96,9 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
             stackId="signups"
             fill={colors.likelyLegit}
             isAnimationActive={false}
-            onClick={selectBar}
+            onClick={entry => selectBar(entry, 'legit')}
           >
-            {rows.map(entry => partialCell(entry, colors.likelyLegit))}
+            {rows.map(entry => partialCell(entry, colors.likelyLegit, 'legit'))}
           </Bar>
           <Bar
             dataKey="suspected"
@@ -98,9 +106,9 @@ export function SignupsSection({ data, loading, error, onRetry, onShowDefaultRan
             stackId="signups"
             fill={colors.suspected}
             isAnimationActive={false}
-            onClick={selectBar}
+            onClick={entry => selectBar(entry, 'suspected')}
           >
-            {rows.map(entry => partialCell(entry, colors.suspected))}
+            {rows.map(entry => partialCell(entry, colors.suspected, 'suspected'))}
           </Bar>
         </BarChart>
       </ResponsiveContainer>

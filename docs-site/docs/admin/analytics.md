@@ -13,12 +13,12 @@ All days are UTC days, and every chart says so. By default, counts exclude inter
 
 ## Toolbar
 
-| Control | Options | Default |
-|---------|---------|---------|
-| **Range** | 7d, 28d, 90d, 12m, Custom | 28d |
-| **Compare** | Previous period, Off | Previous period |
-| **Signups** | Real only, All | Real only |
-| **Accounts** | External only, Internal only, All | External only |
+| Control      | Options                           | Default         |
+| ------------ | --------------------------------- | --------------- |
+| **Range**    | 7d, 28d, 90d, 12m, Custom         | 28d             |
+| **Compare**  | Previous period, Off              | Previous period |
+| **Signups**  | Real only, All                    | Real only       |
+| **Accounts** | External only, Internal only, All | External only   |
 
 **Custom** shows two date inputs. Both days are included, and the range can cover at most 366 days.
 
@@ -30,13 +30,13 @@ The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signup
 
 ## Key numbers
 
-| Tile | What it shows |
-|------|---------------|
-| **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range |
-| **Daily active (avg)** | The average number of users active per day |
-| **Stickiness** | Average daily active users as a share of MAU |
-| **New signups** | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath |
-| **Activation rate** | Not available yet |
+| Tile                   | What it shows                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **Active users (MAU)** | Users active in the 28 days ending on the last complete day of the range                                          |
+| **Daily active (avg)** | The average number of users active per day                                                                        |
+| **Stickiness**         | Average daily active users as a share of MAU                                                                      |
+| **New signups**        | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath |
+| **Activation rate**    | Not available yet                                                                                                 |
 
 A user is active on a day when they make at least one successful AI request that UTC day, from the web app, the CLI, Desktop or an agent run. Requests made through the public API and internal system traffic do not make a user active, so a user active only through the API is not counted in daily, weekly or monthly active users.
 
@@ -44,7 +44,7 @@ The tiles cover complete days only. When the range ends today, today is still co
 
 ## Active users
 
-A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished. A separate **API users (not counted)** line shows how many people used the public API each day; it is never part of the active user numbers.
+A line chart of daily, weekly and monthly active users per day. With **Compare** on, a faint dashed line shows MAU for the previous period. Today is drawn dashed because it is not finished. A separate **External API users (not counted)** line shows how many external accounts used the public API each day. This series always shows external accounts regardless of **Accounts**, and is never part of the active user numbers.
 
 Hover over any day to see its external and internal daily, weekly and monthly active users, whichever **Accounts** option is selected.
 
@@ -54,7 +54,7 @@ Switch to **By surface** to see AI requests per day stacked by surface as bars. 
 
 Stacked bars of real and suspected signups. A signup is real when the account has a verified email, is not banned or held, and made a successful AI request within 7 days of signing up (system traffic does not count). Every other signup is suspected, so there is no unclassified bucket; a signup moves from suspected to real when its first request lands inside the 7 days, which the nightly job re-checks for 14 days. Bars are days for 7d and 28d, ISO weeks (starting Monday) for 90d, and months for 12m.
 
-Click a bar to open the Users list filtered to the accounts created in that bar's window. Below the chart, the signals that marked accounts in the range are listed with their counts.
+Click a Real or Suspected bar to open the Users list filtered to that verdict and the accounts created in that bar's window. In the table, click a date to list all accounts created in its window. Below the chart, the signals that marked accounts in the range are listed with their counts.
 
 ## Retention cohorts
 
@@ -62,8 +62,8 @@ A table of how many people come back. Each row is a signup week (weeks start on 
 
 - **Last 12 weeks.** Only signup weeks that are over appear, so a cohort never grows after you see it. The table is read through the last complete day and ignores the **Range** and **Compare** controls.
 - **Blank cells are gaps, not zero.** A cell is blank when its week is not over yet, when the nightly rollup is missing for a day it depends on, or when the cohort is empty. A real zero is printed as 0.0%.
-- **Signups toggle.** With **Legit only**, the cohort leaves out suspected signups and keeps accounts too new to classify. With **All**, it counts every signup. The size and the active counts follow the same rule.
-- **Active** uses the same definition as the rest of the page: at least one successful AI request that UTC day.
+- **Signups toggle.** With **Real only**, the cohort leaves out suspected signups; new accounts remain suspected until they meet the real-signup definition. With **All**, it counts every signup. The size and the active counts follow the same rule.
+- **Active** uses the same definition as the rest of the page: at least one successful first-party AI request that UTC day.
 
 ## Tables and accessibility
 

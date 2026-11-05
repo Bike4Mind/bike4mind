@@ -10,14 +10,9 @@ import {
   type IAnalyticsUserDay,
 } from '@bike4mind/database';
 import { ACTIVE_SOURCES, UNCLASSIFIED_SOURCE } from '@bike4mind/common';
+import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 import { classifyRealSignups } from './realSignup';
-import {
-  classifySignupWindow,
-  isActiveEligible,
-  isCountedUser,
-  loadCountingContext,
-  loadUserFlags,
-} from './signupCohort';
+import { classifySignupWindow, isCountedUser, loadCountingContext, loadUserFlags } from './signupCohort';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const QUERY_DEADLINE_MS = 120_000;
@@ -279,13 +274,15 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
 
   for (const group of groups) {
     const { userId, ownerType, ownerId, feature, source, model } = group._id;
+    if (source === 'system') continue;
+    const active = !source || (ACTIVE_SOURCES as readonly string[]).includes(source);
     const user = users.get(userId);
+    if (user && aiAccessDeniedMessage(user) !== null) continue;
     if (!isCountedUser(user, ctx)) {
-      internalIds.add(userId);
+      if (active) internalIds.add(userId);
       bump(internalBySource, source ?? UNCLASSIFIED_SOURCE, group.requests);
       continue;
     }
-    if (source === 'system' || !isActiveEligible(user, ctx)) continue;
     const acc: DayUsageAcc = perUser.get(userId) ?? {
       active: false,
       requests: 0,
@@ -295,7 +292,7 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
       byOwner: new Map(),
     };
     perUser.set(userId, acc);
-    if (!source || (ACTIVE_SOURCES as readonly string[]).includes(source)) acc.active = true;
+    if (active) acc.active = true;
     acc.requests += group.requests;
     acc.credits += group.credits;
     acc.features.add(feature);

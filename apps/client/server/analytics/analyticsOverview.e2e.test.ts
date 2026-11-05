@@ -54,7 +54,7 @@ const seedEvent = (userId: mongoose.Types.ObjectId, at: string, extra: Record<st
 
 beforeAll(async () => {
   mongod = await createMongoServer();
-  await mongoose.connect(mongod.getUri());
+  await mongoose.connect(mongod.getUri(), { autoIndex: false });
   await AnalyticsUserDay.createIndexes();
   await AnalyticsDaily.createIndexes();
   await User.createIndexes();

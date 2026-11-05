@@ -20,7 +20,7 @@ import {
 import { adminSearchForTab, type AdminSearch } from '../adminTabParams';
 import { ActiveUsersSection } from './ActiveUsersSection';
 import { CohortsSection } from './CohortsSection';
-import { SignupsSection } from './SignupsSection';
+import { SignupsSection, type SignupWindowSelection } from './SignupsSection';
 import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
 import { useAnalyticsOverview } from './useAnalyticsOverview';
@@ -48,10 +48,10 @@ const ACCOUNTS_OPTIONS = [
 ] as const;
 const FOOTERS: Record<AnalyticsAccounts, string> = {
   external:
-    'Active users: an AI request that UTC day from the web app, CLI, Desktop or an agent run; internal, Developer-tagged, test, banned and AI-held accounts are not counted. A signup is real when the email is verified, the account is not banned or held, and it made an AI request within 7 days; every other signup, banned or held ones included, is suspected. API users are shown separately and not counted. Days are UTC.',
+    'Active users: an AI request that UTC day from the web app, CLI, Desktop or an agent run; internal, Developer-tagged, test, banned and AI-held accounts are not counted. A signup is real when the email is verified, the account is not banned or held, and it made an AI request within 7 days; every other signup, banned or held ones included, is suspected. External API users are shown separately regardless of Accounts and not counted. Days are UTC.',
   internal:
-    'Active users count only admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
-  all: 'Active users include admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
+    'Active users count only admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups always exclude them. The separate API series always counts external accounts. Days are UTC.',
+  all: 'Active users include admin, system, flagged test, staff-domain, Developer-tagged and test-persona accounts; signups always exclude them. The separate API series always counts external accounts. Days are UTC.',
 };
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
@@ -161,10 +161,14 @@ const AnalyticsTab = () => {
     setQuery({ range, from: data?.window.from ?? shiftUtc(to, -27), to });
   };
   const showDefaultRange = query.range === '90d' ? undefined : () => setRange('90d');
-  const openSignupWindow = (window: { createdFrom: string; createdTo: string }) =>
+  const openSignupWindow = (window: SignupWindowSelection) =>
     void navigate({
       to: '/admin',
-      search: (previous: AdminSearch) => ({ ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG), ...window }),
+      search: (previous: AdminSearch) => ({
+        ...adminSearchForTab(previous, ADMIN_USERS_TAB_SLUG),
+        ...window,
+        verdict: window.verdict,
+      }),
     });
 
   // Pending also covers a custom range still waiting for its dates.

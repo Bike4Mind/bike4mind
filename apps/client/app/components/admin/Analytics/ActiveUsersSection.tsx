@@ -192,7 +192,10 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
     return renderDot;
   };
 
-  const empty = !days.some(day => (day.dau ?? 0) > 0);
+  const empty =
+    mode === 'users'
+      ? !days.some(day => [day.dau, day.wau, day.mau, day.apiDau].some(count => (count ?? 0) > 0))
+      : !(data?.activeUsers.bySource ?? []).some(day => Object.values(day.counts ?? {}).some(count => count > 0));
 
   const chart =
     mode === 'users' ? (
@@ -242,7 +245,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
             />
             <Line
               dataKey="apiDau"
-              name="API users (not counted)"
+              name="External API users (not counted)"
               stroke={admin.inkMuted}
               strokeOpacity={0.6}
               strokeDasharray="1 3"
@@ -308,7 +311,7 @@ export function ActiveUsersSection({ data, loading, error, onRetry, onShowDefaul
     { id: 'dau', label: 'DAU', numeric: true, render: row => formatCount(row.dau) },
     { id: 'wau', label: 'WAU', numeric: true, render: row => formatCount(row.wau) },
     { id: 'mau', label: 'MAU', numeric: true, render: row => formatCount(row.mau) },
-    { id: 'apiDau', label: 'API users (not counted)', numeric: true, render: row => formatCount(row.apiDau) },
+    { id: 'apiDau', label: 'External API users (not counted)', numeric: true, render: row => formatCount(row.apiDau) },
     ...(compare
       ? [
           {

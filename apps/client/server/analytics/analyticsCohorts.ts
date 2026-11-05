@@ -123,6 +123,7 @@ export async function getAnalyticsCohorts(
         $match: {
           signupDay: { $gte: firstWeek, $lte: lastCohortEnd },
           day: { $gte: firstWeek, $lte: asOf },
+          active: true,
           ...(query.signups === 'legit' ? { suspected: false } : {}),
         },
       },
