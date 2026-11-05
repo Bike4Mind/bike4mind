@@ -260,18 +260,30 @@ describe('realpathSyncNearest', () => {
     expect(withRealPath(join(tmpdir(), 'a', 'b'))).toEqual([join(tmpdir(), 'a', 'b')]);
   });
 
-  it('walks up past an over-long name and a NUL-containing name', () => {
+  it('walks up past a component over 255 characters and a NUL-containing name', () => {
     const base = join(tmpdir(), 'b4m-missing-codes');
     const native = realpathSync.native;
+    const toolong = 'x'.repeat(256);
     vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
       const text = String(path);
-      if (text.includes('toolong')) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      if (text.includes(toolong)) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
       if (text.includes('\0')) throw Object.assign(new Error('nul'), { code: 'ERR_INVALID_ARG_VALUE' });
       return native(path, options);
     });
-    const long = join(tmpdir(), 'toolong', 'x');
-    expect(realpathSyncNearest(long)).toBe(join(native(tmpdir()), 'toolong', 'x'));
+    const long = join(tmpdir(), toolong, 'x');
+    expect(realpathSyncNearest(long)).toBe(join(native(tmpdir()), toolong, 'x'));
     expect(realpathSyncNearest(`${base}\0x`)).toBe(join(native(tmpdir()), 'b4m-missing-codes\0x'));
+  });
+
+  it('returns null on ENAMETOOLONG from total length with short components', () => {
+    const native = realpathSync.native;
+    const deep = join(tmpdir(), ...Array.from({ length: 40 }, () => 'd'.repeat(100)));
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path).length > 1000) throw Object.assign(new Error('long'), { code: 'ENAMETOOLONG' });
+      return native(path, options);
+    });
+    expect(realpathSyncNearest(deep)).toBeNull();
+    expect(withRealPath(deep)).toEqual([deep]);
   });
 
   it('retries with the JS realpath on win32 when native throws EISDIR', () => {

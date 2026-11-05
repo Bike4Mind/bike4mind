@@ -1,13 +1,13 @@
 import { readlink, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
-import { MISSING_PATH_CODES as MISSING } from '../tools/paths';
+import { isMissingPathError } from '../tools/paths';
 import type { PermissionSubject } from './rules';
 
 export async function physicalPath(path: string): Promise<string> {
   try {
     return await realpath(path);
   } catch (error) {
-    if (!(error instanceof Error && 'code' in error && MISSING.has(String(error.code)))) throw error;
+    if (!(error instanceof Error && 'code' in error && isMissingPathError(error.code, path))) throw error;
     // realpath cannot follow a dangling link, but a write will still follow it to create its target.
     try {
       const target = await readlink(path);
@@ -16,7 +16,7 @@ export async function physicalPath(path: string): Promise<string> {
       if (!(
         linkError instanceof Error &&
         'code' in linkError &&
-        (linkError.code === 'EINVAL' || MISSING.has(String(linkError.code)))
+        (linkError.code === 'EINVAL' || isMissingPathError(linkError.code, path))
       ))
         throw linkError;
     }

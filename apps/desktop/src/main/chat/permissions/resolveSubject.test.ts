@@ -27,6 +27,13 @@ describe('resolveSubject', () => {
     expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
   });
 
+  it('keeps the failure when ENAMETOOLONG comes from the total length of short components', async () => {
+    const deep = join(root, ...Array.from({ length: 60 }, () => 'd'.repeat(100)));
+    await expect(resolveSubject({ tool: 'file_read', paths: [deep] })).rejects.toMatchObject({
+      code: 'ENAMETOOLONG',
+    });
+  });
+
   it('resolves a name holding a NUL as a missing file below its existing folder', async () => {
     const kept = join(root, 'x\0\u{f05c}', 'notes.txt');
     const command = 'cat notes.txt';

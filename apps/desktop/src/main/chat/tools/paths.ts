@@ -315,16 +315,18 @@ export function withRealPath(path: string): string[] {
 }
 
 /**
- * Codes meaning no file by this name exists. ENAMETOOLONG is one: a shell operand such as a
- * multi-line `git commit -m` message is checked like a path, and no file can carry that name.
- * So is ERR_INVALID_ARG_VALUE, a NUL in the name: a WSL share path keeps some Linux names behind one.
+ * Codes meaning no file by this name exists. ERR_INVALID_ARG_VALUE is a NUL in the name; ENAMETOOLONG
+ * counts only when one component exceeds 255 characters (see isMissingPathError).
  */
-export const MISSING_PATH_CODES: ReadonlySet<string> = new Set([
-  'ENOENT',
-  'ENOTDIR',
-  'ENAMETOOLONG',
-  'ERR_INVALID_ARG_VALUE',
-]);
+export const MISSING_PATH_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'ERR_INVALID_ARG_VALUE']);
+
+const MAX_COMPONENT_LENGTH = 255;
+
+/** True when `code` from resolving `path` means no such file exists. A too-long total path could still hold a real link. */
+export function isMissingPathError(code: unknown, path: string): boolean {
+  if (MISSING_PATH_CODES.has(String(code))) return true;
+  return code === 'ENAMETOOLONG' && path.split(/[\\/]/).some(part => part.length > MAX_COMPONENT_LENGTH);
+}
 
 // Windows volumes outside the mount manager (RAM disks, some virtual drives) make native throw EISDIR.
 function nativeOrJsRealpath(path: string): string {
@@ -345,7 +347,7 @@ export function realpathSyncNearest(path: string): string | null {
     return nativeOrJsRealpath(path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (!MISSING_PATH_CODES.has(String(code))) return null;
+    if (!isMissingPathError(code, path)) return null;
     const parent = dirname(path);
     if (parent === path) return path;
     const real = realpathSyncNearest(parent);
