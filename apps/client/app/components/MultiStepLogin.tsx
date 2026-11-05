@@ -35,6 +35,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
+import OtcNoCodeHint from './OtcNoCodeHint';
 import SignupHoneypot from './SignupHoneypot';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
@@ -969,6 +970,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   capped={rateLimit.capped}
                   testId="login-otc-rate-limit-alert"
                 />
+                <OtcNoCodeHint />
               </form>
             )}
 

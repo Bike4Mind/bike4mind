@@ -19,7 +19,7 @@ import { checkTurnstileToken, requireTurnstile } from '@server/middlewares/requi
 import { getTurnstileStepUpPolicy } from '@server/utils/auth/turnstile';
 import { wasTurnstileVerified } from '@server/auth/signupChallenge';
 import type { Request } from 'express';
-import { TURNSTILE_ACTION_OTC_SEND } from '@bike4mind/common';
+import { TURNSTILE_ACTION_OTC_SEND, emailDomainOf } from '@bike4mind/common';
 import { EmailEvents } from '@server/utils/eventBus';
 import { evaluateSignupSignals } from '@server/utils/signupBotChecks';
 import { getLogoUrl } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
@@ -81,10 +81,16 @@ const handler = baseApi({ auth: false })
     const challenge = await challengePastBudget(req, normalizedEmail, ipBucket);
     if (challenge) return res.status(challenge.status).json(challenge.body);
 
-    // A refused address gets the same response and budgets with nothing mailed, and an existing
-    // account is never refused, so neither the refusal nor the account's existence shows.
-    const refusal = await otcRecipientRefusal(normalizedEmail, req.logger);
-    const deliver = !refusal || (await userRepository.findByEmail(normalizedEmail)) !== null;
+    // A refused address with no account gets the same response and budgets but no mail. The account
+    // is looked up on every send so the work does not depend on the refusal; a failed lookup mails.
+    const [refusal, account] = await Promise.all([
+      otcRecipientRefusal(normalizedEmail, req.logger),
+      userRepository.findByEmail(normalizedEmail).catch((error: unknown) => {
+        req.logger.warn('otc-account-lookup-failed', error);
+        return undefined;
+      }),
+    ]);
+    const deliver = !refusal || account !== null;
 
     // Atomic per-recipient cooldown (keyed on PendingOtcToken, written for every send, so it never reveals whether an account exists).
     // tryReserveSlot atomically claims a reservation slot for this email; if the
@@ -128,7 +134,8 @@ const handler = baseApi({ auth: false })
           mailer: {
             sendOTCEmail: async (toEmail: string, code: string) => {
               if (!deliver) {
-                req.logger.info('otc-code-suppressed', { reason: refusal });
+                // Counted by a metric filter in infra/signupAlarms.ts; keep the message in sync.
+                req.logger.info('otc-code-suppressed', { reason: refusal, domain: emailDomainOf(toEmail) });
                 return;
               }
               const logoUrl = getLogoUrl();

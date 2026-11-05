@@ -658,17 +658,29 @@ describe('/api/otc/send recipient checks', () => {
   it('answers a refused address with no account exactly as a delivered one, without mailing', async () => {
     const delivered = await send();
     expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
-    expect(mockFindByEmail).not.toHaveBeenCalled();
+    expect(mockFindByEmail).toHaveBeenCalledWith(EMAIL);
 
     vi.mocked(EmailEvents.Send.publish).mockClear();
     mockRecipientRefusal.mockResolvedValue('blocked-domain');
     const refused = await send();
 
     expect(EmailEvents.Send.publish).not.toHaveBeenCalled();
-    expect(refused.req.logger.info).toHaveBeenCalledWith('otc-code-suppressed', { reason: 'blocked-domain' });
+    expect(refused.req.logger.info).toHaveBeenCalledWith('otc-code-suppressed', {
+      reason: 'blocked-domain',
+      domain: EMAIL.split('@')[1],
+    });
+    expect(JSON.stringify(vi.mocked(refused.req.logger.info).mock.calls)).not.toContain(EMAIL);
+    expect(mockFindByEmail).toHaveBeenCalledTimes(2);
     expect(refused.res._getStatusCode()).toBe(delivered.res._getStatusCode());
     expect(refused.res._getJSONData()).toEqual(delivered.res._getJSONData());
-    expect(mockConfirmReservation).toHaveBeenLastCalledWith(EMAIL, reservedAt, 'real-nonce', 'code-hash', undefined);
+    expect(mockConfirmReservation).toHaveBeenLastCalledWith(
+      EMAIL,
+      reservedAt,
+      'real-nonce',
+      'code-hash',
+      undefined,
+      []
+    );
   });
 
   it('still mails an existing account on a refused domain', async () => {
@@ -679,6 +691,17 @@ describe('/api/otc/send recipient checks', () => {
 
     expect(mockFindByEmail).toHaveBeenCalledWith(EMAIL);
     expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('mails a refused address when the account lookup fails', async () => {
+    mockRecipientRefusal.mockResolvedValue('blocked-domain');
+    mockFindByEmail.mockRejectedValueOnce(new Error('db down'));
+
+    const { req, res } = await send();
+
+    expect(EmailEvents.Send.publish).toHaveBeenCalledTimes(1);
+    expect(req.logger.warn).toHaveBeenCalledWith('otc-account-lookup-failed', expect.any(Error));
     expect(res._getStatusCode()).toBe(200);
   });
 
