@@ -110,16 +110,25 @@ export interface ModelServerLaunchView {
    * start here, kept after it stops, and the variables they came from ("OLLAMA_KV_CACHE_TYPE=q8_0").
    */
   prefill: { settings: ModelServerLaunchSettings; from: string } | null;
+  /** This computer runs Windows, which cannot take back a server Desktop started before it closed unexpectedly. */
+  windowsHost?: boolean;
   /** What answers there, for "This <noun> was not started by Bike4Mind Desktop": "Ollama server", "llama-server". */
   noun: string;
 }
 
+export const WINDOWS_ORPHAN_HINT =
+  'If Desktop was running it before it closed unexpectedly, end ollama.exe or llama-server.exe in Task Manager, then start it here.';
+
 /** Why Desktop leaves this server's launch settings alone; null when it applies them. */
-export function launchLockedMessage(launch: Pick<ModelServerLaunchView, 'owner' | 'noun'>): string | null {
+export function launchLockedMessage(
+  launch: Pick<ModelServerLaunchView, 'owner' | 'noun'> & { windowsHost?: boolean }
+): string | null {
   if (launch.owner === 'remote')
     return `This ${launch.noun} runs on another machine, so Desktop can't start it or apply these settings.`;
-  if (launch.owner === 'other')
-    return `This ${launch.noun} was not started by Bike4Mind Desktop, so Desktop can't apply these settings. To use them, stop that server and start it from Desktop.`;
+  if (launch.owner === 'other') {
+    const message = `This ${launch.noun} was not started by Bike4Mind Desktop, so Desktop can't apply these settings. To use them, stop that server and start it from Desktop.`;
+    return launch.windowsHost ? `${message} ${WINDOWS_ORPHAN_HINT}` : message;
+  }
   return null;
 }
 

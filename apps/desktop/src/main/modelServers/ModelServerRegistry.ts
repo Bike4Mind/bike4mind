@@ -47,6 +47,7 @@ import {
   serverIdOfRuntime,
   serverManagement,
   serverRuntimeId,
+  WINDOWS_ORPHAN_HINT,
   type FlashAttention,
   type LaunchOwner,
   type LaunchRuntime,
@@ -64,7 +65,7 @@ import {
 import type { LocalChat } from '../chat/localChat';
 import { OllamaLocal, type LoadSettingsReader } from '../chat/OllamaLocal';
 import type { ModelHubServer } from '../models/ModelHubService';
-import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import type { ProcessProbe } from './adoptedServers';
 import { ServerCredentialsError, ServerForbiddenError, ServerUnreachableError } from './errors';
 import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
@@ -170,6 +171,8 @@ export interface ModelServerRegistryDeps {
   portFree?(port: number): Promise<boolean>;
   /** Where the servers Desktop runs are listed, so a launch after a crash takes them back; none without it. */
   ownedServers?: StoreFile;
+  /** Seals the llama-server key in `ownedServers`, as the store seals credentials. */
+  ownedCipher?: SecretCipher;
   /** For taking those back; defaults to this computer's (hostProcessProbe). */
   processes?: ProcessProbe;
 }
@@ -229,6 +232,7 @@ export class ModelServerRegistry {
       logger: deps.logger,
       changed: id => this.launchChanged(id),
       records: deps.ownedServers,
+      cipher: deps.ownedCipher,
       processes: deps.processes,
     });
   }
@@ -329,7 +333,9 @@ export class ModelServerRegistry {
       throw new Error(
         this.launchStates.get(id)?.portHeld
           ? portHeldMessage(target.port)
-          : `Something already answers at 127.0.0.1:${target.port}. Stop it first.`
+          : `Something already answers at 127.0.0.1:${target.port}. Stop it first.${
+              this.platform === 'win32' ? ` ${WINDOWS_ORPHAN_HINT}` : ''
+            }`
       );
     }
     const settings = this.launchSettings(id);
@@ -345,7 +351,11 @@ export class ModelServerRegistry {
     const owner = this.ownerOf(id);
     if (owner !== 'desktop') {
       const target = this.launchTarget(id);
-      throw new Error(target ? launchRefusal(owner, nounOf(target)) : 'That model server is no longer saved.');
+      throw new Error(
+        target
+          ? launchRefusal(owner, nounOf(target), this.platform === 'win32')
+          : 'That model server is no longer saved.'
+      );
     }
     await this.supervisor.stop(id);
     return this.check(id);
@@ -956,6 +966,7 @@ export class ModelServerRegistry {
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
       prefill: lastObserved && owner !== 'remote' ? observedPrefill(lastObserved) : null,
       noun: nounOf(target),
+      ...(this.platform === 'win32' ? { windowsHost: true } : {}),
     };
   }
 
@@ -964,7 +975,9 @@ export class ModelServerRegistry {
     const target = this.launchTarget(id);
     if (!target) throw new Error('That model server is no longer saved.');
     const owner = this.ownerOf(id);
-    if (owner === 'remote' || owner === 'other') throw new Error(launchRefusal(owner, nounOf(target)));
+    if (owner === 'remote' || owner === 'other') {
+      throw new Error(launchRefusal(owner, nounOf(target), this.platform === 'win32'));
+    }
     const runtime = kind ? (kind === 'ollama' ? 'ollama' : 'llama-server') : target.runtime;
     const problem = launchSettingsProblem(settings, runtime);
     if (problem) throw new Error(problem);
@@ -1293,8 +1306,8 @@ function nounOf(target: Pick<LaunchTarget, 'runtime' | 'product'>): string {
   return target.product ? PRODUCT_NOUNS[target.product] : 'server';
 }
 
-function launchRefusal(owner: LaunchOwner, noun: string): string {
-  return launchLockedMessage({ owner, noun }) ?? `Desktop is not running this ${noun}.`;
+function launchRefusal(owner: LaunchOwner, noun: string, windowsHost = false): string {
+  return launchLockedMessage({ owner, noun, windowsHost }) ?? `Desktop is not running this ${noun}.`;
 }
 
 function answers(health: ModelServerHealth): boolean {

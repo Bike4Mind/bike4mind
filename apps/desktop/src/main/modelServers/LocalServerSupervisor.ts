@@ -1,10 +1,11 @@
 import { findOllamaBinary, LlamaServerRuntime, startOllamaServe } from '@bike4mind/local-models';
 import type { LaunchRuntime, ModelServerLaunchSettings } from '@shared/modelServers';
-import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
 import { findOnPath, resolveUserPath } from '../chat/tools/userPath';
 import {
   adoptedHandle,
   hostProcessProbe,
+  ownedEntryCount,
   readOwnedRecords,
   sameStartTime,
   writeOwnedRecords,
@@ -60,6 +61,8 @@ export interface LocalServerSupervisorDeps {
   changed(id: string): void;
   /** Lists the servers Desktop runs while they run, for `adopt`; without it nothing is listed or adopted. */
   records?: StoreFile;
+  /** Seals a llama-server key in `records`; without one that works, llama-server is neither listed nor adopted. */
+  cipher?: SecretCipher;
   /** Defaults to this computer's (hostProcessProbe). */
   processes?: ProcessProbe;
   adoptedTiming?: AdoptedTiming;
@@ -93,8 +96,15 @@ export class LocalServerSupervisor {
     const file = this.deps.records;
     if (!file) return;
     let found: OwnedRecord[];
+    let listedCount: number;
     try {
-      found = readOwnedRecords(await file.read());
+      const text = await file.read();
+      const { cipher } = this.deps;
+      found = readOwnedRecords(
+        text,
+        cipher?.isEncryptionAvailable() ? sealed => cipher.decryptString(Buffer.from(sealed, 'base64')) : undefined
+      );
+      listedCount = ownedEntryCount(text);
     } catch (error) {
       this.deps.logger.warn(`MODEL SERVERS: could not read the servers Desktop ran: ${String(error)}`);
       return;
@@ -112,12 +122,13 @@ export class LocalServerSupervisor {
       this.records.set(record.id, record);
       this.watch(record.id, slot, handle);
     }
-    if (this.records.size !== found.length) await this.persist();
+    if (this.records.size !== listedCount) await this.persist();
   }
 
   private async stillRuns(record: OwnedRecord): Promise<boolean> {
     const startTime = await this.processes.startTime(record.pid).catch(() => null);
     if (!sameStartTime(startTime, record.startTime)) return false;
+    if (!(await this.processes.leadsGroup(record.pid).catch(() => false))) return false;
     return this.processes.listening(record.port).catch(() => false);
   }
 
@@ -218,6 +229,7 @@ export class LocalServerSupervisor {
   /** Lists a server this run started, for `adopt`; one whose start time cannot be read is never adopted, so not listed. */
   private async remember(id: string, slot: Slot, handle: ServerHandle): Promise<void> {
     if (!this.deps.records) return;
+    if (handle.apiKey && !this.deps.cipher?.isEncryptionAvailable()) return;
     const startTime = await this.processes.startTime(handle.pid).catch(() => null);
     if (!startTime || this.slots.get(id) !== slot || !handle.running) return;
     const { runtime, port, settings } = slot.request;
@@ -242,7 +254,11 @@ export class LocalServerSupervisor {
   private persist(): Promise<void> {
     const file = this.deps.records;
     if (!file) return Promise.resolve();
-    const contents = writeOwnedRecords([...this.records.values()]);
+    const { cipher } = this.deps;
+    const contents = writeOwnedRecords(
+      [...this.records.values()],
+      cipher?.isEncryptionAvailable() ? key => cipher.encryptString(key).toString('base64') : undefined
+    );
     this.writing = this.writing
       .then(() => file.write(contents))
       .catch(error =>

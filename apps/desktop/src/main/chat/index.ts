@@ -526,6 +526,7 @@ export function registerChat(
       unifiedMemory: async () => (await localHardware.profile())?.memoryKind === 'unified',
     }),
     ownedServers: privateFile(join(userData, 'local-servers.json')),
+    ownedCipher: safeStorage,
     localSpecsChanged: () => {
       forgetLocalContexts();
       localSizing.forget?.();

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { hostProcessProbe, sameStartTime, type ProcessProbe } from './adoptedServers';
+import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import { adoptedHandle, hostProcessProbe, readOwnedRecords, sameStartTime, type ProcessProbe } from './adoptedServers';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 
@@ -174,11 +175,12 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
   }
 
   /** Processes by pid with their start times; a signal ends one. */
-  function processes(starts: Record<number, string>, listening = true) {
+  function processes(starts: Record<number, string>, listening = true, followers = new Set<number>()) {
     const running = new Map(Object.entries(starts).map(([pid, start]) => [Number(pid), start]));
     const signals: [number, string][] = [];
     const probe: ProcessProbe = {
       startTime: async pid => running.get(pid) ?? null,
+      leadsGroup: async pid => !followers.has(pid),
       listening: async () => listening,
       signal: (pid, signal) => {
         signals.push([pid, signal]);
@@ -199,15 +201,30 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     settings: { kvCacheType: 'q8_0' },
   };
 
-  function adopter(file: ReturnType<typeof memoryFile>, probe: ProcessProbe) {
+  const cipher: SecretCipher = {
+    isEncryptionAvailable: () => true,
+    encryptString: plain => Buffer.from(`enc:${plain}`, 'utf8'),
+    decryptString: encrypted => {
+      const text = encrypted.toString('utf8');
+      if (!text.startsWith('enc:')) throw new Error('bad ciphertext');
+      return text.slice(4);
+    },
+  };
+
+  function adopter(
+    file: ReturnType<typeof memoryFile>,
+    probe: ProcessProbe,
+    options: { cipher?: SecretCipher | null; handle?: ServerHandle } = {}
+  ) {
     const changed = vi.fn();
     const warn = vi.fn();
-    const start = vi.fn<Launchers['start']>(async () => handle());
+    const start = vi.fn<Launchers['start']>(async () => options.handle ?? handle());
     const instance = new LocalServerSupervisor({
       launchers: { program: async () => ({ path: '/bin/x' }), start },
       logger: { warn },
       changed,
       records: file,
+      ...(options.cipher === null ? {} : { cipher: options.cipher ?? cipher }),
       processes: probe,
       adoptedTiming: { pollMs: 10, stopTimeoutMs: 50 },
     });
@@ -225,7 +242,7 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
 
   it('takes back a server an earlier run started, with the settings it started with, and can stop it', async () => {
     const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
-    const { probe, signals } = processes({ 4321: '1700000001:555' });
+    const { probe, signals } = processes({ 4321: RECORD.startTime });
     const { instance } = adopter(file, probe);
     await instance.adopt(() => true);
     expect(instance.owned('a')).toEqual({
@@ -241,12 +258,112 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     expect(listed(file)).toEqual([]);
   });
 
+  const ROUTER = { ...RECORD, runtime: 'llama-server', settings: { modelsDir: '/m' } };
+  const sealed = (key: string) => Buffer.from(`enc:${key}`, 'utf8').toString('base64');
+
   it("keeps a router's key, so requests to the router it takes back still get in", async () => {
-    const router = { ...RECORD, runtime: 'llama-server', settings: { modelsDir: '/m' }, apiKey: 'k-zz' };
-    const file = memoryFile(JSON.stringify({ version: 1, servers: [router] }));
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [{ ...ROUTER, sealedKey: sealed('k-zz') }] }));
     const { instance } = adopter(file, processes({ 4321: RECORD.startTime }).probe);
     await instance.adopt(() => true);
     expect(instance.headers('a')).toEqual({ authorization: 'Bearer k-zz' });
+    expect(file.contents).not.toContain('k-zz');
+    expect(listed(file)[0].sealedKey).toBe(sealed('k-zz'));
+  });
+
+  it("never writes a router's key in the clear, and lists no router it cannot seal the key of", async () => {
+    const file = memoryFile();
+    const { instance } = adopter(file, processes({ 4321: RECORD.startTime }).probe, { handle: handle('k-zz') });
+    await instance.start('a', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(file.contents).not.toContain('k-zz');
+    expect(listed(file)[0]).toMatchObject({ sealedKey: sealed('k-zz') });
+    expect(listed(file)[0].apiKey).toBeUndefined();
+
+    const unsealed = memoryFile();
+    const plain = adopter(unsealed, processes({ 4321: RECORD.startTime }).probe, {
+      cipher: null,
+      handle: handle('k-zz'),
+    });
+    await plain.instance.start('a', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(unsealed.contents).toBeNull();
+  });
+
+  it('does not take back a router whose key cannot be decrypted, and deletes its record', async () => {
+    const records = [
+      { ...ROUTER, sealedKey: Buffer.from('garbage').toString('base64') },
+      { ...RECORD, id: 'b', pid: 5555, port: 11501 },
+    ];
+    const file = memoryFile(JSON.stringify({ version: 1, servers: records }));
+    const { instance } = adopter(file, processes({ 4321: RECORD.startTime, 5555: RECORD.startTime }).probe);
+    await instance.adopt(() => true);
+    expect(instance.owned('a')).toBeNull();
+    expect(instance.owned('b')).not.toBeNull();
+    expect(listed(file).map((record: { id: string }) => record.id)).toEqual(['b']);
+
+    const keyless = memoryFile(JSON.stringify({ version: 1, servers: [{ ...ROUTER, apiKey: 'k-zz' }] }));
+    const other = adopter(keyless, processes({ 4321: RECORD.startTime }).probe);
+    await other.instance.adopt(() => true);
+    expect(other.instance.owned('a')).toBeNull();
+    expect(listed(keyless)).toEqual([]);
+  });
+
+  it('never takes back pid 1 or a process that does not lead its own group', async () => {
+    expect(readOwnedRecords(JSON.stringify({ servers: [{ ...RECORD, pid: 1 }] }))).toEqual([]);
+    expect(readOwnedRecords(JSON.stringify({ servers: [{ ...RECORD, pid: 2 }] }))).toHaveLength(1);
+
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
+    const { probe, signals } = processes({ 4321: RECORD.startTime }, true, new Set([4321]));
+    const { instance } = adopter(file, probe);
+    await instance.adopt(() => true);
+    expect(instance.owned('a')).toBeNull();
+    expect(signals).toEqual([]);
+    expect(listed(file)).toEqual([]);
+  });
+
+  it('lists nothing when Stop lands during the start time read', async () => {
+    for (const how of ['stop', 'exit']) {
+      const file = memoryFile();
+      const { probe } = processes({ 4321: RECORD.startTime });
+      let release: (time: string) => void = () => undefined;
+      const slow: ProcessProbe = { ...probe, startTime: () => new Promise(resolve => (release = resolve)) };
+      const fake = handle();
+      if (how === 'stop') fake.stop = vi.fn(async () => undefined);
+      const { instance } = adopter(file, slow, { handle: fake });
+      const starting = instance.start('a', OLLAMA);
+      await vi.waitFor(() => expect(instance.owned('a')).not.toBeNull());
+      if (how === 'stop') await instance.stop('a');
+      else fake.running = false;
+      release(RECORD.startTime);
+      await starting;
+      expect(file.contents).toBeNull();
+    }
+  });
+
+  it('ends a server it took back that is already gone without signalling', async () => {
+    const { probe, signals, running } = processes({ 4321: RECORD.startTime });
+    const adopted = adoptedHandle({ ...RECORD, runtime: 'ollama', settings: {} }, probe, { pollMs: 60_000 });
+    running.delete(4321);
+    await adopted.stop();
+    expect(signals).toEqual([]);
+    expect(adopted.running).toBe(false);
+  });
+
+  it('escalates to SIGKILL when the server it took back ignores SIGTERM', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
+    const { probe, running, signals } = processes({ 4321: RECORD.startTime });
+    const stubborn: ProcessProbe = {
+      ...probe,
+      signal: (pid, signal) => {
+        signals.push([pid, signal]);
+        if (signal === 'SIGKILL') running.delete(pid);
+      },
+    };
+    const { instance } = adopter(file, stubborn);
+    await instance.adopt(() => true);
+    await instance.stop('a');
+    expect(signals).toEqual([
+      [4321, 'SIGTERM'],
+      [4321, 'SIGKILL'],
+    ]);
   });
 
   it('never takes one back on its pid alone, and drops the records it does not take', async () => {
@@ -294,12 +411,121 @@ describe('hostProcessProbe', () => {
     expect(await hostProcessProbe('win32').startTime(process.pid)).toBeNull();
   });
 
-  it('matches a Linux start time on its tick count, allowing the boot time to drift by a second or two', () => {
-    expect(sameStartTime('1700000000:555', '1700000001:555')).toBe(true);
-    expect(sameStartTime('1700000000:555', '1700000000:556')).toBe(false);
-    expect(sameStartTime('1700000000:555', '1700000010:555')).toBe(false);
+  it('matches start times exactly', () => {
+    expect(sameStartTime('boot-a:555', 'boot-a:555')).toBe(true);
+    expect(sameStartTime('boot-a:555', 'boot-a:556')).toBe(false);
+    expect(sameStartTime('boot-a:555', 'boot-b:555')).toBe(false);
     expect(sameStartTime('Wed Nov  4 10:00:00 2026', 'Wed Nov  4 10:00:00 2026')).toBe(true);
     expect(sameStartTime(null, null)).toBe(false);
+  });
+
+  /** A /proc/<pid>/stat line: after the state, field 5 (pgrp) is third and field 22 (start ticks) twentieth. */
+  const statLine = (pid: number, { state = 'S', pgrp = pid, ticks = 555 } = {}) => {
+    const fields = Array.from({ length: 22 }, () => '0');
+    fields[0] = state;
+    fields[2] = String(pgrp);
+    fields[19] = String(ticks);
+    return `${pid} (llama (srv) x) ${fields.join(' ')}`;
+  };
+  const proc = (files: Record<string, string>) => async (path: string) => {
+    if (path in files) return files[path];
+    throw new Error(`ENOENT ${path}`);
+  };
+  const BOOT = '/proc/sys/kernel/random/boot_id';
+
+  it('identifies a Linux process by boot id and start ticks, and not by the clock', async () => {
+    let clock = 1_700_000_000;
+    const files = {
+      '/proc/4321/stat': statLine(4321),
+      [BOOT]: 'aaaa-1111\n',
+    };
+    const read = async (path: string) => (path === '/proc/stat' ? `btime ${clock}\n` : proc(files)(path));
+    const probe = hostProcessProbe('linux', { readText: read });
+    const first = await probe.startTime(4321);
+    clock += 100;
+    expect(await probe.startTime(4321)).toBe(first);
+
+    const rebooted = hostProcessProbe('linux', { readText: proc({ ...files, [BOOT]: 'bbbb-2222\n' }) });
+    expect(sameStartTime(first, await rebooted.startTime(4321))).toBe(false);
+  });
+
+  it('does not take back a process after a reboot, and keeps one after the clock steps', async () => {
+    const files = { '/proc/4321/stat': statLine(4321), [BOOT]: 'aaaa-1111\n' };
+    const listening = async () => true;
+    const stored = await hostProcessProbe('linux', { readText: proc(files) }).startTime(4321);
+    const record = {
+      servers: [{ id: 'a', runtime: 'ollama', pid: 4321, startTime: stored, port: 11500, startedAt: 'x' }],
+    };
+
+    const rebooted = { ...files, [BOOT]: 'bbbb-2222\n' };
+    const afterReboot = new LocalServerSupervisor({
+      logger: { warn: vi.fn() },
+      changed: vi.fn(),
+      records: { read: async () => JSON.stringify(record), write: async () => undefined },
+      processes: { ...hostProcessProbe('linux', { readText: proc(rebooted) }), listening },
+    });
+    await afterReboot.adopt(() => true);
+    expect(afterReboot.owned('a')).toBeNull();
+
+    const steppedClock = async (path: string) => (path === '/proc/stat' ? 'btime 1800000000\n' : proc(files)(path));
+    const sameBoot = new LocalServerSupervisor({
+      logger: { warn: vi.fn() },
+      changed: vi.fn(),
+      records: { read: async () => JSON.stringify(record), write: async () => undefined },
+      processes: { ...hostProcessProbe('linux', { readText: steppedClock }), listening },
+      adoptedTiming: { pollMs: 5 },
+    });
+    await sameBoot.adopt(() => true);
+    await new Promise(done => setTimeout(done, 40));
+    expect(sameBoot.owned('a')).not.toBeNull();
+  });
+
+  it('reads no start time for a zombie, or a process that is gone', async () => {
+    const files = { '/proc/4321/stat': statLine(4321, { state: 'Z' }), [BOOT]: 'aaaa-1111\n' };
+    const probe = hostProcessProbe('linux', { readText: proc(files) });
+    expect(await probe.startTime(4321)).toBeNull();
+    expect(await probe.startTime(4322)).toBeNull();
+  });
+
+  it('says a Linux process leads its group only when its group is its pid', async () => {
+    const files = { '/proc/10/stat': statLine(10), '/proc/11/stat': statLine(11, { pgrp: 10 }) };
+    const probe = hostProcessProbe('linux', { readText: proc(files) });
+    expect(await probe.leadsGroup(10)).toBe(true);
+    expect(await probe.leadsGroup(11)).toBe(false);
+    expect(await probe.leadsGroup(12)).toBe(false);
+  });
+
+  it('asks ps for the macOS start time in the C locale and UTC', async () => {
+    const run = vi.fn(
+      (_file: string, _args: string[], _options: unknown, done: (e: Error | null, out: string) => void) =>
+        done(null, 'Wed Nov  4 10:00:00 2026\n')
+    );
+    const probe = hostProcessProbe('darwin', { execFile: run });
+    expect(await probe.startTime(4321)).toBe('Wed Nov  4 10:00:00 2026');
+    expect(run).toHaveBeenCalledWith(
+      'ps',
+      ['-o', 'lstart=', '-p', '4321'],
+      expect.objectContaining({ env: expect.objectContaining({ LC_ALL: 'C', TZ: 'UTC' }) }),
+      expect.any(Function)
+    );
+  });
+
+  it('signals the process group with the negative pid, and the process alone when that fails', () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      hostProcessProbe('linux').signal(4321, 'SIGTERM');
+      expect(kill).toHaveBeenLastCalledWith(-4321, 'SIGTERM');
+      kill.mockImplementationOnce(() => {
+        throw new Error('ESRCH');
+      });
+      hostProcessProbe('linux').signal(4321, 'SIGKILL');
+      expect(kill.mock.calls.slice(-2)).toEqual([
+        [-4321, 'SIGKILL'],
+        [4321, 'SIGKILL'],
+      ]);
+    } finally {
+      kill.mockRestore();
+    }
   });
 });
 

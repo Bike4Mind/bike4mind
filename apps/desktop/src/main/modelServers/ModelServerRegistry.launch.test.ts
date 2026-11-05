@@ -48,6 +48,7 @@ function setup(
     portFree?: (port: number) => Promise<boolean>;
     ownedServers?: StoreFile;
     processes?: ProcessProbe;
+    platform?: NodeJS.Platform;
   } = {}
 ) {
   const up = new Set<string>();
@@ -132,6 +133,7 @@ function setup(
     portFree: options.portFree ?? (async port => !up.has(`http://127.0.0.1:${port}`)),
     ownedServers: options.ownedServers,
     processes: options.processes,
+    ...(options.platform ? { platform: options.platform } : {}),
   });
   const saved = vi.fn();
   registry.onServerSaved(saved);
@@ -474,6 +476,7 @@ describe('ModelServerRegistry launching servers', () => {
     });
     const processes: ProcessProbe = {
       startTime: async pid => live.get(pid) ?? null,
+      leadsGroup: async () => true,
       listening: async () => true,
       signal,
     };
@@ -493,6 +496,54 @@ describe('ModelServerRegistry launching servers', () => {
     expect(stopped.launch).toMatchObject({ owner: 'none', canStart: true });
     expect(JSON.parse((await ownedServers.read())!).servers).toEqual([]);
     expect(launchers.start).not.toHaveBeenCalled();
+  });
+
+  it('does not take back a server listed for another port or runtime than the saved address', async () => {
+    const base = {
+      pid: 777,
+      startTime: '1700000000:42',
+      startedAt: '2026-11-04T00:00:00.000Z',
+      settings: {},
+    };
+    const records = [
+      { ...base, id: 'local', runtime: 'ollama', port: 11500 },
+      { ...base, id: 'local', runtime: 'llama-server', port: 11434 },
+    ];
+    for (const record of records) {
+      const ownedServers = memoryFile();
+      await ownedServers.write(JSON.stringify({ version: 1, servers: [record] }));
+      const signal = vi.fn();
+      const processes: ProcessProbe = {
+        startTime: async () => record.startTime,
+        leadsGroup: async () => true,
+        listening: async () => true,
+        signal,
+      };
+      const { registry, up } = setup({ ownedServers, processes });
+      up.add(LOCAL_OLLAMA_URL);
+      await registry.check('local');
+      expect((await local(registry)).launch).toMatchObject({ owner: 'other' });
+      expect(JSON.parse((await ownedServers.read())!).servers).toEqual([]);
+      expect(signal).not.toHaveBeenCalled();
+    }
+  });
+
+  it('tells a Windows user how to free a server Desktop cannot take back after a crash', async () => {
+    const hint =
+      'If Desktop was running it before it closed unexpectedly, end ollama.exe or llama-server.exe in Task Manager, then start it here.';
+    for (const platform of ['win32', 'linux'] as const) {
+      const { registry, up } = setup({ platform });
+      up.add(LOCAL_OLLAMA_URL);
+      await registry.check('local');
+      const view = (await local(registry)).launch!;
+      expect(launchLockedMessage(view)!.includes(hint)).toBe(platform === 'win32');
+      await expect(registry.update('local', { launch: { kvCacheType: 'q8_0' } })).rejects.toThrow(
+        platform === 'win32' ? hint : 'start it from Desktop.'
+      );
+      await expect(registry.startServer('local')).rejects.toThrow(
+        platform === 'win32' ? hint : 'Something already answers at 127.0.0.1:11434. Stop it first.'
+      );
+    }
   });
 
   it('sizes a remote Ollama with the KV cache type entered under Hardware', async () => {
