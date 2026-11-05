@@ -7,7 +7,7 @@ The default stack runs app, chatcompletion, background worker, WebSocket gateway
 ## Prerequisites
 
 - Kubernetes 1.27 or newer, Helm 3.19 or newer, and a working default storage class, or `storage.className` explicitly set to an available class.
-- A trusted evaluation namespace. MongoDB and ElasticMQ have no authentication here. ClusterIP services have no public ingress, but other workloads in the cluster can reach them unless the cluster's network policy prevents it. Do not expose backing services publicly. TLS, authenticated database operation and ingress are separate production work. Backup and restore: see [Backup and restore](#backup-and-restore).
+- A trusted evaluation namespace. MongoDB and ElasticMQ have no authentication here. ClusterIP services have no public ingress, but other workloads in the cluster can reach them unless the cluster's network policy prevents it. Do not expose backing services publicly. TLS, authenticated database operation and ingress are separate production work. For backups, see [Backup and restore](#backup-and-restore).
 - A registry reachable by every node, including credentials in `imagePullSecrets` if needed. All application images must come from the same source revision. Tagged references and digests are accepted; untagged images and `:latest` are rejected. For repeatable tests and rollback, use digests or immutable tags.
 - Available PVC capacity: 10 GiB MongoDB, 20 GiB object storage and 5 GiB queues by default. Configure sizes before creating PVCs. Single replicas and ReadWriteOnce storage provide no high availability.
 
@@ -114,24 +114,24 @@ This writes `mongo.archive.gz` (`mongodump --oplog`, online), `objects.tar` (a `
 
 **Restore into a fresh release:**
 
-1. Create the namespace and recreate the Secret from the backed-up env file (same encryption keys).
-2. `helm install` the chart with the same values and wait for it (`--wait --wait-for-jobs`); the init Job recreates the buckets, webhooks and lifecycle rules.
-3. Run the restore:
+1. Create the namespace and recreate the Secret from the backed-up env file (same encryption keys). To make that file, export the live Secret before a disaster, for example `kubectl -n bike4mind-eval get secret bike4mind-runtime -o json | python3 -c 'import sys,json,base64; [print(k+"="+base64.b64decode(v).decode()) for k,v in json.load(sys.stdin)["data"].items()]' > runtime.env`, and keep it encrypted; it feeds the `kubectl create secret generic --from-env-file` command in the install steps.
+2. `helm install` the chart with the same values and wait for it (`--wait --wait-for-jobs`); the init Job recreates the buckets, webhooks and lifecycle rules. Once running, the worker seeds a few documents into the `bike4mind` database, so a freshly installed release is never empty.
+3. Run the restore with `--yes`. It is expected here: it is the flag for a target that already holds data, including that boot-time seed.
 
    ```sh
-   python3 selfhost/kubernetes/backup.py restore --namespace NEW_NS --release NEW_RELEASE --from ./b4m-backup-DIR
+   python3 selfhost/kubernetes/backup.py restore --namespace NEW_NS --release NEW_RELEASE --from ./b4m-backup-DIR --yes
    ```
 
-   It verifies the manifest checksums, scales the app Deployments to 0, restores Mongo (`--oplogReplay`), mirrors the objects, and scales the Deployments back, also on failure. With the app at 0 the bucket put webhook has no target, so restored files are not re-processed. It refuses a target that already has user databases or objects unless you pass `--yes`, which drops those user databases first.
+   It verifies the manifest checksums, scales the app Deployments to 0 and waits for their pods to drain, restores Mongo (`--oplogReplay`), mirrors the objects, checks that each bucket holds at least the backup's object count, and scales the Deployments back, also on failure. A Deployment that is already at 0 is left at 0 (it prints a warning). With the app at 0 the bucket put webhook has no target, so restored files are not re-processed. Without `--yes` it refuses a target that already has user databases or objects. With `--yes` it drops the target's user databases first and makes each bucket match the backup: objects that are not in the backup are removed (the init Job's `.initialized-*` marker is kept). Do not pass `--yes` to a release whose data you want to keep.
 4. Sign in as an existing user and open a known file.
 
-To prove the procedure on a disposable local cluster (kind, k3d, minikube or Docker Desktop; it refuses other contexts), build the `selfhost/minio` images, load them into the cluster, and run the drill. It installs two throwaway releases, seeds one user and one file, backs up, deletes the source, restores into the second release, and prints `PASS user` and `PASS file sha256` only if the same user and the same file bytes come back:
+To prove the procedure on a disposable local cluster (kind, k3d, minikube or Docker Desktop; it refuses other contexts unless you pass `--context-ok`), build the `selfhost/minio` images, load them into the cluster, and run the drill. It installs two throwaway releases, seeds one user and one file, backs up, deletes the source, restores into the second release, and prints `PASS user` and `PASS file sha256` only if the same user and the same file bytes come back:
 
 ```sh
 python3 selfhost/kubernetes/verify-backup-restore.py --images images.yaml
 ```
 
-`images.yaml` is a values file with `images.minio` and `images.mc` set to the built images (the app-role images never run in the drill, so any tagged image works for them).
+`images.yaml` is a values file with `images.minio` and `images.mc` set to the built images. Any tagged image works for the app roles: the drill cannot wait for them to become ready, so it does not use `--wait`, and it writes the worker's boot-time seed marker itself so the destination looks like a freshly installed release. It then runs the same `restore ... --yes` command as step 3.
 
 ## Local package checks
 

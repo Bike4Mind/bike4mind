@@ -16,6 +16,7 @@ import pathlib
 import secrets
 import subprocess
 import sys
+import tarfile
 
 BUCKET_KEYS = [
     'APP_FILES_BUCKET', 'EMAIL_INGESTION_BUCKET', 'FAB_FILE_BUCKET', 'GENERATED_IMAGES_BUCKET',
@@ -102,7 +103,8 @@ def fallback_pod_manifest(release, name, mc_image, secret, config):
 def app_role_deployments(deployments, release):
     roles = {}
     for item in deployments.get('items', []):
-        labels = item['metadata'].get('labels') or item['spec']['template']['metadata']['labels']
+        # Pod template labels only: tools such as Argo CD add their own instance label to the Deployment.
+        labels = item['spec']['template']['metadata']['labels']
         if labels.get('app.kubernetes.io/instance') != release:
             continue
         if labels.get('app.kubernetes.io/component') in BACKING_COMPONENTS:
@@ -111,23 +113,52 @@ def app_role_deployments(deployments, release):
     return roles
 
 
-def mirror_script(buckets, direction):
-    """Shell for the helper pod. Credentials come from its env, never from argv."""
+def mirror_script(buckets, direction, replace=False):
+    """Shell for the helper pod. Credentials come from its env, never from argv.
+
+    replace (restore only) makes each bucket match the backup: objects missing from it are removed.
+    The init Job's marker is left alone so it is not recreated on the next upgrade.
+    """
+    flags = "--overwrite --remove --exclude '%s*' " % MARKER if replace else ''
     head = ('set -eu\nmc alias set local "$LOCAL_OBJECTSTORE_ENDPOINT" '
             '"$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null\n')
     if direction == 'backup':
         body = ''.join('mkdir -p "/work/%s"\nmc mirror --quiet "local/%s" "/work/%s" >&2\n' % (b, b, b) for b in buckets)
         return head + 'mkdir -p /work\n' + body + 'tar -C /work -cf - .\n'
-    body = ''.join('mkdir -p "/work/%s"\nmc mb --ignore-existing "local/%s" >/dev/null\nmc mirror --quiet "/work/%s" "local/%s" >&2\n'
-                   % (b, b, b, b) for b in buckets)
+    body = ''.join('mkdir -p "/work/%s"\nmc mb --ignore-existing "local/%s" >/dev/null\nmc mirror --quiet %s"/work/%s" "local/%s" >&2\n'
+                   % (b, b, flags, b, b) for b in buckets)
     return head + 'mkdir -p /work\ntar -C /work -xf -\n' + body
 
 
 def count_script(buckets):
-    head = ('mc alias set local "$LOCAL_OBJECTSTORE_ENDPOINT" "$MINIO_ROOT_USER" '
+    # mc ls writes to a file, not into $(...), so set -e sees its failure instead of a count of 0.
+    head = ('set -eu\nmkdir -p /work\nmc alias set local "$LOCAL_OBJECTSTORE_ENDPOINT" "$MINIO_ROOT_USER" '
             '"$MINIO_ROOT_PASSWORD" >/dev/null\n')
     return head + ''.join(
-        'echo "%s $(mc ls --recursive "local/%s" | grep -vc \'%s\' || true)"\n' % (b, b, MARKER) for b in buckets)
+        'mc ls --recursive "local/%s" >/work/ls\necho "%s $(grep -vc \'%s\' /work/ls || true)"\n' % (b, b, MARKER)
+        for b in buckets)
+
+
+def tar_counts(path, buckets):
+    """Objects per bucket in objects.tar, ignoring the init marker."""
+    counts = dict.fromkeys(buckets, 0)
+    with tarfile.open(path) as archive:
+        for member in archive:
+            parts = member.name.removeprefix('./').split('/', 1)
+            if member.isfile() and len(parts) == 2 and parts[0] in counts and not parts[1].startswith(MARKER):
+                counts[parts[0]] += 1
+    return counts
+
+
+def is_local_context(name):
+    return name.startswith(('kind-', 'k3d-')) or name in ('minikube', 'docker-desktop')
+
+
+def read_manifest(src):
+    try:
+        return json.loads((pathlib.Path(src) / 'manifest.json').read_text())
+    except (OSError, ValueError) as error:
+        raise BackupError('cannot read manifest.json in %s (incomplete backup?): %s' % (src, error))
 
 
 def sha256_file(path):
@@ -246,12 +277,20 @@ class Helper:
         return pod['spec']['containers'][0]['image']
 
 
-def scale(kube, roles, to_zero):
+# Longer than the executor's terminationGracePeriodSeconds (840) so a draining pod finishes first.
+DRAIN_TIMEOUT = '900s'
+
+
+def scale(kube, roles, to_zero, release):
     for name, replicas in roles.items():
         kube.run(['scale', 'deployment', name, '--replicas', '0' if to_zero else str(replicas)])
     if to_zero and roles:
-        kube.run(['wait', '--for=delete', 'pod', '-l', 'app.kubernetes.io/component notin (%s)' % ','.join(
-            sorted(BACKING_COMPONENTS | {'backup-helper', 'initialize'})), '--timeout=300s'], check=False)
+        selector = 'app.kubernetes.io/instance=%s,app.kubernetes.io/component notin (%s)' % (release, ','.join(
+            sorted(BACKING_COMPONENTS | {'backup-helper', 'initialize'})))
+        result = kube.run(['wait', '--for=delete', 'pod', '-l', selector, '--timeout=' + DRAIN_TIMEOUT], check=False)
+        err = result.stderr if isinstance(result.stderr, str) else result.stderr.decode('utf-8', 'replace')
+        if result.returncode != 0 and 'no matching resources' not in err.lower():
+            raise BackupError('app pods did not drain: ' + err.strip()[-300:])
 
 
 def backup(args):
@@ -270,19 +309,31 @@ def backup(args):
         buckets = helper.buckets()
         with open(dest / ARTIFACTS[1], 'wb') as out:
             helper.sh(mirror_script(buckets, 'backup'), stdout=out)
-        counts = helper.counts(buckets)
+        counts = tar_counts(dest / ARTIFACTS[1], buckets)
         images = {'mongo': mongo_image, 'mc': helper.image()}
     manifest = build_manifest(release, args.namespace, started, now(), images, buckets, counts, dest)
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print('backup complete: %s (%s .. %s)' % (dest, started, manifest['finished_at']))
-    print('REMINDER: back up the runtime Secret (SECRET_ENCRYPTION_KEY, MEMORY_KEY_SECRET) separately; '
+    print('REMINDER: back up the runtime Secret (SECRET_ENCRYPTION_KEY, SECRET_ENCRYPTION_KEY_PREVIOUS, MEMORY_KEY_SECRET) separately; '
           'without it restored data cannot be decrypted.')
+
+
+def check_restored_counts(manifest, restored):
+    expected = manifest.get('object_counts', {})
+    short = []
+    for bucket in manifest['buckets']:
+        want, got = expected.get(bucket, 0), restored.get(bucket, 0)
+        print('objects %s: backup %d, restored %d' % (bucket, want, got))
+        if got < want:
+            short.append(bucket)
+    if short:
+        raise BackupError('restored fewer objects than the backup holds in: ' + ', '.join(short))
 
 
 def restore(args):
     kube, release = Kube(args.namespace, args.context), args.release
     src = pathlib.Path(args.src)
-    manifest = json.loads((src / 'manifest.json').read_text())
+    manifest = read_manifest(src)
     require_local_mongo(kube, release)
     with Helper(kube, release, args.mc_image) as helper:
         buckets = helper.buckets()
@@ -293,17 +344,21 @@ def restore(args):
             raise BackupError('target is not empty (databases: %s; buckets: %s); restore into a fresh release or pass --yes'
                               % (populated or 'none', sorted(objects) or 'none'))
         roles = app_role_deployments(kube.json(['get', 'deploy']), release)
-        scale(kube, roles, True)
+        idle = sorted(name for name, replicas in roles.items() if replicas == 0)
+        if idle:
+            print('warning: already at 0 replicas, will be left at 0: %s' % ', '.join(idle), file=sys.stderr)
         try:
+            scale(kube, roles, True, release)
             for name in populated:
                 mongo_exec(kube, release, ['mongosh', '--quiet', MONGO_URI, '--eval',
                                            'db.getSiblingDB(%s).dropDatabase()' % json.dumps(name)])
             with open(src / ARTIFACTS[0], 'rb') as handle:
                 mongo_exec(kube, release, mongo_restore_cmd(), stdin=handle)
             with open(src / ARTIFACTS[1], 'rb') as handle:
-                helper.sh(mirror_script(buckets, 'restore'), stdin=handle)
+                helper.sh(mirror_script(buckets, 'restore', replace=args.yes), stdin=handle)
+            check_restored_counts(manifest, helper.counts(buckets))
         finally:
-            scale(kube, roles, False)
+            scale(kube, roles, False, release)
     print('restore complete from %s' % src)
 
 
@@ -320,7 +375,7 @@ def main(argv=None):
             p.add_argument('--dest', required=True, help='new or empty directory')
         else:
             p.add_argument('--from', dest='src', required=True, help='directory written by backup')
-            p.add_argument('--yes', action='store_true', help='drop existing user databases first')
+            p.add_argument('--yes', action='store_true', help='for a target that already has data (a freshly installed release does): drop its user databases and make the buckets match the backup')
         p.set_defaults(func=func)
     args = parser.parse_args(argv)
     try:

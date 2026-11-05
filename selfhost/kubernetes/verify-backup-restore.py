@@ -8,8 +8,12 @@ and the same file sha256 come back. Only touches namespaces it creates itself.
   python3 selfhost/kubernetes/verify-backup-restore.py --images images.yaml
 
 images.yaml is a Helm values file with images.{app,chatcompletion,ws,subscriberFanout,
-minio,mc}. The app-role images are scaled to 0 and never run, so any tagged image works
-for them; minio and mc must be the real source-built images.
+minio,mc}. minio and mc must be the real source-built images. Any tagged image works for
+the app roles: they stay installed (and fail to pull) so restore has real Deployments to
+scale down and back, but unlike the README's `helm install --wait` the drill cannot wait
+for them to become ready. To stand in for the worker seeding the database at boot, the
+drill writes the seed marker itself, so the destination looks like a freshly installed
+release and the restore needs `--yes`, exactly as the README says.
 """
 import argparse
 import hashlib
@@ -25,7 +29,6 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import backup  # noqa: E402
 
-LOCAL_CONTEXTS = ('kind', 'k3d', 'minikube', 'docker-desktop')
 OBJECT_BUCKET, OBJECT_KEY = 'b4m-fab-file', 'drill/sentinel.bin'
 
 
@@ -68,9 +71,6 @@ class Release:
         if self.args.storage_class:
             cmd += ['--set', 'storage.className=' + self.args.storage_class]
         sh(cmd)
-        # Placeholder app images must never run; scale them down before they matter.
-        roles = backup.app_role_deployments(self.kube.json(['get', 'deploy']), self.name)
-        backup.scale(self.kube, {name: 0 for name in roles}, True)
         self.kube.run(['rollout', 'status', 'statefulset/%s-mongo' % self.name, '--timeout=600s'])
         self.kube.run(['rollout', 'status', 'deployment/%s-minio' % self.name, '--timeout=600s'])
         job = backup.latest_init_job(self.kube.json(['get', 'jobs']), self.name)['metadata']['name']
@@ -95,7 +95,7 @@ def main():
     parser.add_argument('--context-ok', action='store_true', help='allow a non-local kube context')
     args = parser.parse_args()
     args.context = args.context or sh(['kubectl', 'config', 'current-context']).strip()
-    if not args.context_ok and not any(name in args.context for name in LOCAL_CONTEXTS):
+    if not args.context_ok and not backup.is_local_context(args.context):
         raise SystemExit('refusing to run on context %r; pass --context-ok if it is disposable' % args.context)
 
     payload = os.urandom(64 * 1024)
@@ -128,8 +128,10 @@ def main():
             dst = Release(args, 'dst', str(env_file))
             releases.append(dst)
             dst.install()
+            # What the self-host worker does at boot (runSeedOnce), which is why a restore needs --yes.
+            dst.mongosh('db.getSiblingDB("bike4mind").seedmarkers.insertOne({_id: "signupGrantPools", seededAt: new Date()})')
             common = ['--namespace', dst.ns, '--release', dst.name, '--context', args.context]
-            if backup.main(['restore'] + common + ['--from', dump]) != 0:
+            if backup.main(['restore'] + common + ['--from', dump, '--yes']) != 0:
                 raise SystemExit('FAIL: restore')
 
             got = dst.mongosh('JSON.stringify(db.getSiblingDB("bike4mind").users.findOne({_id: ObjectId("%s")}))' % user_id)
