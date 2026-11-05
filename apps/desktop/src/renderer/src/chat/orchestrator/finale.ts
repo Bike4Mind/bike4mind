@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ChatMessage } from '@shared/chat';
 import { readFinaleSeen, writeFinaleSeen } from './orchestratorPrefs';
 import {
-  formatAgentCost,
+  formatRosterCost,
   isParentBusy,
   summarizeRoster,
   type AgentState,
@@ -26,10 +26,11 @@ export interface FinaleStats {
 }
 
 export function finaleStats(agents: readonly AgentView[]): FinaleStats {
-  const { total, counts, usdCost, credits, hasUsd, hasCost, costPartial } = summarizeRoster(agents);
+  const summary = summarizeRoster(agents);
+  const { total, counts } = summary;
   const started = Math.min(...agents.map(agent => Date.parse(agent.createdAt)));
   const ended = Math.max(...agents.map(agent => Date.parse(agent.updatedAt)));
-  const cost = hasCost ? `${costPartial ? '~' : ''}${formatAgentCost(hasUsd ? usdCost : undefined, credits)}` : '-';
+  const cost = formatRosterCost(summary) ?? '-';
   return {
     agents: total,
     wallMs: agents.length > 0 ? Math.max(0, ended - started) : 0,

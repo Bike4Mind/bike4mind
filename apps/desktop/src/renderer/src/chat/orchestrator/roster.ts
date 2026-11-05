@@ -1,6 +1,7 @@
 import type { ChildOutcome } from '@shared/agentOutcome';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
+import { formatCredits } from '../statusLine';
 import type { AgentActivity } from './activity';
 
 export type AgentState = 'needs-you' | 'working' | 'done' | 'failed' | 'stopped' | 'idle';
@@ -194,11 +195,11 @@ export interface RosterSummary {
   counts: Record<AgentState, number>;
   usdCost: number;
   credits: number;
-  /** Some agent reported a dollar cost, so the total is shown in dollars rather than credits. */
-  hasUsd: boolean;
-  /** False when no agent has reported any cost yet, so the strip shows '-' rather than a zero. */
+  /** Some agent reported credits, so the total is shown in credits; dollars are only a fallback. */
+  hasCredits: boolean;
+  /** False when no agent has reported any cost yet, so no total is shown rather than a zero. */
   hasCost: boolean;
-  /** Some agent lacks the shown currency (credit-only beside dollars, or no cost), so the total is a floor. */
+  /** Some agent lacks the shown currency (dollar-only beside credits, or no cost), so the total is a floor. */
   costPartial: boolean;
 }
 
@@ -211,14 +212,26 @@ export function summarizeRoster(agents: readonly AgentView[]): RosterSummary {
     usdCost += agent.usdCost ?? 0;
     credits += agent.credits ?? 0;
   }
-  const hasUsd = agents.some(agent => agent.usdCost !== undefined);
-  const hasCost = hasUsd || agents.some(agent => agent.credits !== undefined);
-  const costPartial = hasCost && agents.some(agent => (hasUsd ? agent.usdCost : agent.credits) === undefined);
-  return { total: agents.length, counts, usdCost, credits, hasUsd, hasCost, costPartial };
+  const hasCredits = agents.some(agent => agent.credits !== undefined);
+  const hasCost = hasCredits || agents.some(agent => agent.usdCost !== undefined);
+  const costPartial = hasCost && agents.some(agent => (hasCredits ? agent.credits : agent.usdCost) === undefined);
+  return { total: agents.length, counts, usdCost, credits, hasCredits, hasCost, costPartial };
 }
 
+/** The roster's total in its shown currency, with '~' when it is a floor; undefined until any agent reports a cost. */
+export function formatRosterCost(summary: RosterSummary): string | undefined {
+  if (!summary.hasCost) return undefined;
+  const total = summary.hasCredits ? formatAgentCost(undefined, summary.credits) : formatAgentCost(summary.usdCost);
+  return `${summary.costPartial ? '~' : ''}${total}`;
+}
+
+/** Credits, worded as the rest of the app words them; dollars only for an agent that reported no credits. */
 export function formatAgentCost(usdCost?: number, credits?: number): string {
+  if (credits !== undefined) {
+    // A sub-credit charge is still spending; rounding it to "0 credits" would say it was free.
+    if (credits > 0 && Math.round(credits) === 0) return '<1 credit';
+    return `${formatCredits(credits)} ${Math.round(credits) === 1 ? 'credit' : 'credits'}`;
+  }
   if (usdCost !== undefined) return `$${usdCost.toFixed(2)}`;
-  if (credits !== undefined) return `${credits} cr`;
   return '-';
 }

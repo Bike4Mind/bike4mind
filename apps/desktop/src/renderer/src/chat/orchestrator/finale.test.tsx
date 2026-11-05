@@ -33,19 +33,23 @@ const agent = (id: string, state: AgentState, extra: Partial<AgentView> = {}): A
 describe('finaleStats', () => {
   it('counts agents and outcomes, spans first creation to last update, and totals the cost', () => {
     const stats = finaleStats([
-      agent('a', 'done', { createdAt: '2026-10-01T00:00:10.000Z', updatedAt: '2026-10-01T00:02:00.000Z', usdCost: 1 }),
+      agent('a', 'done', {
+        createdAt: '2026-10-01T00:00:10.000Z',
+        updatedAt: '2026-10-01T00:02:00.000Z',
+        credits: 100,
+      }),
       agent('b', 'failed', {
         createdAt: '2026-10-01T00:00:00.000Z',
         updatedAt: '2026-10-01T00:03:12.000Z',
-        usdCost: 0.5,
+        credits: 50,
       }),
-      agent('c', 'done', { updatedAt: '2026-10-01T00:01:00.000Z', usdCost: 0.25 }),
+      agent('c', 'done', { updatedAt: '2026-10-01T00:01:00.000Z', credits: 25 }),
     ]);
-    expect(stats).toEqual({ agents: 3, wallMs: 192_000, cost: '$1.75', done: 2, failed: 1 });
+    expect(stats).toEqual({ agents: 3, wallMs: 192_000, cost: '175 credits', done: 2, failed: 1 });
   });
 
   it('marks a partial cost and shows a dash when nobody reported one', () => {
-    expect(finaleStats([agent('a', 'done', { usdCost: 1 }), agent('b', 'done')]).cost).toBe('~$1.00');
+    expect(finaleStats([agent('a', 'done', { credits: 12 }), agent('b', 'done')]).cost).toBe('~12 credits');
     expect(finaleStats([agent('a', 'done')]).cost).toBe('-');
   });
 });

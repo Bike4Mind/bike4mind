@@ -32,9 +32,9 @@ afterEach(() => {
 
 describe('TableView', () => {
   const agents = [
-    agentFixture('a', 'working', { usdCost: 0.5 }),
-    agentFixture('b', 'working', { usdCost: 2 }),
-    agentFixture('c', 'working', { usdCost: 1, pr: { number: 7, state: 'open' } }),
+    agentFixture('a', 'working', { credits: 5 }),
+    agentFixture('b', 'working', { credits: 20 }),
+    agentFixture('c', 'working', { credits: 10, pr: { number: 7, state: 'open' } }),
   ];
 
   it('labels a preparing agent Preparing and a plain working one Working', async () => {
@@ -57,17 +57,17 @@ describe('TableView', () => {
     expect(rowIds()).toEqual(['a', 'c', 'b']);
   });
 
-  it('keeps credit-only and unknown-cost rows after priced ones in either direction', async () => {
+  it('keeps dollar-only and unknown-cost rows after credit-priced ones in either direction', async () => {
     await renderTable([
-      agentFixture('credits', 'working', { credits: 900 }),
-      agentFixture('cheap', 'working', { usdCost: 0.1 }),
+      agentFixture('dollars', 'working', { usdCost: 9 }),
+      agentFixture('cheap', 'working', { credits: 1 }),
       agentFixture('unknown'),
-      agentFixture('pricey', 'working', { usdCost: 5 }),
+      agentFixture('pricey', 'working', { credits: 500 }),
     ]);
     act(() => el('orchestrator-table-sort-cost').click());
-    expect(rowIds()).toEqual(['pricey', 'cheap', 'credits', 'unknown']);
+    expect(rowIds()).toEqual(['pricey', 'cheap', 'dollars', 'unknown']);
     act(() => el('orchestrator-table-sort-cost').click());
-    expect(rowIds()).toEqual(['cheap', 'pricey', 'credits', 'unknown']);
+    expect(rowIds()).toEqual(['cheap', 'pricey', 'dollars', 'unknown']);
   });
 
   it('calls onSelect with the row id and indents deeper agents', async () => {

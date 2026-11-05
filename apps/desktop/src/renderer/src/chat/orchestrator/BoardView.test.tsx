@@ -89,7 +89,7 @@ describe('BoardView', () => {
   it('shows a cost only when the agent reported one', async () => {
     await renderBoard([agentFixture('a', 'done'), agentFixture('b', 'done', { credits: 7 })]);
     expect(el('orchestrator-board-card-a').textContent).not.toContain('-');
-    expect(el('orchestrator-board-card-b').textContent).toContain('7 cr');
+    expect(el('orchestrator-board-card-b').textContent).toContain('7 credits');
   });
 
   it('survives a reorder re-render in jsdom (FLIP is a no-op there)', async () => {

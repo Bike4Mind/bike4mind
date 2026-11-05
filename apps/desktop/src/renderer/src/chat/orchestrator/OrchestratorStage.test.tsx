@@ -8,9 +8,9 @@ import { TavernView } from './tavern/TavernView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 const FIXTURE = [
-  agentFixture('n', 'needs-you', { usdCost: 1 }),
-  agentFixture('w1', 'working', { usdCost: 1 }),
-  agentFixture('w2', 'working', { usdCost: 1 }),
+  agentFixture('n', 'needs-you', { credits: 10 }),
+  agentFixture('w1', 'working', { credits: 10 }),
+  agentFixture('w2', 'working', { credits: 10 }),
   agentFixture('d', 'done'),
 ];
 
@@ -131,23 +131,28 @@ describe('OrchestratorStage', () => {
   it('summarises the roster, with ~ when a cost is unknown', async () => {
     await renderStage(FIXTURE);
     expect(query('orchestrator-summary-strip')?.textContent).toBe(
-      '4 agents \u00B7 2 working \u00B7 1 done \u00B7 ~$3.00'
+      '4 agents \u00B7 2 working \u00B7 1 done \u00B7 ~30 credits'
     );
   });
 
   it('uses the singular for one agent', async () => {
-    await renderStage([agentFixture('w', 'working', { usdCost: 0.5 })]);
-    expect(query('orchestrator-summary-strip')?.textContent).toBe('1 agent \u00B7 1 working \u00B7 $0.50');
+    await renderStage([agentFixture('w', 'working', { credits: 1 })]);
+    expect(query('orchestrator-summary-strip')?.textContent).toBe('1 agent \u00B7 1 working \u00B7 1 credit');
   });
 
-  it('marks the dollar total partial when an agent only reported credits', async () => {
+  it('marks the credit total partial when an agent only reported dollars', async () => {
     await renderStage([agentFixture('a', 'done', { usdCost: 1 }), agentFixture('b', 'done', { credits: 4 })]);
-    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 ~$1.00');
+    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 ~4 credits');
   });
 
-  it('shows credits when no agent reported dollars', async () => {
-    await renderStage([agentFixture('a', 'done', { credits: 4 }), agentFixture('b', 'done', { credits: 2 })]);
-    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 6 cr');
+  it('falls back to dollars when no agent reported credits', async () => {
+    await renderStage([agentFixture('a', 'done', { usdCost: 4 }), agentFixture('b', 'done', { usdCost: 2 })]);
+    expect(query('orchestrator-summary-strip')?.textContent).toContain('\u00B7 $6.00');
+  });
+
+  it('leaves the cost out until an agent reports one', async () => {
+    await renderStage([agentFixture('a', 'working')]);
+    expect(query('orchestrator-summary-strip')?.textContent).toBe('1 agent \u00B7 1 working');
   });
 
   it('counts the parent waiting on an approval as needing the user, and its pill opens the parent', async () => {
@@ -255,9 +260,9 @@ describe('OrchestratorStage', () => {
       agentFixture('a', 'done', {
         createdAt: '2026-10-01T00:00:00.000Z',
         updatedAt: '2026-10-01T00:03:12.000Z',
-        usdCost: 1.5,
+        credits: 1500,
       }),
-      agentFixture('b', 'failed', { usdCost: 0.25 }),
+      agentFixture('b', 'failed', { credits: 250 }),
     ];
 
     beforeEach(() => {
@@ -281,7 +286,7 @@ describe('OrchestratorStage', () => {
       expect(banner.textContent).toContain('Quest ended');
       expect(banner.getAttribute('data-outcome')).toBe('ended');
       const chips = [...el('orchestrator-finale-stats').querySelectorAll('li')].map(chip => chip.textContent);
-      expect(chips).toEqual(['2 agents', '3m 12s', '$1.75', '1 done', '1 failed']);
+      expect(chips).toEqual(['2 agents', '3m 12s', '1,750 credits', '1 done', '1 failed']);
       expect(query('orchestrator-table')).not.toBeNull();
       // Off the Tavern it sits above the rows instead of floating over (and blocking) them.
       expect(banner.getAttribute('data-placement')).toBe('inline');

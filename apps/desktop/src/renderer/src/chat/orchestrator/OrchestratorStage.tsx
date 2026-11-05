@@ -10,7 +10,7 @@ import { questAgents, useFinale, type ParentReport } from './finale';
 import { FinaleBanner } from './FinaleBanner';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { assignPersonas, type AgentPersona } from './tavern/agentPersona';
-import { formatAgentCost, summarizeRoster, type AgentView, type ParentView } from './roster';
+import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
 import { ViewSwitcher } from './ViewSwitcher';
 
@@ -111,8 +111,8 @@ export function OrchestratorStage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [hasSelection]);
 
-  const { total, counts, usdCost, credits, hasUsd, hasCost, costPartial } = summarizeRoster(agents);
-  const cost = hasCost ? formatAgentCost(hasUsd ? usdCost : undefined, credits) : '-';
+  const rosterSummary = summarizeRoster(agents);
+  const { total, counts } = rosterSummary;
   // The parent waiting on an approval counts too, as it does on the app badge.
   const parentNeedsYou = parent.status === 'needs-action';
   const needsYou = counts['needs-you'] + (parentNeedsYou ? 1 : 0);
@@ -120,7 +120,7 @@ export function OrchestratorStage({
   const firstFailed = agents.find(agent => agent.state === 'failed');
   const needsYouPill = needsYou > 0 && (firstNeedsYou !== undefined || onParentFocus !== undefined);
   // Zero counts are noise, and the two that call for action get their own buttons instead. An empty
-  // stage says nothing: "0 agents" and a blank cost only repeat what the empty state shows.
+  // stage says nothing: "0 agents" would only repeat the empty state. An unknown cost is left out.
   const summary =
     total === 0
       ? ''
@@ -129,7 +129,7 @@ export function OrchestratorStage({
           counts.working > 0 && `${counts.working} working`,
           needsYou > 0 && !needsYouPill && `${needsYou} need you`,
           counts.done > 0 && `${counts.done} done`,
-          `${costPartial ? '~' : ''}${cost}`,
+          formatRosterCost(rosterSummary),
         ]
           .filter(Boolean)
           .join(' \u00B7 ');

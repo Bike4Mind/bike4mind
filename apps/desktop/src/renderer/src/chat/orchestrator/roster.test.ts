@@ -11,6 +11,7 @@ import {
   deriveAgentState,
   descendantIds,
   formatAgentCost,
+  formatRosterCost,
   spawnerName,
   summarizeRoster,
   type AgentState,
@@ -308,27 +309,36 @@ describe('summarizeRoster', () => {
   });
 
   it('is not partial when every agent reported the shown currency', () => {
-    expect(summarizeRoster([view('done', 1), view('done', 2, 3)]).costPartial).toBe(false);
-    expect(summarizeRoster([view('done', undefined, 1), view('done', undefined, 2)]).costPartial).toBe(false);
+    expect(summarizeRoster([view('done', undefined, 1), view('done', 2, 3)]).costPartial).toBe(false);
+    expect(summarizeRoster([view('done', 1), view('done', 2)]).costPartial).toBe(false);
     expect(summarizeRoster([]).costPartial).toBe(false);
   });
 
-  it('is partial when a credit-only agent sits beside dollar costs', () => {
+  it('is partial when a dollar-only agent sits beside credit costs', () => {
     const result = summarizeRoster([view('done', 1), view('done', undefined, 2)]);
-    expect(result.hasUsd).toBe(true);
+    expect(result.hasCredits).toBe(true);
     expect(result.costPartial).toBe(true);
   });
 
-  it('reports credits only when no agent has a dollar cost', () => {
-    expect(summarizeRoster([view('done', undefined, 2)]).hasUsd).toBe(false);
+  it('falls back to dollars only when no agent reported credits', () => {
+    expect(summarizeRoster([view('done', 2)]).hasCredits).toBe(false);
+  });
+
+  it('formats the total in credits first, marks a floor with ~, and is undefined with no cost', () => {
+    expect(formatRosterCost(summarizeRoster([view('done', 1, 1200), view('done', 2, 34)]))).toBe('1,234 credits');
+    expect(formatRosterCost(summarizeRoster([view('done', 1), view('done', undefined, 2)]))).toBe('~2 credits');
+    expect(formatRosterCost(summarizeRoster([view('done', 0.5), view('done', 0.25)]))).toBe('$0.75');
+    expect(formatRosterCost(summarizeRoster([view('done')]))).toBeUndefined();
   });
 });
 
 describe('formatAgentCost', () => {
-  it('prefers dollars, then credits, then a dash', () => {
+  it('prefers credits, then dollars, then a dash', () => {
+    expect(formatAgentCost(0.4213, 12)).toBe('12 credits');
+    expect(formatAgentCost(undefined, 1)).toBe('1 credit');
+    expect(formatAgentCost(undefined, 0.2)).toBe('<1 credit');
+    expect(formatAgentCost(undefined, 0)).toBe('0 credits');
     expect(formatAgentCost(0.4213)).toBe('$0.42');
-    expect(formatAgentCost(0.4213, 12)).toBe('$0.42');
-    expect(formatAgentCost(undefined, 12)).toBe('12 cr');
     expect(formatAgentCost()).toBe('-');
   });
 });
