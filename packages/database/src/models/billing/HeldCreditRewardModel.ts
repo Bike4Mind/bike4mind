@@ -109,6 +109,16 @@ export const heldCreditRewardRepository = {
     );
     return modifiedCount;
   },
+  /** Count and credit total of one user's queued (`held`) and blocked-out (`paused`) rewards. */
+  async totalsForUser(userId: string): Promise<Record<'held' | 'paused', { count: number; credits: number }>> {
+    const rows = await HeldCreditRewardModel.aggregate<{ _id: 'held' | 'paused'; count: number; credits: number }>([
+      { $match: { userId, status: { $in: ['held', 'paused'] } } },
+      { $group: { _id: '$status', count: { $sum: 1 }, credits: { $sum: '$credits' } } },
+    ]);
+    const totals = { held: { count: 0, credits: 0 }, paused: { count: 0, credits: 0 } };
+    for (const row of rows) totals[row._id] = { count: row.count, credits: row.credits };
+    return totals;
+  },
   async settle(transactionId: string, status: 'paid' | 'void', at: Date = new Date()) {
     await HeldCreditRewardModel.updateOne(
       { transactionId, status: 'held' },
