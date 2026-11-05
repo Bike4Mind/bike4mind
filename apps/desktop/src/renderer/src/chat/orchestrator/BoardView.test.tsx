@@ -37,6 +37,11 @@ describe('BoardView', () => {
     expect(query('orchestrator-board-via-lead')).toBeNull();
   });
 
+  it("names a preparing agent's setup step on its card", async () => {
+    await renderBoard([agentFixture('a', 'working', { preparing: 'worktree' })]);
+    expect(el('orchestrator-board-card-a').textContent).toContain('Creating worktree');
+  });
+
   it('puts stopped and idle agents in Done with a muted state chip', async () => {
     await renderBoard([agentFixture('a', 'stopped'), agentFixture('b', 'idle'), agentFixture('c', 'done')]);
     const done = el('orchestrator-board-column-done');

@@ -1,5 +1,5 @@
 import type { ChildOutcome } from '@shared/agentOutcome';
-import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { ChatSessionStatus, ChatSessionSummary, SessionSetupStep } from '@shared/chat';
 import type { PrSummary } from '@shared/pullRequest';
 import { formatCredits } from '../statusLine';
 import type { AgentActivity } from './activity';
@@ -36,8 +36,8 @@ export interface AgentView {
   updatedAt: string;
   model: string;
   state: AgentState;
-  /** Working, but still being prepared (worktree, held first turn); stays 'working' for every count. */
-  preparing?: boolean;
+  /** Working, but still being prepared: the setup step it is on. Stays 'working' for every count. */
+  preparing?: SessionSetupStep;
   outcome?: ChildOutcome;
   activity?: AgentActivity;
   lastSnippet?: string;
@@ -152,7 +152,7 @@ export function spawnerName(
 export function buildRoster(input: {
   sessions: readonly ChatSessionSummary[];
   statuses: ReadonlyMap<string, ChatSessionStatus>;
-  preparing?: ReadonlySet<string>;
+  preparing?: ReadonlyMap<string, SessionSetupStep>;
   activity: ReadonlyMap<string, AgentActivity>;
   prSummaries: ReadonlyMap<string, PrSummary>;
   rootId: string;
@@ -162,6 +162,7 @@ export function buildRoster(input: {
 
   for (const { session, depth } of descendantsOf(sessions, rootId)) {
     const state = deriveAgentState(statuses.get(session.id), session.lastOutcome);
+    const setup = state === 'working' ? preparing?.get(session.id) : undefined;
     views.push({
       id: session.id,
       title: session.title.trim() || 'Untitled agent',
@@ -172,7 +173,7 @@ export function buildRoster(input: {
       updatedAt: session.updatedAt,
       model: session.model,
       state,
-      ...(state === 'working' && preparing?.has(session.id) && { preparing: true }),
+      ...(setup && { preparing: setup }),
       outcome: session.lastOutcome,
       activity: state === 'working' || state === 'needs-you' ? activity.get(session.id) : undefined,
       lastSnippet: session.lastSnippet,

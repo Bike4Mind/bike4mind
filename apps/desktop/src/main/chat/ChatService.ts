@@ -1406,6 +1406,7 @@ export class ChatService {
       // A folder shared while the worktree was being cut lives in the store, not in `project`.
       session.project = summary.project;
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
+      this.deps.activity?.preparingStep(sessionId, 'starting');
       return null;
     } catch (err) {
       return { error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
@@ -2154,7 +2155,7 @@ export class ChatService {
     this.accepting.add(sessionId);
     // Held past startReply for the reason launchSpawned holds its own: no 'done' blink between.
     const cutsWorktree = awaitsWorktree(existing.project);
-    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId);
+    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId, 'worktree');
     try {
       return await this.startAcceptedTurn(
         sessionId,
@@ -5328,7 +5329,7 @@ export class ChatService {
     }
   ): Promise<void> {
     this.launching.add(child.id);
-    this.deps.activity?.preparingStarted(child.id);
+    this.deps.activity?.preparingStarted(child.id, worktree ? 'worktree' : 'starting');
     let failure: string | null = null;
     let deleted = false;
     let stopped = false;
@@ -5353,6 +5354,7 @@ export class ChatService {
         }
       }
       if (!failure) {
+        this.deps.activity?.preparingStep(child.id, 'starting');
         const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
         timer.lap('send');
         if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
@@ -5403,6 +5405,7 @@ export class ChatService {
       })
     );
     try {
+      if (await installer.isInstalling(sessionId)) this.deps.activity?.preparingStep(sessionId, 'dependencies');
       const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
       if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
     } finally {

@@ -38,8 +38,9 @@ describe('TableView', () => {
   ];
 
   it('labels a preparing agent Preparing and a plain working one Working', async () => {
-    await renderTable([agentFixture('a', 'working', { preparing: true }), agentFixture('b')]);
+    await renderTable([agentFixture('a', 'working', { preparing: 'dependencies' }), agentFixture('b')]);
     expect(el('orchestrator-state-chip-preparing').textContent).toBe('Preparing');
+    expect(document.body.textContent).toContain('Installing dependencies');
     expect(el('orchestrator-state-chip-working').textContent).toBe('Working');
   });
 
