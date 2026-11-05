@@ -310,19 +310,24 @@ export async function hostPhysicalTarget(target: string): Promise<string> {
  * nearest existing parent's real path. Sync, and runs per decision, so keep callers off hot loops.
  */
 export function withRealPath(path: string): string[] {
-  const real = realpathSyncNearest(path);
+  const real = realpathSyncNearest(path) ?? path;
   return real === path ? [path] : [path, real];
 }
 
-/** `path` with symlinks resolved as far as it exists, the rest kept as given. */
-export function realpathSyncNearest(path: string): string {
+/**
+ * `path` with symlinks resolved as far as it exists, the rest kept as given. Null when resolution
+ * fails for any reason but a missing component (EACCES, ELOOP, ...): where it lands is then unknown.
+ */
+export function realpathSyncNearest(path: string): string | null {
   try {
     return realpathSync.native(path);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') return path;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') return null;
     const parent = dirname(path);
-    return parent === path ? path : join(realpathSyncNearest(parent), basename(path));
+    if (parent === path) return path;
+    const real = realpathSyncNearest(parent);
+    return real === null ? null : join(real, basename(path));
   }
 }
 

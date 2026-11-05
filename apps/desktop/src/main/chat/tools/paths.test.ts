@@ -252,10 +252,30 @@ describe('withRealPath', () => {
 describe('realpathSyncNearest', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('returns the path unchanged when resolution fails for a reason other than a missing path', () => {
+  it('returns null when resolution fails for a reason other than a missing path', () => {
     vi.spyOn(realpathSync, 'native').mockImplementation(() => {
       throw Object.assign(new Error('denied'), { code: 'EACCES' });
     });
-    expect(realpathSyncNearest(join(tmpdir(), 'a', 'b'))).toBe(join(tmpdir(), 'a', 'b'));
+    expect(realpathSyncNearest(join(tmpdir(), 'a', 'b'))).toBeNull();
+    expect(withRealPath(join(tmpdir(), 'a', 'b'))).toEqual([join(tmpdir(), 'a', 'b')]);
+  });
+
+  it('returns null when a missing path sits under a parent that cannot be resolved', () => {
+    const native = realpathSync.native;
+    const locked = join(tmpdir(), 'locked');
+    vi.spyOn(realpathSync, 'native').mockImplementation((path, options) => {
+      if (String(path) === locked) throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (String(path).startsWith(locked)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      return native(path, options);
+    });
+    expect(realpathSyncNearest(join(locked, 'new', 'file'))).toBeNull();
+  });
+
+  it('returns null for a symlink loop', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-paths-')));
+    await symlink(join(base, 'loop-a'), join(base, 'loop-b'));
+    await symlink(join(base, 'loop-b'), join(base, 'loop-a'));
+    expect(realpathSyncNearest(join(base, 'loop-a', 'x'))).toBeNull();
+    expect(realpathSyncNearest(join(base, 'missing', 'x'))).toBe(join(base, 'missing', 'x'));
   });
 });
