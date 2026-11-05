@@ -256,7 +256,11 @@ export async function runSelfhostHistoryImportCheck(
       { name: 'conversations.json', data: Buffer.from(conversationsJson(conversations, broken), 'utf8') },
     ]);
 
-    const before = await listJobs();
+    let before = await listJobs();
+    while (!Array.isArray(before) && before.retry && deps.now() < deadline) {
+      await deps.sleep(pollIntervalMs);
+      before = await listJobs();
+    }
     if (!Array.isArray(before)) return { ok: false, reason: before.error };
     const active = before.find(j => ACTIVE_JOB_STATUSES.has(String(j.status)));
     if (active) {

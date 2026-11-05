@@ -80,6 +80,8 @@ function setup(
     noWebhook?: boolean;
     /** HTTP statuses the first job polls after the upload answer with. */
     pollStatuses?: number[];
+    /** HTTP statuses the job list answers with before the upload, ahead of the first real answer. */
+    preUploadStatuses?: number[];
     /** Tamper with what the app holds after the import, to prove the content compare bites. */
     afterImport?: (sessions: FakeSession[]) => void;
   } = {}
@@ -88,6 +90,7 @@ function setup(
   const jobs: Record<string, unknown>[] = [...(opts.existingJobs ?? [])];
   const sessions: FakeSession[] = [];
   const pollStatuses = [...(opts.pollStatuses ?? [])];
+  const preUploadStatuses = [...(opts.preUploadStatuses ?? [])];
   let uploaded: Buffer | undefined;
   let clock = 0;
   let calls = 0;
@@ -100,6 +103,7 @@ function setup(
     const path = u.pathname;
 
     if (path === '/api/import-history-jobs') {
+      if (!uploaded && preUploadStatuses.length) return json(preUploadStatuses.shift()!, { error: 'busy' });
       if (uploaded && pollStatuses.length) return json(pollStatuses.shift()!, { error: 'busy' });
       const pending = jobs.find(j => j.status === 'processing');
       if (pending) {
@@ -281,6 +285,19 @@ describe('runSelfhostHistoryImportCheck', () => {
     const { run } = setup({ pollStatuses: [503, 502] });
 
     expect(await run()).toMatchObject({ ok: true, jobId: 'job-new' });
+  });
+
+  it('retries a transient error on the job list taken before the upload', async () => {
+    const { run } = setup({ preUploadStatuses: [429, 503] });
+
+    expect(await run()).toMatchObject({ ok: true, jobId: 'job-new' });
+  });
+
+  it('gives up on the pre-upload job list once the run timeout passes', async () => {
+    const { run, getUploaded } = setup({ preUploadStatuses: Array(100).fill(503), config: { timeoutMs: 5_000 } });
+
+    expect(await run()).toEqual({ ok: false, reason: 'HTTP 503' });
+    expect(getUploaded()).toBeUndefined();
   });
 
   it('stops on a non-retryable poll error', async () => {
