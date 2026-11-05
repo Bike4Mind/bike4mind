@@ -30,6 +30,8 @@ function setup(opts: {
   session?: Response;
   execId?: string;
   hang?: 'session' | 'poll';
+  /** Fake-clock ms the session create takes. */
+  sessionTakesMs?: number;
   config?: Partial<AgentRunCheckConfig>;
 }) {
   const polls = [...opts.polls];
@@ -38,7 +40,11 @@ function setup(opts: {
   const signalMs: number[] = [];
   const sleeps: number[] = [];
   let clock = 0;
+  let calls = 0;
   const fakeFetch = (async (url: string, init?: RequestInit) => {
+    // A retry branch that loses its sleep would spin on microtasks and starve vitest's timeout.
+    // Aborting (not a plain throw, which the poll loop retries) ends the run so the test fails by name.
+    if (++calls > 50) throw new DOMException('stub: too many requests', 'TimeoutError');
     const path = new URL(url).pathname;
     requests.push({
       method: init?.method,
@@ -47,6 +53,7 @@ function setup(opts: {
       body: init?.body ? JSON.parse(init.body as string) : undefined,
     });
     if (opts.hang === 'session' && path === '/api/v1/sessions') return hang(init?.signal);
+    if (path === '/api/v1/sessions') clock += opts.sessionTakesMs ?? 0;
     if (path === '/api/v1/sessions') return opts.session ?? json(201, { id: 'sess-1' });
     if (path === '/api/v1/agent-executions') return opts.start ?? json(202, { id: execId });
     if (opts.hang === 'poll') return hang(init?.signal);
@@ -66,7 +73,9 @@ function setup(opts: {
         now: () => clock,
         timeoutSignal: ms => {
           signalMs.push(ms);
-          return opts.hang ? AbortSignal.abort() : new AbortController().signal;
+          return opts.hang
+            ? AbortSignal.abort(new DOMException('timed out', 'TimeoutError'))
+            : new AbortController().signal;
         },
       },
       {
@@ -106,6 +115,16 @@ describe('runSelfhostAgentCheck', () => {
     expect(start.body?.session_id).toBe('sess-1');
     expect(start.body?.message).toContain(NONCE);
     expect(requests[2].path).toBe('/api/v1/agent-executions/exec%2F1');
+    expect('model' in (start.body ?? {})).toBe(false);
+  });
+
+  it('passes the configured model to the start request', async () => {
+    const { run, requests } = setup({
+      polls: [{ status: 'completed', answer: NONCE }],
+      config: { model: 'm-1' },
+    });
+    expect((await run()).ok).toBe(true);
+    expect(requests[1].body?.model).toBe('m-1');
   });
 
   it('fails a failed run and quotes its error', async () => {
@@ -214,12 +233,14 @@ describe('runSelfhostAgentCheck', () => {
   });
 
   it('keeps the execution id when polls keep throwing until the deadline', async () => {
-    const { run } = setup({ polls: [{ throws: 'fetch failed' }], config: { timeoutMs: 2_000 } });
+    const { run, gets, sleeps } = setup({ polls: [{ throws: 'fetch failed' }], config: { timeoutMs: 2_000 } });
     expect(await run()).toEqual({
       ok: false,
       executionId: EXEC_ID,
       reason: 'timed out after 2s; no status observed; last error fetch failed',
     });
+    expect(sleeps).toEqual([1_000, 1_000]);
+    expect(gets()).toHaveLength(2);
   });
 
   it('fails on other non-2xx while polling, with the execution id', async () => {
@@ -238,6 +259,15 @@ describe('runSelfhostAgentCheck', () => {
     });
     await run();
     expect(signalMs).toEqual([10_000, 10_000, 10_000, 9_000]);
+  });
+
+  it('counts time spent in session create against the same deadline', async () => {
+    const { run, signalMs } = setup({
+      polls: [{ status: 'completed', answer: NONCE }],
+      sessionTakesMs: 4_000,
+    });
+    await run();
+    expect(signalMs).toEqual([10_000, 6_000, 6_000]);
   });
 
   it('times out a stalled session create instead of hanging', async () => {
