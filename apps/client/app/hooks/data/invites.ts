@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { InviteType, MAX_BULK_ITEMS } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
+import { getServerErrorField } from '@client/app/utils/error';
 
 function invalidateOrganizationInviteeSearch(queryClient: QueryClient, organizationId?: string) {
   return queryClient.invalidateQueries({
@@ -212,7 +213,7 @@ export function useRefuseDocument({
 }
 
 type BulkInviteResponse = {
-  results: { id: string; ok: boolean; type?: InviteType; error?: string }[];
+  results: { id: string; ok: boolean; type?: InviteType; invite?: { documentId?: string }; error?: string }[];
   okCount: number;
 };
 
@@ -223,6 +224,8 @@ export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = 
   return useMutation({
     mutationFn: async ({ action, ids }: { action: 'accept' | 'refuse'; ids: string[] }) => {
       let okCount = 0;
+      const organizationIds = new Set<string>();
+      let failureMessage: string | undefined;
       for (let i = 0; i < ids.length; i += MAX_BULK_ITEMS) {
         try {
           const { data } = await api.post<BulkInviteResponse>('/api/invites/bulk', {
@@ -230,19 +233,36 @@ export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = 
             ids: ids.slice(i, i + MAX_BULK_ITEMS),
           });
           okCount += data.okCount;
+          for (const result of data.results) {
+            if (result.ok && result.type === InviteType.Organization && result.invite?.documentId) {
+              organizationIds.add(result.invite.documentId);
+            }
+          }
+          failureMessage ??= data.results.find(result => !result.ok)?.error;
         } catch (error) {
           // Earlier chunks are committed server-side, so report them as a partial result.
           if (okCount === 0) throw error;
+          failureMessage = getServerErrorField(error) ?? `Failed to ${action} the remaining shared documents`;
           break;
         }
       }
-      return { action, okCount, total: ids.length };
+      return { action, okCount, total: ids.length, failureMessage, organizationIds: [...organizationIds] };
     },
-    onSuccess: ({ action, okCount, total }) => {
+    onSuccess: ({ action, okCount, total, failureMessage, organizationIds }) => {
+      if (okCount > 0) {
+        queryClient.invalidateQueries({ queryKey: [action === 'accept' ? 'invites/accept' : 'invites/refuse'] });
+        if (action === 'refuse') invalidateOrganizationInviteeSearch(queryClient);
+        for (const organizationId of organizationIds) {
+          invalidateOrganizationInviteeSearch(queryClient, organizationId);
+          queryClient.invalidateQueries({ queryKey: ['organizations', organizationId] });
+          queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId] });
+        }
+      }
       const verb = action === 'accept' ? 'accepted' : 'refused';
       if (okCount === total) toast.success(`${total} document shares ${verb}`);
       else if (okCount > 0) toast.warning(`${okCount} of ${total} document shares ${verb}`);
-      else toast.error(`Failed to ${action} the shared documents`);
+      else toast.error(failureMessage ?? `Failed to ${action} the shared documents`);
+      if (okCount > 0 && okCount < total && failureMessage) toast.error(failureMessage);
     },
     onError: (error, { action }) => {
       console.error(error);

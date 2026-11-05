@@ -434,6 +434,28 @@ describe('ShareModal - By Users tab', () => {
 });
 
 describe('ShareModal - bulk By Link tab', () => {
+  it('shows the rate-limit reason when link generation partially succeeds', async () => {
+    mocks.batchShare.mockResolvedValue({
+      results: [
+        { id: 'file-1', ok: true, link: 'https://app.example.com/share/t1' },
+        { id: 'file-2', ok: false, rateLimited: true },
+      ],
+      okCount: 1,
+      rateLimitMessage: 'Too many invitations. Try again later.',
+    });
+    renderModal([
+      { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
+      { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
+    ]);
+    await userEvent.setup().click(screen.getByTestId('share-modal-submit-button'));
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        'Too many invitations. Try again later. Generated links for 1 of 2 files. No link for: b.pdf'
+      )
+    );
+    expect(screen.getByTestId('share-modal-generated-link')).toHaveTextContent('/share/t1');
+  });
+
   it('generates every link with one batch request and combines them into one share link', async () => {
     mocks.batchShare.mockResolvedValue({
       results: [

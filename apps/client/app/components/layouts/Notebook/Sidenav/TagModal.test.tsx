@@ -124,6 +124,25 @@ describe('TagModal', () => {
     expect(mockStartJob).toHaveBeenCalledTimes(100);
   });
 
+  it('queues only once while an earlier request is pending', async () => {
+    let completeRequest: (value: ReturnType<typeof okFor>) => void = () => {
+      throw new Error('Request not started');
+    };
+    mockPost.mockImplementationOnce(
+      () =>
+        new Promise<ReturnType<typeof okFor>>(resolve => {
+          completeRequest = resolve;
+        })
+    );
+    const { onTagged } = renderModal();
+    const apply = screen.getByTestId('tag-modal-apply-btn');
+    fireEvent.click(apply);
+    fireEvent.click(apply);
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    completeRequest(okFor(ids));
+    await waitFor(() => expect(onTagged).toHaveBeenCalledTimes(1));
+  });
+
   it('keeps the modal open when the first chunk fails', async () => {
     mockPost.mockRejectedValue(new Error('boom'));
     const { onTagged } = renderModal();

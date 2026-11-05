@@ -1,8 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import React from 'react';
 import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { IInviteDocumentWithDetails } from '@bike4mind/common';
+import { InviteType, IInviteDocumentWithDetails } from '@bike4mind/common';
 import { useGetUserInvites, useRespondToInvites } from './invites';
 
 const { mockPost, mockToast } = vi.hoisted(() => ({
@@ -35,10 +35,43 @@ describe('useGetUserInvites', () => {
 });
 
 describe('useRespondToInvites', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  it('refreshes organization membership caches after a bulk accept', async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        okCount: 1,
+        results: [
+          {
+            id: 'invite',
+            ok: true,
+            type: InviteType.Organization,
+            invite: { documentId: 'organization' },
+          },
+        ],
+      },
+    });
+    const queryClient = new QueryClient();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useRespondToInvites(), { wrapper });
+    await result.current.mutateAsync({ action: 'accept', ids: ['invite'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organizations', 'organization'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['users', 'organization', 'organization'] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ['users'], predicate: expect.any(Function) })
+    );
+  });
+
   it('reports the committed chunk when a later chunk fails in transport', async () => {
     const ids = Array.from({ length: 150 }, (_, i) => `i${i}`);
     mockPost
-      .mockImplementationOnce(async (_url: string, body: { ids: string[] }) => ({ data: { okCount: body.ids.length } }))
+      .mockImplementationOnce(async (_url: string, body: { ids: string[] }) => ({
+        data: { okCount: body.ids.length, results: body.ids.map(id => ({ id, ok: true })) },
+      }))
       .mockRejectedValueOnce(new Error('network'));
     const queryClient = new QueryClient();
     const wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -49,6 +82,6 @@ describe('useRespondToInvites', () => {
     await result.current.mutateAsync({ action: 'accept', ids });
 
     await waitFor(() => expect(mockToast.warning).toHaveBeenCalledWith('100 of 150 document shares accepted'));
-    expect(mockToast.error).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalledWith('Failed to accept the remaining shared documents');
   });
 });

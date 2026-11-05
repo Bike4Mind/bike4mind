@@ -126,11 +126,15 @@ describe('useBulkActions - handleFavoriteSelected', () => {
     await act(async () => {
       await result.current.handleFavoriteSelected();
     });
+    return result;
   }
 
   beforeEach(() => {
     mockPost.mockImplementation(async (_url: string, body: { add: string[]; remove: string[] }) => ({
-      data: { okCount: body.add.length + body.remove.length },
+      data: {
+        okCount: body.add.length + body.remove.length,
+        results: [...body.add, ...body.remove].map(id => ({ id, ok: true })),
+      },
     }));
   });
 
@@ -158,8 +162,11 @@ describe('useBulkActions - handleFavoriteSelected', () => {
   });
 
   it('reports a partial result when some items fail', async () => {
-    mockPost.mockResolvedValue({ data: { okCount: 7 } });
-    await favorite(makeSessions(10));
+    mockPost.mockResolvedValue({
+      data: { okCount: 7, results: makeSessions(10).map((session, index) => ({ id: session.id, ok: index < 7 })) },
+    });
+    const result = await favorite(makeSessions(10));
+    expect([...result.current.selectedItems]).toEqual(['s7', 's8', 's9']);
 
     expect(mockToast.warning).toHaveBeenCalledWith('Updated favorites for 7 of 10 items');
     expect(mockToast.success).not.toHaveBeenCalled();
@@ -167,12 +174,14 @@ describe('useBulkActions - handleFavoriteSelected', () => {
 
   it('keeps the committed chunk count when a later chunk fails in transport', async () => {
     mockPost
-      .mockImplementationOnce(async (_url: string, body: { add: string[] }) => ({ data: { okCount: body.add.length } }))
+      .mockImplementationOnce(async (_url: string, body: { add: string[] }) => ({
+        data: { okCount: body.add.length, results: body.add.map(id => ({ id, ok: true })) },
+      }))
       .mockRejectedValueOnce(new Error('network'));
     await favorite(makeSessions(150));
 
     expect(mockToast.warning).toHaveBeenCalledWith('Updated favorites for 100 of 150 items');
-    expect(mockToast.error).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalledWith('Failed to update the remaining favorites');
   });
 
   it('sends nothing for an empty selection', async () => {

@@ -39,7 +39,7 @@ const transferFileTagsToUser = async (fileId: string, userId: string) => {
 
     // Group under the shared collision rule, so two stored casings of one tag copy across as one tag
     // rather than two. findOrCreateByNameAndUserId matches its name exactly, so it cannot dedup them.
-    const tagInfo = new Map<string, { originalName: string; ownerTag?: any }>();
+    const tagInfo = new Map<string, { originalName: string; ownerTag?: (typeof fileOwnerTags)[number] }>();
 
     for (const fileTag of file.tags) {
       const foldedName = foldTagName(fileTag.name);
@@ -99,20 +99,24 @@ export async function acceptInviteForUser(req: InviteResponder, id: string) {
   }
 
   if (invite.type === InviteType.Project) {
-    const project = await Project.findById(invite.documentId);
-    if (project) {
-      await logEvent(
-        {
-          userId: user.id,
-          type: ProjectEvents.PROJECT_JOINED,
-          metadata: {
-            projectId: project.id,
-            projectName: project.name,
-            memberId: user.id,
+    try {
+      const project = await Project.findById(invite.documentId);
+      if (project) {
+        await logEvent(
+          {
+            userId: user.id,
+            type: ProjectEvents.PROJECT_JOINED,
+            metadata: {
+              projectId: project.id,
+              projectName: project.name,
+              memberId: user.id,
+            },
           },
-        },
-        { ability: req.ability }
-      );
+          { ability: req.ability }
+        );
+      }
+    } catch (error) {
+      req.logger?.warn('[invites] project join analytics failed', { inviteId: invite.id, error });
     }
   }
 

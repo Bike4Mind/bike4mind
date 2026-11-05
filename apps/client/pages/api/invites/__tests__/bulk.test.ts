@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   acceptInvite: vi.fn(),
   refuseWholeInvite: vi.fn(),
   withTransaction: vi.fn((fn: () => unknown) => fn()),
+  logEvent: vi.fn(),
+  findProject: vi.fn(),
   sendToClient: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -36,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   projectRepository: {},
   fabFileRepository: { findById: vi.fn().mockResolvedValue(null) },
   userRepository: {},
-  Project: { findById: vi.fn() },
+  Project: { findById: mocks.findProject },
   fileTagRepository: {},
   withTransaction: mocks.withTransaction,
   FabFile: {},
@@ -45,8 +47,11 @@ vi.mock('@bike4mind/database', () => ({
   User: {},
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient: mocks.sendToClient }));
-vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mocks.logEvent }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://x' } } }));
+
+const payOrgInviteBonus = vi.hoisted(() => vi.fn().mockResolvedValue(0));
+vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus }));
 
 import '@pages/api/invites/bulk';
 
@@ -102,6 +107,25 @@ describe('POST /api/invites/bulk', () => {
     expect(body.okCount).toBe(3);
     expect(body.results.map((r: any) => r.id)).toEqual([ID_A, ID_B, TOKEN_C]);
     expect(JSON.stringify(body)).not.toContain('other@x.com');
+  });
+
+  it('pays the organization invite bonus for each accepted organization invite', async () => {
+    mocks.acceptInvite.mockImplementation(async (_userId: string, { id }: { id: string }) =>
+      invite(id, id === ID_A ? 'Organization' : 'Session')
+    );
+    await call({ action: 'accept', ids: [ID_A, ID_B] });
+    expect(payOrgInviteBonus).toHaveBeenCalledTimes(1);
+    expect(payOrgInviteBonus).toHaveBeenCalledWith('u1', ID_A);
+  });
+
+  it('keeps a committed project accept successful when analytics throws', async () => {
+    mocks.acceptInvite.mockResolvedValueOnce(invite(ID_A, 'Project'));
+    mocks.findProject.mockResolvedValueOnce({ id: 'project', name: 'Project' });
+    mocks.logEvent.mockRejectedValueOnce(new Error('analytics unavailable'));
+    const response = (await call({ action: 'accept', ids: [ID_A] }))._getJSONData();
+    expect(response.okCount).toBe(1);
+    expect(response.results[0].ok).toBe(true);
+    expect(mocks.sendToClient).toHaveBeenCalledTimes(1);
   });
 
   it('reports a per-invite failure without rolling back or blocking the others', async () => {

@@ -26,6 +26,8 @@ vi.mock('@server/middlewares/baseApi', () => {
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => fn }));
 
 const mocks = vi.hoisted(() => ({
+  logEvent: vi.fn(),
+  findFile: vi.fn(),
   createInvite: vi.fn(),
   tryAddWithinLimitFixedWindow: vi.fn(),
   decrementCounter: vi.fn(),
@@ -42,7 +44,7 @@ vi.mock('@bike4mind/database', () => ({
     decrementCounter: mocks.decrementCounter,
   },
   User: { find: () => ({ collation: () => ({ lean: () => Promise.resolve([]) }) }) },
-  FabFile: { findById: () => Promise.resolve({ fileName: 'report.pdf' }) },
+  FabFile: { findById: mocks.findFile },
   Group: { findById: vi.fn() },
   Session: { findById: () => Promise.resolve({ name: 'Notes' }) },
   Organization: {},
@@ -55,7 +57,7 @@ vi.mock('@bike4mind/database', () => ({
   inviteRepository: {},
 }));
 vi.mock('@server/utils/adminAudit', () => ({ recordAdminActionFromRequest: vi.fn().mockResolvedValue(null) }));
-vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEvent: mocks.logEvent }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: vi.fn() } } }));
 
 import '@pages/api/invites/batch';
@@ -87,6 +89,7 @@ describe('POST /api/invites/batch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.tryAddWithinLimitFixedWindow.mockResolvedValue(FITS);
+    mocks.findFile.mockResolvedValue({ fileName: 'report.pdf' });
     mocks.createInvite.mockImplementation(async (_user: unknown, { id }: { id: string }) => ({
       id: `inv-${id}`,
       token: `tok-${id}`,
@@ -154,6 +157,28 @@ describe('POST /api/invites/batch', () => {
     expect(json.results[1]).toEqual(expect.objectContaining({ id: ID_B, ok: true }));
     expect(json.okCount).toBe(1);
     expect(mocks.decrementCounter).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the share successful when notification preparation fails after commit', async () => {
+    mocks.createInvite.mockResolvedValueOnce({
+      id: 'invite',
+      token: 'token',
+      recipients: { pending: ['friend@test.com'] },
+    });
+    mocks.findFile.mockRejectedValueOnce(new Error('name lookup unavailable'));
+    const json = (await call(body({ ids: [ID_A] })))._getJSONData();
+    expect(json.okCount).toBe(1);
+    expect(json.results[0].link).toContain('/share/token');
+    expect(mocks.decrementCounter).not.toHaveBeenCalled();
+    expect(mocks.sendInviteNotificationEmails).not.toHaveBeenCalled();
+  });
+
+  it('returns the committed share link when analytics throws', async () => {
+    mocks.logEvent.mockRejectedValueOnce(new Error('analytics unavailable'));
+    const json = (await call(body({ ids: [ID_A] })))._getJSONData();
+    expect(json.okCount).toBe(1);
+    expect(json.results[0]).toEqual({ id: ID_A, ok: true, link: expect.stringContaining('/share/tok-') });
+    expect(mocks.decrementCounter).not.toHaveBeenCalled();
   });
 
   it('keeps an unexpected server error generic', async () => {

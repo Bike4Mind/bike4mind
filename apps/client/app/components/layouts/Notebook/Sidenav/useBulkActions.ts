@@ -6,7 +6,7 @@ import { MAX_BULK_ITEMS } from '@bike4mind/common';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDeleteSessions, useDownloadSession } from '@client/app/hooks/data/sessions';
 import { api } from '@client/app/contexts/ApiContext';
-import { getErrorMessage } from '@client/app/utils/error';
+import { getErrorMessage, getServerErrorField } from '@client/app/utils/error';
 import type { CombinedSessionDocument } from './types';
 
 interface UseBulkActionsArgs {
@@ -164,19 +164,29 @@ export function useBulkActions({
 
     const favoriteIds = new Set(filteredFavoriteSession.map(fav => fav.id));
     let okCount = 0;
+    let failureMessage: string | undefined;
+    const completedIds = new Set<string>();
     try {
       for (let i = 0; i < sessions.length; i += MAX_BULK_ITEMS) {
         const chunk = sessions.slice(i, i + MAX_BULK_ITEMS);
         try {
-          const { data } = await api.post<{ okCount: number }>('/api/sessions/bulk', {
-            action: 'favorite',
-            add: chunk.filter(s => !favoriteIds.has(s.id)).map(s => s.id),
-            remove: chunk.filter(s => favoriteIds.has(s.id)).map(s => s.id),
-          });
+          const { data } = await api.post<{ okCount: number; results: { id: string; ok: boolean; error?: string }[] }>(
+            '/api/sessions/bulk',
+            {
+              action: 'favorite',
+              add: chunk.filter(s => !favoriteIds.has(s.id)).map(s => s.id),
+              remove: chunk.filter(s => favoriteIds.has(s.id)).map(s => s.id),
+            }
+          );
           okCount += data.okCount;
+          for (const result of data.results) {
+            if (result.ok) completedIds.add(result.id);
+            else failureMessage ??= result.error;
+          }
         } catch (error) {
           // Earlier chunks are committed server-side, so report them as a partial result.
           if (okCount === 0) throw error;
+          failureMessage = getServerErrorField(error) ?? 'Failed to update the remaining favorites';
           break;
         }
       }
@@ -186,8 +196,9 @@ export function useBulkActions({
         toast.success(`Updated favorites for ${total} item${total > 1 ? 's' : ''}`);
       } else {
         toast.warning(`Updated favorites for ${okCount} of ${total} items`);
+        if (failureMessage) toast.error(failureMessage);
       }
-      setSelectedItems(new Set());
+      setSelectedItems(previous => new Set([...previous].filter(id => !completedIds.has(id))));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {

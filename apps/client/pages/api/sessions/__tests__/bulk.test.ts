@@ -98,7 +98,16 @@ vi.mock('@bike4mind/database', async orig => {
     withTransaction: (...a: unknown[]) => mockWithTransaction(...a),
     sessionRepository: {
       ...(actual.sessionRepository as object),
-      shareable: { findAllUpdateAccessByIds: (...a: unknown[]) => mockTag.findUpdatable(...a) },
+      shareable: {
+        findAllUpdateAccessByIds: (...a: unknown[]) => mockTag.findUpdatable(...a),
+        findUpdateAccessById: async (user: unknown, id: string) => {
+          const sessions: { id: string; tags: { name: string; strength: number }[] }[] = await mockTag.findUpdatable(
+            user,
+            [id]
+          );
+          return sessions.find(session => session.id === id) ?? null;
+        },
+      },
     },
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
   };
@@ -315,7 +324,7 @@ describe('POST /api/sessions/bulk - tags', () => {
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockTag.findUpdatable).toHaveBeenCalledTimes(1);
+    expect(mockTag.findUpdatable).toHaveBeenCalledTimes(2);
     expect(mockTag.update.mock.calls.map(c => c[1])).toEqual([
       {
         id: id(1),
@@ -333,6 +342,43 @@ describe('POST /api/sessions/bulk - tags', () => {
       },
     ]);
     expect(res._getJSONData().okCount).toBe(2);
+  });
+
+  it('re-reads tags on a transaction retry and logs only the committed write', async () => {
+    let inTransaction = false;
+    mockTag.findUpdatable
+      .mockResolvedValueOnce([{ id: id(1), tags: [{ name: 'original', strength: 0.4 }] }])
+      .mockResolvedValueOnce([{ id: id(1), tags: [{ name: 'concurrent', strength: 0.7 }] }]);
+    mockTag.update.mockImplementation(async (_user: unknown, parameters: { id: string }) => {
+      expect(inTransaction).toBe(true);
+      return { id: parameters.id, name: 'Notebook' };
+    });
+    mockWithTransaction.mockImplementationOnce(async (callback: (session: unknown) => Promise<unknown>) => {
+      inTransaction = true;
+      try {
+        await callback(undefined);
+        return await callback(undefined);
+      } finally {
+        inTransaction = false;
+      }
+    });
+    const { req, res } = fireWith('POST', { action: 'addTags', sessionIds: [id(1)], tags: ['new'] });
+    await handler(req, res);
+
+    expect(mockTag.findUpdatable).toHaveBeenCalledTimes(2);
+    expect(mockTag.update).toHaveBeenLastCalledWith(
+      expect.anything(),
+      {
+        id: id(1),
+        tags: [
+          { name: 'concurrent', strength: 0.7 },
+          { name: 'new', strength: 1 },
+        ],
+      },
+      expect.anything()
+    );
+    expect(mockLogEvent.mock.calls.filter(([event]) => event.type === SessionEvents.UPDATE_SESSION)).toHaveLength(1);
+    expect(res._getJSONData().okCount).toBe(1);
   });
 
   it('reports a persisted update as ok when the event log fails', async () => {

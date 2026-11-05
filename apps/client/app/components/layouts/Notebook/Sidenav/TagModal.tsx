@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Modal,
   ModalDialog,
@@ -43,6 +43,8 @@ interface TagModalProps {
  * generation, one bulk request per MAX_BULK_ITEMS sessions, then asks the parent to clear the selection.
  */
 const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: TagModalProps) => {
+  const applyingTags = useRef(false);
+  const [isApplying, setIsApplying] = useState(false);
   const [manualTags, setManualTags] = useState('');
   const [tagChips, setTagChips] = useState<string[]>([]);
   const queryClient = useQueryClient();
@@ -51,6 +53,9 @@ const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: 
   const applyTags = async () => {
     const ids = combinedSessions.filter(s => selectedItems.has(s.id)).map(s => s.id);
     if (ids.length === 0) return;
+    if (applyingTags.current) return;
+    applyingTags.current = true;
+    setIsApplying(true);
     const addMode = tagChips.length > 0;
     const plural = (n: number) => `${n} item${n > 1 ? 's' : ''}`;
     let okCount = 0;
@@ -96,6 +101,8 @@ const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: 
       setManualTags('');
       setTagChips([]);
     } finally {
+      applyingTags.current = false;
+      setIsApplying(false);
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
     }
   };
@@ -177,7 +184,7 @@ const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: 
           >
             Cancel
           </Button>
-          <Button data-testid="tag-modal-apply-btn" onClick={applyTags}>
+          <Button data-testid="tag-modal-apply-btn" disabled={isApplying} loading={isApplying} onClick={applyTags}>
             {tagChips.length > 0 ? 'Add Tags' : 'Generate Tags'}
           </Button>
         </DialogActions>

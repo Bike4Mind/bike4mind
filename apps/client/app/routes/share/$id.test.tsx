@@ -65,6 +65,15 @@ describe('SharePage', () => {
     expect(inviteMutations.accept).not.toHaveBeenCalled();
   });
 
+  it('deduplicates ids and preserves the URL order', async () => {
+    mockId.value = 'z,a,z';
+    vi.mocked(fetchInvite).mockResolvedValue(loadedInvite);
+    renderPage();
+    fireEvent.click(await screen.findByLabelText('Accept'));
+    await vi.waitFor(() => expect(inviteMutations.respond).toHaveBeenCalledWith({ action: 'accept', ids: ['z', 'a'] }));
+    expect(vi.mocked(fetchInvite).mock.calls.map(([id]) => id)).toEqual(['z', 'a']);
+  });
+
   it('refuses a multi-invite link with one bulk request', async () => {
     mockId.value = 'a,b,c';
     vi.mocked(fetchInvite).mockResolvedValue(loadedInvite);

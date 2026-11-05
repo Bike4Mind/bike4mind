@@ -125,14 +125,18 @@ export async function createDocumentInvite(
     throw error;
   });
 
-  await logEvent(
-    {
-      userId: user.id,
-      type: InviteEvents.CREATE_INVITE,
-      metadata: { id: created.id, totalInvites: created.recipients?.pending?.length ?? 0 },
-    },
-    { ability: req.ability }
-  );
+  try {
+    await logEvent(
+      {
+        userId: user.id,
+        type: InviteEvents.CREATE_INVITE,
+        metadata: { id: created.id, totalInvites: created.recipients?.pending?.length ?? 0 },
+      },
+      { ability: req.ability }
+    );
+  } catch (error) {
+    req.logger?.warn('[invites] create analytics failed', { inviteId: created.id, error });
+  }
 
   // Group invites carry a membership grant, so they get the same audit trail as the members
   // route's org.group_member.assigned entry. Best-effort, never fails the write.
@@ -156,18 +160,22 @@ export async function createDocumentInvite(
 
   const pendingRecipients = created.recipients?.pending || [];
   if (pendingRecipients.length > 0) {
-    const brand = process.env.APP_NAME || '';
-    notifyInvitees({
-      recipients: pendingRecipients,
-      sharerName: user.name || user.username || `A${brand ? ` ${brand}` : ''} user`,
-      sharerEmail: user.email || '',
-      documentName: await getDocumentName(type, id),
-      typeName: getInviteTypeName(type),
-      inviteLink: generateInviteLink(created),
-      message: restBody.description,
-    }).catch(error => {
-      req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
-    });
+    try {
+      const brand = process.env.APP_NAME || '';
+      notifyInvitees({
+        recipients: pendingRecipients,
+        sharerName: user.name || user.username || `A${brand ? ` ${brand}` : ''} user`,
+        sharerEmail: user.email || '',
+        documentName: await getDocumentName(type, id),
+        typeName: getInviteTypeName(type),
+        inviteLink: generateInviteLink(created),
+        message: restBody.description,
+      }).catch(error => {
+        req.logger?.error('Failed to send invite notification emails', { error, inviteId: created.id });
+      });
+    } catch (error) {
+      req.logger?.error('Failed to prepare invite notification emails', { error, inviteId: created.id });
+    }
   }
 
   const [view] = await toSharerInviteViews([created], user);

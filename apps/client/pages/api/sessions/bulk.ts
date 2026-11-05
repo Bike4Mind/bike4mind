@@ -71,29 +71,28 @@ async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string
   assertCanWriteNotebooks(req);
   const user = req.user!;
   const ids = [...new Set(sessionIds)];
-  const validIds = ids.filter(id => isValidObjectId(id));
-  const stored = new Map(
-    (await plainSessionRepository.shareable.findAllUpdateAccessByIds(user, validIds)).map(s => [String(s.id), s])
-  );
   const newTags = [...new Set(tags.map(t => t.trim()))];
   const adapters = buildSessionUpdateAdapters(req, user, req.logger);
   const results: BulkItemResult[] = [];
 
   for (const id of ids) {
-    const session = stored.get(id);
-    if (!session) {
-      results.push({ id, ok: false, error: isValidObjectId(id) ? 'Update failed' : 'Invalid session id' });
+    if (!isValidObjectId(id)) {
+      results.push({ id, ok: false, error: 'Invalid session id' });
       continue;
     }
-    // Merged against the stored tags, not the caller's cached copy, so a stale client cannot drop tags.
-    const existing = session.tags ?? [];
-    const merged = [
-      ...existing,
-      ...newTags.filter(name => !existing.some(t => t.name === name)).map(name => ({ name, strength: 1 })),
-    ];
-    let updated;
+    let updated: Awaited<ReturnType<typeof sessionService.updateSession>>;
     try {
-      updated = await sessionService.updateSession(user, { id, tags: merged }, adapters);
+      // Read and merge inside the retryable transaction so concurrent tag writes are preserved.
+      updated = await withTransaction(async () => {
+        const session = await plainSessionRepository.shareable.findUpdateAccessById(user, id);
+        if (!session) throw new Error('Cannot update session');
+        const existing = session.tags ?? [];
+        const merged = [
+          ...existing,
+          ...newTags.filter(name => !existing.some(tag => tag.name === name)).map(name => ({ name, strength: 1 })),
+        ];
+        return sessionService.updateSession(user, { id, tags: merged }, adapters);
+      });
     } catch (error) {
       req.logger.warn('[sessions/bulk] tag update failed', { sessionId: id, error });
       results.push({ id, ok: false, error: 'Update failed' });
