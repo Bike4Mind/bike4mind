@@ -85,8 +85,14 @@ export function holdLabel(
 ): string | null {
   if (loop.status !== 'live' || loop.activeExecutionId) return null;
   const { hold } = loop;
-  // A pacing hold lapses once its deferred run is due.
-  if (hold && (hold.kind !== 'pacing' || (hold.until && new Date(hold.until).getTime() > now))) {
+  // A pacing hold lapses once its deferred run is due, or once the owner reschedules (nextRunAt moves off `until`).
+  const pacingLive =
+    hold?.kind === 'pacing' &&
+    !!hold.until &&
+    new Date(hold.until).getTime() > now &&
+    !!loop.nextRunAt &&
+    new Date(loop.nextRunAt).getTime() === new Date(hold.until).getTime();
+  if (hold && (hold.kind !== 'pacing' || pacingLive)) {
     return HOLD_LABELS[hold.kind](hold);
   }
   return backoffLabel(loop, now);
