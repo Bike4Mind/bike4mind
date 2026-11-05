@@ -1971,7 +1971,7 @@ describe('ModelsScreen servers', () => {
     expect(calls.pull).not.toHaveBeenCalled();
   });
 
-  it('sizes the room for a split import as every part plus its largest, not just the download', async () => {
+  it('sizes the room for a split import as an upper bound and leaves the hard check to Desktop', async () => {
     const split = {
       ...view().builds[0],
       id: 'qwen-q8_0',
@@ -1987,8 +1987,9 @@ describe('ModelsScreen servers', () => {
     await click(q('models-explore-result-row'));
     await click(q('models-build-pull-btn'));
     const text = q('models-pull-dialog-path')?.textContent;
-    expect(text).toContain('600 MB free, which is not enough for this import.');
-    expect(text).toContain('Adding the parts needs 691 MB free');
+    expect(text).toContain('600 MB free.');
+    expect(text).not.toContain('not enough');
+    expect(text).toContain('Adding the parts needs up to 691 MB free');
   });
 
   it('shows the notice an import returns when it went ahead without the registry params', async () => {

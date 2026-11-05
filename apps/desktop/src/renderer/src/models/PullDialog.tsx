@@ -49,7 +49,7 @@ function StoreLine({
   location: ModelStoreLocation | null | 'failed';
   server: string | null;
   needed: number;
-  /** A split import stages a part beside the copies Ollama keeps, so `needed` is its own check's figure. */
+  /** For a split import `needed` is an upper bound; Desktop checks the real figure, so it never warns. */
   split: boolean;
 }) {
   if (location === null)
@@ -61,7 +61,7 @@ function StoreLine({
   const path = location === 'failed' ? null : location.path;
   const source = (path && location !== 'failed' && location.source) || null;
   const free = location === 'failed' ? null : location.freeBytes;
-  const short = free !== null && free < needed;
+  const short = !split && free !== null && free < needed;
   const folder = path && <Typography fontFamily="code">{path}</Typography>;
   return (
     <Typography
@@ -90,10 +90,9 @@ function StoreLine({
       ) : (
         <>Saved to Ollama&apos;s model folder.</>
       )}
-      {free !== null &&
-        ` ${formatBytes(free)} free${short ? `, which is not enough for this ${split ? 'import' : 'download'}` : ''}.`}
+      {free !== null && ` ${formatBytes(free)} free${short ? ', which is not enough for this download' : ''}.`}
       {split &&
-        ` Adding the parts needs ${formatBytes(needed)} free: every part, plus room for the largest while it is copied.`}
+        ` Adding the parts needs up to ${formatBytes(needed)} free: every part, plus room for the largest while it is copied.`}
     </Typography>
   );
 }
