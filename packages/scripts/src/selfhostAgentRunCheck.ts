@@ -85,6 +85,11 @@ export async function runSelfhostAgentCheck(
   deps: AgentRunCheckDeps,
   config: AgentRunCheckConfig
 ): Promise<AgentRunCheckResult> {
+  const result = await runCheck(deps, config);
+  return result.ok ? result : { ...result, reason: result.reason.split(config.apiKey).join('[redacted]') };
+}
+
+async function runCheck(deps: AgentRunCheckDeps, config: AgentRunCheckConfig): Promise<AgentRunCheckResult> {
   const { baseUrl, apiKey, nonce, model, timeoutMs = 300_000, pollIntervalMs = 3_000 } = config;
   const headers = { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
   const timeoutSignal = deps.timeoutSignal ?? ((ms: number) => AbortSignal.timeout(ms));
@@ -97,6 +102,8 @@ export async function runSelfhostAgentCheck(
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: timeoutSignal(Math.max(1, deadline - deps.now())),
     });
+
+  const sleepUntilNextPoll = () => deps.sleep(Math.min(pollIntervalMs, Math.max(0, deadline - deps.now())));
 
   let executionId: string | undefined;
   let lastStatus: unknown;
@@ -137,7 +144,7 @@ export async function runSelfhostAgentCheck(
         const res = await call('GET', `/api/v1/agent-executions/${encodeURIComponent(startedId)}`);
         if (RETRYABLE_POLL_STATUSES.has(res.status)) {
           lastError = `HTTP ${res.status}`;
-          await deps.sleep(pollIntervalMs);
+          await sleepUntilNextPoll();
           continue;
         }
         if (!res.ok) return { ok: false, executionId, reason: `poll HTTP ${res.status}: ${await errorText(res)}` };
@@ -145,12 +152,12 @@ export async function runSelfhostAgentCheck(
       } catch (err) {
         if (isAbort(err)) break;
         lastError = messageOf(err);
-        await deps.sleep(pollIntervalMs);
+        await sleepUntilNextPoll();
         continue;
       }
       if (!isActive(polled.status)) return evaluateExecution(startedId, polled, nonce);
       lastStatus = polled.status;
-      await deps.sleep(pollIntervalMs);
+      await sleepUntilNextPoll();
     }
     return timedOut();
   } catch (err) {

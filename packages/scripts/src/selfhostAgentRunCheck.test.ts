@@ -54,7 +54,7 @@ function setup(opts: {
     });
     if (opts.hang === 'session' && path === '/api/v1/sessions') return hang(init?.signal);
     if (path === '/api/v1/sessions') clock += opts.sessionTakesMs ?? 0;
-    if (path === '/api/v1/sessions') return opts.session ?? json(201, { id: 'sess-1' });
+    if (path === '/api/v1/sessions') return opts.session ?? json(200, { id: 'sess-1' });
     if (path === '/api/v1/agent-executions') return opts.start ?? json(202, { id: execId });
     if (opts.hang === 'poll') return hang(init?.signal);
     const next = polls.length > 1 ? polls.shift()! : polls[0];
@@ -289,16 +289,28 @@ describe('runSelfhostAgentCheck', () => {
   });
 
   it('never leaks the API key into a failure reason', async () => {
+    const echo = `bad key ${API_KEY}`;
     const cases = [
-      setup({ polls: [], session: json(401, { error: 'bad key' }) }),
-      setup({ polls: [], start: json(500, { error: 'x' }) }),
-      setup({ polls: [{ status: 'failed', error: 'x' }] }),
-      setup({ polls: [{ status: 'running' }], config: { timeoutMs: 2_000 } }),
+      setup({ polls: [], session: json(401, { error: echo }) }),
+      setup({ polls: [], start: json(500, { error: echo }) }),
+      setup({ polls: [{ httpStatus: 400, body: { error: echo } }] }),
+      setup({ polls: [{ status: 'failed', error: echo }] }),
+      setup({ polls: [{ throws: echo }], config: { timeoutMs: 2_000 } }),
     ];
     for (const c of cases) {
       const r = await c.run();
       expect(r.ok).toBe(false);
       expect(JSON.stringify(r)).not.toContain(API_KEY);
+      expect(JSON.stringify(r)).toContain('[redacted]');
     }
+  });
+
+  it('clamps the poll sleep to the remaining time before the deadline', async () => {
+    const { run, sleeps } = setup({
+      polls: [{ status: 'running' }],
+      config: { timeoutMs: 2_500, pollIntervalMs: 1_000 },
+    });
+    expect((await run()).ok).toBe(false);
+    expect(sleeps).toEqual([1_000, 1_000, 500]);
   });
 });
