@@ -45,6 +45,18 @@ export function foldersTagsForBatch(
 
 const UPLOAD_CONCURRENCY = 5;
 const BATCH_CHUNK_SIZE = 100; // Max files per presigned URL request
+const MAX_PENDING_RETRY_WAIT_S = 60;
+const PENDING_UPLOAD_LIMIT_CODE = 'pending_upload_limit';
+
+/** Seconds to wait before retrying a pending-upload refusal, or undefined when waiting is not worthwhile. */
+function pendingUploadRetryDelay(err: unknown): number | undefined {
+  if (!axios.isAxiosError(err) || err.response?.status !== 429) return undefined;
+  if ((err.response.data as { code?: unknown } | undefined)?.code !== PENDING_UPLOAD_LIMIT_CODE) return undefined;
+  const header: unknown = err.response.headers?.['retry-after'];
+  if (typeof header !== 'string' || !/^\d+$/.test(header.trim())) return undefined;
+  const seconds = Number(header);
+  return seconds <= MAX_PENDING_RETRY_WAIT_S ? seconds : undefined;
+}
 
 /**
  * Canonical offline message. Shared by the mutation's pre-flight guard, the error
@@ -592,30 +604,41 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       // were created for a chunk whose presign failed, so there is nothing to clean up.
       let urlMap: { fileId: string; fileKey: string; url: string; fileName: string }[];
       try {
-        const urlsRes = await api.post<{
-          files: { fileId: string; fileKey: string; url: string; fileName: string }[];
-        }>('/api/files/generate-presigned-urls-batch', {
-          files: chunk.map(f => ({
-            fileName: f.file.name,
-            mimeType: f.type || 'application/octet-stream',
-            // The PUT below sends f.file, and the URL is bound to exactly this many bytes.
-            fileSize: f.file.size,
-            relativePath: f.relativePath,
-            ...(f.contentHash && { contentHash: f.contentHash }),
-            // Just the source-folder tag - AI-suggested categories are applied
-            // later, post-upload, once the background job's suggestions are reviewed.
-            tags: folderTagForFile(f.relativePath, tagPrefix),
-          })),
-          // The lake id, never a slug derived from the name: on a name collision the server
-          // creates the lake under a disambiguated slug, and the name-derived one still
-          // resolves - to the lake that was already there, possibly another user's. The
-          // route accepts either form.
-          dataLakeSlug: dataLakeId,
-          // Correlate every uploaded file to its batch so the pipeline
-          // (objectCreated -> chunk -> vectorize) updates batch progress and the
-          // batch can complete. Also populates the batch manifest server-side.
-          batchId,
-        });
+        const presignChunk = () =>
+          api.post<{
+            files: { fileId: string; fileKey: string; url: string; fileName: string }[];
+          }>('/api/files/generate-presigned-urls-batch', {
+            files: chunk.map(f => ({
+              fileName: f.file.name,
+              mimeType: f.type || 'application/octet-stream',
+              // The PUT below sends f.file, and the URL is bound to exactly this many bytes.
+              fileSize: f.file.size,
+              relativePath: f.relativePath,
+              ...(f.contentHash && { contentHash: f.contentHash }),
+              // Just the source-folder tag - AI-suggested categories are applied
+              // later, post-upload, once the background job's suggestions are reviewed.
+              tags: folderTagForFile(f.relativePath, tagPrefix),
+            })),
+            // The lake id, never a slug derived from the name: on a name collision the server
+            // creates the lake under a disambiguated slug, and the name-derived one still
+            // resolves - to the lake that was already there, possibly another user's. The
+            // route accepts either form.
+            dataLakeSlug: dataLakeId,
+            // Correlate every uploaded file to its batch so the pipeline
+            // (objectCreated -> chunk -> vectorize) updates batch progress and the
+            // batch can complete. Also populates the batch manifest server-side.
+            batchId,
+          });
+        let urlsRes: Awaited<ReturnType<typeof presignChunk>>;
+        try {
+          urlsRes = await presignChunk();
+        } catch (err) {
+          // The cap frees as earlier uploads land, so one bounded wait is worth a retry before failing the chunk.
+          const delay = pendingUploadRetryDelay(err);
+          if (delay === undefined) throw err;
+          await new Promise(resolve => setTimeout(resolve, delay * 1000));
+          urlsRes = await presignChunk();
+        }
         urlMap = urlsRes.data.files;
       } catch (err) {
         const recordedStatus = axios.isAxiosError(presignError) ? presignError.response?.status : undefined;
