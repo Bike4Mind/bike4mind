@@ -315,6 +315,17 @@ const UserRiskSignalSchema = new Schema(
   { _id: false }
 );
 
+/** An account's signup facts as automated containment reads them (UserRepository.findSignupLinkFacts). */
+export type UserSignupLinkFacts = {
+  id: string;
+  createdAt: Date | null;
+  signupIp: string | null;
+  signupDatacenter: boolean | null;
+  /** `otc`, `google`, `github`, ...; `email` when nothing more is recorded. */
+  signupMethod: string;
+  landingNotebookOwnerId: string | null;
+};
+
 /** An account as the payment-risk linked-account checks read it; the blocked fields match accountBlockReasons. */
 export type UserLinkState = {
   id: string;
@@ -743,6 +754,35 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .limit(limit)
       .lean();
     return docs.map(d => String(d._id));
+  }
+
+  /** Stamps IUser.signupLanding once; a later call never overwrites it. */
+  async recordSignupLanding(userId: string, notebookOwnerId: string, capturedAt: Date): Promise<void> {
+    await this.model.updateOne(
+      { _id: convertIds([userId])[0], signupLanding: null },
+      { $set: { signupLanding: { notebookOwnerId, capturedAt } } }
+    );
+  }
+
+  /** The signup facts automated containment reads per account; ids that are not users are absent. */
+  async findSignupLinkFacts(ids: string[]): Promise<UserSignupLinkFacts[]> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select(
+        'createdAt signupMeta.ip signupMeta.isDatacenter acquisition.signupMethod authProviders.strategy signupLanding'
+      )
+      .lean();
+    return docs.map(doc => ({
+      id: String(doc._id),
+      createdAt: doc.createdAt ?? null,
+      signupIp: doc.signupMeta?.ip ?? null,
+      signupDatacenter: doc.signupMeta?.isDatacenter ?? null,
+      // acquisition is consent-gated; the first auth provider is the durable fallback, as the users list reads it.
+      signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+      landingNotebookOwnerId: doc.signupLanding?.notebookOwnerId ?? null,
+    }));
   }
 
   /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
@@ -1616,6 +1656,15 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     acquisition: { type: UserAcquisitionSchema, required: false, default: undefined },
     // Written once at signup - see IUser.signupMeta.
     signupMeta: { type: SignupMetaSchema, required: false, default: undefined },
+    // Written once at an OAuth signup that landed on another account's notebook - see IUser.signupLanding.
+    signupLanding: {
+      type: new Schema(
+        { notebookOwnerId: { type: String, required: true }, capturedAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
     // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
     riskScore: { type: RiskScoreSchema, required: false, default: undefined },
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
