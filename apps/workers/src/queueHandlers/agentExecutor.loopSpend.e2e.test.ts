@@ -16,7 +16,6 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const h = vi.hoisted(() => ({
-  complete: vi.fn(),
   autoName: vi.fn().mockResolvedValue(undefined),
   summarize: vi.fn().mockResolvedValue(undefined),
   completionCompleted: vi.fn().mockResolvedValue(undefined),
@@ -84,7 +83,6 @@ vi.mock('@bike4mind/llm-adapters', async () => {
         _options: Partial<ICompletionOptions>,
         callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
       ) => {
-        h.complete();
         await callback(['Done'], { inputTokens: 1000, outputTokens: 500, toolsUsed: [] });
       },
     }),

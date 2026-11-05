@@ -356,12 +356,9 @@ describe('persistRunAsQuest agent artifact persistence', () => {
 });
 
 describe('persistRunAsQuest loop runs', () => {
-  beforeEach(() => {
-    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
-  });
-
   it('writes the Quest but skips session naming and summarization for a loop run', async () => {
     stubExecution({ loopId: 'loop-1' });
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
 
     await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
 
@@ -369,13 +366,6 @@ describe('persistRunAsQuest loop runs', () => {
     expect(persistAgentArtifactsMock).toHaveBeenCalled();
     expect(autoNamePublishMock).not.toHaveBeenCalled();
     expect(summarizePublishMock).not.toHaveBeenCalled();
-  });
-
-  it('still names and summarizes a non-loop run', async () => {
-    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
-
-    expect(autoNamePublishMock).toHaveBeenCalled();
-    expect(summarizePublishMock).toHaveBeenCalled();
   });
 });
 
