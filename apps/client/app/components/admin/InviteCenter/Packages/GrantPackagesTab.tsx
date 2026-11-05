@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Box, Button, Chip, IconButton, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Chip, IconButton, Stack, Tooltip, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,6 +18,7 @@ import {
 } from '@client/app/utils/grantPackageAPICalls';
 import { getErrorMessage } from '@client/app/utils/error';
 import { GrantPackageFormModal } from './GrantPackageFormModal';
+import { capState } from './capState';
 
 const formatCount = (value: number) => value.toLocaleString('en-US');
 const capLabel = (used: number, cap: number | null) =>
@@ -38,18 +39,26 @@ const columns: DataColumn<GrantPackageRow>[] = [
       </>
     ),
   },
-  { id: 'credits', label: 'Credits', numeric: true, render: row => formatCount(row.credits) },
-  { id: 'total', label: 'Redeemed', numeric: true, render: row => capLabel(row.redeemedTotal, row.totalCap) },
+  { id: 'credits', label: 'Credits', numeric: true, width: '5.5rem', render: row => formatCount(row.credits) },
+  {
+    id: 'total',
+    label: 'Redeemed',
+    numeric: true,
+    width: '7.5rem',
+    render: row => capLabel(row.redeemedTotal, row.totalCap),
+  },
   {
     id: 'today',
     label: 'Today',
     numeric: true,
+    width: '6rem',
     render: row => (row.dailyCap === null ? '-' : capLabel(row.redeemedToday, row.dailyCap)),
   },
   {
     id: 'capHits',
     label: 'Cap hits',
     numeric: true,
+    width: '5.5rem',
     render: row => (
       <Tooltip title={row.lastCapHitAt ? `Last refused ${new Date(row.lastCapHitAt).toUTCString()}` : 'Never refused'}>
         <span data-testid={`grant-package-cap-hits-${row.id}`}>{formatCount(row.capHits)}</span>
@@ -57,13 +66,72 @@ const columns: DataColumn<GrantPackageRow>[] = [
     ),
   },
   {
+    id: 'codes',
+    label: 'Codes',
+    numeric: true,
+    width: '8rem',
+    render: row =>
+      row.usage ? (
+        <Tooltip title="Active codes (not expired, and not yet used unless unlimited-use) out of all codes linked to this package">
+          <span data-testid={`grant-package-codes-${row.id}`}>
+            {formatCount(row.usage.activeCodes)} active / {formatCount(row.usage.codes)}
+          </span>
+        </Tooltip>
+      ) : (
+        '-'
+      ),
+  },
+  {
+    id: 'partnerDomains',
+    label: 'Partner domains',
+    numeric: true,
+    width: '8.5rem',
+    render: row =>
+      row.usage ? (
+        <Tooltip
+          title={`${formatCount(row.usage.enabledPartnerDomains)} enabled out of ${formatCount(row.usage.partnerDomains)} linked partner signup rules`}
+        >
+          <span data-testid={`grant-package-domains-${row.id}`}>{formatCount(row.usage.enabledPartnerDomains)}</span>
+        </Tooltip>
+      ) : (
+        '-'
+      ),
+  },
+  {
+    id: 'nextCodeExpiry',
+    label: 'Next code expiry',
+    width: '9rem',
+    render: row => (
+      <Tooltip title="Packages do not expire; this is the soonest expiry among linked active codes">
+        <span data-testid={`grant-package-next-expiry-${row.id}`}>
+          {row.usage?.nextCodeExpiry ? new Date(row.usage.nextCodeExpiry).toLocaleDateString('en-US') : '-'}
+        </span>
+      </Tooltip>
+    ),
+  },
+  {
     id: 'status',
     label: 'Status',
-    render: row => <StatusChip tone={row.active ? 'good' : 'neutral'} label={row.active ? 'Active' : 'Inactive'} dot />,
+    width: '10rem',
+    render: row => {
+      const cap = capState(row);
+      return (
+        <Stack direction="row" gap={0.5} flexWrap="wrap">
+          <StatusChip tone={row.active ? 'good' : 'neutral'} label={row.active ? 'Active' : 'Inactive'} dot />
+          {cap && (
+            <StatusChip
+              tone="warn"
+              label={cap === 'total' ? 'Cap reached' : 'Daily cap reached'}
+              data-testid={`grant-package-cap-reached-${row.id}`}
+            />
+          )}
+        </Stack>
+      );
+    },
   },
 ];
 
-const GrantPackagesTab = () => {
+const GrantPackagesTab = ({ embedded = false }: { embedded?: boolean }) => {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -71,8 +139,8 @@ const GrantPackagesTab = () => {
   const [editing, setEditing] = useState<IGrantPackageDocument | null>(null);
 
   const { data, isPending, error, refetch } = useQuery({
-    queryKey: [GRANT_PACKAGES_QUERY_KEY, { page, pageSize }],
-    queryFn: () => fetchGrantPackages({ page, limit: pageSize }),
+    queryKey: [GRANT_PACKAGES_QUERY_KEY, { page, pageSize, usage: true }],
+    queryFn: () => fetchGrantPackages({ page, limit: pageSize, usage: true }),
   });
 
   const openForm = (pkg: IGrantPackageDocument | null) => {
@@ -92,7 +160,7 @@ const GrantPackagesTab = () => {
   );
 
   return (
-    <Box sx={{ px: 3, py: 2 }}>
+    <Box sx={embedded ? undefined : { px: 3, py: 2 }}>
       <AdminPageHeader
         title="Grant packages"
         count={data?.meta.total}
@@ -104,6 +172,7 @@ const GrantPackagesTab = () => {
         columns={columns}
         getRowId={row => row.id}
         label="Grant packages"
+        minWidth="72rem"
         loading={isPending}
         error={error ? getErrorMessage(error) : undefined}
         onRetry={() => void refetch()}

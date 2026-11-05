@@ -655,7 +655,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     return this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email username lastActiveAt isOnline photoUrl');
+      .select('name email emailVerified username lastActiveAt isOnline photoUrl');
   }
 
   /**

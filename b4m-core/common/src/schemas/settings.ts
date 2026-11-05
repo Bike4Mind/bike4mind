@@ -513,6 +513,7 @@ export const SettingKeySchema = z.enum([
   'newAccountSpendCapDays',
   'newAccountHourlySpendCapCredits',
   'newAccountDailySpendCapCredits',
+  'paidCompletionOverdraftCredits',
   'spendMonitorEnabled',
   'spendMonitorSlackEnabled',
   'spendMonitorPlatformSpikeRatio',
@@ -522,6 +523,10 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAccountSpikeRatio',
   'spendMonitorAccountSpikeFloorCredits',
   'spendMonitorAccountCeilingCredits',
+  'spendMonitorTrustedEmailDomains',
+  'spendMonitorTrustedAccountIds',
+  'spendMonitorTrustedAccountSpikeFloorCredits',
+  'spendMonitorTrustedAccountCeilingCredits',
   'freeTierDailySystemCostCapUsd',
   'stagedSignupGrantEnabled',
   'signupGrantCredits',
@@ -2345,6 +2350,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'newAccountSpendCapDays', order: 19.1 },
       { key: 'newAccountHourlySpendCapCredits', order: 19.2 },
       { key: 'newAccountDailySpendCapCredits', order: 19.3 },
+      { key: 'paidCompletionOverdraftCredits', order: 19.35 },
       { key: 'spendMonitorEnabled', order: 19.41 },
       { key: 'spendMonitorSlackEnabled', order: 19.42 },
       { key: 'spendMonitorPlatformSpikeRatio', order: 19.43 },
@@ -2354,6 +2360,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAccountSpikeRatio', order: 19.47 },
       { key: 'spendMonitorAccountSpikeFloorCredits', order: 19.48 },
       { key: 'spendMonitorAccountCeilingCredits', order: 19.49 },
+      { key: 'spendMonitorTrustedEmailDomains', order: 19.491 },
+      { key: 'spendMonitorTrustedAccountIds', order: 19.492 },
+      { key: 'spendMonitorTrustedAccountSpikeFloorCredits', order: 19.493 },
+      { key: 'spendMonitorTrustedAccountCeilingCredits', order: 19.494 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
@@ -5156,6 +5166,19 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
+  // Read by ChatCompletionProcess when it caps a chat turn's output at what the payer can afford
+  // (b4m-core/services/src/llm/chatCreditCap.ts).
+  paidCompletionOverdraftCredits: makeNumberSetting({
+    key: 'paidCompletionOverdraftCredits',
+    name: 'Paid Completion Overdraft Allowance (credits)',
+    defaultValue: 500,
+    int: true,
+    min: 0,
+    description:
+      'How far past its balance one chat answer may run for a personal account on a paid plan. Each answer is capped so its worst-case cost fits the balance plus this allowance, and it stops once it reaches that limit. Accounts without a paid plan get no allowance, and organizations always stop at their balance. Applies to chat turns only; agent runs ignore it. Set to 0 to give paid accounts no allowance either.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
   spendMonitorEnabled: makeBooleanSetting({
     key: 'spendMonitorEnabled',
     name: 'Spend Monitor: Enabled',
@@ -5248,6 +5271,46 @@ export const settingsMap = {
     min: 1,
     description:
       'Credits per 15-minute window. Any single account spending this much in the window raises an alert regardless of its baseline. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedEmailDomains: makeStringSetting({
+    key: 'spendMonitorTrustedEmailDomains',
+    name: 'Spend Monitor: Trusted Email Domains',
+    defaultValue: '',
+    description:
+      "Comma-separated email domains. A user whose email is verified and whose domain (the part after the last @) exactly equals one of these is held to the trusted-account thresholds below instead of the standard ones. Subdomains are not covered: list each one. Organizations are never trusted by their members' domains; list them under Trusted Account IDs. Empty (default) trusts no domain.",
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedAccountIds: makeStringSetting({
+    key: 'spendMonitorTrustedAccountIds',
+    name: 'Spend Monitor: Trusted Account IDs',
+    defaultValue: '',
+    description:
+      'Comma-separated user or organization IDs held to the trusted-account thresholds below, for partner and client accounts with known heavy usage. API keys and agents follow the account that pays for them. Empty (default) trusts no account by ID.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedAccountSpikeFloorCredits: makeNumberSetting({
+    key: 'spendMonitorTrustedAccountSpikeFloorCredits',
+    name: 'Spend Monitor: Trusted Account Spike Floor',
+    defaultValue: 20_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. Replaces the account spike floor for trusted accounts: a trusted account spike alert needs at least this much spend in the window. Minimum 1.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  spendMonitorTrustedAccountCeilingCredits: makeNumberSetting({
+    key: 'spendMonitorTrustedAccountCeilingCredits',
+    name: 'Spend Monitor: Trusted Account Ceiling',
+    defaultValue: 40_000,
+    int: true,
+    min: 1,
+    description:
+      'Credits per 15-minute window. Replaces the account ceiling for trusted accounts: a trusted account spending this much in the window still raises a critical alert. Minimum 1.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -5460,7 +5523,7 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Post a LiveOps alert when a card payment matches a risk signal below (young account, shared card, several cards, hosting network). Controls the alert only; the automatic actions below have their own settings.',
+      'Post a LiveOps alert when a card payment matches a risk signal below (young account, shared card, several cards, hosting network). Also controls recording these payments on the Detections page; the automatic actions below have their own settings.',
   }),
   paymentRiskYoungAccountMinutes: makeNumberSetting({
     key: 'paymentRiskYoungAccountMinutes',
@@ -5606,7 +5669,7 @@ export const settingsMap = {
     category: 'Users',
     group: API_SERVICE_GROUPS.CREDITS.id,
     description:
-      'Record what the abuse detectors (such as the signup network burst alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
+      'Record what the abuse detectors (such as the signup network burst and payment risk alerts) would have done to an account, for admin review on the Detections page. Recording never acts: no access, credits or API keys change.',
   }),
   paymentRiskAutoRefundEnabled: makeBooleanSetting({
     key: 'paymentRiskAutoRefundEnabled',

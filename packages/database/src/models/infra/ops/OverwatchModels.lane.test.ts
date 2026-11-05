@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
-import { OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX, OverwatchUserDay } from './OverwatchUserDayModel';
+import {
+  OVERWATCH_USER_DAY_INTERNAL_INDEX,
+  OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX,
+  OverwatchUserDay,
+} from './OverwatchUserDayModel';
 import { OverwatchUserFirstSeen } from './OverwatchUserFirstSeenModel';
 import { OverwatchRollup } from './OverwatchRollupModel';
 
@@ -72,6 +76,11 @@ describe('OverwatchUserDay lane', () => {
       i => i.name === OVERWATCH_USER_DAY_SYNTHETIC_LANE_INDEX
     );
     expect(idx).toMatchObject({ key: { productId: 1, date: 1 }, partialFilterExpression: { lane: 'synthetic' } });
+  });
+
+  it('declares the internal partial index, so autoIndex builds it where the migration has not run', async () => {
+    const idx = (await OverwatchUserDay.collection.indexes()).find(i => i.name === OVERWATCH_USER_DAY_INTERNAL_INDEX);
+    expect(idx).toMatchObject({ key: { productId: 1, date: 1 }, partialFilterExpression: { internal: true } });
   });
 });
 

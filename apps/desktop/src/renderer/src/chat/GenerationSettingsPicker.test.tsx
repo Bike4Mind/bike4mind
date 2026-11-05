@@ -251,6 +251,14 @@ describe('GenerationSettingsPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith({ topP: 0.9, temperature: 2 });
   });
 
+  it('saves nothing when a typed value clamps to the one already stored', async () => {
+    await render(LOCAL, { temperature: 2 });
+    await open();
+    await type('temperature', '5');
+    expect(input('temperature').value).toBe('2');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('builds an edit made before main answers on the one still on its way', async () => {
     onChange.mockReturnValue(new Promise<boolean>(() => {}));
     await render(LOCAL, { topP: 0.9, topK: 12 });
@@ -426,6 +434,117 @@ describe('GenerationSettingsPicker', () => {
     await fill('temperature', '');
     await key(temperature, 'Enter');
     expect(temperature.value).toBe('0.3');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not save the shown value over a stored one after a bad entry and a plain focus', async () => {
+    await render(ADAPTIVE, { maxOutputTokens: 2048 });
+    await open();
+    const field = input('maxOutputTokens');
+    const bad = Object.defineProperty(field, 'validity', { configurable: true, value: { badInput: true } });
+    await fill('maxOutputTokens', '');
+    await blur('maxOutputTokens');
+    Object.defineProperty(bad, 'validity', { configurable: true, value: { badInput: false } });
+    await blur('maxOutputTokens');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not save a typed value that equals the stored one when the model adjusts it', async () => {
+    await render(ADAPTIVE, { maxOutputTokens: 2048 });
+    await open();
+    await type('maxOutputTokens', '2048');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('compares a retyped value with what this field just saved while the stored prop is stale', async () => {
+    onChange.mockReturnValue(new Promise(() => {}));
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await type('temperature', '0.9');
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.9 });
+    await type('temperature', '0.3');
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.3 });
+  });
+
+  it('saves a stored value retyped after its field Reset while that save is still on its way', async () => {
+    onChange.mockReturnValue(new Promise(() => {}));
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await act(async () => byTestId('generation-settings-temperature-reset-btn')?.click());
+    expect(onChange).toHaveBeenLastCalledWith({});
+    await fill('temperature', '');
+    await type('temperature', '0.3');
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.3 });
+  });
+
+  it('saves a stored value retyped after Reset all while that save is still on its way', async () => {
+    onChange.mockReturnValue(new Promise(() => {}));
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await act(async () => byTestId('generation-settings-reset-all-btn')?.click());
+    expect(onChange).toHaveBeenLastCalledWith({});
+    await fill('temperature', '');
+    await type('temperature', '0.3');
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.3 });
+  });
+
+  it('saves a value retyped after its field Reset when the first save of it is still on its way', async () => {
+    onChange.mockReturnValue(new Promise(() => {}));
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await type('temperature', '0.9');
+    await act(async () => byTestId('generation-settings-temperature-reset-btn')?.click());
+    await fill('temperature', '');
+    await type('temperature', '0.9');
+    expect(onChange).toHaveBeenCalledTimes(3);
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.9 });
+  });
+
+  it('saves a value retyped after Reset all when the first save of it is still on its way', async () => {
+    onChange.mockReturnValue(new Promise(() => {}));
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await type('temperature', '0.9');
+    await act(async () => byTestId('generation-settings-reset-all-btn')?.click());
+    await fill('temperature', '');
+    await type('temperature', '0.9');
+    expect(onChange).toHaveBeenCalledTimes(3);
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.9 });
+  });
+
+  it('saves a stored value retyped after the dialog closes and reopens mid-save', async () => {
+    onChange.mockReturnValue(new Promise(() => {}));
+    await render(LOCAL, { temperature: 0.3 });
+    await open();
+    await type('temperature', '0.9');
+    await key(input('temperature'), 'Escape');
+    await open();
+    await fill('temperature', '');
+    await type('temperature', '0.3');
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.3 });
+  });
+
+  it('clears a value that was saved while the stored prop is still blank', async () => {
+    onChange.mockReturnValue(new Promise(() => {}));
+    await render(LOCAL);
+    await open();
+    await type('temperature', '0.9');
+    expect(onChange).toHaveBeenLastCalledWith({ temperature: 0.9 });
+    await type('temperature', '');
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith({});
+  });
+
+  it('saves nothing for a blank field with no stored override', async () => {
+    await render(LOCAL);
+    await open();
+    await fill('temperature', '0.9');
+    await type('temperature', '');
+    await blur('temperature');
     expect(onChange).not.toHaveBeenCalled();
   });
 

@@ -12,7 +12,7 @@ export type ResolvedScope = {
 
 export type ScopeKey = { scopeType: SpendRollupScopeType; scopeId: string };
 
-type UserRef = { id: string; email: string | null; name?: string };
+type UserRef = { id: string; email: string | null; name?: string; emailVerified?: boolean };
 type OrganizationRef = { id: string; name: string };
 type ApiKeyRef = {
   id: string;
@@ -155,7 +155,12 @@ export function defaultResolveScopeDeps(): ResolveScopeDeps {
   return {
     findUsersByIds: async ids => {
       const users = await userRepository.findByIds(ids);
-      return users.map(user => ({ id: String(user._id), email: user.email, name: user.name }));
+      return users.map(user => ({
+        id: String(user._id),
+        email: user.email,
+        name: user.name,
+        emailVerified: user.emailVerified,
+      }));
     },
     findOrganizationsByIds: async ids => {
       const rows = await Organization.find({ _id: { $in: validObjectIds(ids) } })
