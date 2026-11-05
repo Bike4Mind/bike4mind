@@ -311,7 +311,16 @@ export async function hostPhysicalTarget(target: string): Promise<string> {
  */
 export function withRealPath(path: string): string[] {
   const real = realpathSyncNearest(path) ?? path;
-  return real === path ? [path] : [path, real];
+  const own = ownLocation(path);
+  return [...new Set([path, real, ...(own === null ? [] : [own])])];
+}
+
+/** Where `path` itself sits: its parent's real path plus its name, without following a final link. Null if the parent cannot be resolved. */
+export function ownLocation(path: string): string | null {
+  const parent = dirname(path);
+  if (!isAbsolute(path) || parent === path) return null;
+  const real = realpathSyncNearest(parent);
+  return real === null ? null : join(real, basename(path));
 }
 
 /**

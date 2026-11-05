@@ -2,7 +2,14 @@ import { basename, dirname, isAbsolute } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
 import { own } from '@shared/ownKeys';
-import { caseFolded, guardForm, guardFormWithin, realpathSyncNearest, withDriveSpellings } from '../tools/paths';
+import {
+  caseFolded,
+  guardForm,
+  guardFormWithin,
+  ownLocation,
+  realpathSyncNearest,
+  withDriveSpellings,
+} from '../tools/paths';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 
@@ -500,5 +507,6 @@ export class PermissionRuleSet {
 function spellings(path: string): string[] | null {
   const real = isAbsolute(path) ? realpathSyncNearest(path) : path;
   if (real === null) return null;
-  return withDriveSpellings([path, real]).map(spelling => caseFolded(spelling));
+  const own = isAbsolute(path) ? ownLocation(path) : null;
+  return withDriveSpellings([path, real, ...(own === null ? [] : [own])]).map(spelling => caseFolded(spelling));
 }

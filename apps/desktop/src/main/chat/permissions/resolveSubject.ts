@@ -49,13 +49,21 @@ export async function physicalPath(path: string): Promise<string> {
   }
 }
 
+// Also the path's own physical location: an unlink acts on a final link, not on its target.
+async function physicalSpellings(path: string): Promise<string[]> {
+  const target = await physicalPath(path);
+  const parent = dirname(path);
+  if (!isAbsolute(path) || parent === path) return [target];
+  return [target, join(await physicalPath(parent), basename(path))];
+}
+
 /** Check both the requested name and its target, including symlinked parents of new files. */
 export async function resolveSubject(subject: PermissionSubject): Promise<PermissionSubject> {
   const paths = subject.paths;
   const shellPaths = subject.shell?.paths;
   if (!paths && !shellPaths) return subject;
-  const resolved = await Promise.all((paths ?? []).map(physicalPath));
-  const resolvedShell = await Promise.all((shellPaths ?? []).map(physicalPath));
+  const resolved = (await Promise.all((paths ?? []).map(physicalSpellings))).flat();
+  const resolvedShell = (await Promise.all((shellPaths ?? []).map(physicalSpellings))).flat();
   return {
     ...subject,
     ...(paths ? { paths: [...new Set([...paths, ...resolved])] } : {}),

@@ -62,6 +62,7 @@ describe('resolveSubject', () => {
     expect((await resolveSubject({ tool: 'file_write', paths: [long] })).paths).toEqual([
       long,
       join(root, 'prot', 'new'),
+      join(root, 'dang'),
     ]);
   });
 
@@ -110,6 +111,20 @@ describe('resolveSubject', () => {
     const compiled = compileRule(parsed.rule, 'allow', { id: 'test', label: 'Test' }, { home: root, root, cwd: root });
     if (!compiled) throw new Error('Could not compile Write rule');
     expect(new PermissionRuleSet([compiled], [protectedRoot]).evaluate(subject).decision).toBeNull();
+  });
+
+  it('denies an unlink of a link spelled through an alias of its folder', async () => {
+    await mkdir(join(root, 'home', 'prot'), { recursive: true });
+    await symlink(join(root, 'home'), join(root, 'alias'));
+    const lnk = join(root, 'home', 'prot', 'lnk');
+    await symlink(join(root, 'out', 'x'), lnk);
+    const parsed = parseRule(`Edit(/${lnk})`);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const compiled = compileRule(parsed.rule, 'deny', { id: 'test', label: 'Test' }, { home: root, root, cwd: root });
+    if (!compiled) throw new Error('Could not compile Edit rule');
+    const subject = await resolveSubject({ tool: 'file_edit', paths: [join(root, 'alias', 'prot', 'lnk')] });
+    expect(subject.paths).toContain(lnk);
+    expect(new PermissionRuleSet([compiled], []).evaluate(subject).decision).toBe('deny');
   });
 
   it('resolves chains of dangling links and missing descendants of their targets', async () => {

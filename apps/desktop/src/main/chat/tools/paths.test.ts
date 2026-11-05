@@ -320,7 +320,7 @@ describe('realpathSyncNearest', () => {
     const long = join(base, ...Array.from({ length: 17 }, () => loop), 'dang');
     expect(Buffer.byteLength(long)).toBeGreaterThan(4096);
     expect(realpathSyncNearest(long)).toBe(join(base, 'prot', 'new'));
-    expect(withRealPath(long)).toEqual([long, join(base, 'prot', 'new')]);
+    expect(withRealPath(long)).toEqual([long, join(base, 'prot', 'new'), join(base, 'dang')]);
   });
 
   it('returns null on ENAMETOOLONG from total length with short components', () => {

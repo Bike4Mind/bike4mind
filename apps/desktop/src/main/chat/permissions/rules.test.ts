@@ -373,6 +373,21 @@ describe('PermissionRuleSet', () => {
     }
   });
 
+  it('does not allow an edit of a dangling link inside a protected folder reached through an alias', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'home', 'prot'), { recursive: true });
+      await mkdir(join(base, 'out'));
+      await symlink(join(base, 'home'), join(base, 'alias'));
+      await symlink(join(base, 'out', 'x'), join(base, 'home', 'prot', 'lnk'));
+      const rules = set({ allow: ['Edit'] }, [join(base, 'home', 'prot')]);
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'alias', 'prot', 'lnk')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_edit', paths: [join(base, 'alias', 'other')] })).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   describe('when a path cannot be resolved', () => {
     let base: string;
     let rules: PermissionRuleSet;
