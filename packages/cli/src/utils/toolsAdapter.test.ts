@@ -755,3 +755,34 @@ describe('generateCliTools decide availability', () => {
     expect(some.tools.map(t => t.toolSchema.name)).toContain('decide');
   });
 });
+
+describe('generateCliTools while signed out', () => {
+  const SERVER_TOOLS = ['weather_info', 'web_search', 'web_fetch', 'decide'];
+  const client = (signedOut: boolean) =>
+    ({ signedOut, get: vi.fn(async () => ({ models: [{ id: 'gpt-6-luna' }] })) }) as unknown as ApiClient;
+  const build = (apiClient: ApiClient) =>
+    generateCliTools(
+      'user-1',
+      {} as never,
+      'test-model',
+      new PermissionManager(new ToolCatalog(), [], []),
+      vi.fn(async () => ({ action: 'allow-once' as const })),
+      { currentAgent: null },
+      {} as ConfigStore,
+      apiClient
+    );
+
+  it('offers no tool that runs on the server and asks the server nothing', async () => {
+    const apiClient = client(true);
+    const names = (await build(apiClient)).tools.map(tool => tool.toolSchema.name);
+
+    expect(apiClient.get).not.toHaveBeenCalled();
+    for (const name of SERVER_TOOLS) expect(names).not.toContain(name);
+    expect(names).toEqual(expect.arrayContaining(['file_read', 'bash_execute', 'math_evaluate']));
+  });
+
+  it('still offers the server tools when signed in', async () => {
+    const names = (await build(client(false))).tools.map(tool => tool.toolSchema.name);
+    expect(names).toEqual(expect.arrayContaining(['weather_info', 'web_search', 'web_fetch']));
+  });
+});
