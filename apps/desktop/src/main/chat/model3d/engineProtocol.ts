@@ -54,7 +54,7 @@ function stop() {
   worker = null;
   clearTimeout(timer);
 }
-function run(id, source, params) {
+function run(id, source, params, print) {
   stop();
   const current = new Worker('./worker.js', { type: 'module' });
   worker = current;
@@ -73,13 +73,13 @@ function run(id, source, params) {
     stop();
     reply(id, { ok: false, error: event.message || 'The model worker failed to start.' });
   };
-  current.postMessage({ source, params });
+  current.postMessage({ source, params, print });
 }
 window.addEventListener('message', (event) => {
   if (event.source !== window.parent) return;
   const data = event.data;
   if (!data || data.type !== 'build' || typeof data.source !== 'string') return;
-  run(data.id, data.source, data.params || {});
+  run(data.id, data.source, data.params || {}, data.print === true);
 });
 window.parent.postMessage({ type: 'engine-ready' }, '*');
 `;
@@ -123,13 +123,25 @@ function meshOf(shape) {
 
 const PALETTE = ['#b0b7c3', '#c98b4a', '#6f9fd8', '#7cbf7c', '#d6c35a', '#c46f8f'];
 
+function shapeOf(entry, index, Manifold) {
+  const shape = entry instanceof Manifold ? entry : entry && entry.shape;
+  if (!(shape instanceof Manifold)) {
+    throw new Error('The model must return a Manifold, or an array of { name, color, shape } parts (item ' + index + ' is not).');
+  }
+  return shape;
+}
+
+// One solid for a slicer: overlapping parts merge, separate ones (a print-in-place hinge) stay separate shells.
+function printPartOf(result, Manifold) {
+  const list = Array.isArray(result) ? result : [result];
+  const shape = Manifold.union(list.map((entry, index) => shapeOf(entry, index, Manifold)));
+  return [{ name: 'print', color: PALETTE[0], ...meshOf(shape) }];
+}
+
 function partsOf(result, Manifold) {
   const list = Array.isArray(result) ? result : [result];
   return list.map((entry, index) => {
-    const shape = entry instanceof Manifold ? entry : entry && entry.shape;
-    if (!(shape instanceof Manifold)) {
-      throw new Error('The model must return a Manifold, or an array of { name, color, shape } parts (item ' + index + ' is not).');
-    }
+    const shape = shapeOf(entry, index, Manifold);
     const name = entry instanceof Manifold || typeof entry.name !== 'string' ? 'part' + (index + 1) : entry.name;
     const color = entry instanceof Manifold || typeof entry.color !== 'string' ? PALETTE[index % PALETTE.length] : entry.color;
     const part = { name, color, ...meshOf(shape) };
@@ -149,7 +161,7 @@ function partsOf(result, Manifold) {
 }
 
 self.onmessage = async (event) => {
-  const { source, params: overrides } = event.data;
+  const { source, params: overrides, print } = event.data;
   const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
   try {
     const m = await Module();
@@ -168,7 +180,8 @@ self.onmessage = async (event) => {
       p[key] = typeof override === 'number' ? override : param.value;
       params[key] = { ...param, value: p[key] };
     }
-    const parts = partsOf(await mod.default({ m, p }), m.Manifold);
+    const result = await mod.default({ m, p });
+    const parts = print ? printPartOf(result, m.Manifold) : partsOf(result, m.Manifold);
     if (!parts.some((part) => part.indices.length > 0)) throw new Error('The model produced no geometry.');
     self.postMessage({ ok: true, parts, params, units }, parts.flatMap((part) => [part.positions.buffer, part.indices.buffer]));
   } catch (error) {

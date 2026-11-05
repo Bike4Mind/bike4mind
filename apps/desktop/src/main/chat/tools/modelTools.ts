@@ -43,6 +43,11 @@ const MODEL_FILE_CONTRACT = [
   'animation clip named after the part. Check the open pose with model_screenshot pose "open": if the part swings the wrong way, negate the axis.',
   "A part that slides instead (a drawer, a sliding door) adds `motion: 'slide'`: `axis` is the direction it slides along and `range`",
   'is in model units (e.g. [0, 40]); it needs no pivot.',
+  'For 3D printing (the user mentions printing, a printer or an STL), units mm: the STL export unions every part into one',
+  'solid at the rest pose, so touching parts fuse. A part that must move after printing needs a 0.4 mm gap to everything',
+  'around it (a captive pin, a print-in-place hinge), or print it as its own file. Keep walls at least 1.2 mm and details at',
+  'least 0.8 mm, keep overhangs within 45 degrees of vertical (chamfer the underside or split the model), put the largest',
+  'flat face on z = 0, and say how big the print is and which parts need supports.',
 ].join('\n');
 
 function requireModel(context: ToolContext): ModelContext {

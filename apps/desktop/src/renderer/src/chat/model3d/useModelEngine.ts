@@ -7,7 +7,6 @@ import {
   type ModelBuildOutcome,
   type ModelJoint,
   type ModelParam,
-  type ModelPartMesh,
   type ModelSummary,
   type ModelViewState,
 } from '@shared/model3d';
@@ -96,7 +95,6 @@ export function useModelEngine(dark: boolean): ModelEngine {
   const darkRef = useRef(dark);
   darkRef.current = dark;
   const objectRef = useRef<THREE.Group | null>(null);
-  const partsRef = useRef<ModelPartMesh[] | null>(null);
   const stateRef = useRef(state);
   const overrides = useRef<Record<string, number>>({});
   stateRef.current = state;
@@ -117,7 +115,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
   }, []);
 
   const build = useCallback(
-    async (source: string, values: Record<string, number>): Promise<ModelBuildOutcome | null> => {
+    async (source: string, values: Record<string, number>, print = false): Promise<ModelBuildOutcome | null> => {
       engine.current ??= mountEngineFrame();
       const { frame, ready } = engine.current;
       await ready;
@@ -137,7 +135,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
         };
         pending.current = finish;
         window.addEventListener('message', onMessage);
-        frame.contentWindow?.postMessage({ type: 'build', id, source, params: values }, ENGINE_ORIGIN);
+        frame.contentWindow?.postMessage({ type: 'build', id, source, params: values, print }, ENGINE_ORIGIN);
       });
     },
     []
@@ -156,7 +154,6 @@ export function useModelEngine(dark: boolean): ModelEngine {
     }
     const next = buildModelObject(outcome.parts, outcome.units);
     const nextSummary = summarizeParts(outcome.parts, outcome.params, outcome.units);
-    partsRef.current = outcome.parts;
     setJoints(jointsOf(outcome.parts));
     setClips([]);
     setObject(next);
@@ -187,7 +184,6 @@ export function useModelEngine(dark: boolean): ModelEngine {
       setParams({});
       setJoints([]);
       setClips([]);
-      partsRef.current = null;
       return;
     }
     if (missing) {
@@ -209,7 +205,6 @@ export function useModelEngine(dark: boolean): ModelEngine {
         const loaded = await loadAsset(kind, bytes);
         if (cancelled) return;
         const loadedSummary = summarizeObject(loaded);
-        partsRef.current = null;
         setJoints([]);
         setClips(loaded.animations.map(clip => clip.name));
         setObject(loaded);
@@ -266,18 +261,21 @@ export function useModelEngine(dark: boolean): ModelEngine {
     setUnsaved(previous => (saved ? previous.filter(entry => entry !== key) : [...new Set([...previous, key])]));
   }, []);
 
-  const exportFile = useCallback(async (format: 'glb' | 'stl') => {
-    const current = objectRef.current;
-    if (!current) return null;
-    const bytes =
-      format === 'stl' && partsRef.current
-        ? partsToStl(partsRef.current)
-        : format === 'glb'
-          ? await exportGlb(current)
-          : null;
-    if (!bytes) return null;
-    return window.b4m.model.saveExport({ format, bytes });
-  }, []);
+  const exportFile = useCallback(
+    async (format: 'glb' | 'stl') => {
+      const current = objectRef.current;
+      if (!current) return null;
+      if (format === 'glb') return window.b4m.model.saveExport({ format, bytes: await exportGlb(current) });
+      const { kind, source } = stateRef.current;
+      if (kind !== 'model' || source === null) return null;
+      // A fresh build with every part unioned, at the current slider values, so the STL is one printable solid.
+      const outcome = await build(source, overrides.current, true);
+      if (!outcome) throw new Error('The model changed during the export. Try again.');
+      if (!outcome.ok) throw new Error(`The model did not build for export: ${outcome.error}`);
+      return window.b4m.model.saveExport({ format, bytes: partsToStl(outcome.parts) });
+    },
+    [build]
+  );
 
   const openFile = useCallback(async () => {
     await window.b4m.model.openDialog();
