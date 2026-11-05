@@ -249,7 +249,7 @@ export function ModelDefaultsDialog({
 /** An IPC rejection arrives wrapped in Electron's "Error invoking remote method" text. */
 function reasonText(reason: unknown): string {
   const text = reason instanceof Error ? reason.message : String(reason);
-  return text.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+  return text.replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, '');
 }
 
 function ModelDefaultsForm({

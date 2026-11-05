@@ -5,7 +5,7 @@
  */
 
 import { parseLocalModelId, REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from './chat';
-import { normalizeGeneration, parseGenerationInput, type GenerationSettings } from './generation';
+import { GENERATION_FIELDS, normalizeGeneration, parseGenerationInput, type GenerationSettings } from './generation';
 import { parseModelContextSetting, type LocalContextSize, type ModelContextSetting } from './localContextSetting';
 import type { QuantizedKvCacheType } from './modelServers';
 
@@ -93,21 +93,6 @@ export function isEmptyModelSettings(settings: ModelSettings): boolean {
   return Object.values(settings).every(value => value === undefined);
 }
 
-/** What a stored entry still holds that is valid; undefined when nothing is. */
-export function normalizeModelSettings(raw: unknown): ModelSettings | undefined {
-  if (!isRecord(raw)) return undefined;
-  const generation = normalizeGeneration(raw.generation);
-  const context = parseModelContextSetting(raw.context);
-  const settings: ModelSettings = {
-    ...(generation ? { generation } : {}),
-    ...(isModelEffort(raw.effort) ? { effort: raw.effort } : {}),
-    ...(context ? { context } : {}),
-    ...(isDraftTokens(raw.draftTokens) ? { draftTokens: raw.draftTokens } : {}),
-    ...(isKeepAlive(raw.keepAlive) ? { keepAlive: raw.keepAlive } : {}),
-  };
-  return Object.keys(settings).length > 0 ? settings : undefined;
-}
-
 /**
  * A replacement set from the renderer, or null when it is not one: a malformed known field rejects
  * the whole set, as does one with keys but no known field, so a bad call never clears what is
@@ -147,13 +132,91 @@ export function parseModelSettingsInput(raw: unknown): ModelSettings | null {
   return !known && Object.keys(raw).length > 0 ? null : settings;
 }
 
-/** The file's entries that are still valid, invalid ones dropped; null when it is not a settings file at all. */
-export function parseModelSettingsFile(raw: unknown): Map<string, ModelSettings> | null {
-  if (!isRecord(raw) || !isRecord(raw.models)) return null;
-  const parsed = new Map<string, ModelSettings>();
-  for (const [id, entry] of Object.entries(raw.models)) {
-    const settings = isModelSettingsId(id) ? normalizeModelSettings(entry) : undefined;
-    if (settings) parsed.set(id, settings);
+const STORED_FIELDS: ReadonlySet<string> = new Set(['generation', 'effort', 'context', 'draftTokens', 'keepAlive']);
+const GENERATION_FIELD_NAMES: ReadonlySet<string> = new Set(GENERATION_FIELDS);
+
+/** The settings file as read: what Desktop uses, plus every entry and top-level key as written. */
+export interface StoredModelSettings {
+  settings: Map<string, ModelSettings>;
+  /** Every entry by its key, including ones Desktop does not recognize, so a rewrite keeps them. */
+  entries: Map<string, unknown>;
+  /** The file's top-level keys besides `models`. */
+  rest: Record<string, unknown>;
+}
+
+/** A recognized model whose entry, or one known field of it (`field`), holds a value Desktop cannot use. */
+export interface InvalidModelSetting {
+  modelId: string;
+  field: string | null;
+}
+
+export function emptyStoredModelSettings(): StoredModelSettings {
+  return { settings: new Map(), entries: new Map(), rest: {} };
+}
+
+/** One stored entry, read strictly: a known field with a bad value is named, unknown fields are left for the writer. */
+function parseStoredEntry(raw: unknown): { settings: ModelSettings } | { field: string | null } {
+  if (!isRecord(raw)) return { field: null };
+  const settings: ModelSettings = {};
+  if (raw.generation !== undefined) {
+    const stored = raw.generation;
+    if (!isRecord(stored)) return { field: 'generation' };
+    for (const field of GENERATION_FIELDS) {
+      if (Object.hasOwn(stored, field) && !parseGenerationInput({ [field]: stored[field] }))
+        return { field: `generation.${field}` };
+    }
+    const generation = normalizeGeneration(stored);
+    if (generation) settings.generation = generation;
   }
-  return parsed;
+  if (raw.effort !== undefined) {
+    if (!isModelEffort(raw.effort)) return { field: 'effort' };
+    settings.effort = raw.effort;
+  }
+  if (raw.context !== undefined) {
+    const context = parseModelContextSetting(raw.context);
+    if (!context) return { field: 'context' };
+    settings.context = context;
+  }
+  if (raw.draftTokens !== undefined) {
+    if (!isDraftTokens(raw.draftTokens)) return { field: 'draftTokens' };
+    settings.draftTokens = raw.draftTokens;
+  }
+  if (raw.keepAlive !== undefined) {
+    if (!isKeepAlive(raw.keepAlive)) return { field: 'keepAlive' };
+    settings.keepAlive = raw.keepAlive;
+  }
+  return { settings };
+}
+
+/**
+ * The file's settings by model, or the first recognized model holding a bad known value; null when it
+ * is not a settings file at all. Unknown fields and unrecognized keys are kept in `entries`, never read.
+ */
+export function parseModelSettingsFile(raw: unknown): StoredModelSettings | { invalid: InvalidModelSetting } | null {
+  if (!isRecord(raw) || !isRecord(raw.models)) return null;
+  const settings = new Map<string, ModelSettings>();
+  const entries = new Map(Object.entries(raw.models));
+  for (const [id, entry] of entries) {
+    if (!isModelSettingsId(id)) continue;
+    const parsed = parseStoredEntry(entry);
+    if ('field' in parsed) return { invalid: { modelId: id, field: parsed.field } };
+    if (!isEmptyModelSettings(parsed.settings)) settings.set(id, parsed.settings);
+  }
+  return { settings, entries, rest: Object.fromEntries(Object.entries(raw).filter(([key]) => key !== 'models')) };
+}
+
+/** The entry to write for `settings`, keeping what the stored entry held that Desktop does not know; undefined when nothing is left. */
+export function storedModelEntry(previous: unknown, settings: ModelSettings): Record<string, unknown> | undefined {
+  const stored = isRecord(previous) ? previous : {};
+  const storedGeneration = isRecord(stored.generation) ? stored.generation : {};
+  const generation = Object.fromEntries([
+    ...Object.entries(storedGeneration).filter(([key]) => !GENERATION_FIELD_NAMES.has(key)),
+    ...Object.entries(settings.generation ?? {}).filter(([, value]) => value !== undefined),
+  ]);
+  const entry = Object.fromEntries([
+    ...Object.entries(stored).filter(([key]) => !STORED_FIELDS.has(key)),
+    ...(Object.keys(generation).length > 0 ? [['generation', generation] as const] : []),
+    ...Object.entries(settings).filter(([key, value]) => key !== 'generation' && value !== undefined),
+  ]);
+  return Object.keys(entry).length > 0 ? entry : undefined;
 }

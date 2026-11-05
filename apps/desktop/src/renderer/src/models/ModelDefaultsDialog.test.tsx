@@ -270,6 +270,20 @@ describe('ModelDefaultsDialog', () => {
     );
   });
 
+  it('drops the error name Electron puts before a named error, so the file and its fix read plainly', async () => {
+    const message =
+      'The model settings file /data/model-settings.json is not valid JSON. Fix it, or delete it to clear the saved settings of every model.';
+    (window as unknown as { b4m: { chat: { getModelSettings: unknown } } }).b4m.chat.getModelSettings = vi.fn(
+      async () => {
+        throw new Error(`Error invoking remote method 'chat:get-model-settings': ModelSettingsFileError: ${message}`);
+      }
+    );
+    await render(QWEN);
+    expect(byTestId('model-defaults-error')?.textContent).toBe(
+      `Desktop could not read this model's settings: ${message}`
+    );
+  });
+
   it('shows the underlying message of a failed save without the wrapper', async () => {
     setModelSettings.mockRejectedValueOnce(
       new Error("Error invoking remote method 'chat:set-model-settings': Error: disk full")

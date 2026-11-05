@@ -145,13 +145,59 @@ describe('ModelSettingsStore', () => {
     expect(await store.get(QWEN)).toEqual({ effort: 'low' });
   });
 
-  it('drops what a hand-edited file holds that is not valid', async () => {
+  it.each([
+    [{ generation: { temperature: '0.6', topK: 20 } }, 'has an invalid generation.temperature for'],
+    [{ effort: 'wild' }, 'has an invalid effort for'],
+    ['high', 'has an entry for'],
+  ])(
+    'rejects a hand-edited known value %j by file, model and field, and never writes over it',
+    async (entry, problem) => {
+      const path = await fileIn();
+      const content = JSON.stringify({ models: { [GEMMA]: { effort: 'low' }, [QWEN]: entry } });
+      await writeFile(path, content, 'utf8');
+      const store = new ModelSettingsStore(path);
+      await expect(store.get(GEMMA)).rejects.toThrow(
+        `The model settings file ${path} ${problem} ${QWEN}${typeof entry === 'string' ? ' that is not a set of settings' : ''}. Fix it, or delete it`
+      );
+      await expect(store.set(GEMMA, { effort: 'high' })).rejects.toThrow(ModelSettingsFileError);
+      expect(await readFile(path, 'utf8')).toBe(content);
+    }
+  );
+
+  it('keeps fields and entries it does not know when it rewrites the file for another model', async () => {
     const path = await fileIn();
-    await writeFile(
-      path,
-      JSON.stringify({ models: { [QWEN]: { generation: { temperature: 7, topK: 20 }, effort: 'wild' }, x: {} } }),
-      'utf8'
-    );
-    expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ generation: { topK: 20 } });
+    const qwen = { generation: { temperature: 0.6, minP2: 0.1 }, effort: 'high', speculation: { kind: 'eagle', n: 3 } };
+    const others = { 'claude-sonnet': { pinned: true }, 'gpt-5': [1, 'two'] };
+    await writeFile(path, JSON.stringify({ version: 2, models: { [QWEN]: qwen, ...others } }), 'utf8');
+    const store = new ModelSettingsStore(path);
+    expect(await store.get(QWEN)).toEqual({ generation: { temperature: 0.6 }, effort: 'high' });
+    await store.set(GEMMA, { effort: 'medium' });
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+      version: 2,
+      models: { [QWEN]: qwen, ...others, [GEMMA]: { effort: 'medium' } },
+    });
+    await store.set(QWEN, { keepAlive: -1 });
+    expect(JSON.parse(await readFile(path, 'utf8')).models[QWEN]).toEqual({
+      generation: { minP2: 0.1 },
+      speculation: { kind: 'eagle', n: 3 },
+      keepAlive: -1,
+    });
+    expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ keepAlive: -1 });
+  });
+
+  it('logs a failure that persists once, and a different one again', async () => {
+    const path = await fileIn();
+    await writeFile(path, '[]', 'utf8');
+    const warn = vi.fn();
+    const store = new ModelSettingsStore(path, warn);
+    await expect(store.get(QWEN)).rejects.toThrow(ModelSettingsFileError);
+    await expect(store.get(GEMMA)).rejects.toThrow(ModelSettingsFileError);
+    expect(warn).toHaveBeenCalledOnce();
+    await writeFile(path, '{', 'utf8');
+    await expect(store.get(QWEN)).rejects.toThrow('is not valid JSON');
+    expect(warn).toHaveBeenCalledTimes(2);
+    await rm(path);
+    expect(await store.get(QWEN)).toEqual({});
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });

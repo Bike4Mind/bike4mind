@@ -1898,6 +1898,22 @@ describe('OllamaLocal context sizing', () => {
       ]);
     });
 
+    it('does not record a size sent from settings read across a save as the last one that loaded', async () => {
+      const outOfMemory = () => Response.json({ error: 'model requires more system memory' }, { status: 500 });
+      const sent = ollama(trainedFor(131072), done, outOfMemory, done);
+      let saving = true;
+      const read = vi.fn(async (): Promise<ModelLoadSettings> => {
+        if (!saving) return {};
+        forgetLocalContextOf(longTurn.model);
+        return { context: { mode: 'auto', maxTokens: 32768 } };
+      });
+      const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13), undefined, read);
+      await local.stream(longTurn, () => undefined);
+      saving = false;
+      await local.stream(longTurn, () => undefined);
+      expect(sent()).toEqual([32768, 65536, 16384]);
+    });
+
     it('stops sizing again after three Settings changes land mid-sizing, without caching the result', async () => {
       ollama(trainedFor(131072));
       let saving = true;
