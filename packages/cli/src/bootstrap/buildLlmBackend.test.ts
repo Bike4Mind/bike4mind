@@ -177,6 +177,23 @@ describe('buildLlmBackend — Ollama multiplexing', () => {
     expect(res.modelInfo.id).toBe('m1');
   });
 
+  it.each([
+    ['http://localhost:11434', true],
+    ['http://127.0.0.1:11500', false],
+    ['http://gpu-box:11434', false],
+  ])("gives %s Desktop's model settings: %s", async (ollamaHost, applies) => {
+    vi.stubEnv('B4M_DESKTOP_MODEL_SETTINGS', '/nowhere/model-settings.json');
+    try {
+      const { deps } = makeDeps();
+      await buildLlmBackend(makeInput({ apiClient: fakeApiClient({}), ollamaHost }), deps);
+      const call = vi.mocked(deps.createOllamaBackend).mock.calls[0];
+      expect(call[0]).toBe(ollamaHost);
+      expect(typeof call[1]?.requestSettings === 'function').toBe(applies);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('uses the host saved by `b4m models` when no flag or env names one', async () => {
     vi.stubEnv('B4M_OLLAMA_HOST', '');
     try {

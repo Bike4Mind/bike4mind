@@ -55,6 +55,7 @@ export function createHeadlessLlmBackendDeps(
     createOllamaBackend: (host, options) =>
       new OllamaBackend(host, loggerWith(options?.redact), {
         fetch: options?.fetch as typeof globalThis.fetch | undefined,
+        requestSettings: options?.requestSettings,
       }),
     createOpenAICompatibleBackend: options => new OpenAICompatibleBackend({ ...options, logger: loggerWith() }),
   };
