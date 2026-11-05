@@ -136,14 +136,24 @@ export const createOAuthClientSchema = z
   })
   .strict();
 
-/** Update payload: name, type and trust config are fixed at registration. */
+// Update keeps scopes a legacy client already stores, so only the shape is checked here;
+// updateOAuthClient checks newly-added scopes against OAUTH_CLIENT_SCOPES.
+const allowedScopesSchema = z
+  .array(z.string().trim().min(1).max(100))
+  .max(20, 'Too many scopes')
+  .refine(scopes => new Set(scopes).size === scopes.length, 'Scopes must be unique')
+  .refine(scopes => scopes.includes('openid'), "Scopes must include 'openid'");
+
+/** Update payload: name, type and auth method are fixed at registration. `federatedIdp: null` removes the trust config. */
 export const updateOAuthClientSchema = z
   .object({
     redirectUris: redirectUrisList(storedRedirectUriSchema).optional(),
     isActive: z.boolean().optional(),
+    allowedScopes: allowedScopesSchema.optional(),
+    federatedIdp: oauthFederatedIdpInputSchema.nullable().optional(),
   })
   .strict()
-  .refine(data => data.redirectUris !== undefined || data.isActive !== undefined, 'Nothing to update');
+  .refine(data => Object.values(data).some(v => v !== undefined), 'Nothing to update');
 
 export type CreateOAuthClientInput = z.input<typeof createOAuthClientSchema>;
 export type UpdateOAuthClientInput = z.infer<typeof updateOAuthClientSchema>;

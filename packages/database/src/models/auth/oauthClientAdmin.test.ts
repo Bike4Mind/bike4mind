@@ -36,6 +36,14 @@ afterEach(async () => {
 });
 
 const base = { name: 'My App', redirectUris: ['https://app.example.test/callback'] };
+const federated = {
+  ...base,
+  federatedIdp: {
+    subjectSource: 'sub' as const,
+    issuer: 'https://b4m.example.test',
+    jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+  },
+};
 
 describe('generateOAuthClientId', () => {
   it('keeps the b4m_<name>_<8 hex> shape and strips characters unsafe in a URL', () => {
@@ -323,6 +331,154 @@ describe('updateOAuthClient redirect URI edge cases', () => {
   });
 });
 
+const conflictOnRead = (clientId: string, write: Record<string, unknown>) => {
+  const realFindById = OAuthClientModel.findById.bind(OAuthClientModel);
+  vi.spyOn(OAuthClientModel, 'findById').mockImplementationOnce(
+    (id: unknown) =>
+      ({
+        exec: async () => {
+          const doc = await realFindById(id as string).exec();
+          await OAuthClientModel.updateOne({ _id: clientId }, write);
+          return doc;
+        },
+      }) as never
+  );
+};
+
+describe('updateOAuthClient scopes', () => {
+  it('sets allowedScopes', async () => {
+    const { client } = await createOAuthClient(base);
+    const { after } = await updateOAuthClient(client.id, { allowedScopes: ['openid', 'email'] });
+    expect(after.allowedScopes).toEqual(['openid', 'email']);
+  });
+
+  it('keeps a stored legacy scope and rejects a newly-added unknown one', async () => {
+    const { client } = await createOAuthClient(base);
+    await OAuthClientModel.updateOne({ _id: client.id }, { $set: { allowedScopes: ['openid', 'legacy:x'] } });
+    const { after } = await updateOAuthClient(client.id, { allowedScopes: ['openid', 'legacy:x', 'email'] });
+    expect(after.allowedScopes).toEqual(['openid', 'legacy:x', 'email']);
+    await expect(
+      updateOAuthClient(client.id, { allowedScopes: ['openid', 'legacy:x', 'other:y'] })
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('rejects an opt-in scope on a non-federated client', async () => {
+    const { client } = await createOAuthClient(base);
+    await expect(
+      updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] })
+    ).rejects.toBeInstanceOf(BadRequestError);
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.allowedScopes).toEqual(client.allowedScopes);
+  });
+
+  it('rejects an opt-in scope on a first-party federated client', async () => {
+    const { client } = await createOAuthClient({ ...federated, clientType: 'first-party' });
+    await expect(
+      updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] })
+    ).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('grants an opt-in scope to a federated relying-party client and removes it again', async () => {
+    const { client } = await createOAuthClient(federated);
+    const granted = await updateOAuthClient(client.id, {
+      allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE],
+    });
+    expect(granted.after.allowedScopes).toContain(FEDERATED_ADMIN_STATUS_SCOPE);
+    const revoked = await updateOAuthClient(client.id, { allowedScopes: client.allowedScopes });
+    expect(revoked.after.allowedScopes).toEqual(client.allowedScopes);
+  });
+
+  it('answers ConflictError when stored scopes change between the read and the write', async () => {
+    const { client } = await createOAuthClient(base);
+    conflictOnRead(client.id, { $set: { allowedScopes: ['openid'] } });
+    await expect(updateOAuthClient(client.id, { allowedScopes: ['openid', 'email'] })).rejects.toMatchObject({
+      name: 'ConflictError',
+      statusCode: 409,
+    });
+    vi.restoreAllMocks();
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.allowedScopes).toEqual(['openid']);
+  });
+
+  it('answers ConflictError when federation is removed concurrently under an opt-in grant', async () => {
+    const { client } = await createOAuthClient(federated);
+    await updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] });
+    conflictOnRead(client.id, { $unset: { federatedIdp: '' } });
+    await expect(
+      updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] })
+    ).rejects.toMatchObject({ statusCode: 409 });
+    vi.restoreAllMocks();
+  });
+});
+
+describe('updateOAuthClient federated trust', () => {
+  it('adds a sub-shape trust config to a plain client, defaulting the audience to its client_id', async () => {
+    const { client } = await createOAuthClient(base);
+    const { after } = await updateOAuthClient(client.id, { federatedIdp: federated.federatedIdp });
+    expect(after.federatedIdp).toEqual({
+      issuer: 'https://b4m.example.test',
+      audience: client.clientId,
+      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+      subjectSource: 'sub',
+    });
+  });
+
+  it('rejects a sub config without jwksUri and leaves the client unchanged', async () => {
+    const { client } = await createOAuthClient(base);
+    await expect(
+      updateOAuthClient(client.id, { federatedIdp: { subjectSource: 'sub', issuer: 'https://b4m.example.test' } })
+    ).rejects.toBeInstanceOf(BadRequestError);
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeUndefined();
+  });
+
+  it('changes an identities config', async () => {
+    const { client } = await createOAuthClient(base);
+    await updateOAuthClient(client.id, {
+      federatedIdp: { subjectSource: 'identities', issuer: 'https://a.example.test', audience: 'a', providerName: 'p' },
+    });
+    const { after } = await updateOAuthClient(client.id, {
+      federatedIdp: { subjectSource: 'identities', issuer: 'https://b.example.test', audience: 'b', providerName: 'q' },
+    });
+    expect(after.federatedIdp).toMatchObject({ issuer: 'https://b.example.test', audience: 'b', providerName: 'q' });
+  });
+
+  it('answers ConflictError when the trust config changes between the read and the write', async () => {
+    const { client } = await createOAuthClient(federated);
+    conflictOnRead(client.id, { $set: { 'federatedIdp.jwksUri': 'https://other.example.test/jwks' } });
+    await expect(
+      updateOAuthClient(client.id, { federatedIdp: { ...federated.federatedIdp, issuer: 'https://new.example.test' } })
+    ).rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+    vi.restoreAllMocks();
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp?.jwksUri).toBe('https://other.example.test/jwks');
+  });
+
+  it('removes the trust config with null', async () => {
+    const { client } = await createOAuthClient(federated);
+    const { after } = await updateOAuthClient(client.id, { federatedIdp: null });
+    expect(after.federatedIdp).toBeUndefined();
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored).not.toHaveProperty('federatedIdp');
+  });
+
+  it('rejects removing federation while an opt-in scope stays', async () => {
+    const { client } = await createOAuthClient(federated);
+    await updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] });
+    await expect(updateOAuthClient(client.id, { federatedIdp: null })).rejects.toMatchObject({ statusCode: 400 });
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.federatedIdp).toBeDefined();
+  });
+
+  it('allows removing federation and the opt-in scope in one update', async () => {
+    const { client } = await createOAuthClient(federated);
+    await updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] });
+    const { after } = await updateOAuthClient(client.id, { federatedIdp: null, allowedScopes: client.allowedScopes });
+    expect(after.federatedIdp).toBeUndefined();
+    expect(after.allowedScopes).toEqual(client.allowedScopes);
+  });
+});
+
 describe('listOAuthClients', () => {
   it('returns every client, newest first, without any secret material', async () => {
     const first = await createOAuthClient({ ...base, name: 'First' });
@@ -339,15 +495,6 @@ describe('listOAuthClients', () => {
 });
 
 describe('addOAuthClientOptInScopes', () => {
-  const federated = {
-    ...base,
-    federatedIdp: {
-      subjectSource: 'sub' as const,
-      issuer: 'https://b4m.example.test',
-      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
-    },
-  };
-
   it('adds the scope once and is a no-op on rerun', async () => {
     const { client } = await createOAuthClient(federated);
 

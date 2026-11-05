@@ -22,7 +22,12 @@ vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-import OAuthClientsTab, { buildCreatePayload } from './OAuthClientsTab';
+import OAuthClientsTab, {
+  buildCreatePayload,
+  buildEditPayload,
+  editFormFromClient,
+  federatedFormFromClient,
+} from './OAuthClientsTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -236,6 +241,9 @@ describe('OAuthClientsTab', () => {
     api.updateOAuthClient.mockRejectedValue(new Error('Redirect URI must not contain whitespace'));
     renderTab();
     fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+    fireEvent.change(screen.getByTestId('oauth-client-edit-uris-input'), {
+      target: { value: 'https://x.example.test/cb' },
+    });
     fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
     expect(await screen.findByTestId('oauth-client-edit-error')).toHaveTextContent(/must not contain whitespace/);
     expect(screen.getByTestId('oauth-client-edit-modal')).toBeInTheDocument();
@@ -352,5 +360,134 @@ describe('buildCreatePayload', () => {
       federated: { ...form.federated, enabled: false },
     });
     expect(payload).toEqual({ name: 'App', redirectUris: ['https://a.example.test/cb'], clientType: 'relying-party' });
+  });
+});
+
+describe('edit modal scopes and federated trust', () => {
+  const idp = {
+    subjectSource: 'sub' as const,
+    issuer: 'https://b4m.example.test',
+    audience: client.clientId,
+    jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+  };
+  const federatedClient = {
+    ...client,
+    allowedScopes: [...client.allowedScopes, 'ai:generate', 'me:read'],
+    federatedIdp: idp,
+  };
+  const openEdit = async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('oauth-client-edit-b4m_my_app_0011aabb'));
+  };
+  const scopeBox = (scope: string) => screen.getByTestId(`oauth-client-edit-scope-${scope}`) as HTMLInputElement;
+
+  it('prefills scopes and trust config', async () => {
+    api.fetchOAuthClients.mockResolvedValue([federatedClient]);
+    await openEdit();
+    expect(scopeBox('email').checked).toBe(true);
+    expect(scopeBox('ai:generate').checked).toBe(true);
+    expect(scopeBox('federated:admin-status').checked).toBe(false);
+    expect(scopeBox('openid').disabled).toBe(true);
+    expect((screen.getByTestId('oauth-client-edit-federated-switch') as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByTestId('oauth-client-edit-federated-issuer-input')).toHaveValue(idp.issuer);
+  });
+
+  it('disables the opt-in scope unless the client is federated and relying-party', async () => {
+    await openEdit();
+    expect(scopeBox('federated:admin-status').disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('oauth-client-edit-federated-switch'));
+    expect(scopeBox('federated:admin-status').disabled).toBe(false);
+  });
+
+  it('keeps the opt-in scope disabled for a first-party client', async () => {
+    api.fetchOAuthClients.mockResolvedValue([{ ...federatedClient, clientType: 'first-party' }]);
+    await openEdit();
+    expect(scopeBox('federated:admin-status').disabled).toBe(true);
+  });
+
+  it('keeps a ticked opt-in scope untickable after federation is switched off', async () => {
+    api.fetchOAuthClients.mockResolvedValue([
+      { ...federatedClient, allowedScopes: [...federatedClient.allowedScopes, 'federated:admin-status'] },
+    ]);
+    await openEdit();
+    fireEvent.click(screen.getByTestId('oauth-client-edit-federated-switch'));
+    expect(scopeBox('federated:admin-status').disabled).toBe(false);
+    expect(scopeBox('federated:admin-status').checked).toBe(true);
+  });
+
+  it('pre-ticks ai:generate and me:read when federation is turned on', async () => {
+    await openEdit();
+    expect(scopeBox('ai:generate').checked).toBe(false);
+    fireEvent.click(screen.getByTestId('oauth-client-edit-federated-switch'));
+    expect(scopeBox('ai:generate').checked).toBe(true);
+    expect(scopeBox('me:read').checked).toBe(true);
+  });
+
+  it('confirms before removing a scope, and cancel sends no request', async () => {
+    api.updateOAuthClient.mockResolvedValue(client);
+    await openEdit();
+    fireEvent.click(scopeBox('email'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    const modal = await screen.findByTestId('oauth-client-edit-narrow-modal');
+    expect(modal).toHaveTextContent('email');
+    expect(modal).toHaveTextContent('invalid_scope');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel', hidden: false }));
+    expect(api.updateOAuthClient).not.toHaveBeenCalled();
+  });
+
+  it('sends the narrowed scopes once the removal is confirmed', async () => {
+    api.updateOAuthClient.mockResolvedValue(client);
+    await openEdit();
+    fireEvent.click(scopeBox('email'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    fireEvent.click(await screen.findByTestId('oauth-client-edit-narrow-confirm-btn'));
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { allowedScopes: ['openid', 'profile'] })
+    );
+  });
+
+  it('sends federatedIdp null when federation is turned off', async () => {
+    api.fetchOAuthClients.mockResolvedValue([federatedClient]);
+    api.updateOAuthClient.mockResolvedValue(client);
+    await openEdit();
+    fireEvent.click(screen.getByTestId('oauth-client-edit-federated-switch'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { federatedIdp: null }));
+  });
+
+  it('closes without a request when nothing changed', async () => {
+    await openEdit();
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() => expect(screen.queryByTestId('oauth-client-edit-modal')).not.toBeInTheDocument());
+    expect(api.updateOAuthClient).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildEditPayload', () => {
+  const stored = { ...client, allowedScopes: ['openid', 'legacy:x'] } as never;
+
+  it('sends only the changed fields', () => {
+    const form = editFormFromClient(stored);
+    expect(buildEditPayload(stored, form)).toEqual({});
+    expect(buildEditPayload(stored, { ...form, redirectUris: 'https://n.example.test/cb' })).toEqual({
+      redirectUris: ['https://n.example.test/cb'],
+    });
+  });
+
+  it('keeps a legacy scope that is still ticked and appends new ones in catalogue order', () => {
+    const form = editFormFromClient(stored);
+    expect(buildEditPayload(stored, { ...form, scopes: ['me:read', 'email', 'legacy:x', 'openid'] })).toEqual({
+      allowedScopes: ['openid', 'legacy:x', 'email', 'me:read'],
+    });
+  });
+});
+
+describe('federatedFormFromClient', () => {
+  it('reads a stored config without subjectSource as the identities shape', () => {
+    const form = federatedFormFromClient({
+      ...client,
+      federatedIdp: { issuer: 'https://i.example.test', audience: 'a', providerName: 'p' },
+    } as never);
+    expect(form).toMatchObject({ enabled: true, subjectSource: 'identities', providerName: 'p' });
   });
 });

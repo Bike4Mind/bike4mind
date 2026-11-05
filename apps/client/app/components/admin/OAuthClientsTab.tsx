@@ -33,7 +33,17 @@ import CheckIcon from '@mui/icons-material/Check';
 import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import type { CreateOAuthClientInput, OAuthClientView, OAuthClientWithSecret } from '@bike4mind/common';
+import {
+  OAUTH_CLIENT_SCOPES,
+  OAUTH_FEDERATED_DEFAULT_SCOPES,
+  isOAuthClientScope,
+  isOptInScope,
+  type CreateOAuthClientInput,
+  type OAuthClientView,
+  type OAuthClientWithSecret,
+  type OAuthFederatedIdpInput,
+  type UpdateOAuthClientInput,
+} from '@bike4mind/common';
 import {
   fetchOAuthClients,
   createOAuthClient,
@@ -76,26 +86,137 @@ const parseUris = (text: string) =>
 
 const blankToUndefined = (value: string) => value.trim() || undefined;
 
+const federatedInput = (f: FederatedForm): OAuthFederatedIdpInput => ({
+  subjectSource: f.subjectSource,
+  issuer: blankToUndefined(f.issuer),
+  audience: blankToUndefined(f.audience),
+  jwksUri: blankToUndefined(f.jwksUri),
+  ...(f.subjectSource === 'identities' ? { providerName: blankToUndefined(f.providerName) } : {}),
+});
+
 export function buildCreatePayload(form: CreateForm): CreateOAuthClientInput {
-  const { federated } = form;
   return {
     name: form.name,
     redirectUris: parseUris(form.redirectUris),
     clientType: form.firstParty ? 'first-party' : 'relying-party',
-    ...(federated.enabled
-      ? {
-          federatedIdp: {
-            subjectSource: federated.subjectSource,
-            issuer: blankToUndefined(federated.issuer),
-            audience: blankToUndefined(federated.audience),
-            jwksUri: blankToUndefined(federated.jwksUri),
-            ...(federated.subjectSource === 'identities'
-              ? { providerName: blankToUndefined(federated.providerName) }
-              : {}),
-          },
-        }
-      : {}),
+    ...(form.federated.enabled ? { federatedIdp: federatedInput(form.federated) } : {}),
   };
+}
+
+type EditForm = { redirectUris: string; scopes: string[]; federated: FederatedForm };
+
+// A stored trust config without subjectSource is the 'identities' shape (see resolveOAuthFederatedIdp).
+export function federatedFormFromClient(client: OAuthClientView): FederatedForm {
+  const idp = client.federatedIdp;
+  return {
+    enabled: !!idp,
+    subjectSource: idp?.subjectSource ?? 'identities',
+    issuer: idp?.issuer ?? '',
+    audience: idp?.audience ?? '',
+    providerName: idp?.providerName ?? '',
+    jwksUri: idp?.jwksUri ?? '',
+  };
+}
+
+export const editFormFromClient = (client: OAuthClientView): EditForm => ({
+  redirectUris: client.redirectUris.join('\n'),
+  scopes: client.allowedScopes,
+  federated: federatedFormFromClient(client),
+});
+
+/** Only the fields the admin changed, so an unrelated save never trips the server's concurrent-edit guards. */
+export function buildEditPayload(client: OAuthClientView, form: EditForm): UpdateOAuthClientInput {
+  const payload: UpdateOAuthClientInput = {};
+
+  const uris = parseUris(form.redirectUris);
+  if (JSON.stringify(uris) !== JSON.stringify(client.redirectUris)) payload.redirectUris = uris;
+
+  const stored = new Set(client.allowedScopes);
+  const wanted = new Set(form.scopes);
+  if (stored.size !== wanted.size || [...wanted].some(scope => !stored.has(scope))) {
+    payload.allowedScopes = [
+      ...client.allowedScopes.filter(scope => wanted.has(scope)),
+      ...OAUTH_CLIENT_SCOPES.filter(scope => wanted.has(scope) && !stored.has(scope)),
+    ];
+  }
+
+  const before = federatedFormFromClient(client);
+  const after = form.federated;
+  if (after.enabled !== before.enabled || (after.enabled && JSON.stringify(after) !== JSON.stringify(before))) {
+    payload.federatedIdp = after.enabled ? federatedInput(after) : null;
+  }
+  return payload;
+}
+
+export const removedScopes = (client: OAuthClientView, payload: UpdateOAuthClientInput): string[] =>
+  payload.allowedScopes ? client.allowedScopes.filter(scope => !payload.allowedScopes?.includes(scope)) : [];
+
+function FederatedTrustFields({
+  value,
+  onChange,
+  testIdPrefix,
+  audiencePlaceholder,
+}: {
+  value: FederatedForm;
+  onChange: (patch: Partial<FederatedForm>) => void;
+  testIdPrefix: string;
+  audiencePlaceholder: string;
+}) {
+  return (
+    <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }}>
+      <Stack spacing={1.25}>
+        <FormControl>
+          <FormLabel>Subject source</FormLabel>
+          <Select
+            value={value.subjectSource}
+            onChange={(_e, v) => v && onChange({ subjectSource: v })}
+            data-testid={`${testIdPrefix}-subject-select`}
+          >
+            <Option value="sub">sub - app signs in against B4M directly</Option>
+            <Option value="identities">identities - app&apos;s Cognito pool federates B4M</Option>
+          </Select>
+        </FormControl>
+        <FormControl required>
+          <FormLabel>Issuer</FormLabel>
+          <Input
+            value={value.issuer}
+            onChange={e => onChange({ issuer: e.target.value })}
+            slotProps={{ input: { 'data-testid': `${testIdPrefix}-issuer-input` } }}
+          />
+        </FormControl>
+        <FormControl required={value.subjectSource === 'identities'}>
+          <FormLabel>Audience</FormLabel>
+          <Input
+            placeholder={value.subjectSource === 'sub' ? audiencePlaceholder : ''}
+            value={value.audience}
+            onChange={e => onChange({ audience: e.target.value })}
+            slotProps={{ input: { 'data-testid': `${testIdPrefix}-audience-input` } }}
+          />
+        </FormControl>
+        {value.subjectSource === 'identities' && (
+          <FormControl required>
+            <FormLabel>Provider name</FormLabel>
+            <Input
+              value={value.providerName}
+              onChange={e => onChange({ providerName: e.target.value })}
+              slotProps={{ input: { 'data-testid': `${testIdPrefix}-provider-input` } }}
+            />
+          </FormControl>
+        )}
+        <FormControl required={value.subjectSource === 'sub'}>
+          <FormLabel>JWKS URI</FormLabel>
+          <Input
+            placeholder={
+              value.subjectSource === 'sub' ? '<issuer>/api/oauth/jwks' : 'Defaults to <issuer>/.well-known/jwks.json'
+            }
+            value={value.jwksUri}
+            onChange={e => onChange({ jwksUri: e.target.value })}
+            slotProps={{ input: { 'data-testid': `${testIdPrefix}-jwks-input` } }}
+          />
+        </FormControl>
+      </Stack>
+    </Sheet>
+  );
 }
 
 function CopyField({ label, value, testid }: { label: string; value: string; testid: string }) {
@@ -172,7 +293,8 @@ export default function OAuthClientsTab() {
   const [createForm, setCreateForm] = useState<CreateForm>(emptyCreateForm);
   const [formError, setFormError] = useState<string | null>(null);
   const [editTarget, setEditTarget] = useState<OAuthClientView | null>(null);
-  const [editUris, setEditUris] = useState('');
+  const [editForm, setEditForm] = useState<EditForm | null>(null);
+  const [narrowing, setNarrowing] = useState<{ removed: string[]; payload: UpdateOAuthClientInput } | null>(null);
   const [rotateTarget, setRotateTarget] = useState<OAuthClientView | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<OAuthClientView | null>(null);
   // The secret is held in state and in the create/rotate mutation result; both are cleared when the modal closes (gcTime 0).
@@ -198,13 +320,18 @@ export default function OAuthClientsTab() {
   });
 
   const editMutation = useMutation({
-    mutationFn: (client: OAuthClientView) => updateOAuthClient(client.id, { redirectUris: parseUris(editUris) }),
+    mutationFn: ({ client, payload }: { client: OAuthClientView; payload: UpdateOAuthClientInput }) =>
+      updateOAuthClient(client.id, payload),
     onSuccess: client => {
       invalidate();
+      setNarrowing(null);
       setEditTarget(null);
-      toast.success(`Updated redirect URIs for ${client.name}`);
+      toast.success(`Updated ${client.name}`);
     },
-    onError: (error: unknown) => setFormError(getErrorMessage(error)),
+    onError: (error: unknown) => {
+      setNarrowing(null);
+      setFormError(getErrorMessage(error));
+    },
   });
 
   const activeMutation = useMutation({
@@ -236,13 +363,39 @@ export default function OAuthClientsTab() {
   };
 
   const openEdit = (client: OAuthClientView) => {
-    setEditUris(client.redirectUris.join('\n'));
+    setEditForm(editFormFromClient(client));
     setFormError(null);
     setEditTarget(client);
   };
 
   const setFederated = (patch: Partial<FederatedForm>) =>
     setCreateForm(f => ({ ...f, federated: { ...f.federated, ...patch } }));
+
+  const setEditFederated = (patch: Partial<FederatedForm>) =>
+    setEditForm(f => f && { ...f, federated: { ...f.federated, ...patch } });
+
+  const toggleEditFederated = (enabled: boolean) =>
+    setEditForm(
+      f =>
+        f && {
+          ...f,
+          federated: { ...f.federated, enabled },
+          scopes: enabled ? [...new Set([...f.scopes, ...OAUTH_FEDERATED_DEFAULT_SCOPES])] : f.scopes,
+        }
+    );
+
+  const toggleEditScope = (scope: string, checked: boolean) =>
+    setEditForm(f => f && { ...f, scopes: checked ? [...f.scopes, scope] : f.scopes.filter(s => s !== scope) });
+
+  const saveEdit = () => {
+    if (!editTarget || !editForm) return;
+    setFormError(null);
+    const payload = buildEditPayload(editTarget, editForm);
+    if (Object.keys(payload).length === 0) return setEditTarget(null);
+    const removed = removedScopes(editTarget, payload);
+    if (removed.length) return setNarrowing({ removed, payload });
+    editMutation.mutate({ client: editTarget, payload });
+  };
 
   return (
     <Box sx={{ p: 2 }} data-testid="oauth-clients-tab">
@@ -373,7 +526,7 @@ export default function OAuthClientsTab() {
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                        <Tooltip title="Edit redirect URIs">
+                        <Tooltip title="Edit client">
                           <IconButton
                             size="sm"
                             variant="plain"
@@ -452,7 +605,7 @@ export default function OAuthClientsTab() {
               <Box>
                 <FormLabel>Federated trust</FormLabel>
                 <FormHelperText sx={{ mt: 0 }}>
-                  Lets the app mint per-user AI keys via /api/oauth/ai-token. Cannot be added later.
+                  Lets the app mint per-user AI keys via /api/oauth/ai-token.
                 </FormHelperText>
               </Box>
               <Switch
@@ -463,61 +616,12 @@ export default function OAuthClientsTab() {
             </FormControl>
 
             {createForm.federated.enabled && (
-              <Sheet variant="soft" sx={{ p: 1.5, borderRadius: 'sm' }}>
-                <Stack spacing={1.25}>
-                  <FormControl>
-                    <FormLabel>Subject source</FormLabel>
-                    <Select
-                      value={createForm.federated.subjectSource}
-                      onChange={(_e, value) => value && setFederated({ subjectSource: value })}
-                      data-testid="oauth-client-federated-subject-select"
-                    >
-                      <Option value="sub">sub - app signs in against B4M directly</Option>
-                      <Option value="identities">identities - app&apos;s Cognito pool federates B4M</Option>
-                    </Select>
-                  </FormControl>
-                  <FormControl required>
-                    <FormLabel>Issuer</FormLabel>
-                    <Input
-                      value={createForm.federated.issuer}
-                      onChange={e => setFederated({ issuer: e.target.value })}
-                      slotProps={{ input: { 'data-testid': 'oauth-client-federated-issuer-input' } }}
-                    />
-                  </FormControl>
-                  <FormControl required={createForm.federated.subjectSource === 'identities'}>
-                    <FormLabel>Audience</FormLabel>
-                    <Input
-                      placeholder={createForm.federated.subjectSource === 'sub' ? 'Defaults to the new client_id' : ''}
-                      value={createForm.federated.audience}
-                      onChange={e => setFederated({ audience: e.target.value })}
-                      slotProps={{ input: { 'data-testid': 'oauth-client-federated-audience-input' } }}
-                    />
-                  </FormControl>
-                  {createForm.federated.subjectSource === 'identities' && (
-                    <FormControl required>
-                      <FormLabel>Provider name</FormLabel>
-                      <Input
-                        value={createForm.federated.providerName}
-                        onChange={e => setFederated({ providerName: e.target.value })}
-                        slotProps={{ input: { 'data-testid': 'oauth-client-federated-provider-input' } }}
-                      />
-                    </FormControl>
-                  )}
-                  <FormControl required={createForm.federated.subjectSource === 'sub'}>
-                    <FormLabel>JWKS URI</FormLabel>
-                    <Input
-                      placeholder={
-                        createForm.federated.subjectSource === 'sub'
-                          ? '<issuer>/api/oauth/jwks'
-                          : 'Defaults to <issuer>/.well-known/jwks.json'
-                      }
-                      value={createForm.federated.jwksUri}
-                      onChange={e => setFederated({ jwksUri: e.target.value })}
-                      slotProps={{ input: { 'data-testid': 'oauth-client-federated-jwks-input' } }}
-                    />
-                  </FormControl>
-                </Stack>
-              </Sheet>
+              <FederatedTrustFields
+                value={createForm.federated}
+                onChange={setFederated}
+                testIdPrefix="oauth-client-federated"
+                audiencePlaceholder="Defaults to the new client_id"
+              />
             )}
 
             {formError && (
@@ -546,22 +650,80 @@ export default function OAuthClientsTab() {
       </Modal>
 
       <Modal open={!!editTarget} onClose={() => setEditTarget(null)}>
-        <ModalDialog sx={{ minWidth: 460, maxWidth: 560 }} data-testid="oauth-client-edit-modal">
+        <ModalDialog sx={{ minWidth: 460, maxWidth: 560, overflow: 'auto' }} data-testid="oauth-client-edit-modal">
           <ModalClose />
-          <Typography level="h4">Edit redirect URIs</Typography>
+          <Typography level="h4">Edit OAuth client</Typography>
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
             {editTarget?.name}
           </Typography>
           <Divider sx={{ my: 1 }} />
-          <FormControl required>
-            <Textarea
-              minRows={3}
-              value={editUris}
-              onChange={e => setEditUris(e.target.value)}
-              slotProps={{ textarea: { 'data-testid': 'oauth-client-edit-uris-input' } }}
-            />
-            <FormHelperText>One absolute URL per line, matched exactly.</FormHelperText>
-          </FormControl>
+          {editTarget && editForm && (
+            <Stack spacing={2}>
+              <FormControl required>
+                <FormLabel>Redirect URIs</FormLabel>
+                <Textarea
+                  minRows={3}
+                  value={editForm.redirectUris}
+                  onChange={e => setEditForm(f => f && { ...f, redirectUris: e.target.value })}
+                  slotProps={{ textarea: { 'data-testid': 'oauth-client-edit-uris-input' } }}
+                />
+                <FormHelperText>One absolute URL per line, matched exactly.</FormHelperText>
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Scopes</FormLabel>
+                <Stack spacing={0.75}>
+                  {[...OAUTH_CLIENT_SCOPES, ...editTarget.allowedScopes.filter(s => !isOAuthClientScope(s))].map(
+                    scope => {
+                      const checked = editForm.scopes.includes(scope);
+                      const optInBlocked =
+                        isOptInScope(scope) &&
+                        !checked &&
+                        !(editForm.federated.enabled && editTarget.clientType === 'relying-party');
+                      return (
+                        <Checkbox
+                          key={scope}
+                          label={scope}
+                          checked={checked}
+                          disabled={scope === 'openid' || optInBlocked}
+                          onChange={e => toggleEditScope(scope, e.target.checked)}
+                          slotProps={{ input: { 'data-testid': `oauth-client-edit-scope-${scope}` } }}
+                        />
+                      );
+                    }
+                  )}
+                </Stack>
+                <FormHelperText>
+                  Opt-in scopes need a federated relying-party client. Removing a scope takes effect for every user of
+                  this client.
+                </FormHelperText>
+              </FormControl>
+
+              <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                <Box>
+                  <FormLabel>Federated trust</FormLabel>
+                  <FormHelperText sx={{ mt: 0 }}>
+                    Lets the app mint per-user AI keys via /api/oauth/ai-token. Turning it on ticks ai:generate and
+                    me:read.
+                  </FormHelperText>
+                </Box>
+                <Switch
+                  checked={editForm.federated.enabled}
+                  onChange={e => toggleEditFederated(e.target.checked)}
+                  slotProps={{ input: { 'data-testid': 'oauth-client-edit-federated-switch' } }}
+                />
+              </FormControl>
+
+              {editForm.federated.enabled && (
+                <FederatedTrustFields
+                  value={editForm.federated}
+                  onChange={setEditFederated}
+                  testIdPrefix="oauth-client-edit-federated"
+                  audiencePlaceholder="Defaults to this client_id"
+                />
+              )}
+            </Stack>
+          )}
           {formError && (
             <Alert color="danger" variant="soft" data-testid="oauth-client-edit-error">
               {formError}
@@ -571,15 +733,44 @@ export default function OAuthClientsTab() {
             <Button variant="plain" color="neutral" onClick={() => setEditTarget(null)}>
               Cancel
             </Button>
-            <Button
-              loading={editMutation.isPending}
-              onClick={() => {
-                setFormError(null);
-                if (editTarget) editMutation.mutate(editTarget);
-              }}
-              data-testid="oauth-client-edit-save-btn"
-            >
+            <Button loading={editMutation.isPending} onClick={saveEdit} data-testid="oauth-client-edit-save-btn">
               Save
+            </Button>
+          </Stack>
+        </ModalDialog>
+      </Modal>
+
+      <Modal open={!!narrowing} onClose={() => setNarrowing(null)}>
+        <ModalDialog role="alertdialog" variant="outlined" data-testid="oauth-client-edit-narrow-modal">
+          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'warning.500' }} />}>
+            Remove scopes
+          </Typography>
+          <Divider sx={{ my: 1 }} />
+          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+            {narrowing?.removed.map(scope => (
+              <Chip key={scope} size="sm" variant="soft" color="warning">
+                {scope}
+              </Chip>
+            ))}
+          </Stack>
+          <Typography level="body-sm" sx={{ mt: 1 }}>
+            Apps that still request a removed scope get invalid_scope at /authorize, for every user. Grants users
+            already approved are kept, but ai-token and federated-admin calls that need a removed scope fail with
+            invalid_scope, because the client no longer has it.
+          </Typography>
+          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
+            <Button variant="plain" color="neutral" onClick={() => setNarrowing(null)}>
+              Cancel
+            </Button>
+            <Button
+              color="warning"
+              loading={editMutation.isPending}
+              onClick={() =>
+                editTarget && narrowing && editMutation.mutate({ client: editTarget, payload: narrowing.payload })
+              }
+              data-testid="oauth-client-edit-narrow-confirm-btn"
+            >
+              Remove scopes
             </Button>
           </Stack>
         </ModalDialog>
