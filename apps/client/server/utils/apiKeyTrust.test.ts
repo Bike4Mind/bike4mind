@@ -159,4 +159,18 @@ describe('applyUntrustedRateLimit', () => {
     expect(limit).toBe(keyLimit);
     expect(settingsMap).not.toHaveBeenCalled();
   });
+
+  it('leaves a system-owned key untouched without assessing the owner, even with the daily limit on', async () => {
+    settingsMap.mockResolvedValue({ apiKeyUntrustedRequestsPerDay: '200' });
+    // The Overwatch ingest user: unverified, no plan, never an admin, so it would judge untrusted.
+    const systemOwner = { ...youngVerified, emailVerified: false, isSystem: true };
+    const result = await resolveUntrustedKeyLimits(systemOwner, { rateLimit: keyLimit });
+    expect(result).toEqual({ rateLimit: keyLimit, ownerUntrusted: false });
+    expect(settingsMap).not.toHaveBeenCalled();
+  });
+
+  it('still clamps an owner whose isSystem flag is explicitly false', async () => {
+    const limit = await applyUntrustedRateLimit({ ...youngVerified, isSystem: false }, { rateLimit: keyLimit });
+    expect(limit.requestsPerMinute).toBe(20);
+  });
 });
