@@ -170,8 +170,8 @@ describe('SignupGrantPendingCard', () => {
     ready(GRANTED);
     renderCard();
     fireEvent.click(screen.getByTestId('user-pending-releaseRemaining-btn'));
-    fireEvent.click(screen.getByTestId('user-pending-releaseRemaining-dialog-reason-input-preset-0'));
-    fireEvent.click(screen.getByTestId('user-pending-releaseRemaining-dialog-confirm-btn'));
+    fireEvent.click(screen.getByTestId('user-pending-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('user-pending-dialog-confirm-btn'));
     await waitFor(() =>
       expect(mocks.mutateAsync).toHaveBeenCalledExactlyOnceWith({
         action: 'releaseRemaining',
@@ -179,7 +179,7 @@ describe('SignupGrantPendingCard', () => {
       })
     );
     await waitFor(() => expect(mocks.toastSuccess).toHaveBeenCalledWith('700 credits released'));
-    await waitFor(() => expect(screen.queryByTestId('user-pending-releaseRemaining-dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId('user-pending-dialog')).not.toBeInTheDocument());
   });
 
   it('explains a no-op instead of reporting success', async () => {
@@ -187,8 +187,8 @@ describe('SignupGrantPendingCard', () => {
     ready(GRANTED);
     renderCard();
     fireEvent.click(screen.getByTestId('user-pending-block-btn'));
-    fireEvent.click(screen.getByTestId('user-pending-block-dialog-reason-input-preset-0'));
-    fireEvent.click(screen.getByTestId('user-pending-block-dialog-confirm-btn'));
+    fireEvent.click(screen.getByTestId('user-pending-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('user-pending-dialog-confirm-btn'));
     await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('This account is already blocked.'));
     expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
@@ -198,10 +198,10 @@ describe('SignupGrantPendingCard', () => {
     ready(GRANTED);
     renderCard();
     fireEvent.click(screen.getByTestId('user-pending-block-btn'));
-    fireEvent.click(screen.getByTestId('user-pending-block-dialog-reason-input-preset-0'));
-    fireEvent.click(screen.getByTestId('user-pending-block-dialog-confirm-btn'));
+    fireEvent.click(screen.getByTestId('user-pending-dialog-reason-input-preset-0'));
+    fireEvent.click(screen.getByTestId('user-pending-dialog-confirm-btn'));
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Block failed. Try again.'));
-    expect(screen.getByTestId('user-pending-block-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('user-pending-dialog')).toBeInTheDocument();
   });
 
   it('shows a loading line and an error with retry', () => {
