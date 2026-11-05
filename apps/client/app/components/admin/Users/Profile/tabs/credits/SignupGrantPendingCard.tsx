@@ -173,7 +173,7 @@ export const SignupGrantPendingCard: React.FC<{ user: AdminUserProfile }> = ({ u
           tone={ACTION_COPY[open].tone}
           pending={run.isPending}
           onConfirm={reason => confirm(open, reason)}
-          data-testid={`user-pending-${open}-dialog`}
+          data-testid="user-pending-dialog"
         />
       )}
     </SectionCard>
