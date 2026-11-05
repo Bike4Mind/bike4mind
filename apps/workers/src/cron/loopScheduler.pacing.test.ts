@@ -79,7 +79,7 @@ describe('loop liveness thresholds', () => {
     expect(idleAlarmCandidate({ ...base, nextRunAt: ago(44) }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, status: 'paused' }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, status: 'error' }, now)).toBe(false);
-    expect(idleAlarmCandidate({ ...base, activeExecutionId: 'exec-1' }, now)).toBe(false);
+    expect(idleAlarmCandidate({ ...base, activeExecutionIds: ['exec-1'] }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, leaseUntil: new Date(now.getTime() + MIN) }, now)).toBe(false);
     expect(idleAlarmCandidate({ ...base, leaseUntil: ago(1) }, now)).toBe(true);
     expect(idleAlarmCandidate({ ...base, idleStreak: 1 }, now)).toBe(false);

@@ -11,6 +11,7 @@
  * Directive storage and states: `LoopDirectiveModel` and `LOOP_DIRECTIVE_TRANSITIONS` in `LoopTypes.ts`.
  */
 import {
+  activeLaneCount,
   LOOP_DIRECTIVE_TOOL_NAMES,
   LOOP_DIRECTIVE_INSTRUCTION_MAX,
   LOOP_DIRECTIVE_NOTE_MAX,
@@ -222,10 +223,11 @@ export function buildLoopDirectiveTools({
             id: logged.id,
             loopId: target.id,
             due: true,
-            running: !!target.activeExecutionId,
-            note: target.activeExecutionId
-              ? 'A run is in flight; the next one starts after it, on a scheduler tick, if budget and pacing allow.'
-              : 'It starts on the next scheduler tick (within 5 minutes) if budget and pacing allow.',
+            running: activeLaneCount(target) > 0,
+            note:
+              activeLaneCount(target) > 0
+                ? 'A run is in flight; the next one starts after it, on a scheduler tick, if budget and pacing allow.'
+                : 'It starts on the next scheduler tick (within 5 minutes) if budget and pacing allow.',
           };
         }),
       toolSchema: actionSchema(

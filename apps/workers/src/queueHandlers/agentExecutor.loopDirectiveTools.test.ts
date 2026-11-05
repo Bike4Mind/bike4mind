@@ -340,7 +340,7 @@ describe('overseer actions', () => {
     });
 
     it('still succeeds with a run in flight, and says so', async () => {
-      workerOverrides = { activeExecutionId: 'x-worker' };
+      workerOverrides = { activeExecutionIds: ['x-worker'] };
       expect(JSON.parse(await act('loop_run_now'))).toMatchObject({ running: true });
     });
 
