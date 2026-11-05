@@ -112,7 +112,7 @@ Caching is yours: there is one live key per user and app (each exchange revokes 
 
 ## Errors
 
-Any non-2xx response throws `B4mApiError`. An OAuth-style body (`error` and `error_description`) maps `error` to `errorCode` and `error_description` to `message`:
+Any non-2xx response throws `B4mApiError`. An OAuth-style body (a snake_case `error` code and `error_description`) maps `error` to `errorCode` and `error_description` to `message`:
 
 ```ts
 import { B4mApiError } from '@bike4mind/sdk';

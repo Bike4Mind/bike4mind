@@ -163,6 +163,20 @@ describe('B4mApiError', () => {
     expect(error.message).toBe('Too many requests');
   });
 
+  it('does not map a prose error that comes with error_description', () => {
+    const error = new B4mApiError(
+      403,
+      {
+        error: 'Policy acceptance required.',
+        error_description: 'Accept the Terms of Service and Acceptable Use Policy to continue.',
+        policyAcceptanceRequired: true,
+      },
+      new Headers()
+    );
+    expect(error.errorCode).toBeUndefined();
+    expect(error.message).toBe('Policy acceptance required.');
+  });
+
   it('keeps errorCode when a body has both errorCode and error_description', () => {
     const error = new B4mApiError(
       429,
