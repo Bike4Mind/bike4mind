@@ -388,6 +388,43 @@ describe('PermissionRuleSet', () => {
     });
   });
 
+  describe('on win32, for a protected folder reached through the WSL share', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    beforeEach(() => Object.defineProperty(process, 'platform', { value: 'win32' }));
+    afterEach(() => {
+      if (original) Object.defineProperty(process, 'platform', original);
+    });
+
+    const APP = 'C:\\Users\\me\\AppData\\Roaming\\App';
+    const SHARE = '\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App';
+
+    it('allows an edit elsewhere, so the refusals below come from the protected folder', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: ['D:\\notes'] })).toBe('allow');
+      expect(rules.coversFolder('D:\\notes')).toBe(true);
+    });
+
+    it('does not allow an edit through the share spelling of the app folder', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: [SHARE] })).toBeNull();
+    });
+
+    it('does not cover the share spelling of the app folder as a folder', () => {
+      expect(set({ allow: ['Edit'] }, [APP]).coversFolder(SHARE)).toBe(false);
+    });
+  });
+
+  it('does not allow a shell call naming a case variant of a permission file on macOS', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      const script = 'cp x .CLAUDE/settings.json';
+      expect(decide(set({ allow: ['Bash(cp:*)'] }), shell(script, [script]))).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original);
+    }
+  });
+
   it('never allows an irreversible call, but still denies or asks', () => {
     expect(decide(set({ allow: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBeNull();
     expect(decide(set({ deny: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBe('deny');
