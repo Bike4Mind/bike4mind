@@ -91,7 +91,7 @@ describe('LoopsPage', () => {
   });
 
   it('offers pause and run now on a live loop and shows a running loop as running', () => {
-    loopsState.data = [loop({ status: 'live', activeExecutionId: 'e1', intervalMinutes: 120 })];
+    loopsState.data = [loop({ status: 'live', activeExecutionIds: ['e1'], intervalMinutes: 120 })];
     renderPage();
     const r = row();
     expect(r.getByText('every 2 h')).toBeInTheDocument();

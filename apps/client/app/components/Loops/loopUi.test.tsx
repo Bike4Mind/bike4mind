@@ -28,7 +28,19 @@ describe('holdLabel', () => {
   it('is null for a loop that is not live or has a run in flight', () => {
     const hold = { kind: 'capacity' as const, at: new Date(now) };
     expect(holdLabel({ ...live, status: 'paused', hold }, now)).toBeNull();
-    expect(holdLabel({ ...live, activeExecutionId: 'exec-1', hold }, now)).toBeNull();
+    expect(holdLabel({ ...live, status: 'paused', activeExecutionIds: ['exec-1'], hold }, now)).toBeNull();
+  });
+
+  it('names the limit a capacity hold waits on, and shows it while lanes run', () => {
+    const at = new Date(now);
+    const label = (limit: 'loop' | 'user' | 'server' | 'budget') =>
+      holdLabel({ ...live, maxConcurrent: 3, activeExecutionIds: ['a'], hold: { kind: 'capacity', limit, at } }, now);
+    expect(label('loop')).toBe('All 3 run lanes busy (loop lane limit)');
+    expect(label('user')).toBe('Waiting for a free run slot (your cloud run limit)');
+    expect(label('server')).toBe('Waiting for a free run slot (server-wide limit)');
+    expect(label('budget')).toBe("Waiting for budget: running lanes have reserved the rest of today's budget");
+    const backingOff = { ...live, idleStreak: 1, nextRunAt: new Date(now + 30 * 60_000) };
+    expect(holdLabel({ ...backingOff, activeExecutionIds: ['a'] }, now)).toBeNull();
   });
 });
 

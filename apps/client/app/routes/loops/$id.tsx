@@ -46,6 +46,7 @@ import { getToolDisplayName } from '@client/app/utils/toolMapping';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import CloseIcon from '@mui/icons-material/Close';
 import AgentRunViewer from '@client/app/components/Session/AgentExecution/AgentRunViewer';
+import { activeLaneCount, loopMaxConcurrent } from '@bike4mind/common';
 
 export default function LoopDetailPage() {
   const { id = '' } = useParams({ strict: false });
@@ -79,6 +80,9 @@ export default function LoopDetailPage() {
   }
 
   const missingTools = unavailableTools(loop.tools, toolAvailability).map(tool => getToolDisplayName(tool));
+  const lanes = activeLaneCount(loop);
+  const ticketTitle = (executionId: string) =>
+    tickets?.stages.flatMap(column => column.tickets).find(ticket => ticket.executionId === executionId)?.title;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
@@ -110,18 +114,48 @@ export default function LoopDetailPage() {
             {formatInterval(loop.intervalMinutes)} - last run {lastRunLabel(loop)} - next {nextRunLabel(loop)} -{' '}
             {loop.runCount} runs - {formatCredits(loop.creditsUsed)} (90 days) -{' '}
             <span data-testid="loop-detail-spend-today">{formatSpendToday(loop)} today</span> - {loop.model}
+            {loopMaxConcurrent(loop) > 1 && (
+              <span data-testid="loop-detail-lanes">
+                {' '}
+                - {lanes}/{loopMaxConcurrent(loop)} running
+              </span>
+            )}
           </Typography>
-          {(loop.activeExecutionId ?? loop.lastExecutionId) && (
+          {loop.lastExecutionId && (
             <Link
               component="button"
               level="body-sm"
-              onClick={() => setRun(loop.activeExecutionId ?? loop.lastExecutionId)}
+              onClick={() => setRun(loop.lastExecutionId)}
               data-testid="loop-detail-latest-run-link"
             >
               Latest run
             </Link>
           )}
         </Stack>
+        {lanes > 0 && (
+          <Stack gap={0.5} data-testid="loop-detail-active-runs">
+            <Typography level="title-sm">Active runs</Typography>
+            {loop.activeExecutionIds!.map(executionId => (
+              <Stack
+                key={executionId}
+                direction="row"
+                gap={1}
+                alignItems="center"
+                data-testid={`loop-detail-active-run-${executionId}`}
+              >
+                <Typography level="body-sm">{ticketTitle(executionId) ?? 'Goal run'}</Typography>
+                <Link
+                  component="button"
+                  level="body-sm"
+                  onClick={() => setRun(executionId)}
+                  data-testid={`loop-detail-active-run-view-${executionId}`}
+                >
+                  View run
+                </Link>
+              </Stack>
+            ))}
+          </Stack>
+        )}
         {holdLabel(loop) && (
           <Typography level="body-sm" color="neutral" data-testid="loop-detail-backoff">
             <span data-testid="loop-hold-reason">{holdLabel(loop)}</span>

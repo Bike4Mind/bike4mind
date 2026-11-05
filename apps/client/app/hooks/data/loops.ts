@@ -84,6 +84,7 @@ export type LoopFormPayload = Pick<ILoop, 'name' | 'goal' | 'intervalMinutes' | 
   agentId?: string | null;
   oversees?: string[] | null;
   budgetCreditsPerDay?: number | null;
+  maxConcurrent?: number | null;
   stageConfig?: ILoop['stageConfig'];
 };
 

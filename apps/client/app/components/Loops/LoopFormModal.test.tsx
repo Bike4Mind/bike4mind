@@ -3,14 +3,16 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { createLoop, updateLoop } = vi.hoisted(() => ({
+const { createLoop, updateLoop, budget } = vi.hoisted(() => ({
   createLoop: { mutate: vi.fn(), isPending: false },
   updateLoop: { mutate: vi.fn(), isPending: false },
+  budget: { data: { creditsToday: 0, laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 } } },
 }));
 
 vi.mock('@client/app/hooks/data/loops', () => ({
   useCreateLoop: () => createLoop,
   useUpdateLoop: () => updateLoop,
+  useLoopsBudget: () => budget,
   useLoops: () => ({
     data: [
       { id: 'l1', name: 'Digest' },
@@ -51,6 +53,7 @@ const values = (overrides: Partial<LoopFormValues> = {}): LoopFormValues => ({
   agentId: '',
   oversees: [],
   budget: '',
+  maxConcurrent: '1',
   stageConfig: {},
   ...overrides,
 });
@@ -84,6 +87,16 @@ describe('validateLoopForm', () => {
     ['too long', ['todo', 'x'.repeat(61)]],
   ])('rejects %s stages', (_, stages) => {
     expect(validateLoopForm(values({ stages }), 'create').errors.stages).toBeDefined();
+  });
+
+  it.each([['0'], ['6'], ['1.5'], ['']])('rejects %s runs at once', maxConcurrent => {
+    expect(validateLoopForm(values({ maxConcurrent }), 'create').errors.maxConcurrent).toBeDefined();
+  });
+
+  it('omits the default runs at once on create and resets it with null on edit', () => {
+    expect(validateLoopForm(values(), 'create').payload).not.toHaveProperty('maxConcurrent');
+    expect(validateLoopForm(values(), 'edit').payload?.maxConcurrent).toBeNull();
+    expect(validateLoopForm(values({ maxConcurrent: '3' }), 'create').payload?.maxConcurrent).toBe(3);
   });
 
   it('omits no agent on create and clears it with null on edit', () => {
@@ -282,6 +295,14 @@ describe('LoopFormModal', () => {
     } as never);
     expect(screen.getByTestId('loop-form-interval-input')).toHaveValue(2);
     expect(screen.getByTestId('loop-form-budget-input')).toHaveValue(50);
+    expect(screen.getByTestId('loop-form-max-concurrent')).toHaveValue(1);
+    expect(screen.getByTestId('loop-form-max-concurrent-hint').textContent).toBe(
+      "Cloud runs at once; Desktop runs use your machine's own lanes."
+    );
+    fireEvent.change(screen.getByTestId('loop-form-max-concurrent'), { target: { value: '5' } });
+    expect(screen.getByTestId('loop-form-max-concurrent-hint').textContent).toBe(
+      "Cloud runs at once; Desktop runs use your machine's own lanes. Up to 2 run at once: your limit is 2 cloud runs across all loops. (server-wide limit: 4)"
+    );
     fireEvent.change(screen.getByTestId('loop-form-budget-input'), { target: { value: '' } });
     fireEvent.click(screen.getByTestId('loop-form-stage-remove-1'));
     expect(screen.getByTestId('loop-form-stage-removed-warning')).toBeInTheDocument();
@@ -294,6 +315,7 @@ describe('LoopFormModal', () => {
         stages: ['todo', 'done'],
         agentId: null,
         budgetCreditsPerDay: null,
+        maxConcurrent: 5,
       }),
       expect.anything()
     );
