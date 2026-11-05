@@ -75,11 +75,13 @@ Three cards show what people use. Rankings and totals cover the complete days in
 
 ## Top organizations and users
 
-Two tables list the 10 heaviest users and the 10 heaviest organizations over the complete days of the range. Rows are ranked by active days, then by AI requests. Each row shows the plan, active days, AI requests, credits consumed and its share of all requests. Click a column header to sort, or a row to open the user's profile or the organization.
+Two tables list the 10 heaviest users and the 10 heaviest organizations over the complete days of the range. Rows are ranked by active days, then by AI requests. Each row shows the plan, active days, AI requests, credits consumed and its share of all requests. Click a column header to sort, or a row to open the user's profile or the organization. A user or organization that has since been deleted is listed by its id and does not open.
 
 Suspected signups and suspended users are left out of both tables, and their usage is not added to any organization. The line under each table says how many accounts were left out.
 
-An organization's numbers add up the usage of its members on the days they worked in that organization.
+An organization's numbers add up only the usage its members billed to it. A member's personal usage, or usage in another organization on the same day, is not counted toward it.
+
+Both tables cover the complete days that have a nightly rollup. A day still waiting for its rollup is left out, and the line under each table says how many. The **Usage** cards say the same in their captions.
 
 ## Export
 

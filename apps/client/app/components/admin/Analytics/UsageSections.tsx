@@ -50,8 +50,14 @@ function useChartStyle() {
 const tooltipCount = (value: unknown, name: unknown) =>
   [formatCount(value == null ? null : Number(value)), String(name)] as [string, string];
 const dayLabel = (day: UsageDay) => `${day.day}${day.partial ? ' (partial)' : ''}`;
-const summaryPeriod = (data: AnalyticsOverview) =>
-  data.window.completeDays > 0 ? `the ${data.window.completeDays} complete UTC days` : 'today so far';
+const summaryPeriod = ({ window, usage }: AnalyticsOverview) => {
+  if (window.completeDays === 0) return 'today so far';
+  const days = (count: number) => `${count} complete UTC ${count === 1 ? 'day' : 'days'}`;
+  // A complete day can still be waiting for its nightly rollup; it is not in the totals until then.
+  return usage.summaryDays === window.completeDays
+    ? `the ${days(window.completeDays)}`
+    : `${usage.summaryDays} of the ${days(window.completeDays)} (the rest have no rollup yet)`;
+};
 
 export function FeatureUsageSection({ data, loading, error, onRetry, onShowDefaultRange }: Props) {
   const { admin, scheme, axisTick, tooltipStyle } = useChartStyle();

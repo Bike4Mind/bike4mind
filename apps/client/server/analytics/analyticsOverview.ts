@@ -155,9 +155,11 @@ function buildUsage(
   const modelTotals = new Map<string, number>();
   let requests = 0;
   let credits = 0;
+  let coveredDays = 0;
   for (const day of summaryDays) {
     const values = valuesFor(day);
     if (!values) continue;
+    coveredDays++;
     addInto(featureTotals, values.requestsByFeature);
     addInto(modelTotals, values.requestsByModel);
     requests += sum(Object.values(values.requestsByFeature ?? {}));
@@ -194,6 +196,7 @@ function buildUsage(
     models,
     otherModelRequests: Math.max(0, requests - sum(models.map(model => model.requests))),
     totals: { requests, credits },
+    summaryDays: coveredDays,
   };
 }
 

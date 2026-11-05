@@ -131,6 +131,8 @@ export type AnalyticsOverview = {
     /** Requests on models outside the top ANALYTICS_TOP_MODELS. */
     otherModelRequests: number;
     totals: { requests: number; credits: number };
+    /** Days the rankings and totals cover: complete days with a rollup, or today alone when there are none. */
+    summaryDays: number;
   };
   signups: {
     buckets: SignupBucket[];
@@ -149,12 +151,16 @@ export type TopAccountRow = {
   credits: number;
   /** Percent of the included accounts' requests in the range, 0 to 100. */
   share: number;
+  /** False when the user or org no longer exists, so there is no page to open; the name is then its id. */
+  known: boolean;
 };
 
 /** GET /api/admin/analytics/top-accounts: the heaviest accounts over the range's complete rollup days. */
 export type AnalyticsTopAccounts = {
   /** Inclusive UTC days the tables cover; null when the range has no complete day yet. */
   covered: { from: string; to: string } | null;
+  /** Covered days with no nightly rollup yet; their usage is not in the tables. */
+  missingDays: string[];
   users: TopAccountRow[];
   orgs: TopAccountRow[];
   /** Users left out of both tables (and of the org sums) over the range. */

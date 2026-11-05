@@ -378,6 +378,7 @@ describe('buildOverview usage', () => {
   it('totals the complete days only, so they equal a sum over the rollup rows', () => {
     const usage = build(rowsFor('2026-06-09', '2026-06-14'));
     expect(usage.totals).toEqual({ requests: 36, credits: 180 });
+    expect(usage.summaryDays).toBe(6);
     expect(usage.days.at(-1)).toEqual({
       day: '2026-06-15',
       partial: true,
@@ -416,6 +417,7 @@ describe('buildOverview usage', () => {
       byFeature: null,
       credits: null,
     });
+    expect(usage.summaryDays).toBe(5);
   });
 
   it('ranks the top ten models with their share of every request', () => {

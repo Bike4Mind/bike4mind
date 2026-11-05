@@ -43,13 +43,24 @@ const overview = {
     models: [{ model: 'gpt-4.1', requests: 3, share: 75 }],
     otherModelRequests: 1,
     totals: { requests: 4, credits: 12.5 },
+    summaryDays: 5,
   },
 } satisfies AnalyticsOverview;
 
 const topAccounts: AnalyticsTopAccounts = {
   covered: { from: '2026-06-09', to: '2026-06-14' },
+  missingDays: [],
   users: [
-    { id: 'u1', name: '=HYPERLINK("x"), "Ada"', plan: 'PaidUser', activeDays: 4, requests: 3, credits: 9, share: 75 },
+    {
+      id: 'u1',
+      name: '=HYPERLINK("x"), "Ada"',
+      plan: 'PaidUser',
+      activeDays: 4,
+      requests: 3,
+      credits: 9,
+      share: 75,
+      known: true,
+    },
   ],
   orgs: [],
   excluded: { suspected: 0, suspended: 0 },

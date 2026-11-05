@@ -118,12 +118,14 @@ const overview = (patch: Partial<AnalyticsOverview> = {}): AnalyticsOverview => 
     ],
     otherModelRequests: 2,
     totals: { requests: 30, credits: 300 },
+    summaryDays: 27,
   },
   ...patch,
 });
 
 const topAccounts = (patch: Partial<AnalyticsTopAccounts> = {}): AnalyticsTopAccounts => ({
   covered: { from: '2026-05-19', to: '2026-06-14' },
+  missingDays: [],
   users: [
     {
       id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
@@ -133,6 +135,7 @@ const topAccounts = (patch: Partial<AnalyticsTopAccounts> = {}): AnalyticsTopAcc
       requests: 90,
       credits: 900,
       share: 60,
+      known: true,
     },
     {
       id: 'bbbbbbbbbbbbbbbbbbbbbbbb',
@@ -142,6 +145,8 @@ const topAccounts = (patch: Partial<AnalyticsTopAccounts> = {}): AnalyticsTopAcc
       requests: 10,
       credits: 50,
       share: 6.7,
+      // A deleted account: listed, but there is no page to open.
+      known: false,
     },
   ],
   orgs: [
@@ -153,6 +158,7 @@ const topAccounts = (patch: Partial<AnalyticsTopAccounts> = {}): AnalyticsTopAcc
       requests: 95,
       credits: 950,
       share: 63,
+      known: true,
     },
   ],
   excluded: { suspected: 3, suspended: 1 },
@@ -357,7 +363,14 @@ describe('AnalyticsTab', () => {
     const empty = overview();
     empty.activeUsers.days = empty.activeUsers.days.map(day => ({ ...day, dau: 0 }));
     empty.signups.totals = { legit: 0, suspected: 0, unclassified: 0 };
-    empty.usage = { features: [], days: [], models: [], otherModelRequests: 0, totals: { requests: 0, credits: 0 } };
+    empty.usage = {
+      features: [],
+      days: [],
+      models: [],
+      otherModelRequests: 0,
+      totals: { requests: 0, credits: 0 },
+      summaryDays: 0,
+    };
     mocks.overview.mockResolvedValue({ data: empty });
     mocks.topAccounts.mockResolvedValue({ data: topAccounts({ users: [], orgs: [] }) });
     const router = await renderPage('/admin?tab=analytics');
@@ -562,6 +575,30 @@ describe('AnalyticsTab', () => {
         'Ranked by active days, then AI requests, over 2026-05-19 to 2026-06-14 (complete UTC days). 3 suspected and 1 suspended accounts left out.'
       );
       expect(within(screen.getByTestId('analytics-top-orgs')).getByText('Acme')).toBeInTheDocument();
+      expect(screen.getByTestId('analytics-top-orgs-caption')).toHaveTextContent(
+        'Org numbers add up only the usage members billed to the org.'
+      );
+    });
+
+    it('says which covered days have no rollup yet, in the top tables and the usage captions', async () => {
+      mocks.topAccounts.mockResolvedValue({ data: topAccounts({ missingDays: ['2026-06-14'] }) });
+      const base = overview();
+      mocks.overview.mockResolvedValue({ data: overview({ usage: { ...base.usage, summaryDays: 26 } }) });
+      await renderPage('/admin?tab=analytics');
+      expect(await screen.findByTestId('analytics-top-users-caption')).toHaveTextContent(
+        '(complete UTC days). 1 day has no rollup yet and is not counted. 3 suspected'
+      );
+      expect(screen.getByTestId('analytics-usage-features-caption')).toHaveTextContent(
+        '30 AI requests over 26 of the 27 complete UTC days (the rest have no rollup yet); Chat leads.'
+      );
+    });
+
+    it('does not open a row whose account no longer exists', async () => {
+      const router = await renderPage('/admin?tab=analytics');
+      fireEvent.click(await screen.findByTestId('analytics-top-users-row-bbbbbbbbbbbbbbbbbbbbbbbb'));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(router.state.location.pathname).toBe('/admin');
+      expect(router.state.location.search).toMatchObject({ tab: 'analytics' });
     });
 
     it('opens a user profile or an org from its row', async () => {

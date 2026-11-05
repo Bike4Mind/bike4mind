@@ -1,5 +1,5 @@
 import type { PipelineStage } from 'mongoose';
-import { AnalyticsUserDay, Organization, User } from '@bike4mind/database';
+import { AnalyticsDaily, AnalyticsUserDay, Organization, User } from '@bike4mind/database';
 import {
   resolveSubscriptionSource,
   SubscriptionOwnerType,
@@ -7,7 +7,7 @@ import {
 } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import type { AnalyticsOverviewQuery, AnalyticsTopAccounts, TopAccountRow } from '@client/app/utils/analyticsOverview';
-import { resolveOverviewWindow } from './analyticsOverview';
+import { daysBetween, resolveOverviewWindow } from './analyticsOverview';
 import { shiftDay } from './analyticsRollup';
 
 const QUERY_DEADLINE_MS = 30_000;
@@ -43,7 +43,7 @@ async function orgPlans(orgIds: string[]): Promise<Map<string, string>> {
 const toRows = (
   totals: readonly Totals[],
   allRequests: number,
-  describe: (id: string) => { name: string; plan: string | null }
+  describe: (id: string) => { name: string; plan: string | null; known: boolean }
 ): TopAccountRow[] =>
   totals.map(row => ({
     id: row._id,
@@ -57,12 +57,12 @@ const toRows = (
 /**
  * The heaviest users and orgs over the range's complete UTC days, read from analytics_user_days.
  * Suspected signups and suspended (banned) users are left out of both tables and of the org sums;
- * an org's numbers add up its members' user-days attributed to it by the rollup.
+ * an org's numbers add up only the usage its members billed to it.
  */
 export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Date()): Promise<AnalyticsTopAccounts> {
   const window = resolveOverviewWindow({ ...query, compare: 'off' }, now);
   if (window.completeDays === 0)
-    return { covered: null, users: [], orgs: [], excluded: { suspected: 0, suspended: 0 } };
+    return { covered: null, missingDays: [], users: [], orgs: [], excluded: { suspected: 0, suspended: 0 } };
   const covered = { from: window.from, to: shiftDay(window.from, window.completeDays - 1) };
   const day = { $gte: covered.from, $lte: covered.to };
 
@@ -75,7 +75,7 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
   const notSuspended = suspended.length ? { userId: { $nin: suspended } } : {};
   const included = { day, suspected: false, ...notSuspended };
 
-  const [userFacet, orgTotals, suspectedCount] = await Promise.all([
+  const [userFacet, orgTotals, suspectedCount, rolledUp] = await Promise.all([
     AnalyticsUserDay.aggregate<{ top: Totals[]; all: { requests: number }[] }>([
       { $match: included },
       {
@@ -91,12 +91,28 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
       .allowDiskUse(true)
       .option({ maxTimeMS: QUERY_DEADLINE_MS }),
     AnalyticsUserDay.aggregate<Totals>([
-      { $match: { ...included, orgId: { $exists: true, $ne: null } } },
+      {
+        $match: {
+          ...included,
+          $or: [{ 'orgs.0': { $exists: true } }, { orgs: { $exists: false }, orgId: { $exists: true, $ne: null } }],
+        },
+      },
+      // A row rolled up before `orgs` existed credits its whole day to `orgId`; re-running the backfill
+      // over those days replaces it with the per-org split.
+      {
+        $project: {
+          day: 1,
+          orgs: {
+            $ifNull: ['$orgs', [{ orgId: '$orgId', requests: '$requests', creditsCharged: '$creditsCharged' }]],
+          },
+        },
+      },
+      { $unwind: '$orgs' },
       {
         $group: {
-          _id: { orgId: '$orgId', day: '$day' },
-          requests: { $sum: '$requests' },
-          credits: { $sum: '$creditsCharged' },
+          _id: { orgId: '$orgs.orgId', day: '$day' },
+          requests: { $sum: '$orgs.requests' },
+          credits: { $sum: '$orgs.creditsCharged' },
         },
       },
       {
@@ -116,7 +132,9 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
       { $group: { _id: '$userId' } },
       { $count: 'count' },
     ]).option({ maxTimeMS: QUERY_DEADLINE_MS }),
+    AnalyticsDaily.distinct('day', { day }).maxTimeMS(QUERY_DEADLINE_MS) as Promise<string[]>,
   ]);
+  const rolledUpDays = new Set(rolledUp);
 
   const topUsers = userFacet[0]?.top ?? [];
   const allRequests = userFacet[0]?.all[0]?.requests ?? 0;
@@ -137,15 +155,16 @@ export async function getTopAccounts(query: AnalyticsOverviewQuery, now = new Da
 
   return {
     covered,
+    missingDays: daysBetween(covered.from, covered.to).filter(d => !rolledUpDays.has(d)),
     users: toRows(topUsers, allRequests, id => {
       const user = userById.get(id);
       // A user-day can outlive its user (deleted, or a non-ObjectId id); the id is still a usable label.
-      return { name: user?.name || user?.email || user?.username || id, plan: user?.level ?? null };
+      return { name: user?.name || user?.username || user?.email || id, plan: user?.level ?? null, known: !!user };
     }),
-    orgs: toRows(orgTotals, allRequests, id => ({
-      name: orgById.get(id)?.name || id,
-      plan: plans.get(id) ?? 'Free',
-    })),
+    orgs: toRows(orgTotals, allRequests, id => {
+      const org = orgById.get(id);
+      return { name: org?.name || id, plan: plans.get(id) ?? 'Free', known: !!org };
+    }),
     excluded: { suspected: suspectedCount[0]?.count ?? 0, suspended: suspended.length },
   };
 }

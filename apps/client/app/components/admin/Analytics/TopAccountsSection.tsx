@@ -35,10 +35,18 @@ export function TopAccountsSection({ kind, data, loading, error, onRetry, onShow
   const maxShare = Math.max(0, ...rows.map(row => row.share));
   const covered = data?.covered;
   const excluded = data ? excludedLine(data.excluded) : null;
+  const missing = data?.missingDays.length ?? 0;
   const caption = covered
-    ? `Ranked by active days, then AI requests, over ${covered.from} to ${covered.to} (complete UTC days).${
-        excluded ? ` ${excluded}` : ''
-      }${kind === 'orgs' ? ' Org numbers add up the usage of members working in the org.' : ''}`
+    ? [
+        `Ranked by active days, then AI requests, over ${covered.from} to ${covered.to} (complete UTC days).`,
+        missing > 0
+          ? `${missing} ${missing === 1 ? 'day has' : 'days have'} no rollup yet and ${missing === 1 ? 'is' : 'are'} not counted.`
+          : '',
+        excluded ?? '',
+        kind === 'orgs' ? 'Org numbers add up only the usage members billed to the org.' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
     : undefined;
 
   const columns: DataColumn<TopAccountRow>[] = [
@@ -118,7 +126,8 @@ export function TopAccountsSection({ kind, data, loading, error, onRetry, onShow
           getRowId={row => row.id}
           label={TITLES[kind]}
           onRetry={onRetry}
-          onRowActivate={onOpen}
+          // A deleted user or org has no page to open.
+          onRowActivate={row => row.known && onOpen(row)}
           pagination={false}
           // Wide enough that the columns scroll sideways instead of squeezing in the half-width card,
           // and about five rows tall with the rest scrolling under the sticky header.

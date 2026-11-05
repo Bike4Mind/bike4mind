@@ -32,7 +32,7 @@ describe('analytics top accounts route', () => {
 
   beforeEach(() => {
     mocks.topAccounts.mockReset();
-    mocks.topAccounts.mockResolvedValue({ covered: null, users: [], orgs: [] });
+    mocks.topAccounts.mockResolvedValue({ covered: null, missingDays: [], users: [], orgs: [] });
   });
 
   it('gates GET like the overview and rate limits in its own bucket', () => {

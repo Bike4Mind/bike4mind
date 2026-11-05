@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { AnalyticsUserDay, Organization } from '@bike4mind/database';
+import { AnalyticsDaily, AnalyticsUserDay, Organization } from '@bike4mind/database';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { getTopAccounts, TOP_ACCOUNTS_LIMIT } from './analyticsTopAccounts';
@@ -65,9 +65,14 @@ describe('getTopAccounts', () => {
     await seedDay(ids.busy, '2026-06-12', { requests: 500 });
     await seedDay(ids.busy, '2026-06-15', { requests: 500 });
     await seedDay(ids.busy, '2026-06-01', { requests: 500 });
+    // 06-14 has no daily row: its rollup has not run yet.
+    await AnalyticsDaily.collection.insertMany(
+      ['2026-06-09', '2026-06-10', '2026-06-11', '2026-06-12', '2026-06-13'].map(day => ({ day }))
+    );
 
     const result = await getTopAccounts(QUERY, NOW);
     expect(result.covered).toEqual({ from: '2026-06-09', to: '2026-06-14' });
+    expect(result.missingDays).toEqual(['2026-06-14']);
     expect(result.users.map(row => [row.name, row.activeDays, row.requests, row.plan])).toEqual([
       ['Heavy', 3, 30, 'PaidUser'],
       ['Busy', 1, 500, 'DemoUser'],
@@ -118,6 +123,47 @@ describe('getTopAccounts', () => {
     ]);
   });
 
+  it('credits each org with only the usage billed to it', async () => {
+    await seedUser(ids.heavy);
+    await seedUser(ids.busy);
+    await Organization.collection.insertMany([
+      { _id: ids.org, name: 'Acme', personal: false },
+      { _id: ids.quietOrg, name: 'Quiet', personal: false },
+    ]);
+    // 200 personal requests, 1 in Acme and 3 in Quiet on the same day.
+    await seedDay(ids.heavy, '2026-06-10', {
+      ownerType: 'User',
+      orgId: String(ids.quietOrg),
+      requests: 204,
+      creditsCharged: 408,
+      orgs: [
+        { orgId: String(ids.quietOrg), requests: 3, creditsCharged: 6 },
+        { orgId: String(ids.org), requests: 1, creditsCharged: 2 },
+      ],
+    });
+    // Purely personal: no org gets anything.
+    await seedDay(ids.busy, '2026-06-11', { requests: 50, orgs: [] });
+
+    const result = await getTopAccounts(QUERY, NOW);
+    expect(result.orgs.map(row => [row.name, row.activeDays, row.requests, row.credits])).toEqual([
+      ['Quiet', 1, 3, 6],
+      ['Acme', 1, 1, 2],
+    ]);
+  });
+
+  it('credits a row rolled up before the per-org split to its top org, whole', async () => {
+    await Organization.collection.insertOne({ _id: ids.org, name: 'Acme', personal: false });
+    await seedDay(ids.heavy, '2026-06-10', { ownerType: 'Organization', orgId: String(ids.org) });
+    const result = await getTopAccounts(QUERY, NOW);
+    expect(result.orgs.map(row => [row.name, row.requests, row.credits])).toEqual([['Acme', 10, 5]]);
+  });
+
+  it('labels a user without a name by username before email', async () => {
+    await seedUser(ids.heavy, { name: '', username: 'heavy-handle' });
+    await seedDay(ids.heavy, '2026-06-10');
+    expect((await getTopAccounts(QUERY, NOW)).users[0]).toMatchObject({ name: 'heavy-handle', known: true });
+  });
+
   it('keeps a user-day whose user is gone, labelled by its id, and returns at most the limit', async () => {
     for (let i = 0; i < TOP_ACCOUNTS_LIMIT + 2; i++) await seedDay(`orphan-${i}`, '2026-06-10', { requests: i });
     const result = await getTopAccounts(QUERY, NOW);
@@ -125,11 +171,18 @@ describe('getTopAccounts', () => {
     expect(result.users[0]).toMatchObject({
       id: `orphan-${TOP_ACCOUNTS_LIMIT + 1}`,
       name: `orphan-${TOP_ACCOUNTS_LIMIT + 1}`,
+      known: false,
     });
   });
 
   it('returns nothing for a range with no complete day', async () => {
     const result = await getTopAccounts({ ...QUERY, range: 'custom', from: '2026-06-15', to: '2026-06-15' }, NOW);
-    expect(result).toEqual({ covered: null, users: [], orgs: [], excluded: { suspected: 0, suspended: 0 } });
+    expect(result).toEqual({
+      covered: null,
+      missingDays: [],
+      users: [],
+      orgs: [],
+      excluded: { suspected: 0, suspended: 0 },
+    });
   });
 });
