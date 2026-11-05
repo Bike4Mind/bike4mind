@@ -1151,6 +1151,7 @@ export class ModelHubService {
         name: entry.name,
         why: entry.why,
         params: paramsLabel(entry),
+        // Desktop reads the v2 list, which has no labels, so this maps the id; v3 labels are not used here.
         licenseName: hubLicenseLabel(entry.license),
         licenseUrl: entry.license.source,
         licenseKind: permissive(entry) ? 'permissive' : 'restricted',
