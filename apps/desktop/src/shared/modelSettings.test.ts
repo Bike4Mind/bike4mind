@@ -153,6 +153,17 @@ describe('storedModelEntry', () => {
     ).toEqual({ context: { rope: { factor: 2 }, mode: 'auto', maxTokens: 65536 } });
   });
 
+  it('writes a stored context back as it was when the new settings hold the same choice', () => {
+    const stored = { context: { mode: 'fixed', tokens: 8192, maxTokens: 4096 }, effort: 'low' };
+    expect(storedModelEntry(stored, { context: { mode: 'fixed', tokens: 8192 }, effort: 'high' })).toEqual({
+      context: stored.context,
+      effort: 'high',
+    });
+    expect(storedModelEntry(stored, { context: { mode: 'fixed', tokens: 16384 } })).toEqual({
+      context: { mode: 'fixed', tokens: 16384 },
+    });
+  });
+
   it('leaves the extra keys of a context this version cannot use behind when a new one is written', () => {
     expect(
       storedModelEntry({ context: { mode: 'ratio', ratio: 0.5 } }, { context: { mode: 'fixed', tokens: 4096 } })

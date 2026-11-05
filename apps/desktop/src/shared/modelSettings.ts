@@ -282,6 +282,10 @@ export function changedJsonPath(value: unknown, written: unknown): string[] | nu
   return value === written ? null : [];
 }
 
+function contextKey(setting: ModelContextSetting): string {
+  return setting.mode === 'fixed' ? `fixed:${setting.tokens}` : `auto:${setting.maxTokens ?? ''}`;
+}
+
 /**
  * The entry to write for `settings`. What the stored entry held that this version does not know, or
  * holds beyond what it supports, stays as written unless `settings` sets that field. Undefined when empty.
@@ -300,15 +304,22 @@ export function storedModelEntry(previous: unknown, settings: ModelSettings): Re
   ]);
   const kept = (field: StoredScalarField): unknown =>
     stored[field] !== undefined && readStoredField(field, stored[field]) === 'unsupported' ? stored[field] : undefined;
+  const storedContext = readStoredField('context', stored.context);
+  const usableContext = typeof storedContext === 'object' ? (storedContext.value as ModelContextSetting) : null;
   // A context this version cannot use may give its extra keys a meaning under its own mode, so they go with it.
   const storedContextExtras =
-    isRecord(stored.context) && typeof readStoredField('context', stored.context) === 'object'
+    isRecord(stored.context) && usableContext
       ? Object.fromEntries(Object.entries(stored.context).filter(([key]) => !CONTEXT_FIELDS.has(key)))
       : {};
+  // The context as read again keeps what the stored one held beyond its mode, such as a maxTokens under fixed.
+  const context = (setting: ModelContextSetting): unknown =>
+    usableContext && contextKey(setting) === contextKey(usableContext)
+      ? stored.context
+      : { ...storedContextExtras, ...setting };
   const known: [string, unknown][] = [
     ['generation', Object.keys(generation).length > 0 ? generation : undefined],
     ['effort', settings.effort ?? kept('effort')],
-    ['context', settings.context ? { ...storedContextExtras, ...settings.context } : kept('context')],
+    ['context', settings.context ? context(settings.context) : kept('context')],
     ['draftTokens', settings.draftTokens ?? kept('draftTokens')],
     ['keepAlive', settings.keepAlive ?? kept('keepAlive')],
   ];

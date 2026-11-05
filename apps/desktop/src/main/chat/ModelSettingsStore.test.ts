@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,7 +6,7 @@ import { ModelSettingsFileError, ModelSettingsStore } from './ModelSettingsStore
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, rename: vi.fn(actual.rename), readFile: vi.fn(actual.readFile) };
+  return { ...actual, rename: vi.fn(actual.rename), readFile: vi.fn(actual.readFile), stat: vi.fn(actual.stat) };
 });
 
 const QWEN = 'local:ollama:qwen3.8:27b';
@@ -146,8 +146,8 @@ describe('ModelSettingsStore', () => {
   });
 
   it.each([
-    [{ generation: { temperature: '0.6', topK: 20 } }, 'has an invalid generation.temperature for'],
-    [{ effort: 3 }, 'has an invalid effort for'],
+    [{ generation: { temperature: '0.6', topK: 20 } }, 'has an invalid "generation.temperature" for'],
+    [{ effort: 3 }, 'has an invalid "effort" for'],
     ['high', 'has an entry for'],
   ])(
     'rejects only the model whose known value %j is of the wrong type, by file, model and field, and keeps its entry as written',
@@ -172,11 +172,11 @@ describe('ModelSettingsStore', () => {
   );
 
   it.each([
-    ['draftTokens', `{"${QWEN}": {"draftTokens": 1e999}}`, `has an invalid draftTokens for "${QWEN}"`],
+    ['draftTokens', `{"${QWEN}": {"draftTokens": 1e999}}`, `has an invalid "draftTokens" for "${QWEN}"`],
     [
       'generation.topK',
       `{"${QWEN}": {"generation": {"topK": -1e999}}}`,
-      `has an invalid generation.topK for "${QWEN}"`,
+      `has an invalid "generation.topK" for "${QWEN}"`,
     ],
   ])(
     'takes a number too large for JSON in %s for a broken value, which a save elsewhere names and cannot write as null',
@@ -209,11 +209,32 @@ describe('ModelSettingsStore', () => {
     expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ effort: 'low' });
   });
 
+  it('never takes a stat that fails for another reason than a missing file for an unchanged missing file', async () => {
+    const path = await fileIn();
+    const store = new ModelSettingsStore(path);
+    expect(await store.get(QWEN)).toEqual({});
+    const denied = () => Object.assign(new Error('denied'), { code: 'EACCES' });
+    vi.mocked(stat).mockRejectedValueOnce(denied());
+    vi.mocked(readFile).mockRejectedValueOnce(denied());
+    await expect(store.get(QWEN)).rejects.toThrow('denied');
+    expect(await store.get(QWEN)).toEqual({});
+  });
+
+  it('writes back a context entry it did not change, keys beyond its mode included', async () => {
+    const path = await fileIn();
+    const context = { mode: 'fixed', tokens: 8192, maxTokens: 4096 };
+    await writeFile(path, JSON.stringify({ models: { [QWEN]: { context, effort: 'low' } } }), 'utf8');
+    const store = new ModelSettingsStore(path);
+    const current = await store.get(QWEN);
+    await store.set(QWEN, { ...current, effort: 'high' });
+    expect(JSON.parse(await readFile(path, 'utf8')).models[QWEN]).toEqual({ context, effort: 'high' });
+  });
+
   it('reads a model again once its bad entry is fixed by hand, with no save between', async () => {
     const path = await fileIn();
     await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 3 } } }), 'utf8');
     const store = new ModelSettingsStore(path);
-    await expect(store.get(QWEN)).rejects.toThrow('has an invalid effort for');
+    await expect(store.get(QWEN)).rejects.toThrow('has an invalid "effort" for');
     await expect(store.unsupported(QWEN)).rejects.toThrow(ModelSettingsFileError);
     await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'low', keepAlive: 7 } } }), 'utf8');
     expect(await store.get(QWEN)).toEqual({ effort: 'low' });
@@ -243,7 +264,7 @@ describe('ModelSettingsStore', () => {
     const id = `local:ollama:a\nb${'x'.repeat(300)}`;
     await writeFile(path, JSON.stringify({ models: { [id]: { effort: 3 } } }), 'utf8');
     const error = await new ModelSettingsStore(path).get(id).catch((reason: Error) => reason);
-    expect((error as Error).message).toContain('has an invalid effort for "local:ollama:a\\nbxxx');
+    expect((error as Error).message).toContain('has an invalid "effort" for "local:ollama:a\\nbxxx');
     expect((error as Error).message).toContain('xxx.... Fix it');
     expect((error as Error).message).not.toContain('\n');
   });

@@ -29,7 +29,7 @@ function invalidProblem(modelId: string, field: string | null): string {
   const model = quotedForMessage(modelId);
   return field === null
     ? `has an entry for ${model} that is not a set of settings`
-    : `has an invalid ${field} for ${model}`;
+    : `has an invalid ${quotedForMessage(field)} for ${model}`;
 }
 
 /** `path` leads from the file's root to a value a JSON round trip changed, which only a non-finite number does. */
@@ -61,9 +61,14 @@ export class ModelSettingsStore {
     private readonly warn: (message: string) => void = () => {}
   ) {}
 
+  /** Null for a missing file; a stat that fails otherwise gets a stamp nothing matches, so the file is read again. */
   private async stamp(path = this.filePath): Promise<string | null> {
-    const stats = await stat(path).catch(() => null);
-    return stats ? `${stats.mtimeMs}:${stats.size}` : null;
+    try {
+      const stats = await stat(path);
+      return `${stats.mtimeMs}:${stats.size}`;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : `unreadable:${randomUUID()}`;
+    }
   }
 
   /**
