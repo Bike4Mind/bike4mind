@@ -144,9 +144,9 @@ export interface RecordOperationalUsageAdapters {
  * session-event publishers run `server/utils/sessionOperationalCreditPreflight` (#1852) - the
  * ungated `SessionEvents` publishers are `POST /api/sessions/[id]/tag`,
  * `POST /api/sessions/[id]/summary`, the project-attach fan-out
- * (`pages/api/projects/[id]/sessions.ts`) and the admin spider; the rest already sit behind gated
- * primary actions. A NEW publisher of those events inherits no gate: add the pre-flight at its
- * entry point, not in this measurement helper.
+ * (`pages/api/projects/[id]/sessions.ts`) and the admin spider. Every session-event handler also
+ * re-checks the payer's balance before its model call (`apps/workers/src/events/
+ * sessionOperationalCreditGate`), because a chat turn settled at the cap leaves the payer at zero.
  */
 export async function recordOperationalUsage(
   params: RecordOperationalUsageParams,

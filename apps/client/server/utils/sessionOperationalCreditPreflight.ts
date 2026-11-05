@@ -179,7 +179,9 @@ function resolveRefusalReason({
  * Scoped to the `SessionEvents` publishers that are NOT already behind a gated primary action:
  * `POST /api/sessions/[id]/tag`, `POST /api/sessions/[id]/summary`, the project-attach fan-out
  * and the admin spider. The rest (auto-naming, context summarization, the image/video handlers)
- * publish downstream of a completed chat, which runs its own reservation.
+ * publish downstream of a completed chat, whose settlement can leave the payer at zero; the
+ * handlers re-check through `apps/workers/src/events/sessionOperationalCreditGate` before their
+ * model call.
  *
  * A CHECK, not a reservation: settlement moves the balance itself, so reserving here would
  * charge the same work twice. The gap that leaves is the same one every check-then-charge

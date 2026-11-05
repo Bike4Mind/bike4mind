@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   findUpdateAccessById: vi.fn(async () => ({ id: 'session-1' }) as unknown),
   publishTag: vi.fn(),
   recordSessionOperationalUsage: vi.fn(),
+  payerCanFund: vi.fn(async () => true),
   logEvent: vi.fn(),
   upload: vi.fn(),
   findPrefixArmLakes: vi.fn(
@@ -127,6 +128,8 @@ vi.mock('@workers/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: h.recordSessionOperationalUsage,
 }));
 
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
+
 import { handler } from './sessionSummarization';
 import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
@@ -138,6 +141,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), u
 
 beforeEach(() => {
   h.quests = [{ _id: 'q1', prompt: 'hello', reply: 'world' }];
+  h.payerCanFund.mockResolvedValue(true);
 });
 
 const run = (properties: Record<string, unknown> = {}) =>
@@ -634,6 +638,18 @@ describe('sessionSummarization requester write-time re-check', () => {
     });
     expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
     expect(h.sessionUpdateWithUpdateAccess).not.toHaveBeenCalled();
+  });
+
+  it('runs no model and records no usage when the payer cannot fund the operation', async () => {
+    h.payerCanFund.mockResolvedValue(false);
+
+    await run({ callTagging: true });
+
+    expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: OWNER }));
+    expect(h.modelMessages).not.toHaveBeenCalled();
+    expect(h.recordSessionOperationalUsage).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.publishTag).not.toHaveBeenCalled();
   });
 
   it('skips the run when the requester no longer exists', async () => {

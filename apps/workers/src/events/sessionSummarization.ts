@@ -29,6 +29,7 @@ import { getFilesStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 export const handler = withEventContext(async (event, logger) => {
@@ -99,6 +100,8 @@ export const handler = withEventContext(async (event, logger) => {
     logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summarization`);
     return;
   }
+
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session summarization', logger }))) return;
 
   logger.info(`Handling summarization job for session ${sessionId} (as user ${userId ?? session.userId})`);
 

@@ -16,6 +16,7 @@ import { MementoEvaluationService } from '@bike4mind/services/llm';
 import { isMementosV2Enabled, writeFactToLedger } from '@bike4mind/server-utils/memory/mementoLedgerMirror';
 import { generateMementoSummaryEmbedding } from '@bike4mind/server-utils/utils/mementoEmbedding';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 
 const { findMostSimilarMemento } = mementoService;
 
@@ -54,6 +55,8 @@ export const handler = withEventContext(async (event, logger) => {
     writeV1,
     writeV2,
   });
+
+  if (!(await payerCanFundSessionOperation({ payerId: userId, operation: 'memento extraction', logger }))) return;
 
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
     userId,

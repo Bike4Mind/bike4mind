@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   evaluate: vi.fn(),
   recordUsage: vi.fn(),
+  payerCanFund: vi.fn(),
 }));
 
 vi.mock('@workers/utils/eventContext', () => ({ withEventContext: (handler: unknown) => handler }));
@@ -35,7 +36,9 @@ vi.mock('@bike4mind/server-utils/memory/mementoLedgerMirror', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/mementoEmbedding', () => ({ generateMementoSummaryEmbedding: vi.fn() }));
 vi.mock('@workers/events/recordSessionOperationalUsage', () => ({ recordSessionOperationalUsage: h.recordUsage }));
+vi.mock('@workers/events/sessionOperationalCreditGate', () => ({ payerCanFundSessionOperation: h.payerCanFund }));
 
+import { apiKeyService } from '@bike4mind/services';
 import { handler } from './createMemento';
 
 const logger = { updateMetadata: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
@@ -56,7 +59,10 @@ const run = () =>
   );
 
 describe('createMemento evaluation usage', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.payerCanFund.mockResolvedValue(true);
+  });
 
   it("records the evaluation call as the session owner's operational usage", async () => {
     const modelInfo = { id: 'chat-model', backend: 'anthropic' };
@@ -77,5 +83,16 @@ describe('createMemento evaluation usage', () => {
       startTime: 123,
       logger,
     });
+  });
+
+  it('runs no evaluation and records no usage when the user cannot fund the operation', async () => {
+    h.payerCanFund.mockResolvedValue(false);
+
+    await run();
+
+    expect(h.payerCanFund).toHaveBeenCalledWith(expect.objectContaining({ payerId: 'user-1' }));
+    expect(apiKeyService.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(h.evaluate).not.toHaveBeenCalled();
+    expect(h.recordUsage).not.toHaveBeenCalled();
   });
 });

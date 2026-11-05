@@ -5,6 +5,7 @@ import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@server/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
+import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
 
 // A name that is blank after trim is not a usable tag: keeping it would let one blank element make
@@ -121,6 +122,8 @@ export const handler = withEventContext(async (event, logger) => {
     logger.warn(`Skipping tagging for session ${sessionId}: ${accessDenial}`);
     return;
   }
+
+  if (!(await payerCanFundSessionOperation({ payerId: payer.id, operation: 'session tagging', logger }))) return;
 
   logger.info(`Handling tagging job for session ${sessionId} (as user ${user.id})`);
 
