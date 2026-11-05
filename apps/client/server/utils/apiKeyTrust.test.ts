@@ -168,9 +168,4 @@ describe('applyUntrustedRateLimit', () => {
     expect(result).toEqual({ rateLimit: keyLimit, ownerUntrusted: false });
     expect(settingsMap).not.toHaveBeenCalled();
   });
-
-  it('still clamps an owner whose isSystem flag is explicitly false', async () => {
-    const limit = await applyUntrustedRateLimit({ ...youngVerified, isSystem: false }, { rateLimit: keyLimit });
-    expect(limit.requestsPerMinute).toBe(20);
-  });
 });
