@@ -70,11 +70,12 @@ describe('GET /api/admin/subscriptions/[id]/stripe', () => {
     mockRead.mockRejectedValueOnce(Object.assign(new Error('down'), { type: 'StripeConnectionError' }));
     const res = await call();
     expect(res._getStatusCode()).toBe(502);
-    expect(res._getJSONData()).toEqual({ message: "Stripe request failed" });
+    expect(res._getJSONData()).toEqual({ message: 'Stripe request failed' });
 
     mockRead.mockRejectedValueOnce(Object.assign(new Error('no access'), { type: 'StripePermissionError' }));
-    expect((await call())._getStatusCode()).toBe(502);
-    expect(res._getJSONData()).toEqual({ message: "Stripe request failed" });
+    const permissionRes = await call();
+    expect(permissionRes._getStatusCode()).toBe(502);
+    expect(permissionRes._getJSONData()).toEqual({ message: 'Stripe request failed' });
 
     mockRead.mockRejectedValueOnce(new Error('our bug'));
     await expect(call()).rejects.toThrow('our bug');
