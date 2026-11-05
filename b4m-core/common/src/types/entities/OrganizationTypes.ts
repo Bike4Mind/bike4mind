@@ -73,6 +73,7 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   /**
    * When true, push notifications to members' first-party native clients carry category-generic
    * text instead of session names or message content (applied at delivery, apps/workers/src/events/sendPush.ts).
+   * Applies to pushes for users whose active organization is this one.
    */
   redactPushContent?: boolean;
 }

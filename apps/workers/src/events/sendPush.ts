@@ -28,7 +28,7 @@ import {
  * `notification.push` consumer: delivers to the user's device tokens over APNs.
  *
  * Delivery rules, in order: the user must have device tokens; the category must not be switched off
- * in `preferences.pushNotifications`; the user's organization's `redactPushContent` swaps title and
+ * in `preferences.pushNotifications`; the user's active organization's `redactPushContent` swaps title and
  * body for category-generic copy. Publishers apply their own gates (e.g. chat only pushes when the
  * user has no live websocket) before the event exists.
  *
@@ -260,7 +260,10 @@ function resolveDeepLink(deepLink: string, appUrl: string | undefined): string {
   return `${appUrl.replace(/\/+$/, '')}${deepLink}`;
 }
 
-/** The user's opt-outs plus their active organization's redaction setting. */
+/**
+ * The user's opt-outs plus their active organization's redaction setting. Redaction follows the active
+ * organization because chat sessions carry no organization id, so the session's own org cannot be resolved.
+ */
 export async function loadPushRecipient(userId: string): Promise<PushRecipient | null> {
   const user = await userRepository.findById(userId);
   if (!user) return null;
