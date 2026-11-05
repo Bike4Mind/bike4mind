@@ -11,7 +11,7 @@ import { organizationService, creditService } from '@bike4mind/services';
 import { ApiKeyScope, CreditHolderType, IOrganizationDocument } from '@bike4mind/common';
 import { ORGANIZATION_SUBSCRIPTION_PRICE_ID } from '@bike4mind/server-utils/lib/subscriptions/constants';
 import { getTeamPlanSettings } from '@bike4mind/server-utils/services/teamPlanSettings';
-import { entitlementsForPriceIds } from '@bike4mind/server-utils/lib/entitlements/registry';
+import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import { SubscriptionOwnerType, SubscriptionSource } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { grantIndividualAdminSubscription } from '@server/subscriptions/grantIndividualAdminSubscription';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -127,7 +127,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
 
       // Admin grants never produce a Stripe webhook, so the entitlement gate
       // must be woken here when the granted price maps to entitlement keys.
-      if (entitlementsForPriceIds([priceId]).size > 0) {
+      if (priceAffectsEntitlements(priceId)) {
         await sendToClient(userId, Resource.websocket.managementEndpoint, {
           action: 'invalidate_query',
           queryKey: ['entitlements'],
