@@ -366,11 +366,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
         </Button>
       </Stack>
       {note && (
-        <Typography
-          level="body-xs"
-          sx={{ px: 1.5, pb: 1, color: 'text.secondary' }}
-          data-testid="model-pane-note"
-        >
+        <Typography level="body-xs" sx={{ px: 1.5, pb: 1, color: 'text.secondary' }} data-testid="model-pane-note">
           {note}
         </Typography>
       )}
