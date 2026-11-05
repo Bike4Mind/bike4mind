@@ -22,6 +22,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { buildRedirectTo } from '@client/app/utils/authRedirect';
 import { billingLandingHref, parseBillingView } from '@client/app/utils/billingDeepLink';
 import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
+import { takeTicket } from './routes/partners/bedrocknewsClaimTicket';
 import { bootstrapSession } from '@client/app/utils/sessionBootstrap';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
@@ -113,6 +114,7 @@ const ArenaPage = lazy(() => import('./routes/arena'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
+const BedrockNewsClaimPage = lazy(() => import('./routes/partners/bedrocknews-claim'));
 const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const StudioPage = lazy(() => import('./routes/studio/$modality'));
@@ -1310,6 +1312,25 @@ const desktopDownloadRoute = createRoute({
   ),
 });
 
+// BedrockNews Headword credit claim - no layout; the page sends signed-out visitors to /login itself
+const bedrockNewsClaimRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/partners/bedrocknews/claim',
+  // The ticket is moved out of the URL first so a consent redirect never carries it in its return path.
+  beforeLoad: ({ location, search }) => {
+    takeTicket(search.ticket);
+    return enforceConsentRedirect({ pathname: location.pathname, searchStr: '', hash: '' });
+  },
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <BedrockNewsClaimPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): { ticket?: string } => ({
+    ticket: optionalStringParam(search, 'ticket'),
+  }),
+});
+
 // OAuth Authorization endpoint - no layout, public
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1424,6 +1445,7 @@ const routeTree = rootRoute.addChildren([
   atlassianSelectSiteRoute,
   // OAuth Authorization endpoint
   oauthAuthorizeRoute,
+  bedrockNewsClaimRoute,
 ]);
 
 // createBrowserHistory() monkey-patches window.history.pushState/replaceState to detect
