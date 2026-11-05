@@ -1,15 +1,14 @@
 import type { DataHolderRegistry } from '../types';
 
 export const analyticsHolders = {
-  // Platform-wide daily counts. The one per-person field is the day's internal (staff/system) account
-  // ids, kept so WAU/MAU can be re-derived as a union; erasure pulls the id and leaves the counts.
+  // Platform-wide daily counts; only the internal accounts' ids are listed, so WAU/MAU can be re-derived.
   AnalyticsDaily: {
     kind: 'holder',
     references: [{ path: 'internal.userIds', matchBy: 'userId', action: 'pullFromArray' }],
   },
   AnalyticsHop: {
     kind: 'pseudonymous',
-    note: 'Keyed by a random hop id; the visitor is a consent-gated hash and session ids, never a user id.',
+    note: "Cross-product click record keyed by a random hop id, visit ids and the source product's visitor hash; no user id. A signup bound to it records the hop on the User document.",
   },
   // Per-user daily activity counters; the charges themselves are on the credit ledger.
   AnalyticsUserDay: {

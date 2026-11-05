@@ -4,10 +4,12 @@ const AUDIT_LOG_REASON =
   'Tamper-proof administrative audit record kept for security accountability (legitimate interest, GDPR Art. 6(1)(f))';
 
 export const infraHolders = {
-  // `requestedBy` is the admin who ran the assessment (null for scheduled runs).
+  // Advisory model judgment of a shadow detection, kept for as long as the detection.
   AbuseAssessment: {
-    kind: 'holder',
-    references: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
+    kind: 'viaParent',
+    parent: 'ShadowDetection',
+    foreignKey: 'detectionId',
+    attribution: [{ path: 'requestedBy', matchBy: 'userId', action: 'anonymize' }],
   },
   AdminAuditAlertState: {
     kind: 'holder',
