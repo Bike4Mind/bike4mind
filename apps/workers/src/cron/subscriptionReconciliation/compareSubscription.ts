@@ -5,7 +5,7 @@ import {
 } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import type { ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 
-/** A row or Stripe update younger than this may still have its webhook in flight. */
+/** A recent row write, Stripe creation or cancellation may still have its webhook in flight. */
 export const GRACE_MS = 30 * 60 * 1000;
 
 export interface MismatchField {
@@ -67,8 +67,14 @@ export function isStageSubscription(sub: { metadata?: Record<string, string> | n
   return stamped ? stamped === stage : stage === 'production';
 }
 
-/** True while either side was written recently enough that a webhook may still be on its way. */
-export function withinGrace(row: { updatedAt?: Date } | null, stripeSub: { created: number }, now: Date): boolean {
+/** Stripe exposes creation and cancellation times, but no general subscription update timestamp. */
+export function withinGrace(
+  row: { updatedAt?: Date } | null,
+  stripeSub: { created: number; canceled_at?: number | null },
+  now: Date
+): boolean {
   const cutoff = now.getTime() - GRACE_MS;
-  return stripeSub.created * 1000 > cutoff || (row?.updatedAt?.getTime() ?? 0) > cutoff;
+  return (
+    Math.max(stripeSub.created, stripeSub.canceled_at ?? 0) * 1000 > cutoff || (row?.updatedAt?.getTime() ?? 0) > cutoff
+  );
 }

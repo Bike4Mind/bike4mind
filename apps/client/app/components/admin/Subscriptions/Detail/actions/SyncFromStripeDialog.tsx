@@ -26,7 +26,7 @@ export const SyncFromStripeDialog: React.FC<SubscriptionDialogProps> = ({ detail
       await sync.mutateAsync({ expectedUpdatedAt: data.updatedAt, reason });
     } catch (error) {
       // The preview is stale after a conflict; reread it so the next confirm carries the new updatedAt.
-      void preview.refetch();
+      await preview.refetch();
       throw error;
     }
     onClose();

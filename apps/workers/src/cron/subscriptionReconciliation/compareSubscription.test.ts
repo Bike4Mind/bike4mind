@@ -120,6 +120,15 @@ describe('withinGrace', () => {
     expect(withinGrace(null, { created: Math.floor(now.getTime() / 1000) - 60 }, now)).toBe(true);
   });
 
+  it('skips a recent cancellation on an older subscription, then checks it once grace expires', () => {
+    const canceledAt = Math.floor(now.getTime() / 1000) - 60;
+    expect(withinGrace(null, { created: old, canceled_at: canceledAt }, now)).toBe(true);
+    expect(withinGrace(null, { created: old, canceled_at: canceledAt }, new Date(now.getTime() + GRACE_MS))).toBe(
+      false
+    );
+    expect(withinGrace(null, { created: old, canceled_at: null }, now)).toBe(false);
+  });
+
   it('does not skip settled rows', () => {
     expect(withinGrace({ updatedAt: new Date(now.getTime() - 2 * GRACE_MS) }, { created: old }, now)).toBe(false);
   });

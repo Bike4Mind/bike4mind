@@ -262,6 +262,22 @@ describe('runSubscriptionReconciliation', () => {
     expect(findings[0].fields).toContainEqual({ field: 'status', mongo: 'active', stripe: 'canceled' });
   });
 
+  it.each(['listing', 'retrieve'] as const)('leaves a recent cancellation uncovered in the %s phase', async phase => {
+    mocks.findRows.mockResolvedValue([row('sub_recent')]);
+    const canceled = stripeSub('sub_recent', {
+      status: 'canceled',
+      canceled_at: Math.floor(NOW.getTime() / 1000) - 60,
+    });
+    mocks.list.mockReturnValue(listing(phase === 'listing' ? [canceled] : []));
+    mocks.retrieve.mockResolvedValue(canceled);
+
+    const { findings } = await runSubscriptionReconciliation(undefined, NOW);
+
+    expect(findings).toEqual([]);
+    expect(mocks.upsertOpen).not.toHaveBeenCalled();
+    expect(mocks.resolveMissing).toHaveBeenCalledWith(expect.objectContaining({ coveredIds: [] }));
+  });
+
   it('compares organization seats with the billed quantity', async () => {
     mocks.findRows.mockResolvedValue([row('sub_org', { ownerType: 'Organization', ownerId: 'org_1' })]);
     mocks.findOrg.mockResolvedValue(new Map([['cus_1', 5]]));

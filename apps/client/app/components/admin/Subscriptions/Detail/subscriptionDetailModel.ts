@@ -70,7 +70,7 @@ export const subscriptionActionAvailability = (
     compActions: isCompSubscription(subscription) && !terminal,
     editCredits: { visible: !terminal, disabledReason: noActor },
     remove: { disabledReason: live ? REMOVE_LIVE_STRIPE_REASON : noActor },
-    sync: { visible: subscription.source === 'stripe', disabledReason: null },
+    sync: { visible: subscription.source === 'stripe' && !isCompSubscription(subscription), disabledReason: null },
   };
 };
 

@@ -150,6 +150,21 @@ const PAYMENT_FAILURE_NOTICE_HISTORY = 12;
 export const Subscription =
   mongoose.models.Subscription || mongoose.model<ISubscription>('Subscription', SubscriptionSchema);
 
+export type ReconciliationSubscriptionRow = Pick<
+  ISubscription,
+  | 'ownerType'
+  | 'ownerId'
+  | 'subscriptionId'
+  | 'source'
+  | 'status'
+  | 'priceId'
+  | 'quantity'
+  | 'periodEndsAt'
+  | 'cancelAtPeriodEnd'
+  | 'unitAmount'
+> &
+  Pick<IMongoDocument, 'id' | 'updatedAt'>;
+
 class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocument> implements ISubscriptionRepository {
   constructor(model: mongoose.Model<ISubscription & IMongoDocument>) {
     super(model);
@@ -276,9 +291,19 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
    * Every non-terminal Stripe-sourced row, for the nightly reconciliation to match against Stripe's
    * own listing. Admin grants have no Stripe subscription and are left out.
    */
-  async findNonTerminalStripeRows(): Promise<(ISubscription & IMongoDocument)[]> {
+  async findNonTerminalStripeRows(): Promise<ReconciliationSubscriptionRow[]> {
     const rows = await this.model
-      .find({ status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] } })
+      .find({
+        status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] },
+        subscriptionId: { $exists: true, $nin: ['', null] },
+        $or: [
+          { source: SubscriptionSource.Stripe },
+          { source: { $in: [null, ''] }, subscriptionId: { $not: /^admin_granted_/ } },
+        ],
+      })
+      .select(
+        'ownerType ownerId subscriptionId source status priceId quantity periodEndsAt cancelAtPeriodEnd unitAmount updatedAt'
+      )
       .lean({ virtuals: true });
     return rows.filter(row => row.subscriptionId && resolveSubscriptionSource(row) === SubscriptionSource.Stripe);
   }

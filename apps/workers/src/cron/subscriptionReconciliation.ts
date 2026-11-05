@@ -221,6 +221,7 @@ export async function runSubscriptionReconciliation(
       if (withinGrace(row, { created: 0 }, now)) continue;
       const sub = await retrieveOrMissing(subscriptionId);
       if (sub === 'error') continue;
+      if (sub !== 'missing' && withinGrace(row, sub, now)) continue;
       covered.add(subscriptionId);
       if (sub === 'missing') {
         findings.push({
@@ -259,6 +260,7 @@ export async function runSubscriptionReconciliation(
       if (withinGrace(row, { created: 0 }, now)) continue;
       const sub = await retrieveOrMissing(subscriptionId);
       if (sub === 'error') continue;
+      if (sub !== 'missing' && withinGrace(row, sub, now)) continue;
       covered.add(subscriptionId);
       // Gone from Stripe, or finished there too: both sides agree the subscription is over.
       if (sub === 'missing' || TERMINAL_STATUSES.has(sub.status)) continue;

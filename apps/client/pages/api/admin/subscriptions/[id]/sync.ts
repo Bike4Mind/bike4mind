@@ -8,7 +8,10 @@ import {
   resolveSubscriptionSource,
   type ISubscription,
 } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { stripeSubscriptionRowFields } from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
+import {
+  SEAT_BILLING_STATUSES,
+  stripeSubscriptionRowFields,
+} from '@bike4mind/server-utils/lib/subscriptions/stripeMirror';
 import { Subscription, subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 import { ConflictError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
@@ -86,7 +89,9 @@ const previewChanges = async (
   }
   const customerId = typeof stripeSub.customer === 'string' ? stripeSub.customer : stripeSub.customer.id;
   const organization =
-    row.ownerType === 'Organization' ? await organizationRepository.findByStripeCustomerId(customerId) : null;
+    row.ownerType === 'Organization' && SEAT_BILLING_STATUSES.has(stripeSub.status)
+      ? await organizationRepository.findByStripeCustomerId(customerId)
+      : null;
   return stripeSyncChanges({
     before: row,
     after: stripeSubscriptionRowFields(stripeSub, now),
@@ -158,15 +163,13 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           before = applied.before;
           diff = stripeSyncChanges(applied);
         } else {
-          // Stripe has no such subscription: the same write as customer.subscription.deleted. A row that is
-          // already finished keeps its status and canceledAt, so nothing is written.
-          before = isFinished(row)
-            ? row
-            : await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
-                subscriptionId,
-                { status: 'canceled', canceledAt: now },
-                row.updatedAt
-              );
+          // Guard finished rows too: a webhook can change the row while the Stripe read is in flight.
+          // Reasserting only its status preserves canceledAt, including legacy rows without that field.
+          before = await subscriptionRepository.updateByStripeSubscriptionIdReturningBefore(
+            subscriptionId,
+            isFinished(row) ? { status: row.status } : { status: 'canceled', canceledAt: now },
+            row.updatedAt
+          );
           diff = before ? canceledChanges(before, now) : [];
         }
         if (!before) throw new ConflictError('This subscription changed; reload and try again.');
@@ -192,6 +195,10 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
           await sendToClient(owner.notifyUserId, Resource.websocket.managementEndpoint, {
             action: 'invalidate_query',
             queryKey: ['subscriptions'],
+          });
+          await sendToClient(owner.notifyUserId, Resource.websocket.managementEndpoint, {
+            action: 'invalidate_query',
+            queryKey: row.ownerType === 'Organization' ? ['organizations'] : ['entitlements'],
           });
         }
         if (owner.actingUserId) {

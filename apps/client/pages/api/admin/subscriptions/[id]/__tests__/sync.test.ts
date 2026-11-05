@@ -202,6 +202,31 @@ describe('GET /api/admin/subscriptions/[id]/sync', () => {
     expect(res._getJSONData().changes).toEqual([]);
   });
 
+  it.each([
+    ['active', true],
+    ['trialing', true],
+    ['past_due', true],
+    ['unpaid', false],
+    ['incomplete', false],
+    ['incomplete_expired', false],
+    ['canceled', false],
+    ['paused', false],
+  ])('previews organization seats only when status %s writes them', async (status, writesSeats) => {
+    mocks.rowFindById.mockResolvedValue(row({ ownerType: 'Organization', ownerId: 'org_1', status }));
+    mocks.orgFindByCustomer.mockResolvedValue({ id: 'org_1', seats: 5 });
+    mocks.retrieve.mockResolvedValue({ ...stripeSub(), status });
+    const { res, run } = call('GET');
+    await run();
+
+    const seatChanges = res._getJSONData().changes.filter((change: { field: string }) => change.field === 'seats');
+    expect(seatChanges).toEqual(writesSeats ? [{ field: 'seats', before: '5', after: '3' }] : []);
+    if (writesSeats) {
+      expect(mocks.orgFindByCustomer).toHaveBeenCalledWith('cus_1');
+    } else {
+      expect(mocks.orgFindByCustomer).not.toHaveBeenCalled();
+    }
+  });
+
   it('previews a subscription Stripe no longer has as canceled', async () => {
     mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
     const { res, run } = call('GET');
@@ -249,6 +274,20 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
     expect(mocks.state.auditInTransaction).toBe(true);
     expect(mocks.resolveForSubscription).toHaveBeenCalledWith(ID, 'sync', expect.any(Date));
     expect(mocks.retrieve).toHaveBeenCalledTimes(1);
+    expect(mocks.send).toHaveBeenCalledWith('boss-1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['organizations'],
+    });
+  });
+
+  it('refreshes the user entitlement cache after syncing Stripe state', async () => {
+    const { run } = call('POST');
+    await run();
+
+    expect(mocks.send).toHaveBeenCalledWith('u1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
   });
 
   it('is a 400 without a reason', async () => {
@@ -298,35 +337,59 @@ describe('POST /api/admin/subscriptions/[id]/sync', () => {
       'synced subscription from Stripe (gone from Stripe, marked canceled)'
     );
     expect(mocks.audit.mock.calls[0][1].details).toMatchObject({ stripeMissing: true });
+    expect(mocks.send).toHaveBeenCalledWith('u1', 'ws-endpoint', {
+      action: 'invalidate_query',
+      queryKey: ['entitlements'],
+    });
   });
 
-  it('leaves an already-canceled row untouched when Stripe has no such subscription', async () => {
-    mocks.rowFindById.mockResolvedValue(row({ status: 'canceled', canceledAt: new Date('2025-03-01T00:00:00Z') }));
+  it('preserves an already-canceled row when Stripe has no such subscription', async () => {
+    const finishedRow = row({ status: 'canceled', canceledAt: new Date('2025-03-01T00:00:00Z') });
+    mocks.rowFindById.mockResolvedValue(finishedRow);
+    mocks.updateReturningBefore.mockResolvedValue(finishedRow);
     mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
     const { res, run } = call('POST');
     await run();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
+    expect(mocks.updateReturningBefore).toHaveBeenCalledWith('sub_1', { status: 'canceled' }, UPDATED_AT);
     expect(mocks.audit.mock.calls[0][1].changes).toEqual([]);
     expect(mocks.audit.mock.calls[0][1].summary).toBe(
       'synced subscription from Stripe (gone from Stripe, already finished)'
     );
   });
 
-  it('leaves an incomplete_expired row untouched when Stripe has no such subscription', async () => {
-    mocks.rowFindById.mockResolvedValue(row({ status: 'incomplete_expired' }));
+  it('preserves an incomplete_expired row when Stripe has no such subscription', async () => {
+    const finishedRow = row({ status: 'incomplete_expired' });
+    mocks.rowFindById.mockResolvedValue(finishedRow);
+    mocks.updateReturningBefore.mockResolvedValue(finishedRow);
     mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
     const { res, run } = call('POST');
     await run();
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mocks.updateReturningBefore).not.toHaveBeenCalled();
+    expect(mocks.updateReturningBefore).toHaveBeenCalledWith('sub_1', { status: 'incomplete_expired' }, UPDATED_AT);
     expect(mocks.audit.mock.calls[0][1].changes).toEqual([]);
     expect(mocks.audit.mock.calls[0][1].summary).toBe(
       'synced subscription from Stripe (gone from Stripe, already finished)'
     );
   });
+
+  it.each(['canceled', 'incomplete_expired'])(
+    'rejects a stale %s snapshot before resolving its finding',
+    async status => {
+      mocks.rowFindById.mockResolvedValue(row({ status }));
+      mocks.retrieve.mockRejectedValue(Object.assign(new Error('gone'), { code: 'resource_missing' }));
+      mocks.updateReturningBefore.mockResolvedValue(null);
+      const { run } = call('POST');
+
+      await expect(run()).rejects.toMatchObject({ statusCode: 409 });
+      expect(mocks.updateReturningBefore).toHaveBeenCalledWith('sub_1', { status }, UPDATED_AT);
+      expect(mocks.audit).not.toHaveBeenCalled();
+      expect(mocks.resolveForSubscription).not.toHaveBeenCalled();
+      expect(mocks.send).not.toHaveBeenCalled();
+    }
+  );
 
   it('is a 409, with no seat write or audit, when the row changed after the precheck', async () => {
     mocks.rowFindById.mockResolvedValue(row({ ownerType: 'Organization', ownerId: 'org_1' }));
