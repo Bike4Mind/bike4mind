@@ -2,6 +2,7 @@ import type { AuthState } from '@shared/auth';
 import { localModelId, type ChatModelOption } from '@shared/chat';
 import type { ModelRuntimeStatus } from '@shared/models';
 import { describe, expect, it } from 'vitest';
+import { OLLAMA_NOT_RUNNING, OLLAMA_START_HINT } from '../models/localRuntimeCopy';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 
 const model: ChatModelOption = { id: localModelId('ollama', 'qwen2.5:0.5b'), name: 'qwen2.5:0.5b' };
@@ -28,14 +29,14 @@ describe('noLocalModels', () => {
     expect(noLocalModels({ models: [], loading: true, runtime: null })).toBeNull();
   });
 
-  it('names the address when Ollama is not reachable and offers no screen to open', () => {
+  it('says Ollama is not running, how to start it, and asks for a start rather than a screen', () => {
     const state = noLocalModels({ models: [], loading: false, runtime: down });
-    expect(state?.reason).toContain('Ollama is not running at http://127.0.0.1:11434');
-    expect(state?.fix).toBeNull();
+    expect(state?.reason).toBe(`${OLLAMA_NOT_RUNNING}. ${OLLAMA_START_HINT}`);
+    expect(state?.fix).toBe('start-ollama');
   });
 
   it('blocks when Ollama stops while models are still listed', () => {
-    expect(noLocalModels({ models: [model], loading: false, runtime: down })).toMatchObject({ fix: null });
+    expect(noLocalModels({ models: [model], loading: false, runtime: down })).toMatchObject({ fix: 'start-ollama' });
   });
 
   it('counts a saved server still listing its models as usable, but not one that is down', () => {
@@ -43,7 +44,9 @@ describe('noLocalModels', () => {
     const listing = { ...model, server, unavailable: 'gpu box is still listing its models', pending: true };
     expect(noLocalModels({ models: [listing], loading: false, runtime: down })).toBeNull();
     const unreachable = { ...model, server, unavailable: 'gpu box is unreachable' };
-    expect(noLocalModels({ models: [unreachable], loading: false, runtime: down })).toMatchObject({ fix: null });
+    expect(noLocalModels({ models: [unreachable], loading: false, runtime: down })).toMatchObject({
+      fix: 'start-ollama',
+    });
   });
 
   it('does not block while a saved server offers a model, even with Ollama on this computer down', () => {
@@ -55,11 +58,11 @@ describe('noLocalModels', () => {
     expect(noLocalModels({ models: [remote], loading: false, runtime: down })).toBeNull();
     expect(
       noLocalModels({ models: [{ ...remote, unavailable: 'gpu box is unreachable' }], loading: false, runtime: down })
-    ).toMatchObject({ fix: null });
+    ).toMatchObject({ fix: 'start-ollama' });
   });
 
   it('treats an unreadable status with an empty list as not running', () => {
-    expect(noLocalModels({ models: [], loading: false, runtime: null })?.fix).toBeNull();
+    expect(noLocalModels({ models: [], loading: false, runtime: null })?.fix).toBe('start-ollama');
   });
 
   it('points at the Models screen when Ollama runs with no chat-capable model', () => {
@@ -91,6 +94,6 @@ describe('composerBlock', () => {
   it('falls back to the attachment reason, and to nothing', () => {
     expect(composerBlock(null, 'cannot read images')).toEqual({ reason: 'cannot read images', action: null });
     expect(composerBlock(null, null)).toEqual({ reason: null, action: null });
-    expect(composerBlock({ reason: 'down', fix: null }, null).action).toBeNull();
+    expect(composerBlock({ reason: 'down', fix: 'start-ollama' }, null).action).toBeNull();
   });
 });

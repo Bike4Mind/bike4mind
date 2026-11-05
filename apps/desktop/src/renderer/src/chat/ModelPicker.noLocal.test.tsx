@@ -77,7 +77,7 @@ const el = (testId: string) => {
 
 describe('ModelPicker with no local model', () => {
   it('names the empty state instead of the saved hosted model or a sign-in error', () => {
-    mount({ noLocal: { reason: 'Ollama is not running at http://127.0.0.1:11434.', fix: null } });
+    mount({ noLocal: { reason: 'Ollama is not running on this computer.', fix: 'start-ollama' } });
     expect(el('model-picker-btn').textContent).toBe('No local model');
     expect(el('model-picker-no-local').textContent).toContain('Ollama is not running');
     expect(document.body.textContent).not.toContain('claude-opus-5');
@@ -86,7 +86,7 @@ describe('ModelPicker with no local model', () => {
   });
 
   it('makes the reason a focusable menu item that rechecks Ollama', () => {
-    const { reload } = mount({ noLocal: { reason: 'Ollama is not running.', fix: null } });
+    const { reload } = mount({ noLocal: { reason: 'Ollama is not running.', fix: 'start-ollama' } });
     expect(el('model-picker-no-local').getAttribute('role')).toBe('menuitem');
     act(() => el('model-picker-no-local').click());
     expect(reload).toHaveBeenCalledOnce();
@@ -103,7 +103,7 @@ describe('ModelPicker with no local model', () => {
   });
 
   it('keeps the model label while models are listed but Ollama stopped', () => {
-    mount({ models: [qwen], modelId: qwen.id, noLocal: { reason: 'Ollama is not running.', fix: null } });
+    mount({ models: [qwen], modelId: qwen.id, noLocal: { reason: 'Ollama is not running.', fix: 'start-ollama' } });
     expect(el('model-picker-btn').textContent).toBe('qwen2.5:0.5b');
     expect(el('model-picker-no-local').textContent).toContain('Ollama is not running');
   });

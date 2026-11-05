@@ -566,6 +566,17 @@ describe('the attach shortcut', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it('shows a blocking notice in place of the reason text and still blocks sending', () => {
+    mount({
+      blockedReason: 'Ollama is not running.',
+      blockedNotice: <span data-testid="composer-test-notice">notice</span>,
+    });
+    const banner = host?.querySelector('[data-testid="composer-blocked-reason"]');
+    expect(banner?.querySelector('[data-testid="composer-test-notice"]')).not.toBeNull();
+    expect(banner?.textContent).not.toContain('Ollama is not running.');
+    expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('advertises the chord on the attach button', () => {
     mount();
     const button = host?.querySelector('[data-testid="composer-attach-btn"]');

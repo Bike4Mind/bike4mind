@@ -90,6 +90,7 @@ export function Composer({
   attachments,
   blockedReason,
   blockedAction,
+  blockedNotice,
   notReady,
   usage,
   contextStatus,
@@ -130,6 +131,8 @@ export function Composer({
   blockedReason?: string | null;
   /** A button beside `blockedReason` that fixes it. */
   blockedAction?: { label: string; onClick: () => void } | null;
+  /** Shown in place of `blockedReason`'s text when the fix is a control of its own, such as Start Ollama. */
+  blockedNotice?: ReactNode;
   /**
    * A word for the idle indicator naming a state that is not ready to send - "No folder" for a
    * Code session with no project. It blocks Send and draws NO banner: the control that answers
@@ -634,7 +637,7 @@ export function Composer({
               )
             }
           >
-            {blockedReason}
+            {blockedNotice ?? blockedReason}
           </Alert>
         </Box>
       )}

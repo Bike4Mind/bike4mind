@@ -2,7 +2,7 @@
 import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import type { ModelServerView } from '@shared/modelServers';
+import type { ModelServerLaunchView, ModelServerView } from '@shared/modelServers';
 import {
   pullKey,
   type CuratedBuildView,
@@ -90,6 +90,24 @@ function server(id: string, name: string, extra: Partial<ModelServerView> = {}):
     models: [],
     specs: null,
     launch: null,
+    ...extra,
+  };
+}
+
+function launchView(extra: Partial<ModelServerLaunchView> = {}): ModelServerLaunchView {
+  return {
+    runtime: 'ollama',
+    owner: 'none',
+    busy: null,
+    settings: {},
+    pendingRestart: false,
+    canStart: true,
+    problem: null,
+    observed: null,
+    sizingKvCacheType: 'f16',
+    sizingFlashAttention: 'auto',
+    prefill: null,
+    noun: 'Ollama server',
     ...extra,
   };
 }
@@ -327,6 +345,8 @@ const calls = {
   clearHfToken: vi.fn(),
   checkCuratedList: vi.fn(),
   getStoreLocation: vi.fn(),
+  checkServers: vi.fn(),
+  launchServer: vi.fn(),
 };
 
 beforeEach(() => {
@@ -349,6 +369,8 @@ beforeEach(() => {
   window.localStorage.clear();
   installedCache.clear();
   calls.getHfToken.mockImplementation(async () => bridge.token);
+  calls.checkServers.mockImplementation(async () => bridge.servers);
+  calls.launchServer.mockImplementation(async () => ({ ok: true, servers: bridge.servers }));
   calls.pull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.resumePull.mockResolvedValue({ ok: true, ref: `hf.co/${REPO}:Q4_K_M` });
   calls.remove.mockResolvedValue({ ok: true });
@@ -364,6 +386,8 @@ beforeEach(() => {
     shell: { openExternal: vi.fn() },
     modelServers: {
       list: async () => bridge.servers,
+      check: calls.checkServers,
+      launch: calls.launchServer,
       onChanged: (listener: (servers: ModelServerView[]) => void) => {
         pushServers = listener;
         return () => {};
@@ -1362,6 +1386,33 @@ describe('ModelsScreen installed', () => {
 
     await click(q('models-point-at-server-btn'));
     expect(openModelServers).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Start in place of Install when Desktop can start Ollama, and lists models once it has', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView() }];
+    calls.launchServer.mockImplementation(async () => {
+      bridge.status = RUNNING;
+      return { ok: true, servers: bridge.servers };
+    });
+    await mount(undefined, 'curated');
+    expect(q('models-install-ollama-btn')).toBeNull();
+    expect(q('models-no-runtime-text')?.textContent).not.toContain('install');
+    expect(q('models-point-at-server-btn')).not.toBeNull();
+
+    await click(q('ollama-start-btn'));
+    expect(calls.launchServer).toHaveBeenCalledWith('local', 'start');
+    await vi.waitFor(() => expect(q('models-runtime-status')?.dataset.state).toBe('running'));
+  });
+
+  it('keeps Install and the start hint when Desktop cannot start Ollama here', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
+    await mount(undefined, 'curated');
+    expect(q('ollama-start-btn')).toBeNull();
+    expect(q('ollama-start-hint')).not.toBeNull();
+    expect(q('models-install-ollama-btn')).not.toBeNull();
+    expect(calls.checkServers).toHaveBeenCalledWith('local');
   });
 
   it('hints at Ollama in WSL on Windows only', async () => {

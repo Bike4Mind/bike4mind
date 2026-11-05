@@ -20,6 +20,7 @@ import { TrashIcon } from '../chat/icons';
 import { FitBadge } from './FitBadge';
 import { installedCache, listedAtLabel, type LastInstalled } from './installedCache';
 import { hasModelDefaults, ModelDefaultsDialog } from './ModelDefaultsDialog';
+import { OLLAMA_NOT_RUNNING } from './localRuntimeCopy';
 import type { ChatOn, ModelOn, ModelTarget } from './modelTarget';
 
 /** A device-side model a chat points at: its Ollama name and the server it runs on. */
@@ -256,7 +257,7 @@ export function InstalledTab({
     ? null
     : status && !status.reachable
       ? target.local
-        ? 'Ollama is not running.'
+        ? `${OLLAMA_NOT_RUNNING}.`
         : (status.error ?? `Desktop could not reach ${target.name}.`)
       : installed && !installed.ok
         ? installed.error.message
@@ -287,9 +288,9 @@ export function InstalledTab({
         sx={{ py: 6, textAlign: 'center' }}
         data-testid="models-installed-runtime-down"
       >
-        <Typography level="title-md">Ollama is not running</Typography>
+        <Typography level="title-md">{OLLAMA_NOT_RUNNING}</Typography>
         <Typography level="body-sm" sx={{ maxWidth: 440 }}>
-          Your Ollama models show here once it is running.
+          Your Ollama models show here once it is running. The banner above shows how to start it.
         </Typography>
       </Stack>
     );
