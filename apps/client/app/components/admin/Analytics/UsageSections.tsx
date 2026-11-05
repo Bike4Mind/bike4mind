@@ -17,7 +17,7 @@ import { ANALYTICS_OTHER_FEATURE, type AnalyticsOverview, type UsageDay } from '
 import { DataTable, InlineBar, type DataColumn } from '../shared';
 import { SIGNAL_COLORS } from '../Signups/SignupChart';
 import { AnalyticsSection } from './AnalyticsSection';
-import { featureLabel, formatCount, formatDayLabel, formatShare } from './analyticsFormat';
+import { featureLabel, formatCount, formatDayLabel, formatShare, modelAxisLabel } from './analyticsFormat';
 import { isIsolatedPoint } from './isolatedPoint';
 
 const PARTIAL_DASH = '4 4';
@@ -203,7 +203,8 @@ export function ModelUsageSection({
             type="category"
             dataKey="model"
             tick={axisTick}
-            width={140}
+            tickFormatter={modelAxisLabel}
+            width={180}
             axisLine={false}
             tickLine={false}
             interval={0}
