@@ -1963,6 +1963,28 @@ describe('dispatchLoopNow', () => {
     expect(await reload(loop.id)).toMatchObject({ activeExecutionId: 'exec-1', runCount: 1 });
   });
 
+  it('gives a freed slot to the longest-due loop, not back to the loop whose run ended', async () => {
+    for (let i = 0; i < MAX_ACTIVE_LOOP_RUNS - 1; i++)
+      await createLoop({ activeExecutionId: `busy-${i}`, nextRunAt: LATER });
+    const loop = await createLoop({ activeExecutionId: 'exec-0', nextRunAt: LATER });
+    await createTicket(loop.id, { status: 'in_progress', executionId: 'exec-0' });
+    executions['exec-0'] = { status: 'completed', result: { answer: 'done' } };
+    const waiting = await createLoop({ userId: 'user-2', nextRunAt: new Date(PAST.getTime() - 60_000) });
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).toHaveBeenCalledTimes(1);
+    expect(await reload(waiting.id)).toMatchObject({ activeExecutionId: 'exec-1' });
+    expect((await reload(loop.id)).activeExecutionId).toBeUndefined();
+    // The fold still shows on the ended loop's page.
+    expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
+  });
+
+  it('is a no-op for a loop that does not exist', async () => {
+    await dispatchLoopNow(new mongoose.Types.ObjectId().toString(), NOW, logger);
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+  });
+
   it('never starts a run on a desktop-stage ticket', async () => {
     const loop = await createLoop({
       stages: ['todo', 'review', 'done'],

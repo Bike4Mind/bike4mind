@@ -136,37 +136,6 @@ describe('LoopRepository', () => {
     });
   });
 
-  describe('claimDueById', () => {
-    const now = new Date('2026-10-29T12:00:00Z');
-    const past = new Date(now.getTime() - 1000);
-
-    it('claims only the loop it names, and only once against a parallel claimDue', async () => {
-      const other = await create({ status: 'live', nextRunAt: new Date(past.getTime() - 1000) });
-      const loop = await create({ status: 'live', nextRunAt: past });
-      const [byId, byTick, byTickAgain] = await Promise.all([
-        loopRepository.claimDueById(loop.id, now, LEASE_MS),
-        loopRepository.claimDue(now, LEASE_MS),
-        loopRepository.claimDue(now, LEASE_MS),
-      ]);
-      const claimedIds = [byId?.id, byTick?.id, byTickAgain?.id].filter(Boolean);
-      expect(claimedIds.sort()).toEqual([loop.id, other.id].sort());
-      expect(byId?.leaseUntil).toBeDefined();
-    });
-
-    it('skips a loop that is not live, not due, leased or has a run in flight', async () => {
-      for (const fields of [
-        { status: 'paused' as const, nextRunAt: past },
-        { status: 'live' as const, nextRunAt: new Date(now.getTime() + 1000) },
-        { status: 'live' as const, nextRunAt: past, leaseUntil: new Date(now.getTime() + 1000) },
-        { status: 'live' as const, nextRunAt: past, activeExecutionId: 'exec-1' },
-      ]) {
-        const loop = await create(fields);
-        expect(await loopRepository.claimDueById(loop.id, now, LEASE_MS)).toBeNull();
-      }
-      expect(await loopRepository.claimDueById('not-an-id', now, LEASE_MS)).toBeNull();
-    });
-  });
-
   it('folds a run once and clears activeExecutionId', async () => {
     const loop = await create({ status: 'live', activeExecutionId: 'exec-1' });
     const update = { $inc: { runCount: 1 } };

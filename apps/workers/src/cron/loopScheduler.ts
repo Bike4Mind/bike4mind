@@ -204,40 +204,35 @@ export async function runLoopSchedulerTick(now: Date, logger: Logger): Promise<v
 
 /**
  * Event-driven dispatch, from the loop dispatch queue (apps/workers/src/queueHandlers/loopDispatch.ts): folds
- * the loop's finished run, then starts its next run if the loop is due and a run slot is free. The claim
- * (`claimDueById`, the tick's lease) is the only gate, so the tick and any number of events never start one
- * loop twice. A no-op when nothing is due. Skips the tick's per-owner round-robin; the global cap still holds.
+ * the loop's finished run, then fills one free run slot through the tick's own `dispatchDue`. That claims the
+ * longest-due loop (this one unless another has waited longer), so a run that frees a slot does not hand it
+ * straight back to its own loop. The claim's lease is the only gate, so the tick and any number of events
+ * never start one loop twice. A no-op when nothing is due.
  */
 export async function dispatchLoopNow(loopId: string, now: Date, logger: Logger): Promise<void> {
   if ((await adminSettingsRepository.getSettingsValue('EnableLoops')) !== true) return;
   const loop = await loopRepository.findById(loopId);
   if (!loop) return;
 
-  let changed = false;
+  let folded = false;
   if (loop.activeExecutionId) {
     try {
       await reconcileLoop(loop, now);
     } catch (error) {
       logger.error(`[Loops] Failed to reconcile loop ${loop.id}`, error as Error);
     }
-    changed = !(await loopRepository.findById(loopId))?.activeExecutionId;
+    folded = !(await loopRepository.findById(loopId))?.activeExecutionId;
   }
 
   // ponytail: count-then-claim is not atomic, so concurrent events and the tick can overshoot the cap by the
   // consumer's concurrency (infra/cron.ts, loopDispatchQueue); an atomic in-flight counter is the upgrade.
-  if (MAX_ACTIVE_LOOP_RUNS - (await loopRepository.countInFlight()) > 0) {
-    const claimed = await loopRepository.claimDueById(loopId, now, LOOP_LEASE_MS);
-    if (claimed) {
-      changed = true;
-      try {
-        await dispatchLoop(claimed, now, logger);
-      } catch (error) {
-        logger.error(`[Loops] Failed to dispatch loop ${loop.id}`, error as Error);
-      }
-    }
-  }
+  const { claimed } =
+    (await loopRepository.countInFlight()) < MAX_ACTIVE_LOOP_RUNS
+      ? await dispatchDue(now, 1, logger)
+      : { claimed: [] as string[] };
 
-  if (changed) await pushLoopChanged(loop.userId, loop.id, logger);
+  // dispatchDue already pushed for every loop it claimed.
+  if (folded && !claimed.includes(loopId)) await pushLoopChanged(loop.userId, loop.id, logger);
 }
 
 /** Reopens tickets whose `blockedOn` condition now holds, and makes their loops due. Never touches a plain block. */
