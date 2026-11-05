@@ -177,7 +177,7 @@ With that config, the client's `allowedScopes` are `openid email profile ai:gene
 
 The exchange verifies the ID token by fetching B4M's own JWKS over HTTPS from inside the `app` container. So it works only when B4M serves its public URL over HTTPS with a publicly trusted certificate (the Caddy setup in `SELF_HOST.md`, with `APP_URL=https://<your-domain>`). On a plain `http://` install, or with a self-signed certificate, every exchange fails with 401 `invalid_grant`.
 
-Operators register clients with the seed script. A stock install pulls images and has no Node toolchain, so on the host first install Node 24 and pnpm, then run `pnpm install --filter @bike4mind/scripts...` from the repository root. One pass registers the client with its trust config. The compose network's `mongo` hostname does not resolve from the host, so use the published port with `directConnection=true`. If you set `MONGO_HOST_PORT` in `.env.selfhost`, use that port instead of 27017:
+If the install has no admin user yet, register clients with the seed script. A stock install pulls images and has no Node toolchain, so on the host first install Node 24 and pnpm, then run `pnpm install --filter @bike4mind/scripts...` from the repository root. One pass registers the client with its trust config. The compose network's `mongo` hostname does not resolve from the host, so use the published port with `directConnection=true`. If you set `MONGO_HOST_PORT` in `.env.selfhost`, use that port instead of 27017:
 
 ```bash
 MONGODB_URI="mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true" \
@@ -197,9 +197,13 @@ FEDERATED_JWKS_URI="https://<your-b4m-host>/api/oauth/jwks" \
 - The script is idempotent by name: if a client with that `CLIENT_NAME` exists, it changes nothing.
 - It always creates a confidential client. That is what you want: the AI-token exchange requires a client secret.
 
-Register the trust config in the same run. Adding `federatedIdp` to an existing client by hand leaves `allowedScopes` without `ai:generate` and `me:read`, and the exchange then fails with 403 `invalid_scope`.
+With the script, register the trust config in the same run. To add it to an existing client later, use the admin console, which lets you set the scopes in the same edit. A raw database edit that adds `federatedIdp` leaves `allowedScopes` without `ai:generate` and `me:read`, and the exchange then fails with 403 `invalid_scope`.
 
-An admin can also register, edit, deactivate and rotate clients from the admin console (Trust and safety > OAuth clients), which applies the same rules as the script. The script remains for installs that have no admin user yet. Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when you edit a client, URIs it already stores are kept even if they predate these rules, and only newly-added ones are checked.
+An admin can also register, edit, deactivate and rotate clients from the admin console (Trust and safety > OAuth clients), which applies the same rules as the script. Editing a client changes its redirect URIs, active state, allowed scopes and federated trust config. The opt-in `federated:admin-status` scope can be ticked only on a federated relying-party client. Turning federation on in the form ticks `ai:generate` and `me:read`. The script remains the fallback for installs that have no admin user yet.
+
+Removing a scope takes effect at once for every user of the client. An app that still requests a removed scope gets 400 `invalid_scope` at `/authorize`. Grants users already approved are kept, but `ai-token` and `federated-admin` calls that need a removed scope return 403 `invalid_scope`, because the client no longer has it. The admin console asks you to confirm before it removes a scope or turns federation off.
+
+Redirect URIs must be https (http only for localhost, 127.0.0.1 and [::1]); when you edit a client, URIs it already stores are kept even if they predate these rules, and only newly-added ones are checked.
 
 A stock self-hosted stack does not expose the completions API (`/api/ai/v1/completions`) on its public origin, so your app's completion calls return 404. Add this route inside the existing site block in `selfhost/caddy/Caddyfile`, before the catch-all `handle { reverse_proxy app:3000 }` (see [the sample in the Caddyfile](https://github.com/bike4mind/bike4mind/blob/main/selfhost/caddy/Caddyfile)):
 

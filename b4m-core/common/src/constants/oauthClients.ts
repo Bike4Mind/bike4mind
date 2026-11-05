@@ -105,12 +105,26 @@ export function clientIdFromAuthorizeRedirect(redirectTo: unknown): string | und
 /** Lets a federated app's server ask /api/oauth/federated-admin whether its user is a B4M admin. */
 export const FEDERATED_ADMIN_STATUS_SCOPE = 'federated:admin-status';
 
-// Never part of a registration's default allowedScopes (oauthClientAdmin.ts FEDERATED_SCOPES):
-// each is granted to a client deliberately, one client at a time.
+// Default allowedScopes at registration (createOAuthClient); a federated client also gets the federated defaults.
+export const OAUTH_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
+export const OAUTH_FEDERATED_DEFAULT_SCOPES = ['ai:generate', 'me:read'] as const;
+
+// Never part of a registration's default allowedScopes: each is granted to a client deliberately,
+// one client at a time.
 export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE] as const;
+
+// Scopes an admin can grant to a client; shared by the admin edit form and updateOAuthClient.
+export const OAUTH_CLIENT_SCOPES = [
+  ...OAUTH_IDENTITY_SCOPES,
+  ...OAUTH_FEDERATED_DEFAULT_SCOPES,
+  ...OAUTH_OPT_IN_SCOPES,
+] as const;
+
+export const isOAuthClientScope = (scope: string): boolean =>
+  (OAUTH_CLIENT_SCOPES as readonly string[]).includes(scope);
+export const isOptInScope = (scope: string): boolean => (OAUTH_OPT_IN_SCOPES as readonly string[]).includes(scope);
 
 /** Entries of `scopes` that are not opt-in scopes; empty when every one may be granted. */
 export function nonOptInScopes(scopes: readonly string[]): string[] {
-  const allowed: readonly string[] = OAUTH_OPT_IN_SCOPES;
-  return scopes.filter(s => !allowed.includes(s));
+  return scopes.filter(s => !isOptInScope(s));
 }
