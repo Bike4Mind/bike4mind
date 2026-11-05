@@ -65,6 +65,8 @@ export const billingHolders = {
       { path: 'userId', matchBy: 'userId', action: 'retain', reason: FINANCIAL_RECORD_REASON },
       // The admin who made a manual adjustment: attribution, not a party to the transaction.
       { path: 'metadata.actorId', matchBy: 'userId', action: 'anonymize' },
+      // The invited friend on a referral reward: attribution, not a party to the transaction.
+      { path: 'metadata.referredUserId', matchBy: 'userId', action: 'anonymize' },
     ],
   },
   FailedRefund: {
