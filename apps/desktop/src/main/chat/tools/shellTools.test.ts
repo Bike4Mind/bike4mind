@@ -486,10 +486,10 @@ describe('shellApproval in auto mode', () => {
       expect(result.detail).toContain('Reaches a location Desktop protects');
     });
 
-    it('asks in auto mode only before a read of a protected location', async () => {
+    it('asks in auto and full mode before a read of the app data, which no tool reads', async () => {
       const result = await prompt('cat ~/.config/App/vault.json');
       expect(result.askInAuto).toBe(true);
-      expect(result.askInFull).toBeUndefined();
+      expect(result.askInFull).toBe(true);
     });
 
     it.each(['cp payload copy.json', 'ls ~', 'cat payload'])('leaves %s to the mode', async command => {

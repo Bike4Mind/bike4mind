@@ -59,6 +59,8 @@ export function permissionSubject(
         ...(prompt?.always?.globFolders ? { globFolders: prompt.always.globFolders } : {}),
         ...(prompt?.always?.dotlessGlobFolders ? { dotlessGlobFolders: prompt.always.dotlessGlobFolders } : {}),
         ungranted: prompt?.always?.ungranted ?? [],
+        ...(prompt?.always?.writes ? { writes: prompt.always.writes } : {}),
+        ...(prompt?.always?.writtenTrees ? { writtenTrees: prompt.always.writtenTrees } : {}),
       },
       ...irreversible,
     };

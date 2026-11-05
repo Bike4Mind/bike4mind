@@ -556,6 +556,8 @@ export interface ChatServiceDeps {
   protectedPaths?: readonly string[];
   /** Protected folders not yet resolved; the file tools refuse every write while any is. */
   unresolvedProtectedPaths?: readonly string[];
+  /** Folders no permission allow rule covers; a shell command reaching one asks in auto mode too. */
+  uncoverablePaths?: readonly string[];
   /**
    * Where the user's own CLAUDE.md lives. Overridden only by tests, which must not read - or
    * depend on the contents of - the real ~/.claude of whoever runs them.
@@ -4306,6 +4308,7 @@ export class ChatService {
           // Read first: once it is empty, protectedPaths holds every spelling.
           unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
           protectedPaths: this.deps.protectedPaths,
+          uncoverablePaths: this.deps.uncoverablePaths,
           sessionId,
           callId: call.id,
           background: this.deps.background,

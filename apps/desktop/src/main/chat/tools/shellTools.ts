@@ -24,8 +24,8 @@ import {
 } from './sessionScripts';
 import { commandEnv, launchCommand, spawnsDetached } from './commandLaunch';
 import { commandExit, signalCommandTree } from './commandTree';
-import { protectionFor, type SandboxedCommand } from './sandbox';
-import { folderReaches } from '../permissions/rules';
+import { protectionFor, secretPaths, type SandboxedCommand } from './sandbox';
+import { folderReaches, shellReachesProtected } from '../permissions/rules';
 import { shownPath, wslLocation } from '../../wsl/wslPath';
 import {
   capOutputMiddle,
@@ -398,20 +398,44 @@ export async function resolveCwd(
 
 const NAMES_CLAUDE_FOLDER = /[\\/]\.claude([\\/]|$)/i;
 
-/**
- * Whether a scanned command reaches a protected location: the app's own folders, a path the file tools
- * refuse to write (sandbox.ts `protectionFor`), or, for a command that may write, a `.claude` folder.
- */
-function reachesProtected(scan: ShellScan, protectedPaths: readonly string[]): boolean {
-  const named = [...(scan.paths ?? []), ...scan.writes];
-  const roots = protectedPaths.map(path => guardForm(path));
+/** Whether a folder the scan reaches whole holds or lies in one of `guarded`. */
+function foldersReach(scan: ShellScan, guarded: readonly string[]): boolean {
+  const roots = guarded.map(path => guardForm(path));
   const reached = (folder: string, dotless: boolean): boolean =>
     roots.some(root => folderReaches(guardForm(folder), root, dotless));
   return (
-    named.some(path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'write') !== undefined) ||
-    (!scan.readOnly && named.some(path => NAMES_CLAUDE_FOLDER.test(path))) ||
-    (scan.globFolders ?? []).some(folder => reached(folder, false)) ||
+    [...(scan.globFolders ?? []), ...scan.writtenTrees].some(folder => reached(folder, false)) ||
     (scan.dotlessGlobFolders ?? []).some(folder => reached(folder, true))
+  );
+}
+
+/**
+ * Whether a scanned command reaches a protected location: the app's own folders, a path the file tools
+ * refuse to write (sandbox.ts `protectionFor`), a `.claude` folder, or anything the permission rules'
+ * protected floor refuses (rules.ts `shellReachesProtected`), so auto mode asks wherever a rule could not allow.
+ */
+function reachesProtected(
+  command: string,
+  scan: ShellScan,
+  protectedPaths: readonly string[],
+  permissionPaths: readonly string[]
+): boolean {
+  const named = [...(scan.paths ?? []), ...scan.writes];
+  const guarded = [...protectedPaths, ...permissionPaths];
+  return (
+    named.some(path => withinGuarded(guarded, [path]) || protectionFor([path], 'write') !== undefined) ||
+    named.some(path => NAMES_CLAUDE_FOLDER.test(path)) ||
+    foldersReach(scan, guarded) ||
+    shellReachesProtected({ script: command, ...scan }, guarded)
+  );
+}
+
+/** Whether a command may read what no tool reads in any mode: the app's own data or a secret store (sandbox.ts). */
+function readsSecret(scan: ShellScan, protectedPaths: readonly string[]): boolean {
+  const named = [...(scan.paths ?? []), ...scan.writes];
+  return (
+    named.some(path => withinGuarded(protectedPaths, [path]) || protectionFor([path], 'read') !== undefined) ||
+    foldersReach(scan, [...protectedPaths, ...secretPaths()])
   );
 }
 
@@ -467,8 +491,10 @@ export async function shellApproval(
     scriptCheckFailed = true;
     return null;
   });
-  const gitProgram = gitRunsConfiguredProgram(scan.commands);
-  const touchesProtected = reachesProtected(scan, context.protectedPaths ?? []);
+  const gitProgram = gitRunsConfiguredProgram(scan.commands) ?? scan.gitProgram ?? null;
+  const protectedPaths = context.protectedPaths ?? [];
+  const touchesProtected = reachesProtected(command, scan, protectedPaths, context.uncoverablePaths ?? []);
+  const secret = readsSecret(scan, protectedPaths);
   const writesWhileUnresolved = (context.unresolvedProtectedPaths?.length ?? 0) > 0 && !scan.readOnly;
   const unreachable = [...new Set([...ungranted, ...scan.ungranted])];
   const named = unreachable.filter(
@@ -489,8 +515,13 @@ export async function shellApproval(
       ? ['Runs git in a repository whose .git or .husky folder was changed in this session.']
       : []),
     ...(gitProgram ? [`Sets ${gitProgram}, which makes git run a program.`] : []),
-    ...(touchesProtected
+    ...(touchesProtected || secret
       ? ['Reaches a location Desktop protects, such as its own data or permission and hook settings.']
+      : []),
+    ...(scan.unread
+      ? [
+          'Builds a path from a variable, a substitution or a folder it cannot follow, so where it acts cannot be checked.',
+        ]
       : []),
     ...(writesWhileUnresolved
       ? ['May write while Desktop cannot resolve a protected folder, so where it writes cannot be checked.']
@@ -525,7 +556,10 @@ export async function shellApproval(
     !!gitProgram ||
     unreachable.length > 0 ||
     touchesProtected ||
+    secret ||
+    scan.unread === true ||
     writesWhileUnresolved;
+  const asksInFull = ((touchesProtected || scan.unread === true) && !scan.readOnly) || secret || writesWhileUnresolved;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -533,8 +567,8 @@ export async function shellApproval(
     detail: [detail, ...reasons].join('\n\n'),
     key: runKey,
     ...(asks ? { askInAuto: true as const } : {}),
-    // The file tools refuse these writes in every mode, so 'full' stops for one that may write.
-    ...((touchesProtected && !scan.readOnly) || writesWhileUnresolved ? { askInFull: true as const } : {}),
+    // The file tools refuse these writes, and reads of secrets, in every mode, so 'full' stops for them too.
+    ...(asksInFull ? { askInFull: true as const } : {}),
     ...(scriptCheckFailed ? { allowOnce: true as const } : {}),
     ...(scan.contained ? { contained: true as const } : {}),
     always: {
@@ -550,6 +584,8 @@ export async function shellApproval(
       paths: scan.paths ?? [],
       ...(scan.globFolders ? { globFolders: scan.globFolders } : {}),
       ...(scan.dotlessGlobFolders ? { dotlessGlobFolders: scan.dotlessGlobFolders } : {}),
+      writes: scan.writes,
+      writtenTrees: scan.writtenTrees,
       ungranted: unreachable,
     },
   };
