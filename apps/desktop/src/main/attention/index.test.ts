@@ -220,6 +220,10 @@ describe("main's needs-you watch", () => {
       sessionMessages: async () => [],
     });
 
+  it('hands back the same monitor when asked twice', () => {
+    expect(watch()).toBe(watch());
+  });
+
   it('announces an entry and keeps the badge with every window closed', async () => {
     windows.open = [];
     const monitor = watch();

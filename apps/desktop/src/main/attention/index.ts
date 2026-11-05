@@ -112,6 +112,7 @@ export function registerAttention({ openWindow }: { openWindow(): void }): Atten
 
   return {
     watchNeedsYou: sources => {
+      if (monitor) return monitor;
       monitor = new NeedsYouMonitor({
         ...sources,
         hasWindow: () => appWindows().some(window => !window.isDestroyed()),
