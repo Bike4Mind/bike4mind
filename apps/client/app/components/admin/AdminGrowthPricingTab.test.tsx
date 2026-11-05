@@ -123,14 +123,12 @@ describe('AdminGrowthPricingTab', () => {
     expect(screen.queryByTestId('admin-growth-pricing-warning')).toBeNull();
   });
 
-  it('values starter and referral credits in dollars at the floor rate', () => {
+  it('values referral credits in dollars at the floor rate, and not the retired Default Free Credits', () => {
     serverSettings = [{ settingName: 'defaultFreeCredits', settingValue: 5000 }];
     renderTab();
 
     const floor = formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD);
-    expect(screen.getByTestId('admin-growth-pricing-derived-defaultFreeCredits').textContent).toBe(
-      `5,000 credits = ${formatUsdAmount(5000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
-    );
+    expect(screen.queryByTestId('admin-growth-pricing-derived-defaultFreeCredits')).toBeNull();
     // Referral is at its default (10,000).
     expect(screen.getByTestId('admin-growth-pricing-derived-ReferralCreditsAmount').textContent).toBe(
       `10,000 credits = ${formatUsdAmount(10000 * MIN_PRICE_PER_CREDIT_USD)} at the floor ${floor} per credit`
@@ -162,8 +160,9 @@ describe('AdminGrowthPricingTab', () => {
 
   it('derives nothing for settings that are not money', () => {
     expect(describeDerivedValue('teamPlanMaxSeats', 100)).toBeNull();
-    expect(describeDerivedValue('defaultFreeCredits', 'abc')).toBeNull();
-    expect(describeDerivedValue('defaultFreeCredits', '')).toBeNull();
+    expect(describeDerivedValue('defaultFreeCredits', 5000)).toBeNull();
+    expect(describeDerivedValue('ReferralCreditsAmount', 'abc')).toBeNull();
+    expect(describeDerivedValue('ReferralCreditsAmount', '')).toBeNull();
     expect(describeDerivedValue('pricePerCredit', undefined)).toMatch(/^USD per credit - floor /);
   });
 

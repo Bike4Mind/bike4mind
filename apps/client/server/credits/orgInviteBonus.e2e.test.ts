@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { InviteType, Permission, SIGNUP_UNLOCK_FORFEIT_CAUSES } from '@bike4mind/common';
+import { InviteType, newSignupGrant, Permission, SIGNUP_UNLOCK_FORFEIT_CAUSES } from '@bike4mind/common';
 import {
   AdminSettings,
+  adminSettingsRepository,
   CreditTransaction,
   Invite,
   mongoose,
@@ -161,6 +162,21 @@ describe('payOrgInviteBonus', () => {
     expect(stored?.signupInvite?.source).toBe('organization');
     expect(stored?.signupGrant?.inviteBonusPaid).toBe(2000);
     expect(await CreditTransaction.countDocuments({ transactionId: `invite-bonus:${user.id}` })).toBe(1);
+  });
+
+  it('pays an account that a no-amount admin code enrolled in the default signup grant', async () => {
+    await AdminSettings.collection.insertOne({ settingName: 'signupGrantInitialCredits', settingValue: '10' });
+    await createOrganization(true);
+    const invite = await createInvite();
+    const enrolled = await newSignupGrant(adminSettingsRepository);
+    expect(enrolled.signupCredits).toBe(10);
+    const user = await createUser('new', {
+      ...released,
+      pendingCreditGrant: null,
+      signupGrant: { ...enrolled, stage: 'signup', creditsReleased: enrolled.signupCredits },
+    });
+    expect(await payOrgInviteBonus(user.id, invite.id)).toBe(2000);
+    expect((await User.findById(user.id).lean())?.signupGrant?.inviteBonusPaid).toBe(2000);
   });
 
   it('leaves an account uninvited and unpaid for an unpaid organization', async () => {

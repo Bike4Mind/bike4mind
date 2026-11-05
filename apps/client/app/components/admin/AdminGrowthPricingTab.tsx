@@ -148,7 +148,6 @@ export const describeDerivedValue = (key: SettingKey, value: unknown): string | 
   const amount = value === undefined || value === null || value === '' ? Number.NaN : Number(value);
   const floor = `floor ${formatUsdPerCredit(MIN_PRICE_PER_CREDIT_USD)} per credit`;
   switch (key) {
-    case 'defaultFreeCredits':
     case 'ReferralCreditsAmount':
     case 'ReferralFirstAnswerCredits':
     case 'ReferralFirstPaymentCredits':

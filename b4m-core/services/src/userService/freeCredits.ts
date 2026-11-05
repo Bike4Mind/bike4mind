@@ -166,7 +166,8 @@ async function grantFlatFreeCredits(
   }
 
   // An invite-resolved amount is an explicit grant (admin/unlimited code, subscriber), not the open-signup
-  // budget. A referral invitee also carries one (staging off) but is an open-signup grant: it stays metered.
+  // budget. A referral invitee from before staged grants also carries one but is an open-signup grant:
+  // it stays metered.
   const isExplicitGrant = !isDefaultGrant && !referred;
   const budget =
     bypassBudget || isExplicitGrant

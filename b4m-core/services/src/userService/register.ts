@@ -208,7 +208,8 @@ export const registerUser = async (
   const invite = resolvedInvite?.invite ?? null;
   let grantPackage: IGrantPackageDocument | null = null;
   // A legacy package (migrated from an invite's own amounts) keeps the pre-package rules: subscriber
-  // amounts win, it never claims the inbox, and a 0 amount takes the staged signup grant.
+  // amounts win, its own amount never claims the inbox, and a 0 amount takes the staged signup grant
+  // (which claims the inbox on payout, like any default grant).
   let packageGrantsCredits = false;
   let freeCredits = 0;
   // True when an operator sized this signup's grant (package, subscriber or invite credits).
@@ -312,11 +313,9 @@ export const registerUser = async (
   }
 
   const isReferralInvite = resolvedInvite?.isReferral ?? false;
-  // A referral that resolves no credits is never worse off than signing up without the code.
-  const referralTakesDefaultGrant =
-    isReferralInvite && freeCredits <= 0 && (allowOpenRegistration || Boolean(skipInviteCheck));
-  // Admin bulk, unlimited and pre-source codes that size no amount take the default staged grant.
-  const takesDefaultGrant = referralTakesDefaultGrant || (Boolean(invite) && !isReferralInvite && !explicitAmount);
+  // A referral resolving no credits, and an admin bulk, unlimited or pre-source code sizing no amount,
+  // take the default staged grant.
+  const takesDefaultGrant = Boolean(invite) && (isReferralInvite ? freeCredits <= 0 : !explicitAmount);
 
   // invite-resolved credits are deferred behind the same pending tag as the
   // open-registration grant; the amount travels on the user doc.

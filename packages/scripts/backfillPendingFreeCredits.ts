@@ -37,8 +37,8 @@ type BackfillOptions = {
  *
  * What this does:
  *   Finds every user with `emailVerified=true` AND `pending-free-credits` in tags,
- *   grants them their invite-resolved `pendingCreditGrant` when set - else
- *   `defaultFreeCredits` (read from admin settings at script run time) - clears both
+ *   grants them their invite-resolved `pendingCreditGrant` when set - else the signup
+ *   schedule's initial credits (read from admin settings at script run time) - clears both
  *   the tag and the pending amount. Idempotent - re-runs are safe because `addCredits` is keyed
  *   on a stable `transactionId='verify-grant:${user.id}'` (matches the runtime grant
  *   path in apps/client/pages/api/email/verify.ts).

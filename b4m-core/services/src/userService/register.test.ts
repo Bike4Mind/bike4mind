@@ -205,6 +205,16 @@ describe('registerUser', () => {
       expect(grantPackages.reserveRedemption).toHaveBeenCalledWith('pkg-1', 'newUserId');
     });
 
+    it('enrolls the staged signup grant for a 0-credit legacy package', async () => {
+      grantPackages.findById.mockResolvedValue({ ...pkg, credits: 0, legacy: true });
+      await registerUser(baseParams, mockAdapters);
+      const created = mockAdapters.db.users.create.mock.calls[0][0];
+      expect(created.signupGrant).toMatchObject({ signupCredits: expect.any(Number) });
+      expect(created.pendingCreditGrant).toBeNull();
+      expect(created.tags).toContain(PENDING_FREE_CREDITS_TAG);
+      expect(grantPackages.isInboxClaimed).not.toHaveBeenCalled();
+    });
+
     it.each([
       ['total_cap', 'This invite code has reached its signup limit'],
       ['daily_cap', 'This invite code has reached its signup limit for today, please try again tomorrow'],
@@ -823,14 +833,19 @@ describe('registerUser', () => {
         expect(created().pendingCreditGrant).toBeNull();
       });
 
-      it('records a referral signup invite even when the referral resolves no credits', async () => {
+      it('enrolls the default grant for a no-credit referral with open registration off, like a no-amount admin code', async () => {
+        enableStaging();
         const readSetting = mockAdapters.db.adminSettings.findBySettingName.getMockImplementation();
-        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) =>
-          name === 'ReferralCreditsAmount' ? { settingValue: '0' } : readSetting(name)
-        );
+        mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
+          if (name === 'ReferralCreditsAmount') return { settingValue: '0' };
+          if (name === 'allowOpenRegistration') return { settingValue: false };
+          return readSetting(name);
+        });
         mockAdapters.db.registrationInvites.findByCode.mockResolvedValue(referralInvite({ startingCredits: 0 }));
         await registerUser(baseParams, mockAdapters);
-        expect(created().signupGrant).toBeUndefined();
+        expect(created().signupGrant).toMatchObject({ signupCredits: 4 });
+        expect(created().pendingCreditGrant).toBeNull();
+        expect(created().tags).toContain(PENDING_FREE_CREDITS_TAG);
         expect(created().referredByUserId).toBe('inviterId');
         expect(created().signupInvite).toEqual({ source: 'referral', inviteId: 'invite-1', at: expect.any(Date) });
       });

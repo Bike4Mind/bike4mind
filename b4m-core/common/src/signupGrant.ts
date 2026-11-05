@@ -171,9 +171,10 @@ export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlocked
 }
 
 /**
- * Resolves the schedule from stored values, including the retired toggles. Only the seed in
- * packages/scripts/migrate/migrations/20260921237400_seed-signup-grant-schedule.ts reads it directly;
- * runtime goes through runtimeSignupGrantSchedule below.
+ * Resolves the schedule from stored values, including the retired toggles. Only the migrations in
+ * packages/scripts/migrate/migrations (20260921237400_seed-signup-grant-schedule.ts and
+ * 20260921237450_pin-signup-grant-initial-and-cap.ts) read it directly; runtime goes through
+ * runtimeSignupGrantSchedule below.
  */
 export function signupGrantScheduleFromValues(
   read: (key: SignupGrantCreditKey) => number | undefined,
