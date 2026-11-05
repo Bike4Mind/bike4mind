@@ -166,12 +166,18 @@ export function useBulkActions({
     try {
       for (let i = 0; i < sessions.length; i += MAX_BULK_ITEMS) {
         const chunk = sessions.slice(i, i + MAX_BULK_ITEMS);
-        const { data } = await api.post<{ okCount: number }>('/api/sessions/bulk', {
-          action: 'favorite',
-          add: chunk.filter(s => !favoriteIds.has(s.id)).map(s => s.id),
-          remove: chunk.filter(s => favoriteIds.has(s.id)).map(s => s.id),
-        });
-        okCount += data.okCount;
+        try {
+          const { data } = await api.post<{ okCount: number }>('/api/sessions/bulk', {
+            action: 'favorite',
+            add: chunk.filter(s => !favoriteIds.has(s.id)).map(s => s.id),
+            remove: chunk.filter(s => favoriteIds.has(s.id)).map(s => s.id),
+          });
+          okCount += data.okCount;
+        } catch (error) {
+          // Earlier chunks are committed server-side, so report them as a partial result.
+          if (okCount === 0) throw error;
+          break;
+        }
       }
 
       const total = sessions.length;

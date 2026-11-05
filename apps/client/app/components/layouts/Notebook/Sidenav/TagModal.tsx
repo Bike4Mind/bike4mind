@@ -30,6 +30,7 @@ interface TagModalProps {
   open: boolean;
   /** Close without clearing selection - mirrors the backdrop-dismiss behaviour. */
   onClose: () => void;
+  /** Must already be narrowed to visible sessions: the count shown and the ids sent both come from it. */
   selectedItems: Set<string>;
   combinedSessions: CombinedSessionDocument[];
   /** Called after tags are successfully applied so the parent can clear the selection. */
@@ -53,14 +54,21 @@ const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: 
     const addMode = tagChips.length > 0;
     const plural = (n: number) => `${n} item${n > 1 ? 's' : ''}`;
     let okCount = 0;
+    let failure: unknown;
 
     try {
       for (let i = 0; i < ids.length; i += MAX_BULK_ITEMS) {
         const sessionIds = ids.slice(i, i + MAX_BULK_ITEMS);
-        const { data } = await api.post<BulkTagResponse>(
-          '/api/sessions/bulk',
-          addMode ? { action: 'addTags', sessionIds, tags: tagChips } : { action: 'generateTags', sessionIds }
-        );
+        let data: BulkTagResponse;
+        try {
+          ({ data } = await api.post<BulkTagResponse>(
+            '/api/sessions/bulk',
+            addMode ? { action: 'addTags', sessionIds, tags: tagChips } : { action: 'generateTags', sessionIds }
+          ));
+        } catch (error) {
+          failure = error;
+          break;
+        }
         okCount += data.okCount;
         for (const result of data.results) {
           if (!result.ok) continue;
@@ -69,18 +77,24 @@ const TagModal = ({ open, onClose, selectedItems, combinedSessions, onTagged }: 
         }
       }
 
+      // Nothing committed: keep the modal open so the user can retry.
+      if (failure && okCount === 0) {
+        toast.error(getInsufficientCreditsMessage(failure) ?? 'Failed to manage tags');
+        return;
+      }
+
       const done = addMode
         ? `Added ${tagChips.length} tag${tagChips.length > 1 ? 's' : ''} to`
         : 'Started generating tags for';
       if (okCount === ids.length) toast.success(`${done} ${plural(ids.length)}`);
       else toast.warning(`${done} ${okCount} of ${ids.length} items`);
+      // Earlier chunks are already applied (and billed), so close rather than invite a retry of them.
+      if (failure) toast.error(getInsufficientCreditsMessage(failure) ?? 'Failed to manage the remaining tags');
 
       onClose();
       onTagged();
       setManualTags('');
       setTagChips([]);
-    } catch (error) {
-      toast.error(getInsufficientCreditsMessage(error) ?? 'Failed to manage tags');
     } finally {
       queryClient.invalidateQueries({ queryKey: ['sessions'] });
     }

@@ -224,11 +224,17 @@ export function useRespondToInvites({ onSettled }: { onSettled?: () => void } = 
     mutationFn: async ({ action, ids }: { action: 'accept' | 'refuse'; ids: string[] }) => {
       let okCount = 0;
       for (let i = 0; i < ids.length; i += MAX_BULK_ITEMS) {
-        const { data } = await api.post<BulkInviteResponse>('/api/invites/bulk', {
-          action,
-          ids: ids.slice(i, i + MAX_BULK_ITEMS),
-        });
-        okCount += data.okCount;
+        try {
+          const { data } = await api.post<BulkInviteResponse>('/api/invites/bulk', {
+            action,
+            ids: ids.slice(i, i + MAX_BULK_ITEMS),
+          });
+          okCount += data.okCount;
+        } catch (error) {
+          // Earlier chunks are committed server-side, so report them as a partial result.
+          if (okCount === 0) throw error;
+          break;
+        }
       }
       return { action, okCount, total: ids.length };
     },

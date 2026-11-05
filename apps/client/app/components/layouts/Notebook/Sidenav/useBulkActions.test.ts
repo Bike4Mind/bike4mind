@@ -165,6 +165,16 @@ describe('useBulkActions - handleFavoriteSelected', () => {
     expect(mockToast.success).not.toHaveBeenCalled();
   });
 
+  it('keeps the committed chunk count when a later chunk fails in transport', async () => {
+    mockPost
+      .mockImplementationOnce(async (_url: string, body: { add: string[] }) => ({ data: { okCount: body.add.length } }))
+      .mockRejectedValueOnce(new Error('network'));
+    await favorite(makeSessions(150));
+
+    expect(mockToast.warning).toHaveBeenCalledWith('Updated favorites for 100 of 150 items');
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
   it('sends nothing for an empty selection', async () => {
     await favorite([]);
     expect(mockPost).not.toHaveBeenCalled();

@@ -94,4 +94,42 @@ describe('TagModal', () => {
     expect(mockToast.success).not.toHaveBeenCalled();
     expect(mockStartJob).toHaveBeenCalledTimes(1);
   });
+
+  it('closes and reports the committed chunk when a later chunk fails', async () => {
+    const many = Array.from({ length: 150 }, (_, i) => `m${i}`);
+    const manySessions = many.map(id => ({ id, name: id, tags: [] })) as unknown as CombinedSessionDocument[];
+    mockPost
+      .mockImplementationOnce(async (_url: string, body: { sessionIds: string[] }) => okFor(body.sessionIds))
+      .mockRejectedValueOnce(new Error('Insufficient credits'));
+    const onTagged = vi.fn();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <TagModal
+            open
+            onClose={vi.fn()}
+            selectedItems={new Set(many)}
+            combinedSessions={manySessions}
+            onTagged={onTagged}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    fireEvent.click(screen.getByTestId('tag-modal-apply-btn'));
+
+    await waitFor(() => expect(onTagged).toHaveBeenCalled());
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockToast.warning).toHaveBeenCalledWith('Started generating tags for 100 of 150 items');
+    expect(mockToast.error).toHaveBeenCalled();
+    expect(mockStartJob).toHaveBeenCalledTimes(100);
+  });
+
+  it('keeps the modal open when the first chunk fails', async () => {
+    mockPost.mockRejectedValue(new Error('boom'));
+    const { onTagged } = renderModal();
+    fireEvent.click(screen.getByTestId('tag-modal-apply-btn'));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Failed to manage tags'));
+    expect(onTagged).not.toHaveBeenCalled();
+  });
 });
