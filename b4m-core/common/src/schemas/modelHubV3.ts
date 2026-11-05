@@ -72,18 +72,26 @@ const TEXT_ROLES = ['chat', 'code', 'vision'] as const;
 const MAX_PICKS = 24;
 const MAX_METRICS = 16;
 
-// Printable ASCII only: the label is shown as is in client UIs.
-const LicenseLabelSchema = z
-  .string()
-  .min(1)
-  .max(48)
-  .regex(/^[\x20-\x7e]+$/);
+// Printable ASCII with no leading or trailing space: client UIs show it as is.
+const DISPLAY_TEXT = /^[\x21-\x7e]([\x20-\x7e]*[\x21-\x7e])?$/;
+const LicenseLabelSchema = z.string().max(48).regex(DISPLAY_TEXT);
+
+// Labels for well-known license ids; a v3 label for one of these ids must match, and v2 lists get it from here.
+const LICENSE_LABELS = new Map<string, string>([
+  ['apache-2.0', 'Apache 2.0'],
+  ['mit', 'MIT'],
+  ['bsd-2-clause', 'BSD 2-Clause'],
+  ['bsd-3-clause', 'BSD 3-Clause'],
+  ['isc', 'ISC'],
+  ['gemma', 'Gemma Terms of Use'],
+]);
 
 /** A build's own license, with the label clients show beside it. */
 const BuildLicenseSchema = HubLicenseRefSchema.extend({ label: LicenseLabelSchema });
 const EntryLicenseSchema = HubLicenseSchema.extend({ label: LicenseLabelSchema });
 
-// The runtime settings a profile was measured with; Ollama applies kv and flashAttn server-wide.
+// The settings a profile was measured with. Ollama applies kv and flashAttn server-wide, so a client sets them per
+// model only where the runtime allows (llama-server presets).
 const TextProfileSettingsSchema = z.object({
   numCtx: HubContextSchema,
   kv: z.enum(KV_CACHE_TYPES),
@@ -111,6 +119,8 @@ const ProfileSchema = z.object({
     .record(z.string().regex(/^[a-z][A-Za-z0-9]{0,39}$/), z.number().min(0).max(1e9))
     .refine(hubMaxKeys(MAX_METRICS), 'too many metrics')
     .default({}),
+  // Conditions a reader should weigh, such as host load during the run.
+  note: z.string().max(160).regex(DISPLAY_TEXT).optional(),
 });
 export type HubProfile = z.infer<typeof ProfileSchema>;
 
@@ -148,16 +158,22 @@ function profileIssues(entry: TextEntryShape, build: HubBuildV3, b: number): Hub
     if (settings.numCtx > entry.arch.contextMax)
       issues.push({ path: at('settings', 'numCtx'), message: 'numCtx exceeds arch.contextMax' });
     // Ollama keeps an f16 cache with flash attention off, and llama-server rejects a quantized V cache without it.
-    if (settings.kv !== 'f16' && settings.flashAttn !== 'on')
-      issues.push({ path: at('settings', 'kv'), message: "a quantized KV cache needs flashAttn 'on'" });
+    if (settings.kv !== 'f16' && settings.flashAttn === 'off')
+      issues.push({ path: at('settings', 'kv'), message: 'a quantized KV cache needs flash attention' });
     if ((settings.draftNumPredict ?? 0) > 0 && !hasDraft)
       issues.push({ path: at('settings', 'draftNumPredict'), message: 'draftNumPredict needs a draft or MTP layer' });
   });
   return issues;
 }
 
+function labelIssue(license: { id: string; label: string }, path: PropertyKey[]): HubEntryIssue[] {
+  const known = LICENSE_LABELS.get(license.id.toLowerCase());
+  if (known === undefined || known === license.label) return [];
+  return [{ path, message: `the label for ${license.id} is ${known}` }];
+}
+
 function licenseIssues(entry: TextEntryShape, build: HubBuildV3, b: number): HubEntryIssue[] {
-  const issues: HubEntryIssue[] = [];
+  const issues: HubEntryIssue[] = [...labelIssue(build.license, ['builds', b, 'license', 'label'])];
   const rank = hubLicenseRank(build.license.class);
   if (rank < hubLicenseRank(entry.license.base.class))
     issues.push({ path: ['builds', b, 'license', 'class'], message: 'less restrictive than the base license' });
@@ -169,7 +185,7 @@ function licenseIssues(entry: TextEntryShape, build: HubBuildV3, b: number): Hub
 
 function refineTextEntry(entry: TextEntryShape, ctx: z.RefinementCtx<TextEntryShape>): void {
   const header = v2Header(entry);
-  const issues = hubHeaderIssues(header);
+  const issues = [...hubHeaderIssues(header), ...labelIssue(entry.license, ['license', 'label'])];
   const buildIds = new Set<string>();
   entry.builds.forEach((build, b) => {
     if (buildIds.has(build.id)) issues.push({ path: ['builds', b, 'id'], message: `duplicate build id ${build.id}` });
@@ -209,6 +225,10 @@ export type HubTierV3 = z.infer<typeof TierV3Schema>;
 /** What the curated-v2 channel publishes from this list; curatedV2FromV3 turns it into the v2 manifest. */
 const V2ChannelSchema = z.object({
   sequence: z.number().int().min(1).max(HUB_MAX_SEQUENCE),
+  // sha256 of JSON.stringify of the generated v2 list, per v2 sequence, so a content change needs a new sequence.
+  contentSha256: z
+    .record(z.string().regex(/^[1-9][0-9]{0,8}$/), z.string().regex(/^[0-9a-f]{64}$/))
+    .refine(hubMaxKeys(HUB_MAX_CHANGELOG), 'too many sequences'),
   updatedAt: z.iso.datetime(),
   changelog: z.array(HubChangelogItemSchema).max(HUB_MAX_CHANGELOG),
   rankings: z.partialRecord(HubRoleSchema, z.array(HubSlugSchema).max(HUB_MAX_ENTRIES)),
@@ -277,6 +297,13 @@ function refineManifestV3(manifest: ManifestV3Shape, ctx: z.RefinementCtx<Manife
       if (byId.get(id)?.modality !== modality) issue(['rankings', modality, i], `no ${modality} entry ${id}`);
     });
   }
+  const channel = manifest.v2Channel;
+  if (channel) {
+    if (!Object.hasOwn(channel.contentSha256, String(channel.sequence)))
+      issue(['v2Channel', 'contentSha256'], `no hash for sequence ${channel.sequence}`);
+    for (const key of Object.keys(channel.contentSha256))
+      if (Number(key) > channel.sequence) issue(['v2Channel', 'contentSha256', key], 'a later sequence');
+  }
   manifest.v2Channel?.entries.forEach(({ entry: id, builds }, i) => {
     const path = ['v2Channel', 'entries', i];
     const entry = byId.get(id);
@@ -297,16 +324,6 @@ export type HubManifestV3Input = z.input<typeof HubManifestV3Schema>;
 
 /** The published v3 list: the same sequence and changelog rules as v2. */
 export const CuratedCatalogV3Schema = HubManifestV3Schema.superRefine(refinePublishedCatalog);
-
-// Labels for license ids a v2 list carries without one; anything else shows its id.
-const LICENSE_LABELS = new Map<string, string>([
-  ['apache-2.0', 'Apache 2.0'],
-  ['mit', 'MIT'],
-  ['bsd-2-clause', 'BSD 2-Clause'],
-  ['bsd-3-clause', 'BSD 3-Clause'],
-  ['isc', 'ISC'],
-  ['gemma', 'Gemma Terms of Use'],
-]);
 
 /** The label a client shows for a license: the manifest's own, else a known label for its id, else the id. */
 export function hubLicenseLabel(license: { id: string; label?: string }): string {

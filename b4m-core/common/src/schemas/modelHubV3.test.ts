@@ -37,6 +37,18 @@ describe('curated v3 schema', () => {
     expect(parsed.entries.find(e => e.id === 'gemma-4-12b')?.builds[0].profiles).toEqual([]);
   });
 
+  it('accepts a quantized KV cache measured with flash attention on or auto, and a profile note', () => {
+    for (const flashAttn of ['on', 'auto'])
+      expect(
+        messages(
+          mutated(d => {
+            Object.assign(profile(d, 'qwen3-5-9b').settings, { flashAttn });
+            profile(d, 'qwen3-5-9b').note = 'Measured with a host load average near 30.';
+          })
+        )
+      ).toEqual([]);
+  });
+
   it('lists a non-permissive build with its label', () => {
     const doc = mutated(d => {
       const e = entry(d, 'gemma-4-12b');
@@ -50,7 +62,12 @@ describe('curated v3 schema', () => {
         legalNote: 'Reviewed for listing.',
         cardTag: 'gemma',
       });
-      Object.assign(e.builds[0].license, { id: 'gemma', spdx: false, class: 'restricted-commercial', label: 'Gemma' });
+      Object.assign(e.builds[0].license, {
+        id: 'gemma',
+        spdx: false,
+        class: 'restricted-commercial',
+        label: 'Gemma Terms of Use',
+      });
     });
     expect(messages(doc)).toEqual([]);
   });
@@ -68,11 +85,40 @@ describe('curated v3 schema', () => {
       /invalid/i,
     ],
     ['a label over 48 characters', d => (entry(d, 'gemma-4-12b').license.label = 'x'.repeat(49)), /too big/i],
+    ['an empty label', d => (entry(d, 'gemma-4-12b').license.label = ''), /invalid/i],
+    ['a space-padded label', d => (entry(d, 'gemma-4-12b').builds[0].license.label = ' Apache 2.0'), /invalid/i],
     [
-      'a quantized KV cache without flash attention',
-      d => (profile(d, 'qwen3-5-9b').settings.flashAttn = 'auto'),
-      /quantized KV cache needs flashAttn/,
+      'an entry label that differs from the known one for its id',
+      d => (entry(d, 'gemma-4-12b').license.label = 'Apache License'),
+      /the label for apache-2.0 is Apache 2.0/,
     ],
+    [
+      'a build label that differs from the known one for its id',
+      d => (entry(d, 'gemma-4-12b').builds[0].license.label = 'Apache-2.0'),
+      /the label for apache-2.0 is Apache 2.0/,
+    ],
+    [
+      'a quantized KV cache with flash attention off',
+      d => (profile(d, 'qwen3-5-9b').settings.flashAttn = 'off'),
+      /quantized KV cache needs flash attention/,
+    ],
+    [
+      'a profile note with smart punctuation',
+      d => (profile(d, 'gemma-4-12b').note = `Load ${String.fromCharCode(0x2014)} high`),
+      /invalid/i,
+    ],
+    ['a profile note over 160 characters', d => (profile(d, 'gemma-4-12b').note = 'x'.repeat(161)), /too big/i],
+    [
+      'a v2 channel with no hash for its sequence',
+      d => (d.v2Channel.contentSha256 = { '3': 'a'.repeat(64) }),
+      /no hash for sequence 4/,
+    ],
+    [
+      'a v2 channel hash for a later sequence',
+      d => (d.v2Channel.contentSha256['5'] = 'a'.repeat(64)),
+      /a later sequence/,
+    ],
+    ['a malformed v2 channel hash', d => (d.v2Channel.contentSha256['4'] = 'xyz'), /invalid/i],
     [
       'a profile context above the model maximum',
       d => (profile(d, 'gemma-4-e4b').settings.numCtx = 262144),

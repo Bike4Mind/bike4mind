@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   CuratedCatalogV3Schema,
   curatedV2FromV3,
@@ -55,12 +56,19 @@ describe('the curated v3 list', () => {
     for (const entry of manifest.entries) expect(recorded, entry.id).toContain(entry.id);
   });
 
-  it('gives every build a measured profile with flash attention on', () => {
+  it('gives every build a measured profile with flash attention available', () => {
     for (const entry of strict().entries)
       for (const build of entry.builds) {
         expect(build.profiles.length, `${entry.id} ${build.id}`).toBeGreaterThan(0);
-        for (const profile of build.profiles) expect(profile.settings.flashAttn).toBe('on');
+        for (const profile of build.profiles) expect(profile.settings.flashAttn).not.toBe('off');
       }
+  });
+
+  it('records the bundled v2 content hash under the current v2 sequence', () => {
+    const channel = strict().v2Channel;
+    const sha = createHash('sha256').update(JSON.stringify(bundled)).digest('hex');
+    expect(channel?.contentSha256[String(channel.sequence)]).toBe(sha);
+    expect(bundled.sequence).toBe(channel?.sequence);
   });
 
   // Planned as Ollama runs the profile: flash attention on, the profile's KV type and draft count.

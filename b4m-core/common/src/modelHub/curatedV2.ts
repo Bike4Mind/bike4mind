@@ -21,6 +21,20 @@ function v2Entry({ modality, builds: all, ...header }: EntryV3Input, builds: Bui
   };
 }
 
+// The keys of `input` the v2 schema kept in `parsed`, so stray keys drop and defaults the input left out stay out.
+function onlyKnown(input: unknown, parsed: unknown): unknown {
+  if (Array.isArray(input) && Array.isArray(parsed)) return input.map((item, i) => onlyKnown(item, parsed[i]));
+  if (!isRecord(input) || !isRecord(parsed)) return input;
+  return Object.fromEntries(
+    Object.entries(input)
+      .filter(([key]) => Object.hasOwn(parsed, key))
+      .map(([key, value]) => [key, onlyKnown(value, parsed[key])])
+  );
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
 function lookup<T>(map: ReadonlyMap<string, T>, id: string, what: string): T {
   const found = map.get(id);
   if (found === undefined) throw new Error(`v2Channel names ${what} ${id}, which the v3 list does not have`);
@@ -58,6 +72,6 @@ export function curatedV2FromV3(input: HubManifestV3Input): HubManifestInput {
     tiers: channel.tiers,
     entries,
   };
-  CuratedCatalogSchema.parse(manifest);
-  return manifest;
+  // The v2 schema strips unknown keys on parse; the pruned input is valid because pruning only drops those.
+  return onlyKnown(manifest, CuratedCatalogSchema.parse(manifest)) as HubManifestInput;
 }

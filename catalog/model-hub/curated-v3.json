@@ -245,7 +245,7 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "f16", "draftNumPredict": 0 },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16", "draftNumPredict": 0 },
               "evidenceRunId": "ann:p2:Q08:sweepWinner",
               "measuredOn": {
                 "date": "2026-11-03",
@@ -342,22 +342,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0", "numBatch": 2048 },
-              "evidenceRunId": "ann:p2:Q4B:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "evidenceRunId": "p2:Q4B:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 43.75,
-                "codeDecodeTokS": 46.05,
-                "prefill16kTokS": 4275.05,
-                "gpuMiB": 5064,
-                "kvQ8DecodeTokS": 43.59,
-                "kvQ8Prefill16kTokS": 3669.9
-              }
+              "metrics": { "decodeTokS": 43.59, "prefill16kTokS": 3669.9, "gpuMiB": 5229 }
             }
           ]
         }
@@ -446,22 +439,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0" },
-              "evidenceRunId": "ann:p2:S3:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "evidenceRunId": "p2:S3:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 31.43,
-                "codeDecodeTokS": 27.77,
-                "prefill16kTokS": 2477.7,
-                "gpuMiB": 7470,
-                "kvQ8DecodeTokS": 36.8,
-                "kvQ8Prefill16kTokS": 2560.35
-              }
+              "metrics": { "decodeTokS": 36.8, "prefill16kTokS": 2560.35, "gpuMiB": 7727 }
             }
           ]
         }
@@ -550,7 +536,7 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "f16" },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16" },
               "evidenceRunId": "ann:p2:GE4B:sweepWinner",
               "measuredOn": {
                 "date": "2026-11-03",
@@ -647,7 +633,7 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "f16" },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16" },
               "evidenceRunId": "ann:p2:G12B:sweepWinner",
               "measuredOn": {
                 "date": "2026-11-03",
@@ -745,7 +731,7 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "f16" },
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "f16" },
               "evidenceRunId": "ann:p2:K3:sweepWinner",
               "measuredOn": {
                 "date": "2026-11-03",
@@ -753,7 +739,8 @@
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": { "decodeTokS": 63.3, "codeDecodeTokS": 69.12, "prefill16kTokS": 1953.4, "gpuMiB": 16619 }
+              "metrics": { "decodeTokS": 63.3, "codeDecodeTokS": 69.12, "prefill16kTokS": 1953.4, "gpuMiB": 16619 },
+              "note": "Measured with a host load average near 55."
             }
           ]
         }
@@ -844,22 +831,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0", "draftNumPredict": 2 },
-              "evidenceRunId": "ann:p2:N1:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 2 },
+              "evidenceRunId": "p2:N1:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 63.79,
-                "codeDecodeTokS": 67.54,
-                "prefill16kTokS": 2583.95,
-                "gpuMiB": 23104,
-                "kvQ8DecodeTokS": 64.12,
-                "kvQ8Prefill16kTokS": 2275.35
-              }
+              "metrics": { "decodeTokS": 64.12, "prefill16kTokS": 2275.35, "gpuMiB": 23668 }
             }
           ]
         },
@@ -903,22 +883,16 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0", "draftNumPredict": 3, "numBatch": 2048 },
-              "evidenceRunId": "ann:p2:N2:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 3 },
+              "evidenceRunId": "p2:N2:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 50.13,
-                "codeDecodeTokS": 66.68,
-                "prefill16kTokS": 2686.3,
-                "gpuMiB": 38750,
-                "kvQ8DecodeTokS": 50.09,
-                "kvQ8Prefill16kTokS": 1889.95
-              }
+              "metrics": { "decodeTokS": 50.09, "prefill16kTokS": 1889.95, "gpuMiB": 38826 },
+              "note": "Measured with a host load average near 30."
             }
           ]
         }
@@ -1007,22 +981,16 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0", "draftNumPredict": 4, "numBatch": 512 },
-              "evidenceRunId": "ann:p2:N6:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 4 },
+              "evidenceRunId": "p2:N6:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 13.35,
-                "codeDecodeTokS": 22.81,
-                "prefill16kTokS": 422.8,
-                "gpuMiB": 20192,
-                "kvQ8DecodeTokS": 17.45,
-                "kvQ8Prefill16kTokS": 697.05
-              }
+              "metrics": { "decodeTokS": 17.45, "prefill16kTokS": 697.05, "gpuMiB": 20060 },
+              "note": "Measured with a host load average near 30."
             }
           ]
         },
@@ -1065,22 +1033,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0", "draftNumPredict": 4, "numBatch": 2048 },
-              "evidenceRunId": "ann:p2:K1:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0", "draftNumPredict": 4 },
+              "evidenceRunId": "p2:K1:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 14.67,
-                "codeDecodeTokS": 22.2,
-                "prefill16kTokS": 673.75,
-                "gpuMiB": 31864,
-                "kvQ8DecodeTokS": 13.43,
-                "kvQ8Prefill16kTokS": 686.85
-              }
+              "metrics": { "decodeTokS": 13.43, "prefill16kTokS": 686.85, "gpuMiB": 31089 }
             }
           ]
         }
@@ -1179,22 +1140,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0" },
-              "evidenceRunId": "ann:p2:GSQ3:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "evidenceRunId": "p2:GSQ3:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 17.75,
-                "codeDecodeTokS": 17.7,
-                "prefill16kTokS": 747.45,
-                "gpuMiB": 14692,
-                "kvQ8DecodeTokS": 16.66,
-                "kvQ8Prefill16kTokS": 731.2
-              }
+              "metrics": { "decodeTokS": 16.66, "prefill16kTokS": 731.2, "gpuMiB": 14775 }
             }
           ]
         },
@@ -1247,22 +1201,15 @@
           "profiles": [
             {
               "id": "quality",
-              "settings": { "numCtx": 32768, "flashAttn": "on", "kv": "q8_0", "numBatch": 512 },
-              "evidenceRunId": "ann:p2:GSQ2:sweepWinner",
+              "settings": { "numCtx": 32768, "flashAttn": "auto", "kv": "q8_0" },
+              "evidenceRunId": "p2:GSQ2:kv8-best",
               "measuredOn": {
                 "date": "2026-11-03",
                 "hardware": "n1x-unified-128gb",
                 "runtime": "ollama",
                 "runtimeVersion": "0.40.13"
               },
-              "metrics": {
-                "decodeTokS": 17.6,
-                "codeDecodeTokS": 17.72,
-                "prefill16kTokS": 562.5,
-                "gpuMiB": 11622,
-                "kvQ8DecodeTokS": 17.48,
-                "kvQ8Prefill16kTokS": 582.45
-              }
+              "metrics": { "decodeTokS": 17.48, "prefill16kTokS": 582.45, "gpuMiB": 11705 }
             }
           ]
         }
@@ -1271,6 +1218,7 @@
   ],
   "v2Channel": {
     "sequence": 4,
+    "contentSha256": { "4": "135a1a95a9e37c6a8da44fa6c22187655861ab2754fd3f3d484f332a0faa6e57" },
     "updatedAt": "2026-11-04T00:00:00Z",
     "changelog": [
       {

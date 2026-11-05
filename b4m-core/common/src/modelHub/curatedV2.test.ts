@@ -17,9 +17,22 @@ describe('curatedV2FromV3', () => {
     const v2 = curatedV2FromV3(read('curated-v3.json'));
     expect(CuratedCatalogSchema.safeParse(v2).success).toBe(true);
     const text = JSON.stringify(v2);
-    for (const key of ['"modality"', '"profiles"', '"label":"Apache 2.0"', '"v2Channel"', 'qwen3-6'])
-      expect(text).not.toContain(key);
+    const v3Only = ['"modality"', '"profiles"', '"label":"Apache 2.0"', '"v2Channel"', 'contentSha256', '"note"'];
+    for (const key of [...v3Only, 'qwen3-6']) expect(text).not.toContain(key);
     for (const entry of v2.entries) expect(entry.capabilities.embeddings).toBe(false);
+  });
+
+  it('drops keys v2 does not define, at any depth', () => {
+    const v3 = read('curated-v3.json');
+    v3.stray = 1;
+    v3.entries[0].stray = 1;
+    v3.entries[0].arch.stray = 1;
+    v3.entries[0].builds[0].stray = 1;
+    v3.entries[0].builds[0].ollama.layers.stray = 1;
+    v3.v2Channel.tiers[0].picks[0].stray = 1;
+    const v2 = curatedV2FromV3(v3 as never);
+    expect(JSON.stringify(v2)).not.toContain('stray');
+    expect(JSON.stringify(v2)).toBe(JSON.stringify(read('curated-v2.json')));
   });
 
   it('follows the channel, not the v3 order or picks', () => {

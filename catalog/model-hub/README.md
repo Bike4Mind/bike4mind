@@ -7,7 +7,7 @@ the catalog is reviewed and updated pins arrive in a desktop release or an accep
 Explore remains available for reviewing the live repo.
 Do not refresh digests automatically just to make a check green.
 
-`curated-v3.json` is the source list: each entry has a `modality`, each build a license label and the runtime profile it was measured with, and tiers pick per modality. Its `v2Channel` names what v2 clients get, and `curated-v2.json` is generated from it: edit v3, then run `pnpm --filter @bike4mind/scripts curated:v2` (`--check` verifies the committed file).
+`curated-v3.json` is the source list: each entry has a `modality`, each build a license label and the runtime profile it was measured with, and tiers pick per modality. Its `v2Channel` names what v2 clients get, and `curated-v2.json` is generated from it: edit v3, then run `pnpm --filter @bike4mind/scripts curated:v2` (`--check` verifies the committed file). `v2Channel.contentSha256` records the hash of the v2 content per v2 sequence, so both commands fail on a v2 content change until the v2 sequence is bumped and the new hash recorded; the error prints both values. A profile's `kv` and `flashAttn` are what the evidence run used.
 
 `keys.json` is the one keyring Desktop, the CLI and the publishing scripts trust (`{ keyId, spki, role }` entries; empty until production keys exist).
 A key only reaches users in a Desktop or CLI release built after it lands here.
