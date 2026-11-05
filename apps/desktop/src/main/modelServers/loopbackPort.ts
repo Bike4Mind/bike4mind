@@ -1,4 +1,4 @@
-import { createServer } from 'node:net';
+import { connect, createServer } from 'node:net';
 
 const LAUNCH_HOSTS = new Set(['127.0.0.1', 'localhost']);
 
@@ -22,11 +22,26 @@ function canBind(port: number, host: string): Promise<boolean> {
   });
 }
 
+/** Whether something accepts connections on 127.0.0.1:port, a listener on the wildcard address included. Never binds. */
+export function loopbackPortListening(port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = connect({ port, host: '127.0.0.1' });
+    const done = (listening: boolean) => {
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.setTimeout(timeoutMs, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
+}
+
 /**
  * Whether a server could listen on 127.0.0.1:port now; anything bound there, answering or not, makes it false. On
- * Windows a listener on 0.0.0.0 or another address does not block a 127.0.0.1 bind, so the wildcard must bind too.
+ * Windows a listener on 0.0.0.0 does not block a 127.0.0.1 bind, so a connect finds it: binding the wildcard there
+ * would raise a Windows Firewall prompt.
  */
 export async function loopbackPortFree(port: number, platform: NodeJS.Platform = process.platform): Promise<boolean> {
   if (!(await canBind(port, '127.0.0.1'))) return false;
-  return platform !== 'win32' || canBind(port, '0.0.0.0');
+  return platform !== 'win32' || !(await loopbackPortListening(port));
 }

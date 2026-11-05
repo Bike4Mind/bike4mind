@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loopbackLaunchPort, loopbackPortFree } from './loopbackPort';
+import { loopbackLaunchPort, loopbackPortFree, loopbackPortListening } from './loopbackPort';
 
 let held: Server | null = null;
 
@@ -24,20 +24,35 @@ describe('loopbackPortFree', () => {
     expect(await loopbackPortFree(address.port)).toBe(true);
   });
 
-  it('on Windows also needs the wildcard address, and releases both binds', async () => {
-    // Linux refuses a 0.0.0.0 bind while 127.0.0.2 holds the port, but allows 127.0.0.1: the gap Windows has.
+  it('on Windows also counts a listener a connect reaches, without binding the wildcard address', async () => {
     const server = createServer(() => undefined);
     held = server;
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.2', resolve));
+    await new Promise<void>(resolve => server.listen(0, '0.0.0.0', resolve));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('no port');
 
-    expect(await loopbackPortFree(address.port, 'linux')).toBe(true);
     expect(await loopbackPortFree(address.port, 'win32')).toBe(false);
     held = null;
     await new Promise(resolve => server.close(resolve));
     expect(await loopbackPortFree(address.port, 'win32')).toBe(true);
     expect(await loopbackPortFree(address.port, 'win32')).toBe(true);
+  });
+});
+
+describe('loopbackPortListening', () => {
+  it('is true while something listens on 127.0.0.1 or the wildcard address, false once it stops', async () => {
+    for (const host of ['127.0.0.1', '0.0.0.0']) {
+      const server = createServer(() => undefined);
+      held = server;
+      await new Promise<void>(resolve => server.listen(0, host, resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('no port');
+
+      expect(await loopbackPortListening(address.port)).toBe(true);
+      held = null;
+      await new Promise(resolve => server.close(resolve));
+      expect(await loopbackPortListening(address.port)).toBe(false);
+    }
   });
 });
 
