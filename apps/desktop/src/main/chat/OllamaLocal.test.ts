@@ -7,7 +7,13 @@ import type { CompletionStreamEvent } from './streamEvents';
 import { cpuMachine, discreteMachine, GIB, lowConfidenceMachine, stubArch, unifiedMachine } from './fitStub.testHelper';
 import type { LocalModelFootprint } from './localContext';
 import { HardwareProbe, localContextSizing } from './localContextSizing';
-import { forgetLocalContextOf, forgetLocalContexts, OllamaLocal, type LocalContextSizing } from './OllamaLocal';
+import {
+  forgetLocalContextOf,
+  forgetLocalContexts,
+  noToolsNotice,
+  OllamaLocal,
+  type LocalContextSizing,
+} from './OllamaLocal';
 import { createThinkFilter } from './thinkFilter';
 import { ServerCredentialsError, ServerForbiddenError } from '../modelServers/errors';
 
@@ -742,6 +748,75 @@ describe('OllamaLocal', () => {
     expect('tools' in sent).toBe(sendsTools);
   });
 
+  describe('the no-tools notice', () => {
+    const serve = (capabilities: string[]) =>
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: unknown) =>
+          String(input).endsWith('/api/show')
+            ? Response.json({ capabilities })
+            : new Response(`${JSON.stringify({ done: true })}\n`)
+        )
+      );
+    const turn = (sessionId: string, offered: 'tools' | 'withheld' | 'none', model = 'gemma3:270m') => ({
+      model: `local:ollama:${model}`,
+      messages: [{ role: 'user' as const, content: 'read README.md' }],
+      sessionId,
+      ...(offered === 'tools' ? { tools: [{ toolSchema: { name: 'read_file', parameters: {} } }] } : {}),
+      ...(offered === 'withheld' ? { toolsUnsupported: true as const } : {}),
+    });
+
+    it('tells each conversation once that its model has no tool support', async () => {
+      serve(['completion']);
+      const local = new OllamaLocal();
+      const onNotice = vi.fn();
+      await local.stream(turn('a', 'withheld'), () => undefined, undefined, undefined, onNotice);
+      await local.stream(turn('a', 'tools'), () => undefined, undefined, undefined, onNotice);
+      await local.stream(turn('b', 'tools'), () => undefined, undefined, undefined, onNotice);
+      await local.stream(turn('c', 'withheld'), () => undefined, undefined, undefined, onNotice);
+      expect(onNotice.mock.calls).toEqual(Array(3).fill([noToolsNotice('gemma3:270m'), 'no-tools']));
+      expect(noToolsNotice('gemma3:270m')).toBe(
+        'gemma3:270m has no tool support, so this conversation runs without tools. Pick a model with tool support to use tools.'
+      );
+    });
+
+    it('tells a conversation again when it switches to another model without tools, or returns after one with tools', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: unknown, init?: RequestInit) => {
+          if (!String(input).endsWith('/api/show')) return new Response(`${JSON.stringify({ done: true })}\n`);
+          const { name } = JSON.parse(String(init?.body)) as { name: string };
+          return Response.json({ capabilities: name === 'qwen3:0.6b' ? ['completion', 'tools'] : ['completion'] });
+        })
+      );
+      const local = new OllamaLocal();
+      const onNotice = vi.fn();
+      const run = (model: string) =>
+        local.stream(turn('a', 'tools', model), () => undefined, undefined, undefined, onNotice);
+      await run('gemma3:270m');
+      await run('gemma3:270m');
+      await run('tinyllama');
+      await run('gemma3:270m');
+      await run('qwen3:0.6b');
+      await run('gemma3:270m');
+      expect(onNotice.mock.calls.map(([notice]) => notice)).toEqual([
+        noToolsNotice('gemma3:270m'),
+        noToolsNotice('tinyllama'),
+        noToolsNotice('gemma3:270m'),
+        noToolsNotice('gemma3:270m'),
+      ]);
+    });
+
+    it('says nothing for a model with tool support, or a turn that offered no tools', async () => {
+      const onNotice = vi.fn();
+      serve(['completion', 'tools']);
+      await new OllamaLocal().stream(turn('a', 'tools'), () => undefined, undefined, undefined, onNotice);
+      serve(['completion']);
+      await new OllamaLocal().stream(turn('a', 'none'), () => undefined, undefined, undefined, onNotice);
+      expect(onNotice).not.toHaveBeenCalled();
+    });
+  });
+
   it('excludes embedding-only models and models whose capabilities could not be inspected', async () => {
     vi.stubGlobal(
       'fetch',
@@ -1373,7 +1448,7 @@ describe('OllamaLocal context sizing', () => {
     const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, discrete(7, 32)));
     await local.stream(longTurn, () => undefined, undefined, undefined, onNotice);
     expect(sent()).toEqual([16384, 32768]);
-    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('replies will be slower'));
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('replies will be slower'), 'context-size');
   });
 
   it('drops Auto to 16K and retries once when the model fails to load at a larger context', async () => {
@@ -1383,7 +1458,10 @@ describe('OllamaLocal context sizing', () => {
     const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13));
     await local.stream(longTurn, () => undefined, undefined, undefined, onNotice);
     expect(sent()).toEqual([65536, 16384]);
-    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('could not load with a 64K-token context'));
+    expect(onNotice).toHaveBeenCalledWith(
+      expect.stringContaining('could not load with a 64K-token context'),
+      'context-size'
+    );
     expect((await local.models())[0].contextWindow).toBe(16384);
     // It does not grow back into the size that failed.
     await expect(local.stream(longTurn, () => undefined)).rejects.toThrow("would not fit this computer's memory");

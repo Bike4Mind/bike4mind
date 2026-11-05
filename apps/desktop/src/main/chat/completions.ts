@@ -129,6 +129,8 @@ export interface CompletionRequest {
   sessionId?: string;
   /** Set when the tools were left out because the model's fixed context cannot hold them: Desktop's prompt plus tools. */
   toolPromptTokens?: number;
+  /** Set when the tools were left out because the listed model reports no tool support. */
+  toolsUnsupported?: true;
 }
 
 /**

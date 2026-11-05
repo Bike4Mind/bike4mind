@@ -49,6 +49,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
   WorkspacePreparation,
+  ContextNoticeKind,
 } from '@shared/chat';
 import {
   awaitsWorktree,
@@ -2973,8 +2974,8 @@ export class ChatService {
       const videoModels = await videoModelsRead;
       // Cleared when the server-fixed context cannot hold Desktop's prompt with tools; see toolPromptOverflow.
       let roomForTools = true;
-      const toolsFor = (granted: readonly string[]) =>
-        modelOption?.supportsTools === false || (localTurn && !modelOption) || !roomForTools
+      const offeredTools = (granted: readonly string[]) =>
+        (localTurn && !modelOption) || !roomForTools
           ? []
           : toolsForRequest({
               modelId: session.model,
@@ -2997,6 +2998,8 @@ export class ChatService {
               mcpServers: !!this.deps.mcp,
               pullRequest: session.mode === 'code' && attended && !!this.deps.pullRequests,
             });
+      const toolsFor = (granted: readonly string[]) =>
+        modelOption?.supportsTools === false ? [] : offeredTools(granted);
       let tools = toolsFor(roots);
       // A resumed reply replays the interrupted turn's tool results to the model, so untrusted
       // text it had already read is still in front of it: it starts out as tainted as the turn
@@ -3325,11 +3328,12 @@ export class ChatService {
                 ...generationField,
                 ...(maxTokens ? { maxTokens } : {}),
                 ...(toolPromptTokens !== undefined ? { toolPromptTokens } : {}),
+                ...(modelOption?.supportsTools === false ? { toolsUnsupported: true as const } : {}),
               },
               onCompletionEvent,
               controller.signal,
               dropped => this.emit({ type: 'context-trimmed', sessionId, dropped }),
-              message => this.emit({ type: 'context-notice', sessionId, message })
+              (message, kind) => this.emit({ type: 'context-notice', sessionId, message, ...(kind ? { kind } : {}) })
             )
           : await streamRound(
               api!.getAxiosInstance(),
@@ -7491,7 +7495,7 @@ async function streamLocalRound(
   onEvent: (event: CompletionStreamEvent) => void,
   signal?: AbortSignal,
   onTrimmed?: (dropped: number) => void,
-  onNotice?: (message: string) => void
+  onNotice?: (message: string, kind?: ContextNoticeKind) => void
 ): Promise<Error | null> {
   try {
     await local.stream(request, onEvent, signal, onTrimmed, onNotice);

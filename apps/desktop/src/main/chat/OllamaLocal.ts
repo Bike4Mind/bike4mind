@@ -1,7 +1,13 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import { modelBlobsOf, type FetchLike } from '@bike4mind/local-models';
-import { localBackend, localModelId, parseLocalModelId, type ChatModelOption } from '@shared/chat';
+import {
+  localBackend,
+  localModelId,
+  parseLocalModelId,
+  type ChatModelOption,
+  type ContextNoticeKind,
+} from '@shared/chat';
 import {
   AUTO_LOCAL_CONTEXT,
   LOCAL_CONTEXT_SIZES,
@@ -250,6 +256,8 @@ export interface RemoteOllama {
 export class OllamaLocal {
   private listed: ChatModelOption[] = [];
   private readonly runtimeId: string;
+  /** Conversation to the model it was last told has no tool support; cleared once a model with tools runs. */
+  private readonly toldNoTools = new Map<string, string>();
 
   /**
    * Main passes Electron's net.fetch: Node's fetch gives up after five minutes without response
@@ -336,7 +344,7 @@ export class OllamaLocal {
     /** Called with how many of the oldest messages were left out because the prompt overflowed. */
     onTrimmed?: (dropped: number) => void,
     /** Called when Auto changed this model's context in a way the user should hear about. */
-    onNotice?: (message: string) => void
+    onNotice?: (message: string, kind?: ContextNoticeKind) => void
   ): Promise<void> {
     const model = ollamaModelName(request.model, this.runtimeId);
     const inspection = showSchema.parse(await this.json('/api/show', { name: model }, signal, TURN_INSPECT_TIMEOUT_MS));
@@ -362,9 +370,18 @@ export class OllamaLocal {
         ? withNoThinkSwitch(toMessages(request.messages))
         : toMessages(request.messages);
     // Ollama refuses tools for a model without the capability; the list may not have known it yet.
-    const tools = inspection.capabilities.includes('tools')
+    const canUseTools = inspection.capabilities.includes('tools');
+    const tools = canUseTools
       ? (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }))
       : [];
+    const offeredTools = request.toolsUnsupported === true || (request.tools?.length ?? 0) > 0;
+    // A switch through a hosted model or another server's Ollama keeps the told state; the picker's "No tools" label still shows.
+    if (canUseTools && request.sessionId) {
+      this.toldNoTools.delete(request.sessionId);
+    } else if (offeredTools && onNotice && request.sessionId && this.toldNoTools.get(request.sessionId) !== model) {
+      this.toldNoTools.set(request.sessionId, model);
+      onNotice(noToolsNotice(model), 'no-tools');
+    }
     const post = (fitted: OllamaMessage[]) => {
       // Another conversation may have grown the model, or a load failure lowered it, since this turn began.
       numCtx = contextByModel.get(request.model) ?? numCtx;
@@ -404,7 +421,8 @@ export class OllamaLocal {
       const floor = await this.fallBack(request.model, inspection, tried);
       if (floor === undefined) return reply;
       onNotice?.(
-        `This model could not load with a ${shortSize(tried)}-token context, so Desktop runs it at ${shortSize(floor)} for now.`
+        `This model could not load with a ${shortSize(tried)}-token context, so Desktop runs it at ${shortSize(floor)} for now.`,
+        'context-size'
       );
       return post(fitted);
     };
@@ -420,7 +438,10 @@ export class OllamaLocal {
       if (growth.tokens !== undefined) {
         numCtx = growth.tokens;
         if (growth.slower)
-          onNotice?.(`This conversation now runs with a ${shortSize(numCtx)}-token context.${SLOWER_HINT}`);
+          onNotice?.(
+            `This conversation now runs with a ${shortSize(numCtx)}-token context.${SLOWER_HINT}`,
+            'context-size'
+          );
         response = await send(sent);
         measured = await refusedSize(response);
       }
@@ -988,6 +1009,11 @@ function ollamaModelName(modelId: string, runtimeId: string): string {
   const parsed = parseLocalModelId(modelId);
   if (parsed?.runtimeId !== runtimeId) throw new Error('Invalid local model id.');
   return parsed.model;
+}
+
+/** Worded like the CLI's notice for a server model without tool support. */
+export function noToolsNotice(model: string): string {
+  return `${model} has no tool support, so this conversation runs without tools. Pick a model with tool support to use tools.`;
 }
 
 // Module-wide so every OllamaLocal instance (catalog, chat, tests) reads the same figure.
