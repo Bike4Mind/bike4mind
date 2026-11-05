@@ -10,7 +10,7 @@ import { type MigrationFile } from './index';
  * for indexes that already exist.
  */
 const migration: MigrationFile = {
-  id: 20260921239700,
+  id: 20260921239980,
   name: 'ensure stripe dispute indexes',
 
   up: async () => {
