@@ -156,7 +156,7 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
   async listUntriagedForLoop(userId: string, loopId: string, limit: number): Promise<IWorkItem[]> {
     const results = await this.workItemModel
       .find({ userId, loopId, deletedAt: null, status: 'open', priority: { $exists: false }, epic: { $ne: true } })
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: 1, _id: 1 })
       .limit(limit);
     return results.map(doc => doc.toJSON());
   }
