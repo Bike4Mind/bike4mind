@@ -212,12 +212,10 @@ test.describe('Staged signup grants', () => {
     });
     expect(unlock.ok(), await unlock.text()).toBe(true);
     const total = SIGNUP_CREDITS + UNLOCK_CREDITS;
-    expect(await unlock.json()).toMatchObject({
-      creditsGranted: total - SIGNUP_CREDITS - DRIP_CREDITS,
-      currentCredits: total,
-    });
+    expect(await unlock.json()).toEqual({ outcome: 'applied', credits: total - SIGNUP_CREDITS - DRIP_CREDITS });
 
     const view = await apiGetSignupGrant(request, selfServe.accessToken, selfServe.userId);
+    expect(view.currentCredits).toBe(total);
     expect(view.signupGrant).toMatchObject({
       stage: 'unlocked',
       creditsReleased: total,
