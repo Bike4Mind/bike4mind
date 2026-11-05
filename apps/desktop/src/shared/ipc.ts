@@ -494,6 +494,8 @@ export const IPC_CHANNELS = {
   attentionSetBadge: 'attention:set-badge',
   /** main -> renderer push: the user clicked a notice. */
   attentionOpen: 'attention:open',
+  /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
+  attentionTakePendingOpen: 'attention:take-pending-open',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -1251,6 +1253,12 @@ export interface DesktopApi {
     /** Sessions waiting on the user, as the macOS dock badge; 0 clears it. A no-op elsewhere. */
     setBadgeCount(count: number): Promise<void>;
     onOpen(listener: (event: AttentionOpenEvent) => void): () => void;
+    /**
+     * The notice clicked while every window was closed, which reopened this one; null if none. Taken
+     * once: a later call returns null. Pulled rather than pushed, since the push would land before
+     * the renderer is listening.
+     */
+    takePendingOpen(): Promise<AttentionOpenEvent | null>;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

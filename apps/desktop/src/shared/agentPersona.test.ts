@@ -1,17 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentView } from '../roster';
-import { PERSONA_NAMES, assignPersonas, distinctTitle, epithetFor } from './agentPersona';
+import { PERSONA_NAMES, assignPersonas, distinctTitle, epithetFor, type PersonaSubject } from './agentPersona';
 
-const agentFixture = (id: string, extra: Partial<AgentView> = {}): AgentView => ({
+const agentFixture = (id: string, extra: Partial<PersonaSubject> = {}): PersonaSubject => ({
   id,
   title: `Agent ${id}`,
-  parentId: 'root',
-  depth: 1,
   seedPrompt: '',
   createdAt: '2026-10-01T00:00:00.000Z',
-  updatedAt: '2026-10-01T00:00:00.000Z',
-  model: 'm',
-  state: 'working',
   ...extra,
 });
 

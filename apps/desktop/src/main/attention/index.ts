@@ -2,6 +2,7 @@ import { Notification, app, ipcMain } from 'electron';
 import { parseAttentionNotice, type AttentionOpenEvent } from '@shared/attention';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { appWindows } from '../windows';
+import { NeedsYouMonitor, type NeedsYouMonitorDeps } from './needsYouMonitor';
 
 /**
  * Windows learn of a status change within milliseconds of each other. A second claim for a session
@@ -9,23 +10,30 @@ import { appWindows } from '../windows';
  */
 const CLAIM_WINDOW_MS = 2000;
 
+export type Attention = {
+  /** Starts main's own needs-you watch, for when no window is open to run the renderer's. */
+  watchNeedsYou(sources: Pick<NeedsYouMonitorDeps, 'listSessions' | 'sessionMessages'>): NeedsYouMonitor;
+};
+
 /**
  * OS notices for sessions that need the user, and the dock badge counting them.
  *
- * The renderer decides WHEN a session newly needs the user (it holds the statuses, titles and
- * personas); main owns the OS surfaces and the focus check, so a notice never pops over the window
- * the user is already looking at. Because every window runs that logic, main also decides which
- * window announces an entry (`attentionClaim`), so the chime and the notice happen once, not per window.
+ * While a window is open its renderer decides WHEN a session newly needs the user (it holds the
+ * statuses and plays the chime); with every window closed (macOS) main's NeedsYouMonitor does,
+ * by the same rules (@shared/needsYou). Main owns the OS surfaces and the focus check, so a notice
+ * never pops over the window the user is already looking at. Every announcer, each window and the
+ * monitor, claims an entry first (`attentionClaim`), so a notice happens once, not per announcer.
+ *
+ * `openWindow` reopens the app window when a notice is clicked with none open.
  */
-export function registerAttention(): void {
+export function registerAttention({ openWindow }: { openWindow(): void }): Attention {
   // Held so a notice is not garbage-collected before it is clicked, and so a session's newer notice
   // replaces its older one rather than stacking.
   const live = new Map<string, Notification>();
 
   const claimedAt = new Map<string, number>();
 
-  ipcMain.handle(IPC_CHANNELS.attentionClaim, (_event, sessionIds: unknown): string[] => {
-    if (!Array.isArray(sessionIds)) return [];
+  const claim = (sessionIds: readonly unknown[]): string[] => {
     const now = Date.now();
     for (const [sessionId, at] of claimedAt) if (now - at >= CLAIM_WINDOW_MS) claimedAt.delete(sessionId);
     const won: string[] = [];
@@ -35,9 +43,21 @@ export function registerAttention(): void {
       won.push(sessionId);
     }
     return won;
+  };
+
+  ipcMain.handle(IPC_CHANNELS.attentionClaim, (_event, sessionIds: unknown): string[] =>
+    Array.isArray(sessionIds) ? claim(sessionIds) : []
+  );
+
+  // Set by a click that had to reopen the window; its renderer takes it once it is listening.
+  let pendingOpen: AttentionOpenEvent | null = null;
+  ipcMain.handle(IPC_CHANNELS.attentionTakePendingOpen, (): AttentionOpenEvent | null => {
+    const taken = pendingOpen;
+    pendingOpen = null;
+    return taken;
   });
 
-  ipcMain.handle(IPC_CHANNELS.attentionNotify, (_event, payload: unknown) => {
+  const showNotice = (payload: unknown) => {
     const notice = parseAttentionNotice(payload);
     if (!notice || !Notification.isSupported()) return;
     const windows = appWindows();
@@ -50,7 +70,11 @@ export function registerAttention(): void {
     shown.on('click', () => {
       live.delete(notice.sessionId);
       const window = appWindows()[0];
-      if (!window) return;
+      if (!window) {
+        pendingOpen = open;
+        openWindow();
+        return;
+      }
       if (window.isMinimized()) window.restore();
       window.show();
       window.focus();
@@ -61,7 +85,9 @@ export function registerAttention(): void {
     });
     live.set(notice.sessionId, shown);
     shown.show();
-  });
+  };
+
+  ipcMain.handle(IPC_CHANNELS.attentionNotify, (_event, payload: unknown) => showNotice(payload));
 
   const setBadge = (count: number) => {
     if (process.platform !== 'darwin') return;
@@ -73,10 +99,28 @@ export function registerAttention(): void {
     setBadge(count);
   });
 
-  // macOS keeps the app alive with no window; a badge no window maintains would never clear.
+  let monitor: NeedsYouMonitor | null = null;
+
+  // macOS keeps the app alive with no window; the badge the last renderer kept passes to main.
   app.on('browser-window-created', (_event, created) => {
     created.once('closed', () => {
-      if (!appWindows().some(window => window !== created && !window.isDestroyed())) setBadge(0);
+      if (appWindows().some(window => window !== created && !window.isDestroyed())) return;
+      if (monitor) monitor.windowsClosed();
+      else setBadge(0);
     });
   });
+
+  return {
+    watchNeedsYou: sources => {
+      monitor = new NeedsYouMonitor({
+        ...sources,
+        hasWindow: () => appWindows().some(window => !window.isDestroyed()),
+        claim,
+        notify: showNotice,
+        setBadge,
+        warn: message => console.warn(message),
+      });
+      return monitor;
+    },
+  };
 }

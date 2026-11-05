@@ -504,6 +504,7 @@ const api: DesktopApi = {
       ipcRenderer.on(IPC_CHANNELS.attentionOpen, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.attentionOpen, handler);
     },
+    takePendingOpen: () => ipcRenderer.invoke(IPC_CHANNELS.attentionTakePendingOpen),
   },
   devLog: {
     getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),

@@ -6,7 +6,7 @@ import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import { AGENT_STATE_LABEL, spawnerName, type AgentView, type ParentView } from '../roster';
-import type { AgentPersona } from './agentPersona';
+import type { AgentPersona } from '@shared/agentPersona';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
 import {
   DOOR_POINT,

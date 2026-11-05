@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
-import { assignPersonas } from './agentPersona';
+import { assignPersonas } from '@shared/agentPersona';
 import { DOOR_POINT, INNKEEPER_POINT, TAVERN_SLOTS } from './scene';
 import { TavernView } from './TavernView';
 

@@ -8,7 +8,7 @@ import macAppIcon from '../../build/icon-mac.png?asset';
 import { registerAccount } from './account';
 import { onAuthStateChanged, registerAuth } from './auth';
 import { registerChat } from './chat';
-import { sessionScopeFor, sessionScopeKey } from './chat/sessionScope';
+import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './chat/sessionScope';
 import { closeBrowsersOnScopeChange } from './chat/browser/browserScope';
 import { resolveUserPath } from './chat/tools/userPath';
 import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
@@ -127,7 +127,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
-  registerAttention();
+  const attention = registerAttention({ openWindow: createWindow });
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();
@@ -149,6 +149,7 @@ void app.whenReady().then(async () => {
     sessionClosed: sessionId => terminals.killSession(sessionId),
     releaseSessionTerminals: sessionId => terminals.acquireSessionCleanup(sessionId),
     observeStream: event => fleet.observe(event),
+    observeSessionStatus: event => needsYou.observe(event),
     cancelModelPull: key => models.stop(key),
     pinnedProjectors: () => models.pinnedProjectors(),
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
@@ -159,6 +160,21 @@ void app.whenReady().then(async () => {
     { localContext: () => localContext.read(), modelSettings: modelId => modelSettings.get(modelId) },
     capabilityLedger
   );
+  const needsYou = attention.watchNeedsYou({
+    listSessions: () => chat.listSessions(),
+    sessionMessages: async sessionId => (await chat.getSession(sessionId))?.messages ?? [],
+  });
+  const chatScopeKeyOf = (state: Parameters<typeof sessionScopeForChat>[0]) => {
+    const scope = sessionScopeForChat(state);
+    return scope ? sessionScopeKey(scope) : null;
+  };
+  let needsYouScope = chatScopeKeyOf(auth.getState());
+  onAuthStateChanged(state => {
+    const next = chatScopeKeyOf(state);
+    if (next === needsYouScope) return;
+    needsYouScope = next;
+    needsYou.scopeChanged();
+  });
   fleet.setDirectoryResolver(async sessionId => {
     const session = await chat.getSession(sessionId);
     return session?.project?.workingDirectory ?? session?.grantedDirectories?.[0] ?? null;

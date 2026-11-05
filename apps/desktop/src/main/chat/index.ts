@@ -388,6 +388,8 @@ export function registerChat(
   auth: AuthService,
   hooks: Pick<ChatServiceDeps, 'sessionClosed' | 'releaseSessionTerminals'> & {
     observeStream?(event: ChatStreamEvent): void;
+    /** Every session status push, as the renderers get it; main's needs-you watch reads these. */
+    observeSessionStatus?(event: ChatSessionStatusEvent): void;
     /** Revoking a model-pull grant in Settings stops that download; true once it no longer runs. */
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
@@ -610,6 +612,7 @@ export function registerChat(
   // replying, and this turns the pair into the one status a sidebar row draws.
   const activity = new SessionActivity((event: ChatSessionStatusEvent) => {
     send(IPC_CHANNELS.chatSessionStatus, event);
+    hooks.observeSessionStatus?.(event);
     // Only reached once a turn has run, long after pullRequests below exists.
     if (event.status === 'done') pullRequests.turnSettled(event.sessionId);
   });

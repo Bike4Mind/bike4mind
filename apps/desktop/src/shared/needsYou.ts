@@ -1,11 +1,12 @@
-import type { ChatMessage, ChatSessionStatus, ChatSessionSummary, ChatToolCall } from '@shared/chat';
-import type { PrSummary } from '@shared/pullRequest';
-import { activityLabel, describeToolInput, type AgentActivity } from './activity';
-import { buildRoster, descendantIds } from './roster';
-import { assignPersonas } from './tavern/agentPersona';
+import { assignPersonas } from './agentPersona';
+import type { ChatMessage, ChatSessionStatus, ChatSessionSummary, ChatToolCall } from './chat';
+import { descendantsOf } from './spawnTree';
+import { describeToolInput } from './toolDetail';
 
-const NO_ACTIVITY: ReadonlyMap<string, AgentActivity> = new Map();
-const NO_PRS: ReadonlyMap<string, PrSummary> = new Map();
+/*
+ * The needs-you rules, shared by the renderer (which announces while a window is open) and main
+ * (which announces when none is; see main/attention/needsYouMonitor.ts). Both must say the same thing.
+ */
 
 /** Tool calls parked at the approval gate; shared with the peek drawer, which answers them. */
 export function pendingCallsIn(messages: readonly ChatMessage[]): ChatToolCall[] {
@@ -35,8 +36,8 @@ export function alertableSessions(sessions: readonly ChatSessionSummary[]): Read
   const alertable = new Set<string>();
   for (const root of roots) {
     if (archived.has(root)) continue;
-    const agents = descendantIds(sessions, root);
-    if (agents.size === 0) continue;
+    const agents = descendantsOf(sessions, root).map(({ session }) => session.id);
+    if (agents.length === 0) continue;
     alertable.add(root);
     for (const id of agents) alertable.add(id);
   }
@@ -69,17 +70,18 @@ export function rootSessionOf(sessions: readonly ChatSessionSummary[], sessionId
 }
 
 /** "<name> needs you", naming an agent by the persona the Tavern gives it under `rootId`. */
-export function needsYouTitle(
-  sessions: readonly ChatSessionSummary[],
-  statuses: ReadonlyMap<string, ChatSessionStatus>,
-  sessionId: string,
-  rootId: string
-): string {
+export function needsYouTitle(sessions: readonly ChatSessionSummary[], sessionId: string, rootId: string): string {
   const session = sessions.find(candidate => candidate.id === sessionId);
   if (!session) return 'A session needs you';
   if (sessionId !== rootId) {
-    const roster = buildRoster({ sessions, statuses, activity: NO_ACTIVITY, prSummaries: NO_PRS, rootId });
-    const persona = assignPersonas(roster).get(sessionId);
+    // The same subjects the roster hands the Tavern, so the notice and the stage agree on the name.
+    const agents = descendantsOf(sessions, rootId).map(({ session: agent }) => ({
+      id: agent.id,
+      createdAt: agent.createdAt,
+      title: agent.title.trim() || 'Untitled agent',
+      seedPrompt: agent.origin.seedPrompt,
+    }));
+    const persona = assignPersonas(agents).get(sessionId);
     if (persona) return `${persona.label} needs you`;
   }
   return `${session.title.trim() || 'Untitled session'} needs you`;
@@ -89,5 +91,5 @@ export function needsYouTitle(
 export function needsYouBody(messages: readonly ChatMessage[]): string {
   const call = pendingCallsIn(messages).at(-1);
   if (!call) return 'Waiting for your answer';
-  return activityLabel({ kind: 'tool', tool: call.name, detail: describeToolInput(call) });
+  return `${call.name} ${describeToolInput(call)}`.trim();
 }

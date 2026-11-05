@@ -4,7 +4,7 @@ import type { ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } fro
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentPeekDrawer } from './AgentPeekDrawer';
 import type { AgentView } from './roster';
-import { assignPersonas } from './tavern/agentPersona';
+import { assignPersonas } from '@shared/agentPersona';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 let queueListener: ((event: ChatQueueEvent) => void) | null = null;

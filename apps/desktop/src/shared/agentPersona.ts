@@ -1,6 +1,7 @@
-import type { AgentView } from '../roster';
-
 export type Epithet = 'Warden' | 'Scribe' | 'Tinkerer' | 'Cartographer' | 'Seeker' | 'Wanderer';
+
+/** What a persona is derived from: an agent's id, creation time, title and seed prompt. */
+export type PersonaSubject = { id: string; createdAt: string; title: string; seedPrompt: string };
 
 export type AgentPersona = { name: string; epithet: Epithet; label: string; shortTitle: string };
 
@@ -107,14 +108,14 @@ function hashOf(text: string): number {
   return hash;
 }
 
-const byAge = (a: AgentView, b: AgentView) =>
+const byAge = (a: PersonaSubject, b: PersonaSubject) =>
   a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 
 /**
  * A pure function of ids, creation times, titles and prompts, so a persona survives restarts. Agents claim
  * names oldest first, which keeps existing agents' names when a newer one joins.
  */
-export function assignPersonas(agents: readonly AgentView[]): Map<string, AgentPersona> {
+export function assignPersonas(agents: readonly PersonaSubject[]): Map<string, AgentPersona> {
   const titles = agents.map(agent => agent.title);
   const taken = new Set<number>();
   const personas = new Map<string, AgentPersona>();

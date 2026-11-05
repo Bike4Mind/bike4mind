@@ -4,12 +4,12 @@ import {
   activityLabel,
   agentNowText,
   bufferUntrackedActivity,
-  describeToolInput,
   foldActivity,
   toolKind,
   type AgentActivity,
   type ToolKind,
 } from './activity';
+import { describeToolInput } from '@shared/toolDetail';
 
 const call = (name: string, input: Record<string, unknown> = {}): ChatToolCall => ({
   id: 'call-1',
