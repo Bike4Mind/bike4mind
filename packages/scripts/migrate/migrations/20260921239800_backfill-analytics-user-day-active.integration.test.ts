@@ -5,7 +5,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921239700_backfill-analytics-user-day-active';
+import migration from './20260921239800_backfill-analytics-user-day-active';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

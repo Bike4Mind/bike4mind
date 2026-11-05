@@ -1,7 +1,7 @@
 import {
-  NO_CARD_UNLOCK_REASONS,
-  noCardUnlockTransactionId,
-  type NoCardUnlockReason,
+  ARENA_LEGACY_UNLOCK_REASONS,
+  arenaLegacyUnlockTransactionId,
+  type ArenaLegacyUnlockReason,
   type PreferenceArenaSettings,
   resolvePreferenceArenaSettings,
 } from '@bike4mind/common';
@@ -42,15 +42,15 @@ export async function loadArenaSettings(): Promise<PreferenceArenaSettings> {
   return resolvePreferenceArenaSettings(settings);
 }
 
-/** The no-card unlock proves GitHub or work email only through its ledger row; it never stamps signupGrant. */
-async function loadNoCardUnlocks(userId: string): Promise<NoCardUnlockReason[]> {
+/** The retired GitHub and work-email unlocks prove verification only through their ledger row; they never stamped signupGrant. */
+async function loadNoCardUnlocks(userId: string): Promise<ArenaLegacyUnlockReason[]> {
   const rows = await Promise.all(
-    NO_CARD_UNLOCK_REASONS.map(reason =>
-      creditTransactionRepository.findOne({ transactionId: noCardUnlockTransactionId(reason, userId) })
+    ARENA_LEGACY_UNLOCK_REASONS.map(reason =>
+      creditTransactionRepository.findOne({ transactionId: arenaLegacyUnlockTransactionId(reason, userId) })
     )
   );
   // BaseRepository.findOne yields undefined (not null) on a miss.
-  return NO_CARD_UNLOCK_REASONS.filter((_, index) => rows[index] != null);
+  return ARENA_LEGACY_UNLOCK_REASONS.filter((_, index) => rows[index] != null);
 }
 
 export async function loadArenaUser(userId: string): Promise<ArenaUser | null> {

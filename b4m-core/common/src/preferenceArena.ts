@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { NoCardUnlockReason } from './noCardUnlock';
 import type { SignupGrant, SignupGrantUnlockReason } from './signupGrant';
 
 /**
@@ -16,10 +15,20 @@ export type ArenaPairSource = (typeof ARENA_PAIR_SOURCES)[number];
 
 /**
  * Signup-grant unlocks that prove a human behind the account; activity, org-invite and admin unlocks
- * do not. GitHub and work-email proof comes from the no-card unlock's ledger row instead, which never
- * stamps the signup grant (see `grantNoCardUnlock` in services/userService/noCardUnlock.ts).
+ * do not.
  */
 export const ARENA_VERIFIED_UNLOCK_REASONS: readonly SignupGrantUnlockReason[] = ['card_verified', 'phone_verified'];
+
+/**
+ * Ledger rows written by the retired GitHub and work-email unlocks. They never stamped the signup
+ * grant, so accounts that already hold one stay verified through the row alone.
+ */
+export const ARENA_LEGACY_UNLOCK_REASONS = ['github_verified', 'work_email_verified'] as const;
+export type ArenaLegacyUnlockReason = (typeof ARENA_LEGACY_UNLOCK_REASONS)[number];
+
+export function arenaLegacyUnlockTransactionId(reason: ArenaLegacyUnlockReason, userId: string): string {
+  return `unlock-grant:${reason}:${userId}`;
+}
 
 export type ArenaIneligibleReason = 'disabled' | 'unverified' | 'blocked';
 
@@ -102,8 +111,8 @@ export interface ArenaEligibilityFields {
   isSynthetic?: boolean | null;
   deletedAt?: Date | null;
   signupGrant?: Pick<SignupGrant, 'stage' | 'unlockedBy'> | null;
-  /** No-card unlocks this user holds a ledger row for. */
-  noCardUnlocks?: readonly NoCardUnlockReason[];
+  /** Retired unlocks this user holds a ledger row for. */
+  noCardUnlocks?: readonly ArenaLegacyUnlockReason[];
 }
 
 /** Account-block checks (ban, dispute, suspension) are the caller's, via `accountBlockReasons`. */
