@@ -3,6 +3,7 @@ import { Organization, User, realtimeConnectionRepository } from '@bike4mind/dat
 import type { Logger } from '@bike4mind/observability';
 import { authSessionService } from '@bike4mind/services';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { logSystemAuthAudit } from '@server/utils/authAudit';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
@@ -116,6 +117,10 @@ export async function completeAccountDeletion(
     throw error;
   }
   logger.info(`[AccountDeletion] Deleted user ${userId} whose deletion grace period ended`);
+  await logSystemAuthAudit(
+    { userId, event: 'account_deleted', actorUserId: userId, metadata: { initiatedBy: 'self' } },
+    logger
+  );
   if (user.email) {
     try {
       await sendAccountDeletionCompleteEmail(user.email);

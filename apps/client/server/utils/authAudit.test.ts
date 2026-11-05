@@ -12,7 +12,7 @@ vi.mock('@bike4mind/database', () => ({ userAuthAuditLogRepository: { createLog 
 vi.mock('@bike4mind/server-utils/utils/ip', () => ({ getClientIp }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ recordSessionReuseRevoked, recordSessionRecovered }));
 
-import { logAuthAudit } from './authAudit';
+import { logAuthAudit, logSystemAuthAudit } from './authAudit';
 
 const req = { headers: { 'user-agent': 'UA/2' }, requestId: 'req-1' } as unknown as Request;
 
@@ -121,5 +121,28 @@ describe('logAuthAudit', () => {
     expect(createLog.mock.calls[0][0].metadata).toEqual({ issuedIp: '203.0.113.7' });
     expect(console.warn).not.toHaveBeenCalled();
     expect(recordSessionRecovered).toHaveBeenCalledOnce();
+  });
+});
+
+describe('logSystemAuthAudit', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('writes the entry with system actor fields and no request', async () => {
+    await logSystemAuthAudit({ userId: 'user-1', event: 'account_deleted', actorUserId: 'user-1' });
+    expect(createLog).toHaveBeenCalledWith({
+      userId: 'user-1',
+      event: 'account_deleted',
+      actorUserId: 'user-1',
+      actorIp: 'system',
+      userAgent: 'system',
+    });
+    expect(getClientIp).not.toHaveBeenCalled();
+  });
+
+  it('never throws, and logs a failed write', async () => {
+    createLog.mockRejectedValueOnce(new Error('db down'));
+    const logger = { warn: vi.fn() };
+    await expect(logSystemAuthAudit({ userId: 'user-1', event: 'account_deleted' }, logger)).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('db down'));
   });
 });

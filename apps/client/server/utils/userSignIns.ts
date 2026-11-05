@@ -80,6 +80,8 @@ export const authEventSummary = (event: UserAuthAuditEvent, method: string | und
       return 'Cancelled the account deletion';
     case 'account_data_export_requested':
       return 'Requested a copy of the account data';
+    case 'account_deleted':
+      return 'Account deleted';
   }
 };
 

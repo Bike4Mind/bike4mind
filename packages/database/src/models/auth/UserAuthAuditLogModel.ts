@@ -27,7 +27,9 @@ import BaseRepository from '@bike4mind/db-core';
  * identity moved to.
  *
  * `account_deletion_requested` / `account_deletion_cancelled` record a user scheduling or cancelling
- * the deletion of their own account (apps/client/pages/api/account/deletion.ts).
+ * the deletion of their own account (apps/client/pages/api/account/deletion.ts). `account_deleted`
+ * records that deletion being carried out once due (apps/client/server/users/completeAccountDeletion.ts);
+ * no request carries it, so actorIp and userAgent read 'system'.
  */
 export type UserAuthAuditEvent =
   | 'login_success'
@@ -57,7 +59,8 @@ export type UserAuthAuditEvent =
   | 'email_change_cancelled'
   | 'account_deletion_requested'
   | 'account_deletion_cancelled'
-  | 'account_data_export_requested';
+  | 'account_data_export_requested'
+  | 'account_deleted';
 
 export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -88,6 +91,7 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'account_deletion_requested',
   'account_deletion_cancelled',
   'account_data_export_requested',
+  'account_deleted',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {

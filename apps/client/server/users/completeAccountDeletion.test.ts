@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   purgeContent: vi.fn(),
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
+  logSystemAuthAudit: vi.fn(),
   order: [] as string[],
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -27,6 +28,7 @@ vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDelete
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
+vi.mock('@server/utils/authAudit', () => ({ logSystemAuthAudit: h.logSystemAuthAudit }));
 
 import { completeAccountDeletion } from './completeAccountDeletion';
 
@@ -61,6 +63,9 @@ beforeEach(() => {
   });
   h.sendComplete.mockImplementation(async () => {
     h.order.push('email');
+  });
+  h.logSystemAuthAudit.mockImplementation(async () => {
+    h.order.push('audit');
   });
   h.hardDeleteUser.mockImplementation(
     async (_id: string, context: HardDeleteContext, commitDelete: (repository: typeof users) => Promise<unknown>) => {
@@ -107,7 +112,7 @@ describe('completeAccountDeletion', () => {
       },
       { new: true, projection: { email: 1 } }
     );
-    expect(h.order).toEqual(['files', 'content', 'realtime', 'delete', 'email']);
+    expect(h.order).toEqual(['files', 'content', 'realtime', 'delete', 'audit', 'email']);
     expect(h.deletePersonalOrganizations).toHaveBeenCalledWith(
       { userId: USER_ID, personal: true },
       { hardDelete: true }
@@ -213,5 +218,20 @@ describe('completeAccountDeletion', () => {
     h.claimUser.mockResolvedValue({ email: null });
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(h.sendComplete).not.toHaveBeenCalled();
+  });
+
+  it('audits the completed deletion after the row is gone and before the email', async () => {
+    await expect(complete()).resolves.toEqual({ deleted: true });
+    expect(h.logSystemAuthAudit).toHaveBeenCalledWith(
+      { userId: USER_ID, event: 'account_deleted', actorUserId: USER_ID, metadata: { initiatedBy: 'self' } },
+      logger
+    );
+    expect(h.order.slice(-3)).toEqual(['delete', 'audit', 'email']);
+  });
+
+  it('writes no audit entry when the delete fails', async () => {
+    h.purgeContent.mockRejectedValue(new Error('purge unavailable'));
+    await expect(complete()).rejects.toThrow('purge unavailable');
+    expect(h.logSystemAuthAudit).not.toHaveBeenCalled();
   });
 });
