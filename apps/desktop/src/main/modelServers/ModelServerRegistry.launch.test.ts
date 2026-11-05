@@ -473,6 +473,26 @@ describe('ModelServerRegistry launching servers', () => {
     expect(handles[1].running).toBe(false);
   });
 
+  it('keeps a server saved and manageable when stopping it for removal fails', async () => {
+    const { registry, handles, store } = setup();
+    const [, added] = await registry.add({
+      address: 'http://127.0.0.1:11500',
+      credential: none,
+      name: 'spare',
+      kind: 'ollama',
+      access: 'chat',
+      launch: true,
+    });
+    await registry.startServer(added.id);
+    const stop = vi.spyOn(handles[0], 'stop').mockRejectedValueOnce(new Error('Stop failed'));
+    await expect(registry.remove(added.id)).rejects.toThrow('Stop failed');
+    expect((await store.list()).map(server => server.id)).toContain(added.id);
+    expect((await registry.views()).find(server => server.id === added.id)?.launch?.owner).toBe('desktop');
+    stop.mockRestore();
+    await registry.remove(added.id);
+    expect((await store.list()).map(server => server.id)).not.toContain(added.id);
+  });
+
   it('takes back the Ollama it started before Desktop exited without stopping it, with its launch settings', async () => {
     const record = {
       id: 'local',

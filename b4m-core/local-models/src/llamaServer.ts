@@ -16,7 +16,7 @@ import {
 import { storageError } from './fileLock';
 import { requestJson, type HttpClient } from './http';
 import { OpenAICompatibleRuntime } from './openaiCompatible';
-import { signalTree, trackChild, trackedChildCount } from './processTree';
+import { stopTree, trackChild, trackedChildCount } from './processTree';
 import type { FetchLike } from './types';
 
 /** Used when the caller passes no `contextSize`; callers such as Desktop pass one sized to the hardware. */
@@ -441,13 +441,7 @@ class ManagedLlamaServer implements LlamaServerProcess {
   async stop(): Promise<LlamaServerExit> {
     if (this.exit) return this.exit;
     this.#stopping = true;
-    signalTree(this.child, 'SIGTERM');
-    const timer = setTimeout(() => signalTree(this.child, 'SIGKILL'), this.stopTimeoutMs);
-    try {
-      return await this.exited;
-    } finally {
-      clearTimeout(timer);
-    }
+    return stopTree(this.child, this.exited, this.stopTimeoutMs);
   }
 
   startError(reason: LlamaServerStartError['reason'], message: string): LlamaServerStartError {

@@ -687,7 +687,23 @@ describe('ModelServersSettings launch settings', () => {
   it('says it sizes with f16 when it cannot read an unmanaged server', async () => {
     await show({ ...LOCAL, launch: launch({ owner: 'other', canStart: false }) });
     expect(byTestId('model-servers-launch-observed')?.textContent).toBe(
-      "Desktop can't read this server's settings, so fit badges assume an f16 KV cache."
+      "Desktop can't read this server's settings. Fit badges assume an f16 KV cache."
+    );
+  });
+
+  it('shows the effective saved sizing when an unmanaged server cannot be read', async () => {
+    await show({
+      ...LOCAL,
+      launch: launch({
+        owner: 'other',
+        canStart: false,
+        settings: { kvCacheType: 'q8_0' },
+        sizingKvCacheType: 'q8_0',
+        sizingFlashAttention: 'on',
+      }),
+    });
+    expect(byTestId('model-servers-launch-observed')?.textContent).toBe(
+      "Desktop can't read this server's settings. Fit badges assume a q8_0 KV cache with flash attention on."
     );
   });
 

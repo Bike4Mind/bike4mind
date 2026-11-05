@@ -167,7 +167,7 @@ export interface ModelServerRegistryDeps {
   launchers?: Launchers;
   /** The launch variables of the Ollama at `url` on this computer; null when they cannot be read, as without this. */
   readOllamaEnv?(url: string): Promise<OllamaEnvironment | null>;
-  /** Whether Desktop could start a server on 127.0.0.1:port now; defaults to trying to bind it (loopbackPortFree). */
+  /** Whether a loopback port is free; defaults to binding for an address probe and connecting for observation. */
   portFree?(port: number): Promise<boolean>;
   /** Where the servers Desktop runs are listed, so a launch after a crash takes them back; none without it. */
   ownedServers?: StoreFile;
@@ -565,8 +565,8 @@ export class ModelServerRegistry {
 
   async remove(id: string): Promise<ModelServerView[]> {
     await this.load();
+    await this.supervisor.stop(id);
     await this.deps.store.remove(id);
-    await this.supervisor.stop(id).catch(() => undefined);
     this.launchStates.delete(id);
     const entry = this.entries.get(id);
     this.entries.delete(id);

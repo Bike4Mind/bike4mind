@@ -322,7 +322,11 @@ export class LocalServerSupervisor {
 
   /** Every server Desktop runs, before quitting. Children it misses die with the process (see processTree). */
   async stopAll(): Promise<void> {
-    await Promise.all([...this.slots.keys()].map(id => this.stop(id).catch(() => undefined)));
+    await Promise.all(
+      [...this.slots.keys()].map(id =>
+        this.stop(id).catch(error => this.deps.logger.warn(`MODEL SERVERS: could not stop ${id}: ${String(error)}`))
+      )
+    );
   }
 }
 

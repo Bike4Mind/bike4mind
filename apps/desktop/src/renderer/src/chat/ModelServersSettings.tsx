@@ -432,7 +432,7 @@ function observedLine(launch: ModelServerLaunchView): string {
   const flash = launch.sizingFlashAttention === 'auto' ? '' : ` with flash attention ${launch.sizingFlashAttention}`;
   const sizing = `Fit badges assume a${launch.sizingKvCacheType === 'f16' ? 'n' : ''} ${launch.sizingKvCacheType} KV cache${flash}.`;
   if (launch.runtime !== 'ollama') return sizing;
-  if (!launch.observed) return `Desktop can't read this server's settings, so fit badges assume an f16 KV cache.`;
+  if (!launch.observed) return `Desktop can't read this server's settings. ${sizing}`;
   const set = Object.entries(launch.observed).map(([key, value]) => `${key}=${value}`);
   return `${set.length > 0 ? `It runs with ${set.join(', ')}.` : "It runs with Ollama's defaults."} ${sizing}`;
 }

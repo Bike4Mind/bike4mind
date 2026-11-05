@@ -56,3 +56,22 @@ export function trackChild(child: ChildProcess): void {
 export function trackedChildCount(): number {
   return liveChildren.size;
 }
+
+/** Bounds shutdown even when the OS cannot reap a process after SIGKILL. */
+export async function stopTree<Exit>(child: ChildProcess, exited: Promise<Exit>, timeoutMs: number): Promise<Exit> {
+  signalTree(child, 'SIGTERM');
+  const killTimer = setTimeout(() => signalTree(child, 'SIGKILL'), timeoutMs);
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    deadlineTimer = setTimeout(
+      () => reject(new Error(`Process ${child.pid} did not exit after SIGKILL.`)),
+      timeoutMs * 2
+    );
+  });
+  try {
+    return await Promise.race([exited, deadline]);
+  } finally {
+    clearTimeout(killTimer);
+    clearTimeout(deadlineTimer);
+  }
+}

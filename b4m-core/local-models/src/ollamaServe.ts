@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { posix, win32 } from 'node:path';
 import { createInterface } from 'node:readline';
 import { LocalRuntimeError } from './errors';
-import { signalTree, trackChild } from './processTree';
+import { stopTree, trackChild } from './processTree';
 import type { FetchLike } from './types';
 
 export const OLLAMA_SERVE_RUNTIME_ID = 'ollama';
@@ -236,13 +236,7 @@ export async function startOllamaServe(options: StartOllamaServeOptions): Promis
   const stop = async (): Promise<OllamaServeExit> => {
     if (exit) return exit;
     stopping = true;
-    signalTree(child, 'SIGTERM');
-    const timer = setTimeout(() => signalTree(child, 'SIGKILL'), stopTimeoutMs);
-    try {
-      return await exited;
-    } finally {
-      clearTimeout(timer);
-    }
+    return stopTree(child, exited, stopTimeoutMs);
   };
   const baseUrl = `http://${host}`;
   const fetchImpl = options.fetch ?? fetch;
