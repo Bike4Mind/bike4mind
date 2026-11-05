@@ -18,7 +18,7 @@ import {
 import { generateImage } from '../media/imageGeneration';
 import { MediaToolError } from '../media/MediaApiClient';
 import { planMusicRequest, type MusicPlan } from '../media/musicModels';
-import { resolveInputImage, uploadInputImage, type VideoInputImage } from '../media/videoInput';
+import { resolveInputImage, uploadInputImage, type InputImage } from '../media/imageInput';
 import {
   describeVideoModel,
   planVideoRequest,
@@ -454,7 +454,7 @@ function optionalSetting(input: Record<string, unknown>, key: string): string | 
 
 interface VideoCall {
   plan: VideoPlan;
-  image: VideoInputImage | undefined;
+  image: InputImage | undefined;
 }
 
 /**

@@ -12,11 +12,11 @@ vi.mock('../tools/paths', async importOriginal => {
   };
 });
 
-const { resolveInputImage } = await import('./videoInput');
+const { resolveInputImage } = await import('./imageInput');
 
 const APP = 'C:\\Users\\me\\AppData\\Roaming\\App';
 
-describe('video input on Windows, for an image that resolves through the WSL share', () => {
+describe('image input on Windows, for an image that resolves through the WSL share', () => {
   const platform = Object.getOwnPropertyDescriptor(process, 'platform');
   beforeEach(() => Object.defineProperty(process, 'platform', { value: 'win32' }));
   afterEach(() => {

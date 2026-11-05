@@ -6,7 +6,7 @@ import type { ToolContext } from '../tools/types';
 import { MediaToolError, type MediaApiClient } from './MediaApiClient';
 import type { MediaStore } from './MediaStore';
 
-/** What the video providers accept as a first frame. */
+/** What every image-consuming generation accepts: a video's first frame, and later a mesh's source. */
 const INPUT_IMAGE_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -14,14 +14,14 @@ const INPUT_IMAGE_TYPES: Record<string, string> = {
   '.webp': 'image/webp',
 };
 
-/** Larger than any first frame needs; a bigger file is almost certainly the wrong one. */
+/** Larger than any input image needs; a bigger file is almost certainly the wrong one. */
 export const MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024;
 
 /** A fresh upload is scanned before any endpoint will use it; this usually takes seconds. */
 const SCAN_POLL_MS = 2_000;
 const SCAN_DEADLINE_MS = 90_000;
 
-export interface VideoInputImage {
+export interface InputImage {
   kind: 'generated' | 'file';
   /** What the approval card and the upload call it. */
   name: string;
@@ -30,33 +30,58 @@ export interface VideoInputImage {
   size: number;
 }
 
+/** An image generate_image produced in this conversation, by the id that tool reported. */
+export interface GeneratedImage {
+  id: string;
+  path: string;
+  mimeType: string;
+  size: number;
+}
+
 /**
- * The image an image-to-video request starts from, resolved and checked BEFORE the user is asked
- * to approve: the card names the file, and a path outside the shared folders is refused here.
+ * Find a generated image by id. It resolves only inside this conversation's own media folder, so
+ * an id from another conversation finds nothing; a non-image there (a speech clip) is refused too.
+ */
+export async function locateGeneratedImage(
+  id: string,
+  context: ToolContext,
+  store: MediaStore
+): Promise<GeneratedImage> {
+  const located = context.sessionId ? await store.locate(context.sessionId, id) : null;
+  if (!located || !Object.values(INPUT_IMAGE_TYPES).includes(located.mimeType)) {
+    throw new Error(`"${id}" is not an image generated in this conversation. Use an id generate_image reported here.`);
+  }
+  return { id, path: located.path, mimeType: located.mimeType, size: located.size };
+}
+
+/**
+ * The image a generation starts from, resolved and checked BEFORE the user is asked to approve:
+ * the card names the file, and a path outside the shared folders is refused here. Shared by every
+ * tool that takes an input image, so they all accept the same two sources under the same names.
  *
- * Two sources. `inputGeneratedImage` is an image generate_image produced in this conversation,
- * named by the id that tool reported; it resolves only inside this conversation's own media
- * folder, so an id from another conversation finds nothing. `inputImagePath` is a file the user
- * shared, under the same roots as the file tools: this file leaves the machine, so the token
- * vault and the secret stores (sandbox.ts `protectionFor`) are refused whatever was granted.
+ * `inputGeneratedImage` is an image generate_image produced in this conversation (see
+ * `locateGeneratedImage`). `inputImagePath` is a file the user shared, under the same roots as the
+ * file tools: this file leaves the machine, so the token vault and the secret stores (sandbox.ts
+ * `protectionFor`) are refused whatever was granted.
  */
 export async function resolveInputImage(
   generatedId: string | undefined,
   requestedPath: string | undefined,
   context: ToolContext,
   store: MediaStore
-): Promise<VideoInputImage | undefined> {
+): Promise<InputImage | undefined> {
   if (generatedId && requestedPath) {
     throw new Error('Pass inputGeneratedImage or inputImagePath, not both.');
   }
   if (generatedId) {
-    const located = context.sessionId ? await store.locate(context.sessionId, generatedId) : null;
-    if (!located || !Object.values(INPUT_IMAGE_TYPES).includes(located.mimeType)) {
-      throw new Error(
-        `"${generatedId}" is not an image generated in this conversation. Use an id generate_image reported here.`
-      );
-    }
-    return { kind: 'generated', name: generatedId, path: located.path, mimeType: located.mimeType, size: located.size };
+    const generated = await locateGeneratedImage(generatedId, context, store);
+    return {
+      kind: 'generated',
+      name: generatedId,
+      path: generated.path,
+      mimeType: generated.mimeType,
+      size: generated.size,
+    };
   }
   if (!requestedPath) return undefined;
 
@@ -83,11 +108,11 @@ export async function resolveInputImage(
 /**
  * Upload the image as one of the user's files and wait for the server's scan to clear it.
  *
- * Uploaded even when it is a generated image: the public video API takes only a file id, and
- * the generated-image key the web chat passes is not part of it.
+ * Uploaded even when it is a generated image: the public generation APIs take only a file id,
+ * and the generated-image key the web chat passes is not part of them.
  */
 export async function uploadInputImage(
-  image: VideoInputImage,
+  image: InputImage,
   client: MediaApiClient,
   signal: AbortSignal,
   progress: (text: string) => void
