@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions } from './download';
+import { ModelFileBusyError } from './errors';
 import type { HubGgufBuild, HubGgufFile, HubGgufProjector } from './huggingface';
 import {
   createFileNameProblem,
@@ -346,6 +347,61 @@ describe('runSplitImport', () => {
     expect(await readdir(dir)).toEqual([]);
   });
 
+  it('leaves a part another import needs when its own create succeeds', async () => {
+    const { hub, runtime } = fakes();
+    const dir = join(root, 'run');
+    const shared = `sha256:${hex('f')}`;
+    runtime.create.mockImplementationOnce(async () => {
+      await writeFile(join(dir, `${hex('f')}.gguf.partial`), 'x');
+      await writeFile(join(dir, `${hex('f')}.gguf.lock`), 'x');
+      await writeFile(join(dir, `${hex('1')}.gguf.lock`), 'x');
+    });
+    await runSplitImport(plan(), { hub, runtime, dir, keep: () => new Set([shared]) });
+    expect((await readdir(dir)).sort()).toEqual([`${hex('f')}.gguf.lock`, `${hex('f')}.gguf.partial`]);
+  });
+
+  it('waits for a part another import is downloading and skips it once Ollama has it', async () => {
+    const { events, hub, runtime } = fakes();
+    const shared = `sha256:${hex('f')}`;
+    let sharedDone = false;
+    runtime.hasBlob.mockImplementation(async (digest: string) => digest === shared && sharedDone);
+    const download = hub.download.getMockImplementation();
+    hub.download.mockImplementation(async (file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+      if (file.sha256 !== hex('f')) return download!(file, destination, opts);
+      sharedDone = true;
+      throw new ModelFileBusyError('ollama', destination, 123);
+    });
+    await runSplitImport(plan(), { hub, runtime, dir: join(root, 'run') });
+    expect(events.filter(event => event.includes('mmproj') || event.includes(hex('f')))).toEqual([]);
+    expect(hub.download.mock.calls.filter(([file]) => file.sha256 === hex('f'))).toHaveLength(1);
+    expect(runtime.create).toHaveBeenCalled();
+  });
+
+  it('downloads a busy part itself once the lock is free and Ollama still lacks it', async () => {
+    const { hub, runtime } = fakes();
+    const download = hub.download.getMockImplementation();
+    let busy = 2;
+    hub.download.mockImplementation(async (file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
+      if (file.sha256 === hex('f') && busy-- > 0) throw new ModelFileBusyError('ollama', destination, null);
+      return download!(file, destination, opts);
+    });
+    await runSplitImport(plan(), { hub, runtime, dir: join(root, 'run') });
+    expect(runtime.uploadBlob).toHaveBeenCalledWith(`sha256:${hex('f')}`, expect.anything(), expect.anything());
+  });
+
+  it('stops waiting for a busy part when the run is aborted', async () => {
+    const { hub, runtime } = fakes();
+    const controller = new AbortController();
+    hub.download.mockImplementation(async (_file: HubGgufFile, destination: string) => {
+      setTimeout(() => controller.abort(), 20);
+      throw new ModelFileBusyError('ollama', destination, null);
+    });
+    await expect(
+      runSplitImport(plan(), { hub, runtime, dir: join(root, 'run'), signal: controller.signal })
+    ).rejects.toBeDefined();
+    expect(hub.download).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the staged parts and creates nothing when a part fails', async () => {
     const { hub, runtime } = fakes({ failUpload: `sha256:${hex('2')}` });
     const dir = join(root, 'run');
@@ -425,6 +481,19 @@ describe('runSplitImport', () => {
     expect((await readdir(root)).sort()).toEqual([`${hex('9')}.gguf`, `${hex('9')}.gguf.partial`]);
   });
 
+  it('leaves the staged files of digests in keep, partials and locks included', async () => {
+    const build = plan();
+    const kept = [
+      `${hex('f')}.gguf`,
+      `${hex('f')}.gguf.partial`,
+      `${hex('f')}.gguf.partial.json`,
+      `${hex('f')}.gguf.lock`,
+    ];
+    for (const name of [...kept, `${hex('1')}.gguf`, `${hex('1')}.gguf.lock`]) await writeFile(join(root, name), 'x');
+    await removeSplitStaging(root, build, new Set([`sha256:${hex('f')}`]));
+    expect((await readdir(root)).sort()).toEqual([...kept].sort());
+  });
+
   it('refuses a bad name before downloading anything', async () => {
     const { hub, runtime } = fakes();
     const bad = plan();
@@ -496,25 +565,7 @@ describe('sweepSplitImports', () => {
   });
 });
 
-describe('sweepSplitImports of pre-digest folders', () => {
-  it('removes staging folders untouched for longer than the age limit and keeps recent ones', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'split-sweep-'));
-    try {
-      const old = join(root, 'build-old');
-      const recent = join(root, 'build-recent');
-      for (const dir of [old, recent]) await mkdir(dir, { recursive: true });
-      await writeFile(join(old, 'part.partial'), 'x');
-      await writeFile(join(recent, 'part.partial'), 'x');
-      const week = 7 * 24 * 60 * 60 * 1000;
-      const aged = new Date(Date.now() - 2 * week);
-      for (const path of [join(old, 'part.partial'), old]) await utimes(path, aged, aged);
-      await sweepSplitImports(root, week);
-      expect((await readdir(root)).sort()).toEqual(['build-recent']);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
+describe('sweepSplitImports without a folder', () => {
   it('does nothing for a folder that does not exist yet', async () => {
     await expect(sweepSplitImports(join(tmpdir(), 'split-sweep-missing'))).resolves.toBeUndefined();
   });

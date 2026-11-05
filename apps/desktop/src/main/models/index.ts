@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { rm, stat, statfs } from 'node:fs/promises';
+import { stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { app, ipcMain, powerSaveBlocker, safeStorage } from 'electron';
 import {
   CuratedListSource,
@@ -40,12 +40,13 @@ const LINUX_SERVICE_STORE = '/usr/share/ollama/.ollama/models';
 // Local cache, not userData: that is Roaming on Windows and parts run to tens of GB.
 function splitImportRoot(): string {
   const home = app.getPath('home');
+  const absolute = (value: string | undefined) => (value && isAbsolute(value) ? value : undefined);
   const cache =
     process.platform === 'win32'
-      ? (process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local'))
+      ? (absolute(process.env.LOCALAPPDATA) ?? join(home, 'AppData', 'Local'))
       : process.platform === 'darwin'
         ? join(home, 'Library', 'Caches')
-        : (process.env.XDG_CACHE_HOME ?? join(home, '.cache'));
+        : (absolute(process.env.XDG_CACHE_HOME) ?? join(home, '.cache'));
   return join(cache, 'bike4mind-desktop', 'model-imports');
 }
 
@@ -189,8 +190,6 @@ export function registerModels(
     send(IPC_CHANNELS.modelsCuratedChanged);
   });
   registerModelsIpc(ipcMain, service);
-  // Folders a failed import left for its retry; older ones, and the pre-cache location, are removed.
-  void rm(join(app.getPath('userData'), 'model-imports'), { recursive: true, force: true }).catch(() => undefined);
   void sweepSplitImports(splitImportRoot()).catch(() => undefined);
 
   // Opening Models lists the curated models, so this is where a due check starts; it never blocks the list.

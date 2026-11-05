@@ -3525,7 +3525,7 @@ describe('ModelHubService split builds', () => {
     }
   });
 
-  it('keeps the staged part when the app quits mid-part, and a cancel still removes it', async () => {
+  it('keeps the staged part when the app quits mid-part', async () => {
     const t = await importing();
     try {
       const stall = async (_file: HubGgufFile, destination: string, opts?: DownloadOptions) => {
@@ -3539,6 +3539,7 @@ describe('ModelHubService split builds', () => {
       await vi.waitFor(() => expect(t.hub.download).toHaveBeenCalled());
       t.service.dispose();
       await expect(quit).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+      await new Promise(resolve => setTimeout(resolve, 50));
       expect(await t.left()).toEqual([`${'1'.repeat(64)}.gguf.partial`]);
     } finally {
       await t.cleanup();
@@ -3592,6 +3593,99 @@ describe('ModelHubService split builds', () => {
     } finally {
       await t.cleanup();
     }
+  });
+
+  describe('two builds of one repo sharing a projector', () => {
+    const OTHER_ID = 'qwen2.5-0.5b-instruct-q4_0';
+    const otherShard = (index: number) => ({
+      path: `${OTHER_ID}-0000${index - 2}-of-00002.gguf`,
+      sizeBytes: 100,
+      sha256: String(index).repeat(64),
+      url: `https://x/${index}`,
+    });
+    const otherRequest = { ...request, buildId: OTHER_ID, sizeBytes: 200 };
+
+    async function sharing() {
+      const base = splitDetail();
+      const t = await importing({
+        detail: {
+          ...base,
+          builds: [
+            ...base.builds,
+            {
+              ...base.builds[1],
+              id: OTHER_ID,
+              quant: 'Q4_0',
+              label: 'Q4_0',
+              files: [otherShard(3), otherShard(4)],
+              sizeBytes: 200,
+            },
+          ],
+        },
+      });
+      const fallback = t.hub.download.getMockImplementation()!;
+      const releases: Array<() => void> = [];
+      const hold = (_destination: string, opts?: DownloadOptions) =>
+        new Promise<void>((resolve, reject) => {
+          releases.push(resolve);
+          opts?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      return { t, fallback, hold, releases };
+    }
+
+    it('keeps the shared part another import holds open when one build is cancelled', async () => {
+      const { t, fallback, hold, releases } = await sharing();
+      try {
+        t.hub.download.mockImplementation(async (file, destination, opts) => {
+          if (file.sha256 === PROJECTOR_SHA) {
+            await writeFile(`${destination}.partial`, 'half');
+            await writeFile(`${destination}.lock`, 'held');
+            await hold(destination, opts);
+            await writeFile(destination, 'x');
+            return { path: destination, sizeBytes: file.sizeBytes, sha256: file.sha256, resumedBytes: 0 };
+          }
+          if (file.sha256 === '3'.repeat(64)) {
+            await writeFile(`${destination}.partial`, 'half');
+            await hold(destination, opts);
+          }
+          return fallback(file, destination, opts);
+        });
+        const first = t.service.pull(splitRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        const second = t.service.pull(otherRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(2));
+        t.service.cancel(pullKey(REPO, OTHER_ID));
+        await expect(second).resolves.toMatchObject({ ok: false, error: { kind: 'cancelled' } });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect((await t.left()).sort()).toEqual([`${PROJECTOR_SHA}.gguf.lock`, `${PROJECTOR_SHA}.gguf.partial`]);
+        releases[0]();
+        await expect(first).resolves.toMatchObject({ ok: true });
+      } finally {
+        await t.cleanup();
+      }
+    });
+
+    it('does not remove a shared part when the other build succeeds', async () => {
+      const { t, fallback, hold, releases } = await sharing();
+      try {
+        t.hub.download.mockImplementation(async (file, destination, opts) => {
+          if (file.sha256 === '3'.repeat(64)) await hold(destination, opts);
+          return fallback(file, destination, opts);
+        });
+        t.runtime.create.mockImplementationOnce(async () => {
+          await writeFile(join(t.root, `${PROJECTOR_SHA}.gguf.partial`), 'x');
+        });
+        const second = t.service.pull(otherRequest);
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: true });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(await t.left()).toEqual([`${PROJECTOR_SHA}.gguf.partial`]);
+        t.service.cancel(pullKey(REPO, OTHER_ID));
+        await second;
+      } finally {
+        await t.cleanup();
+      }
+    });
   });
 
   it("fails with Ollama's reason, keeps the staged part, and a retry fetches only what Ollama lacks", async () => {

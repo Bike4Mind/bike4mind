@@ -1790,6 +1790,7 @@ export class ModelHubService {
         runtime,
         dir: root,
         signal,
+        keep: () => this.#partsOfOthers(entry),
         onProgress: progress => {
           const phase = progress.status === 'creating' ? 'finishing' : 'downloading';
           const changed = phase !== entry.view.phase;
@@ -1805,7 +1806,7 @@ export class ModelHubService {
     } catch (error) {
       if (signal.aborted) {
         // Quitting aborts every pull; its parts stay so the next import resumes them.
-        if (!this.#disposed) await removeSplitStaging(root, plan);
+        if (!this.#disposed) await removeSplitStaging(root, plan, this.#partsOfOthers(entry));
         this.#drop(key, entry);
         return { ok: false, error: entry.stopped ?? hubError('cancelled', 'Download cancelled.'), listed: false };
       }
@@ -1970,8 +1971,17 @@ export class ModelHubService {
     if (this.#pulls.get(key) !== entry) return;
     this.#pulls.delete(key);
     const root = this.#deps.importDir?.();
-    if (entry.import && root && !this.#disposed) void removeSplitStaging(root, entry.import);
+    if (entry.import && root && !this.#disposed)
+      void removeSplitStaging(root, entry.import, this.#partsOfOthers(entry));
     this.#push(true);
+  }
+
+  /** Digests of the staged parts other imports still hold or may resume; two builds of one repo can share a projector. */
+  #partsOfOthers(entry: PullEntry): Set<string> {
+    const digests = new Set<string>();
+    for (const other of this.#pulls.values())
+      if (other !== entry) for (const part of other.import?.parts ?? []) digests.add(part.digest);
+    return digests;
   }
 
   #push(now: boolean): void {

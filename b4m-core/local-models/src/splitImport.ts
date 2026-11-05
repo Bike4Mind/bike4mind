@@ -1,6 +1,7 @@
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { PARTIAL_RECORD_SUFFIX, PARTIAL_SUFFIX, type DownloadOptions, type DownloadResult } from './download';
+import { ModelFileBusyError } from './errors';
 import {
   ollamaHubName,
   type HubGgufBuild,
@@ -276,6 +277,8 @@ export interface SplitImportDeps {
   dir: string;
   signal?: AbortSignal;
   onProgress?: (progress: SplitImportProgress) => void;
+  /** Digests that other running imports still need; the success cleanup leaves those parts alone. */
+  keep?: () => ReadonlySet<string>;
 }
 
 /**
@@ -293,12 +296,23 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
   for (const part of plan.parts) {
     signal?.throwIfAborted();
     const size = part.file.sizeBytes;
-    if (!(await runtime.hasBlob(part.digest, { signal }))) {
-      const path = splitPartPath(dir, part);
-      await hub.download(part.file, path, {
-        signal,
-        onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
-      });
+    let held = await runtime.hasBlob(part.digest, { signal });
+    const path = splitPartPath(dir, part);
+    for (let wait = BUSY_POLL_MIN_MS; !held; wait = Math.min(wait * 2, BUSY_POLL_MAX_MS)) {
+      try {
+        await hub.download(part.file, path, {
+          signal,
+          onProgress: progress => report(done + Math.min(progress.completedBytes, size) / 2),
+        });
+        break;
+      } catch (error) {
+        if (!(error instanceof ModelFileBusyError)) throw error;
+        // Another import is downloading this part; it may hand the part to Ollama, so look again once it lets go.
+        await abortableDelay(wait, signal);
+        held = await runtime.hasBlob(part.digest, { signal });
+      }
+    }
+    if (!held) {
       await runtime.uploadBlob(part.digest, path, {
         signal,
         onProgress: sent => report(done + (size + Math.min(sent, size)) / 2),
@@ -312,18 +326,42 @@ export async function runSplitImport(plan: SplitImportPlan, deps: SplitImportDep
   report(done, 'creating');
   await runtime.create(splitImportCreateRequest(plan), { signal });
   // A Windows handle can outlive the run; sweepSplitImports removes what is left.
-  await removeSplitStaging(dir, plan);
+  await removeSplitStaging(dir, plan, deps.keep?.());
 }
 
-/** Removes exactly this build's staged parts, their partials and locks; other builds' files in `dir` stay. */
-export async function removeSplitStaging(dir: string, plan: SplitImportPlan): Promise<void> {
+const BUSY_POLL_MIN_MS = 250;
+const BUSY_POLL_MAX_MS = 2000;
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Removes exactly this build's staged parts, their partials and locks, except digests in `keep` (another import's). */
+export async function removeSplitStaging(
+  dir: string,
+  plan: SplitImportPlan,
+  keep: ReadonlySet<string> = new Set()
+): Promise<void> {
   await Promise.all(
-    plan.parts.map(async part => {
-      const path = splitPartPath(dir, part);
-      const partial = `${path}${PARTIAL_SUFFIX}`;
-      for (const target of [path, `${partial}${PARTIAL_RECORD_SUFFIX}`, partial, `${path}.lock`])
-        await removeStaged(target);
-    })
+    plan.parts
+      .filter(part => !keep.has(part.digest))
+      .map(async part => {
+        const path = splitPartPath(dir, part);
+        const partial = `${path}${PARTIAL_SUFFIX}`;
+        for (const target of [path, `${partial}${PARTIAL_RECORD_SUFFIX}`, partial, `${path}.lock`])
+          await removeStaged(target);
+      })
   );
 }
 
@@ -348,17 +386,9 @@ export async function stagedPartBytes(
 
 export const SPLIT_STAGING_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-async function lastTouched(path: string): Promise<number> {
-  const info = await stat(path);
-  let newest = info.mtimeMs;
-  if (info.isDirectory()) {
-    for (const name of await readdir(path).catch(() => [] as string[]))
-      newest = Math.max(newest, (await stat(join(path, name)).catch(() => info)).mtimeMs);
-  }
-  return newest;
-}
+const lastTouched = async (path: string): Promise<number> => (await stat(path)).mtimeMs;
 
-/** Removes staged files (and pre-digest build folders) nothing has written to for `maxAgeMs`; a recent one may be a retry's resume point. */
+/** Removes staged files nothing has written to for `maxAgeMs`; a recent one may be a retry's resume point. */
 export async function sweepSplitImports(
   root: string,
   maxAgeMs: number = SPLIT_STAGING_MAX_AGE_MS,
