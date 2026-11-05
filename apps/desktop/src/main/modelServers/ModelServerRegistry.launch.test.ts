@@ -593,19 +593,27 @@ describe('ModelServerRegistry launching servers', () => {
     }
   });
 
-  it('keeps looking after a lookup that throws before it returns a promise', async () => {
+  it('treats a lookup that throws before it returns a promise as a failed look, and keeps looking', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
     try {
       const { registry, launchers } = setup();
       vi.mocked(launchers.program).mockImplementation(() => {
         throw new Error('no shell');
       });
       for (let round = 0; round < 3; round++) {
-        await registry.check('local').catch(() => {});
+        await expect(registry.check('local')).resolves.toBeDefined();
         await vi.advanceTimersByTimeAsync(31_000);
       }
       expect(launchers.program).toHaveBeenCalledTimes(3);
+      const launch = (await local(registry)).launch;
+      expect(launch).toMatchObject({ canStart: false, programMissing: 'no shell' });
+      expect(launch?.programPending).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(unhandled).not.toHaveBeenCalled();
     } finally {
+      process.off('unhandledRejection', unhandled);
       vi.useRealTimers();
     }
   });

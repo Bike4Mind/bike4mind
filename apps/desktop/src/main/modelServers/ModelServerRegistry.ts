@@ -1082,11 +1082,12 @@ export class ModelServerRegistry {
     if (state.lookingSince !== null && now - state.lookingSince < PROGRAM_TTL_MS) return;
     if (now - state.programAt < PROGRAM_TTL_MS) return;
     state.programAt = now;
-    const lookup = this.supervisor.program('ollama', this.launchSettings(id));
     state.lookingSince = now;
     state.looksOutstanding += 1;
     const look = ++state.programLook;
-    const settled = lookup
+    // A synchronous throw takes the same path as a rejected look, so it never escapes into check().
+    const settled = Promise.resolve()
+      .then(() => this.supervisor.program('ollama', this.launchSettings(id)))
       .then(
         found => ('problem' in found ? found.problem : null),
         (error: unknown) => (error instanceof Error ? error.message : String(error))
