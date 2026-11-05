@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, type IMessage } from '@bike4mind/common';
 import type { ChatRequest } from 'ollama';
-import { OllamaBackend } from './ollamaBackend';
+import { OllamaBackend, type OllamaRequestSettingsReader } from './ollamaBackend';
 import type { ICompletionOptionTools } from './backend';
 import { MAX_RECORDED_TOOL_RESULT_CHARS, TOOL_RESULT_TRUNCATION_NOTICE } from './recordToolResult';
 
@@ -713,6 +713,99 @@ describe('OllamaBackend model options', () => {
     await run(backend, { tools: [mathTool(async () => '4')] });
     expect(chat).toHaveBeenCalledTimes(2);
     expect(show).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('OllamaBackend per-model request settings', () => {
+  const reply = { message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 1, eval_count: 1 };
+  const show = {
+    capabilities: ['completion', 'thinking'],
+    model_info: { 'gptoss.context_length': 131072, 'gptoss.nextn_predict_layers': 1 },
+    parameters: 'temperature 1',
+    modelfile: 'FROM /blobs/sha256-abc',
+    thinking: { values: ['low', 'medium', 'high'] },
+  };
+
+  function backendWith(options: { requestSettings: OllamaRequestSettingsReader }) {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger, options);
+    const chat = vi.fn(async (_request: ChatRequest) => reply);
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => show),
+      list: vi.fn(async () => ({ models: [{ name: 'gpt-oss:20b' }] })),
+    };
+    return { backend, chat };
+  }
+
+  it('hands the reader what /api/show said and sends what it returns', async () => {
+    const read = vi.fn(async () => ({
+      numCtx: 65536,
+      keepAlive: -1,
+      options: { temperature: 0.6, draft_num_predict: 2 },
+      maxOutputTokens: 4096,
+      think: 'high',
+    }));
+    const { backend, chat } = backendWith({ requestSettings: read });
+    await run(backend, { temperature: 0.7 });
+
+    expect(read).toHaveBeenCalledWith('qwen2.5-coder:3b', {
+      capabilities: show.capabilities,
+      modelInfo: show.model_info,
+      parameters: show.parameters,
+      modelfile: show.modelfile,
+      thinkingValues: ['low', 'medium', 'high'],
+      trainedContext: 131072,
+      defaultNumCtx: 32768,
+    });
+    const request = chat.mock.calls[0][0];
+    expect(request.options).toEqual({ num_ctx: 65536, temperature: 0.6, draft_num_predict: 2, num_predict: 4096 });
+    expect(request.keep_alive).toBe(-1);
+    expect(request.think).toBe('high');
+  });
+
+  it("keeps the caller's maxTokens and thinking over the model's own", async () => {
+    const { backend, chat } = backendWith({
+      requestSettings: async () => ({ maxOutputTokens: 4096, think: 'high' }),
+    });
+    await run(backend, { maxTokens: 64, thinking: { enabled: false, budget_tokens: 0 } });
+    const request = chat.mock.calls[0][0];
+    expect(request.options).toEqual({ num_ctx: 32768, num_predict: 64 });
+    expect(request.think).toBe(false);
+  });
+
+  it("fails the turn with the reader's error and sends nothing", async () => {
+    const { backend, chat } = backendWith({
+      requestSettings: async () => {
+        throw new Error('settings file is broken');
+      },
+    });
+    await expect(run(backend, {})).rejects.toThrow('settings file is broken');
+    expect(chat).not.toHaveBeenCalled();
+  });
+
+  it('reads the settings again on every round of a tool loop', async () => {
+    const read = vi.fn(async () => ({ numCtx: 16384 }));
+    const { backend, chat } = backendWith({ requestSettings: read });
+    chat.mockResolvedValueOnce({
+      message: { content: '', tool_calls: [{ function: { name: 'math_evaluate', arguments: { expression: '1' } } }] },
+      prompt_eval_count: 1,
+      eval_count: 1,
+    } as never);
+    await run(backend, { tools: [mathTool(async () => '1')] });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("lists the model's own num_ctx, and the default when its settings cannot be read", async () => {
+    const listed = async (requestSettings: () => Promise<{ numCtx?: number }>) =>
+      (await backendWith({ requestSettings }).backend.getModelInfo())[0].contextWindow;
+    expect(await listed(async () => ({ numCtx: 65536 }))).toBe(65536);
+    expect(await listed(async () => ({}))).toBe(32768);
+    expect(
+      await listed(async () => {
+        throw new Error('broken');
+      })
+    ).toBe(32768);
   });
 });
 
