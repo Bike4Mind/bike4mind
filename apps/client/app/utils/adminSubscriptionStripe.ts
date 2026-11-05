@@ -5,12 +5,15 @@ import { z } from 'zod';
  * React-free, because the server reader imports it too. See docs/admin-subscriptions-spec.md sections 5.2, 5.6.
  */
 
+/** Invoices read per subscription (about 25 years monthly); past it the result is flagged truncated. */
+export const MAX_INVOICES = 300;
+
 export const AdminSubscriptionStripeParamsSchema = z.object({
   id: z.string().regex(/^[0-9a-f]{24}$/i),
   fresh: z
-    .enum(['1', 'true'])
+    .enum(['1', 'true', '0', 'false'])
     .optional()
-    .transform(value => value !== undefined),
+    .transform(value => value === '1' || value === 'true'),
 });
 
 export type AdminStripePaymentMethod = {

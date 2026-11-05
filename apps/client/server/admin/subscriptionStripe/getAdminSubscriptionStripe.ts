@@ -6,6 +6,7 @@ import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { isCompSubscription, type AdminSubscriptionRow } from '@client/app/utils/adminSubscriptionDetail';
 import {
   invoicePaymentKey,
+  MAX_INVOICES,
   type AdminStripeInvoice,
   type AdminStripePaymentMethod,
   type AdminSubscriptionStripe,
@@ -16,8 +17,6 @@ const READ_MAX_TIME_MS = 10_000;
 // StripeConnectionError, which the route answers with 502.
 const STRIPE_READ_OPTIONS: Stripe.RequestOptions = { timeout: 5_000, maxNetworkRetries: 0 };
 const INVOICE_PAGE_SIZE = 100;
-/** Invoices read per subscription (about 25 years monthly); past it the result is flagged truncated. */
-export const MAX_INVOICES = 300;
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX_ENTRIES = 200;
 
