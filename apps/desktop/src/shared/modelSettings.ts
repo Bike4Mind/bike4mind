@@ -15,6 +15,7 @@ export {
   isModelSettingsId,
   KEEP_ALIVE_CHOICES,
   MAX_DRAFT_TOKENS,
+  MODEL_SETTINGS_FILE_NAME,
   parseModelSettingsFile,
   parseModelSettingsInput,
   quotedForMessage,

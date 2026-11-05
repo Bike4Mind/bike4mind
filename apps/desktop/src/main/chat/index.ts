@@ -109,6 +109,7 @@ import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
+import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -506,7 +507,9 @@ export function registerChat(
     models.forgetLocal();
     send(IPC_CHANNELS.chatModelsChanged, undefined);
   }, LATE_RELOAD_DEBOUNCE_MS);
-  const modelSettings = new ModelSettingsStore(join(userData, 'model-settings.json'), message => logger.warn(message));
+  const modelSettings = new ModelSettingsStore(join(userData, MODEL_SETTINGS_FILE_NAME), message =>
+    logger.warn(message)
+  );
   const loadSettings = (modelId: string) => modelSettings.get(modelId);
   // safeStorage like the MCP secrets: a server's token or header value never goes to plain JSON.
   const modelServers = new ModelServerRegistry({
