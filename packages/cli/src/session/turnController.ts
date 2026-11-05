@@ -85,6 +85,11 @@ export interface TurnContext {
   workflowStores: WorkflowStores;
   /** Publish the turn's abort controller so the ESC handler / tavern can cancel it. */
   setAbortController: (controller: AbortController | null) => void;
+  /**
+   * The host's session generation, which a sign-in restart advances. A turn that ends after it moved neither
+   * records its cancellation nor runs the queued input as a turn of the old session.
+   */
+  sessionGeneration?: () => number;
 }
 
 /**
@@ -110,6 +115,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   }
 
   store.setTurnInFlight(true);
+  const generation = ctx.sessionGeneration?.();
   try {
     let next: string | null = message;
     while (next !== null) {
@@ -124,6 +130,8 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
       } finally {
         releaseSession();
       }
+      // Queued input stays queued for the session that replaced this one.
+      if (ctx.sessionGeneration?.() !== generation) break;
       const queued = useCliStore.getState().dequeueAllMessages();
       next = queued.length > 0 ? queued.join('\n\n') : null;
     }
@@ -154,6 +162,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     workflowStores,
     setAbortController,
   } = ctx;
+  const generation = ctx.sessionGeneration?.();
 
   // Read session fresh from the Zustand store, never from the caller-captured
   // context. On the message-queue drain this turn is re-entered with the same
@@ -454,7 +463,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
 
       // Add cancellation message to session
       const currentSession = useCliStore.getState().session;
-      if (currentSession) {
+      if (currentSession && ctx.sessionGeneration?.() === generation) {
         const cancelMessage: Message = {
           id: uuidv4(),
           role: 'assistant',

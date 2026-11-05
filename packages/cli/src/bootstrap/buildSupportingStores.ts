@@ -219,6 +219,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     // Subagent bash_execute is sandboxed and directory-scoped like the main agent.
     sandboxOrchestrator,
     additionalDirectories,
+    isCancelled,
   });
 
   // Create background agent manager

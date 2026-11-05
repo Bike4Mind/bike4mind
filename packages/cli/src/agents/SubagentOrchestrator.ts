@@ -180,6 +180,8 @@ export interface OrchestratorDependencies {
   sandboxOrchestrator?: SandboxOrchestrator;
   /** Live filesystem allow-list shared with the parent, for the same reason. */
   additionalDirectories?: string[];
+  /** The parent session's WrapToolDeps.isCancelled, so a subagent's late tool call never runs after it ends. */
+  isCancelled?: () => boolean;
 }
 
 /**
@@ -322,7 +324,8 @@ export class SubagentOrchestrator {
       this.deps.checkpointStore,
       this.deps.sandboxOrchestrator,
       this.deps.additionalDirectories,
-      effectiveInteractionMode
+      effectiveInteractionMode,
+      this.deps.isCancelled
     );
 
     // Apply wildcard filtering
@@ -340,6 +343,7 @@ export class SubagentOrchestrator {
       allowedDirectories: this.deps.additionalDirectories,
       interactionModeOverride: effectiveInteractionMode,
       checkpointStore: this.deps.checkpointStore,
+      isCancelled: this.deps.isCancelled,
     };
 
     // Inject additional tools (e.g., decompose_task for coordinator agent)

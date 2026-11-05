@@ -1717,6 +1717,7 @@ function CliApp() {
         reviewGateStore: reviewGateStoreRef.current,
       },
       setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
+      sessionGeneration: () => initGenerationRef.current,
     });
   handleMessageRef.current = handleMessage;
 
@@ -1862,10 +1863,12 @@ function CliApp() {
       }
       console.error('Error processing background results:', error);
     } finally {
-      if (stillThisSession()) {
-        setState(prev => ({ ...prev, abortController: null }));
+      // This turn's controller and spinner are cleared even after a restart, or /login and Esc would see a reply running.
+      if (stillThisSession() || abortControllerRef.current === abortController) {
         useCliStore.getState().setIsThinking(false);
-      } else {
+      }
+      setState(prev => (prev.abortController === abortController ? { ...prev, abortController: null } : prev));
+      if (!stillThisSession()) {
         useCliStore.setState(prev => ({ pendingMessages: prev.pendingMessages.filter(m => m.id !== pendingId) }));
       }
       releaseSession();

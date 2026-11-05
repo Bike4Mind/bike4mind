@@ -481,6 +481,33 @@ describe('runTurn', () => {
     expect(save.mock.calls[0][0].metadata.workflow?.decisions).toEqual([decision]);
   });
 
+  it('neither records a cancellation nor runs queued input once a sign-in restart replaced the session', async () => {
+    seedSession([]);
+    let generation = 1;
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    const run = vi.fn(async () => {
+      if (generation === 1) useCliStore.getState().enqueueMessage('typed meanwhile', 'followUp');
+      generation = 2;
+      throw abortError;
+    });
+    const save = vi.fn(async () => undefined);
+
+    await runTurn(
+      'do it',
+      makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        sessionStore: { save } as unknown as SessionStore,
+        sessionGeneration: () => generation,
+      })
+    );
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(useCliStore.getState().session!.messages.some(m => m.metadata?.cancelled)).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+    expect(useCliStore.getState().messageQueue).toHaveLength(1);
+  });
+
   it('drains queued messages into a follow-up turn after the current one settles', async () => {
     seedSession([]);
     const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());

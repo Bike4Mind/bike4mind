@@ -299,6 +299,33 @@ describe('SubagentOrchestrator sandbox parity (criterion 4)', () => {
     expect(args[11]).toBe(sandboxOrchestrator);
     expect(args[12]).toBe(additionalDirectories);
   });
+
+  it("generates subagent tools that stop running once the parent's session has ended", async () => {
+    vi.mocked(generateCliTools).mockClear();
+    const isCancelled = () => true;
+    const deps = {
+      userId: 'test-user',
+      llm: createOneShotLlm('done'),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      permissionManager: {},
+      showPermissionPrompt: vi.fn(),
+      configStore: { get: async () => ({}) },
+      apiClient: {},
+      agentStore: { getAgent: () => undefined, getAgentNames: () => [] },
+      historyStore: new AgentHistoryStore(),
+      isCancelled,
+    } as unknown as OrchestratorDependencies;
+
+    await new SubagentOrchestrator(deps).delegateToAgent({
+      task: 'do the thing',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+    });
+
+    const calls = vi.mocked(generateCliTools).mock.calls;
+    expect(calls[calls.length - 1][14]).toBe(isCancelled);
+  });
 });
 
 describe('resume_agent end-to-end through the real orchestrator', () => {
