@@ -8,6 +8,7 @@ import {
   type SpawnSuggestionHost,
   type ToolContext,
   type ToolDefinition,
+  type ToolSchema,
 } from './types';
 
 /**
@@ -136,9 +137,25 @@ const RUN_HERE_NOTE =
   'The user chose to run this task here, in this conversation, instead of starting a session. ' +
   'Nothing was started. Do the work yourself now, in this turn, and do not call session_spawn for it again.';
 
+/**
+ * Set by the approval card and by nothing else - none of these properties is in the schema
+ * below, so a model cannot send one. Absent means no gate was configured at all, and the answer
+ * there is the placement that touches nothing: creating a checkout nobody asked for is the worse
+ * of the two ways to be wrong.
+ */
+async function cardPlacement(input: Record<string, unknown>, host: HostContext): Promise<SpawnPlacement> {
+  const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
+  if (input.placement !== 'worktree' || branch === '') return { kind: 'local' };
+  // Only empty when no card ran to resolve it, and then resolved the same way the card would.
+  const carried = typeof input.base === 'string' ? input.base.trim() : '';
+  return { kind: 'worktree', branch, base: carried || (await host.spawnBase()) };
+}
+
+export const SESSION_SPAWN_TOOL_NAME = 'session_spawn';
+
 export const sessionSpawn: ToolDefinition = {
   schema: {
-    name: 'session_spawn',
+    name: SESSION_SPAWN_TOOL_NAME,
     description:
       'Hand a self-contained piece of work to a NEW conversation in this project. With the user ' +
       'present this only SUGGESTS it: a card appears beside their composer where they can edit ' +
@@ -175,7 +192,7 @@ export const sessionSpawn: ToolDefinition = {
     },
   },
   // A suggestion starts nothing, so there is nothing to approve; the gate is for the start itself.
-  needsApproval: (_input, context) => !context.host?.suggestions,
+  needsApproval: (_input, context) => !context.host?.suggestions && !context.host?.delegates,
   async approval(input, context) {
     // Resolved here, once, and carried to `run` in the option's input: the base the card names
     // is then the base the child is cut from, with no second resolution to disagree with it.
@@ -248,31 +265,79 @@ export const sessionSpawn: ToolDefinition = {
       ].join('\n');
     }
 
-    // Set by the approval card and by nothing else - none of these properties is in the schema
-    // above, so a model cannot send one. Absent means no gate was configured at all, and the
-    // answer there is the placement that touches nothing: creating a checkout nobody asked for is
-    // the worse of the two ways to be wrong.
-    const branch = typeof input.branch === 'string' ? input.branch.trim() : '';
-    const worktree = input.placement === 'worktree' && branch !== '';
-    // Only empty when no card ran to resolve it, and then resolved the same way the card would.
-    const carried = typeof input.base === 'string' ? input.base.trim() : '';
-    const base = worktree ? carried || (await host.spawnBase()) : '';
-    const placement: SpawnPlacement = worktree ? { kind: 'worktree', branch, base } : { kind: 'local' };
+    const placement = host.delegates ? await host.delegates.placement(title, prompt) : await cardPlacement(input, host);
 
     context.beginWrite?.();
     if (placement.kind === 'worktree') context.report?.progress(`Creating branch ${placement.branch} and worktree...`);
+    // A worktree that could not be made fails the spawn. Falling back to this working directory
+    // would run the agent un-isolated, editing the parent's files, while it was told otherwise.
     const outcome = await host.spawn(prompt, title, placement);
     if (!outcome.ok) throw new Error(outcome.message);
     context.report?.label(`Started a session: ${outcome.session.title}`);
+    const who = host.delegates ? 'It has' : 'The user gave it';
     return [
       `Started session ${outcome.session.id} ("${outcome.session.title}").`,
       placement.kind === 'worktree'
-        ? `The user gave it its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
-        : 'The user had it share this working directory, so it is editing the same files you are.',
+        ? `${who} its own worktree on ${placement.branch}, cut from ${placement.base}, so it is NOT editing the files here and its dependencies are installing there now.`
+        : host.delegates
+          ? 'It shares this working directory, so it is editing the same files you are.'
+          : 'The user had it share this working directory, so it is editing the same files you are.',
       'It is running now. You will be told in this conversation WHEN it finishes, but not what',
       'it said - read it with session_read then if you need that. Do not wait for it in this',
       'turn, and do not start another one for the same work.',
     ].join('\n');
+  },
+};
+
+/** session_spawn as declared to a session with Orchestrate in effect; same parameters, other contract. */
+export const delegatedSpawnSchema: ToolSchema = {
+  ...sessionSpawn.schema,
+  description:
+    'Hand a self-contained piece of work to a NEW conversation in this project. The user turned ' +
+    'on Orchestrate here, so this STARTS it at once: no card, nothing to approve. It runs in its ' +
+    'own git worktree on a new branch cut from the branch this conversation is on when the ' +
+    'project is a repository, and in this working directory otherwise; the result says which. ' +
+    'A started session runs on its own, does not report into your turn, and tells this ' +
+    'conversation when it finishes. It cannot see anything said here, so the prompt has to ' +
+    'carry the whole task. Each one costs credits: never start several variations of one task.',
+};
+
+export const QUEST_COMPLETE_TOOL_NAME = 'quest_complete';
+
+/**
+ * Marks the reply that calls it as the orchestrated job's final summary, which is what the app's
+ * finale reads. Explicit because an interim reply ("waiting on X") looks just like a final one.
+ */
+export const questComplete: ToolDefinition = {
+  schema: {
+    name: QUEST_COMPLETE_TOOL_NAME,
+    description:
+      'Declare the whole orchestrated job finished and mark THIS reply as its final summary for ' +
+      'the user. Call it once, after every agent you started has finished and their work is ' +
+      'combined, in the same reply as that summary. Never call it for an interim update. It is ' +
+      'refused while an agent is still working or waiting on approval, or while a background ' +
+      'process you started is still running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summary: {
+          type: 'string',
+          description: 'One or two sentences on what the job achieved; the full report is your reply.',
+        },
+      },
+      required: ['summary'],
+      additionalProperties: false,
+    },
+  },
+  async run(input, context) {
+    const quest = requireHost(context).quest;
+    if (!quest) throw new Error('quest_complete is only available in a conversation with Orchestrate on.');
+    requireString(input, 'summary');
+    const readiness = await quest.readiness();
+    if (!readiness.ready) throw new Error(readiness.reason);
+    const marked =
+      'Marked this reply as the final summary of the job. Do not call quest_complete again unless more work is done.';
+    return readiness.note ? `${marked} ${readiness.note}` : marked;
   },
 };
 

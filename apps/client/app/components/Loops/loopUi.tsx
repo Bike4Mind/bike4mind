@@ -86,8 +86,14 @@ export function holdLabel(
 ): string | null {
   if (loop.status !== 'live' || loop.activeExecutionId) return null;
   const { hold } = loop;
-  // A deferring hold (pacing, priority_budget) lapses once its deferred run is due.
-  if (hold && (!hold.until || new Date(hold.until).getTime() > now)) {
+  // A deferring hold (pacing, priority_budget) lapses once its deferred run is due, or once the loop is made due or
+  // rescheduled (nextRunAt moves off `until`).
+  const deferLive =
+    !!hold?.until &&
+    new Date(hold.until).getTime() > now &&
+    !!loop.nextRunAt &&
+    new Date(loop.nextRunAt).getTime() === new Date(hold.until).getTime();
+  if (hold && (!hold.until || deferLive)) {
     return HOLD_LABELS[hold.kind](hold);
   }
   return backoffLabel(loop, now);

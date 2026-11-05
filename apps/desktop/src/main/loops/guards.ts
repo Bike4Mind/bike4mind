@@ -74,11 +74,12 @@ export const DEPLOY_TIMEOUT_MS = 60 * 60_000;
 
 /**
  * Wait for the PR's merge commit (a merge queue lands it later), then for `workflow`'s run on it
- * to conclude. Anything but success, or no conclusion within `timeoutMs`, fails.
+ * to conclude. Anything but success, or no conclusion within `timeoutMs`, fails. With no
+ * `workflow`, passes as soon as the PR has merged.
  */
 export async function runDeployCheck(
   gh: GhRunner,
-  target: { pr: PrRef; mergeSha?: string; workflow: string; cwd: string },
+  target: { pr: PrRef; mergeSha?: string; workflow?: string; cwd: string },
   deps: WaitDeps,
   timeoutMs = DEPLOY_TIMEOUT_MS
 ): Promise<CheckResult> {
@@ -91,10 +92,14 @@ export async function runDeployCheck(
         mergeCommit?: { oid?: string } | null;
       };
       if (view.state === 'CLOSED')
-        return { ok: false, reason: 'deploy did not reach prod: the PR was closed unmerged' };
+        return {
+          ok: false,
+          reason: `${target.workflow ? 'deploy did not reach prod: ' : ''}the PR was closed unmerged`,
+        };
       if (view.state === 'MERGED' && view.mergeCommit?.oid) sha = view.mergeCommit.oid;
     }
     if (sha) {
+      if (!target.workflow) return { ok: true };
       const runs = JSON.parse(
         await gh(
           [
@@ -124,9 +129,12 @@ export async function runDeployCheck(
     }
     await deps.sleep(DEPLOY_POLL_MS);
   }
+  const minutes = timeoutMs / 60_000;
   return {
     ok: false,
-    reason: `deploy did not reach prod: ${target.workflow} did not finish within ${timeoutMs / 60_000} min`,
+    reason: target.workflow
+      ? `deploy did not reach prod: ${target.workflow} did not finish within ${minutes} min`
+      : `the PR did not merge from the merge queue within ${minutes} min`,
   };
 }
 

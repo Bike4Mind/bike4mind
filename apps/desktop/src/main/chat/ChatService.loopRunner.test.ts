@@ -127,6 +127,26 @@ describe('ChatService loop runner sessions', () => {
     expect(events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval')).toBe(true);
   });
 
+  it('turns back into an ordinary conversation once its run ends', async () => {
+    const session = await service.createSession();
+    await service.setApprovalMode(session.id, 'ask');
+    await service.startAutomaticTurn(session.id, 'work the ticket', origin);
+    (await nextStream(1)).write(frame('[DONE]'));
+    service.endLoopRun('run-1');
+    expect(service.loopRunOf(session.id)).toBeUndefined();
+
+    await service.send(session.id, 'carry on');
+    (await nextStream(2)).write(toolTurn('c1', 'bash_execute', { command: 'rm -rf build', cwd: root }));
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(
+      () => events.some(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'),
+      { timeout: 5000, interval: 10 }
+    );
+    expect(post.mock.calls[1][2].headers).toBeUndefined();
+    expect(unattended).toEqual([]);
+    expect(ended().some(call => call.status === 'denied')).toBe(false);
+  });
+
   it('starts its shell commands at low priority; a normal session does not', async () => {
     const runner = await service.createSession();
     await service.setApprovalMode(runner.id, 'full');

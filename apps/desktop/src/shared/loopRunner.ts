@@ -25,6 +25,8 @@ export interface LoopPolicy {
   directory: string;
   /** `owner/name` the server named for the loop, checked against the folder's origin remote. */
   repoHint?: string;
+  /** `owner/name` of the folder's origin when approved; loop_merge_pr merges only there. */
+  repo?: string;
   /** Used when the server serves none for the stage. */
   guards?: LoopStageGuards;
   approvedAt: string;

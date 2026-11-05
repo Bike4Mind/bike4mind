@@ -312,8 +312,17 @@ const AssistantTurn = memo(function AssistantTurn({
         [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
         [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
         ...revealCopyButtonSx,
+        borderRadius: 'sm',
+        transition: 'box-shadow 0.4s ease-out, background-color 0.4s ease-out',
+        '&[data-report-highlight]': {
+          boxShadow: '0 0 0 6px var(--joy-palette-warning-softBg)',
+          bgcolor: 'warning.softBg',
+        },
       }}
       data-testid="chat-message-assistant"
+      // The orchestrator's "Read the report" scrolls to and highlights the one with its summary's id.
+      data-assistant-reply
+      data-message-id={message.id}
     >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten

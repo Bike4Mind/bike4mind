@@ -35,6 +35,7 @@ export interface RunnerChat {
   removeWorktrees(directory: string, paths?: readonly string[]): Promise<unknown>;
   loopRunOf(sessionId: string): string | undefined;
   loopRunSessions(runId: string): string[];
+  endLoopRun(runId: string): void;
 }
 
 export interface RunnerGithub {
@@ -91,8 +92,11 @@ const USER_WIDE_REASON: Record<string, string> = {
   user_budget: 'your loops have spent their daily budget',
 };
 
-/** A completions refusal at the credit cap: the run stops and the ticket goes back, never retried. */
-const CREDIT_STOP = /\(status 422\)/;
+/**
+ * A completions refusal at the credit cap: the run stops and the ticket goes back, never retried.
+ * Matches both of completions.ts toRequestError's forms, with and without the server's body.
+ */
+const CREDIT_STOP = /status 422\b/;
 
 interface Lane {
   claim: RunnerClaim;
@@ -136,6 +140,8 @@ export class LoopRunner {
   private previous: MachineSample | undefined;
   private blocker: number | null = null;
   private running = false;
+  /** Set by releaseAll: the app is going, so finishing runs skip the worktree GC and its gh calls. */
+  private quitting = false;
   private ticking = false;
   /** A claim pass was asked for while one was running; run another as soon as it ends. */
   private again = false;
@@ -158,6 +164,7 @@ export class LoopRunner {
     // Turning the runner on is the user's retry after a credit stop; an auth refresh re-calling start is not.
     if (!this.running) this.creditStops.clear();
     this.running = true;
+    this.quitting = false;
     this.gcTimer ??= setInterval(() => void this.collectWorktrees(), RUNNER_MS.gcEvery);
     void this.collectWorktrees();
     this.schedule(0);
@@ -281,7 +288,7 @@ export class LoopRunner {
    */
   private async run(claim: RunnerClaim, policy: LoopPolicy): Promise<void> {
     const { runId } = claim;
-    let sessionId: string;
+    let sessionId: string | undefined;
     try {
       const created = await this.deps.chat.createCodeSession({ directory: policy.directory, workspace: true });
       if (!created.ok) {
@@ -292,6 +299,8 @@ export class LoopRunner {
       await this.deps.chat.setApprovalMode(sessionId, policy.approvalMode);
       if (claim.model) await this.deps.chat.setLoopRunModel(sessionId, claim.model);
     } catch (err) {
+      // No turn has run, so no worktree exists yet: only the empty conversation is left to remove.
+      if (sessionId) await this.deps.chat.deleteSession(sessionId).catch(() => undefined);
       await this.report(runId, this.now(), { outcome: 'released', reason: `could not start: ${String(err)}` });
       return;
     }
@@ -330,7 +339,9 @@ export class LoopRunner {
 
   private laneOf(sessionId: string): Lane | undefined {
     const runId = this.deps.chat.loopRunOf(sessionId);
-    return runId ? this.lanes.get(runId) : undefined;
+    if (runId) return this.lanes.get(runId);
+    // Deleting a session drops its marking before its turn stops, so the turn's last event arrives unmarked.
+    return [...this.lanes.values()].find(lane => lane.sessionId === sessionId);
   }
 
   /** Every chat stream event, from the main-process observer. */
@@ -346,7 +357,11 @@ export class LoopRunner {
       this.creditStop(lane.claim.ticket.loopId);
       void this.finish(lane, { outcome: 'released', reason: 'out of credits' });
     } else if (event.type === 'error') void this.finish(lane, { outcome: 'failed', reason: event.message });
-    if (event.type === 'done') void this.turnDone(lane, event.content);
+    if (event.type !== 'done') return;
+    // The user pressed Stop (or deleted the conversation): the work is unfinished, and theirs now.
+    if (event.stopReason === 'aborted')
+      void this.finish(lane, { outcome: 'blocked', reason: 'Stopped on the desktop' });
+    else void this.turnDone(lane, event.content);
   }
 
   /** ApprovalGate closed a card in a runner session: nobody can answer it, so the user gets the ticket. */
@@ -374,13 +389,14 @@ export class LoopRunner {
   /** After a merge: the stage's deploy workflow, then its smoke check. Either failing blocks the ticket. */
   private async postTurnChecks(lane: Lane, answer: string): Promise<Outcome> {
     const guards = lane.claim.stage.guards ?? lane.policy.guards;
-    if (lane.merged && guards?.deployWorkflow) {
+    // No merge sha means the PR went to the merge queue, which may still drop it: wait for it to land.
+    if (lane.merged && (guards?.deployWorkflow || !lane.merged.mergeSha)) {
       const deployed = await runDeployCheck(
         this.deps.gh,
         {
           pr: lane.merged.pr,
           mergeSha: lane.merged.mergeSha,
-          workflow: guards.deployWorkflow,
+          ...(guards?.deployWorkflow ? { workflow: guards.deployWorkflow } : {}),
           cwd: lane.policy.directory,
         },
         { now: this.now, sleep: this.sleep }
@@ -418,11 +434,23 @@ export class LoopRunner {
       throw new Error(`${reason} The ticket is handed to the user; stop here.`);
     };
 
+    // Only the loop's own repository: the user's gh could merge a green PR anywhere it has rights.
+    const repo = lane.policy.repo ?? lane.policy.repoHint?.toLowerCase();
+    if (`${ref.owner}/${ref.repo}`.toLowerCase() !== repo)
+      return blocked(`${ref.url} is not in this loop's repository (${repo ?? 'unknown'}).`);
+
     const guards = lane.claim.stage.guards ?? lane.policy.guards;
-    const [snapshot, labels] = await Promise.all([
-      this.deps.github.snapshot(ref, { threads: false, queue: true }),
-      readLabels(this.deps.gh, ref),
-    ]);
+    let snapshot: PrSnapshot;
+    let labels: string[];
+    try {
+      [snapshot, labels] = await Promise.all([
+        this.deps.github.snapshot(ref, { threads: false, queue: true }),
+        readLabels(this.deps.gh, ref),
+      ]);
+    } catch (err) {
+      // Not a tool error the model could finish past: an unreadable PR is not merged, so the ticket waits.
+      return blocked(`Could not read ${ref.url}: ${err instanceof Error ? err.message : String(err)}`);
+    }
     const decision = mergeDecision(
       snapshot,
       labels,
@@ -502,6 +530,7 @@ export class LoopRunner {
 
   /** Quit: hand everything back now, so the server re-offers it without waiting out the lease. */
   async releaseAll(): Promise<void> {
+    this.quitting = true;
     this.stop();
     await this.stopAll('the desktop app quit');
   }
@@ -534,24 +563,29 @@ export class LoopRunner {
   }
 
   /**
-   * Record each of the run's worktrees, then remove the ones without an open PR. A worktree whose
-   * PR is still open is kept for the user, and collected later by collectWorktrees.
+   * Record each of the run's worktrees and end the run's marking in ChatService, then remove the
+   * worktrees without an open PR. One whose PR is still open is kept for the user, and collected
+   * later by collectWorktrees. Not on quit: the GC's gh calls would hold the quit up.
    */
   private async retire(lane: Lane): Promise<void> {
-    for (const sessionId of this.deps.chat.loopRunSessions(lane.claim.runId)) {
-      const project = (await this.deps.chat.getSession(sessionId))?.project;
-      if (!project?.workspace || !project.workspaceBranch) continue;
-      await this.deps.store.recordWorktree({
-        sessionId,
-        directory: project.directory,
-        path: project.workingDirectory,
-        branch: project.workspaceBranch,
-        ticketId: lane.claim.ticket.ticketId,
-        createdAt: new Date(lane.startedAt).toISOString(),
-        finishedAt: new Date(this.now()).toISOString(),
-      });
+    try {
+      for (const sessionId of this.deps.chat.loopRunSessions(lane.claim.runId)) {
+        const project = (await this.deps.chat.getSession(sessionId))?.project;
+        if (!project?.workspace || !project.workspaceBranch) continue;
+        await this.deps.store.recordWorktree({
+          sessionId,
+          directory: project.directory,
+          path: project.workingDirectory,
+          branch: project.workspaceBranch,
+          ticketId: lane.claim.ticket.ticketId,
+          createdAt: new Date(lane.startedAt).toISOString(),
+          finishedAt: new Date(this.now()).toISOString(),
+        });
+      }
+    } finally {
+      this.deps.chat.endLoopRun(lane.claim.runId);
     }
-    await this.collectWorktrees();
+    if (!this.quitting) await this.collectWorktrees();
   }
 
   /** Remove recorded runner worktrees that are finished with no open PR, or past the age limit. */

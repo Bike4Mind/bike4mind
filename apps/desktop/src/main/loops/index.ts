@@ -105,26 +105,26 @@ export function registerLoopRunner(auth: AuthService, chat: ChatService, backgro
     async (event, request: LoopApproveRequest): Promise<LoopApproveResult> => {
       const env = environment();
       if (!env) return { ok: false, error: 'Sign in first.' };
-      if (typeof request?.loopId !== 'string' || typeof request.loopName !== 'string') {
-        return { ok: false, error: 'Unknown loop.' };
-      }
+      // The hint comes from the server's list, never from the renderer's request.
+      const pending = runner.state().pendingApprovals.find(loop => loop.loopId === request?.loopId);
+      if (!pending || typeof request.loopName !== 'string') return { ok: false, error: 'Unknown loop.' };
+      const { repoHint } = pending;
       const window = BrowserWindow.fromWebContents(event.sender);
       const options = { title: `Folder for ${request.loopName}`, properties: ['openDirectory' as const] };
       const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
       const directory = picked.filePaths[0];
       if (picked.canceled || !directory) return { ok: false, error: 'No folder picked.' };
-      if (request.repoHint) {
-        const slug = repoSlug(await originOf(directory));
-        if (slug !== request.repoHint.toLowerCase()) {
-          return { ok: false, error: `That folder's origin is not ${request.repoHint}.` };
-        }
+      const slug = repoSlug(await originOf(directory));
+      if (repoHint && slug !== repoHint.toLowerCase()) {
+        return { ok: false, error: `That folder's origin is not ${repoHint}.` };
       }
       await store.approve(env.key, {
         loopId: request.loopId,
         loopName: request.loopName,
         approvalMode: request.approvalMode === 'full' ? 'full' : 'auto',
         directory,
-        ...(request.repoHint ? { repoHint: request.repoHint } : {}),
+        ...(repoHint ? { repoHint } : {}),
+        ...(slug ? { repo: slug } : {}),
         approvedAt: new Date().toISOString(),
       });
       void runner.tick();

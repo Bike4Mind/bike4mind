@@ -72,6 +72,7 @@ import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
+import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
@@ -820,6 +821,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
+  registerSessionOrchestrateIpc(ipcMain, service);
   // Validated here rather than trusted, for the same reason the folder grant goes through a
   // native picker: this is the only door to the approval mode, so an unrecognised value must
   // not reach the store and land as something looser than the user asked for.

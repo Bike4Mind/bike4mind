@@ -5,6 +5,7 @@ import {
   sanitizeSuggestion,
   suggestionModelChoices,
   suggestionRequestMessages,
+  SUGGESTION_INSTRUCTION,
   SUGGESTION_MODELS,
 } from './nextPrompt';
 
@@ -84,6 +85,11 @@ describe('suggestionModelChoices', () => {
 });
 
 describe('suggestionRequestMessages', () => {
+  it('steers away from suggesting a push to main', () => {
+    expect(SUGGESTION_INSTRUCTION).toContain('Never suggest pushing to main');
+    expect(SUGGESTION_INSTRUCTION).toContain('Suggest opening a PR instead');
+  });
+
   // The regression guard, and the whole point of the fix. A request that ends on an assistant
   // turn is a prefill: the model continues that turn instead of writing the user's next
   // message, and this feature shipped answering with a few tokens of nothing on nearly every
