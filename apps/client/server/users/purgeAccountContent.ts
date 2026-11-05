@@ -30,6 +30,7 @@ type PurgeOptions = { logger: Pick<Logger, 'info' | 'warn' | 'error'>; assertLea
 const BATCH_SIZE = 100;
 type PurgeRecord = {
   userId?: string | mongoose.Types.ObjectId;
+  __v?: number;
   sessionId?: string;
   id?: string;
   dataLakeId?: string;
@@ -364,7 +365,10 @@ async function purgePersonalProjects(
       // Members keep the grants a project minted on surviving (organization or other owners')
       // documents unless they go with it, as deleteProject's revoke cascade does.
       for (const model of [FabFile.modelName, Session.modelName]) {
-        await collectionFor(model).updateMany({ 'users.projectId': projectId }, { $pull: { users: { projectId } } });
+        await collectionFor(model).updateMany(
+          { 'users.projectId': projectId },
+          { $pull: { users: { projectId } }, $inc: { __v: 1 } }
+        );
       }
       await projects.deleteOne({ _id: project._id, ...personalFilter(userId, personalOrganizationIds) });
     }
