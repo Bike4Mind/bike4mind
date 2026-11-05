@@ -281,8 +281,15 @@ export class CreditTransactionRepository
     ownerId: string,
     ownerType: CreditHolderType
   ): Promise<ICreditTransactionDocument | null> {
-    // `reversedAt: null` also matches rows written before the field existed.
-    return this.model.findOne({ ownerId, ownerType, type: 'purchase', status: 'completed', reversedAt: null });
+    // `reversedAt: null` also matches rows written before the field existed; a status-less legacy
+    // purchase counts as completed, same as findLatestTopUp.
+    return this.model.findOne({
+      ownerId,
+      ownerType,
+      type: 'purchase',
+      reversedAt: null,
+      $or: [{ status: 'completed' }, { status: { $exists: false } }, { status: null }],
+    });
   }
 
   async findByOwnerWithFilters(

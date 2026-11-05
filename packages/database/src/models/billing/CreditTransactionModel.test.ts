@@ -668,4 +668,18 @@ describe('purchase reversal', () => {
     expect(found?.stripePaymentIntentId).toBe('pi_legacy');
     expect(await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.Organization)).toBeNull();
   });
+
+  it.each([
+    ['missing', (row: Record<string, unknown>) => delete row.status],
+    ['null', (row: Record<string, unknown>) => (row.status = null)],
+  ])('counts a legacy purchase whose status is %s as unreversed', async (_label, strip) => {
+    const row = purchase({ stripePaymentIntentId: 'pi_nostatus' });
+    strip(row);
+    await seed([row]);
+    const stored = await CreditTransaction.collection.findOne({ stripePaymentIntentId: 'pi_nostatus' });
+    expect(stored?.status ?? 'absent').not.toBe('completed');
+
+    const found = await creditTransactionRepository.findUnreversedPurchase(USER, CreditHolderType.User);
+    expect(found?.stripePaymentIntentId).toBe('pi_nostatus');
+  });
 });
