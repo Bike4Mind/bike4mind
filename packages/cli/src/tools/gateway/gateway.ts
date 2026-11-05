@@ -9,6 +9,8 @@ import { commandTextOf } from './toolPolicy.js';
 import { buildPromptPreview } from './stages/preview.js';
 import { executeAndRecord } from './stages/execution.js';
 
+export const SESSION_ENDED_MESSAGE = 'Not run: the session this call belonged to has ended.';
+
 /**
  * The args handed to execution, minus any gateSnapshot or confirmedFuzzyHash. Only the
  * edit_local_file gate (once it actually resolves) may set these fields, plus
@@ -105,6 +107,7 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
             permissionManager,
           })
         ) {
+          if (deps.isCancelled?.()) return SESSION_ENDED_MESSAGE;
           return await run();
         }
 
@@ -119,6 +122,8 @@ export function wrapToolWithPermission(tool: ICompletionOptionTools, deps: WrapT
         const sessionScope = promptSessionScope(toolName, args, permissionManager);
         // Waits indefinitely for the user's answer.
         const response = await showPermissionPrompt(toolName, effectiveArgs, preview, undefined, { sessionScope });
+        // An answer arriving after the session ended must neither record trust nor run the tool.
+        if (deps.isCancelled?.()) return SESSION_ENDED_MESSAGE;
         await applyPromptResponse(toolName, args, response.action, permissionManager, deps.configStore);
         return await run();
       } finally {

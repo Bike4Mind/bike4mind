@@ -325,7 +325,8 @@ export async function generateCliTools(
   allowedDirectories?: string[],
   /** Ceiling interaction mode for a spawned subagent (see wrapToolWithPermission).
    *  Omitted for the main agent, which follows the live store mode. */
-  interactionModeOverride?: InteractionMode
+  interactionModeOverride?: InteractionMode,
+  isCancelled?: () => boolean
 ): Promise<{ tools: ICompletionOptionTools[]; agentContext: AgentContext }> {
   // Wire the ask_user_question callback into the tool's module-level setter
   if (showUserQuestion) {
@@ -457,6 +458,7 @@ export async function generateCliTools(
     allowedDirectories: liveAllowedDirectories,
     interactionModeOverride,
     checkpointStore,
+    isCancelled,
   };
   let tools = wrapTools(Object.values(toolsMap), wrapDeps);
 
