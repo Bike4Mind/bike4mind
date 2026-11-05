@@ -56,7 +56,10 @@ export function parseWslPath(path: string): WslLocation | null {
   };
 }
 
-/** A share path under a distro's `/mnt/<x>` as the Windows drive path `<X>:\...` it reaches; null for any other path. */
+/**
+ * A share path under a distro's `/mnt/<x>` as the Windows drive path `<X>:\...` it reaches; null for any other path.
+ * Maps only the default `/mnt/<x>` automount root.
+ */
 export function wslDrivePath(path: string): string | null {
   const linuxPath = parseWslPath(path)?.linuxPath;
   const match = linuxPath ? /^\/mnt\/([a-z])(?:\/(.*))?$/i.exec(linuxPath) : null;

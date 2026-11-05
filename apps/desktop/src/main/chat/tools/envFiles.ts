@@ -22,7 +22,7 @@ function windowsSpellings(path: string): string[] {
 /**
  * Ported from opencode's default read rules, which mirror the Node.gitignore patterns: any path
  * ending `.env` or holding `.env.`, except a committed `.env.example`. It is judged under every
- * spelling windowsSpellings gives, so a drive, revision or stream part cannot hide the name.
+ * spelling windowsSpellings gives, with any drive, revision or stream part split off.
  */
 export function isEnvFile(path: string): boolean {
   return windowsSpellings(path).some(
