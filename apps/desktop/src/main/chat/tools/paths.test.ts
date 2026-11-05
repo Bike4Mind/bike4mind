@@ -2,12 +2,14 @@ import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { realpathSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PathAccessDenied,
   resolveWithinRoots,
   resolveWithinRootsPhysically,
   withinGuarded,
+  realpathSyncNearest,
   withRealPath,
 } from './paths';
 
@@ -244,5 +246,16 @@ describe('withRealPath', () => {
       join(base, 'cfg-link', 'new', 'file'),
       join(base, 'config', 'new', 'file'),
     ]);
+  });
+});
+
+describe('realpathSyncNearest', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('returns the path unchanged when resolution fails for a reason other than a missing path', () => {
+    vi.spyOn(realpathSync, 'native').mockImplementation(() => {
+      throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    });
+    expect(realpathSyncNearest(join(tmpdir(), 'a', 'b'))).toBe(join(tmpdir(), 'a', 'b'));
   });
 });

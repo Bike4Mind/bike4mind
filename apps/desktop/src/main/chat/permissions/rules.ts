@@ -1,8 +1,8 @@
-import { basename, dirname, isAbsolute, sep } from 'node:path';
+import { basename, dirname, isAbsolute } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
 import { own } from '@shared/ownKeys';
-import { caseFolded, realpathSyncNearest, withDriveSpellings } from '../tools/paths';
+import { caseFolded, guardForm, guardFormWithin, realpathSyncNearest, withDriveSpellings } from '../tools/paths';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 
@@ -279,7 +279,23 @@ const NO_VERDICT: PermissionVerdict = { decision: null };
 const NAMES_RULE_FILE = /\.claude|permission-rules/;
 
 function within(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(root.endsWith(sep) ? root : root + sep);
+  return guardFormWithin(guardForm(root), guardForm(candidate));
+}
+
+/** On Windows, the `/mnt/<drive>/...` spelling of a guard-form drive path, else null. */
+function wslMountSpelling(guardRoot: string): string | null {
+  const match = /^([a-z]):(?:\/(.*))?$/.exec(guardRoot);
+  return match ? `/mnt/${match[1]}/${match[2] ?? ''}` : null;
+}
+
+function scriptNamesRoot(script: string, roots: readonly string[]): boolean {
+  const folded = caseFolded(script);
+  const text = guardForm(script);
+  return roots.some(root => {
+    const form = guardForm(root);
+    const mount = process.platform === 'win32' ? wslMountSpelling(form) : null;
+    return folded.includes(root) || text.includes(form) || (mount !== null && text.includes(mount));
+  });
 }
 
 function isSettingsFile(path: string): boolean {
@@ -393,7 +409,7 @@ export class PermissionRuleSet {
       const folded = caseFolded(script);
       if (commands.length === 0 || NAMES_RULE_FILE.test(folded)) return null;
       if (subject.shell.ungranted?.length) return null;
-      if (this.foldedRoots().some(root => folded.includes(root))) return null;
+      if (scriptNamesRoot(script, this.foldedRoots())) return null;
       if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(caseFolded(path)))) {
         return null;
       }

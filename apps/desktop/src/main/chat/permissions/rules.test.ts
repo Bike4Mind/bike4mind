@@ -412,6 +412,35 @@ describe('PermissionRuleSet', () => {
     it('does not cover the share spelling of the app folder as a folder', () => {
       expect(set({ allow: ['Edit'] }, [APP]).coversFolder(SHARE)).toBe(false);
     });
+
+    it('does not allow an edit to a child of the app folder through the share spelling', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${SHARE}\\tool-access.json`] })).toBeNull();
+    });
+
+    it.each(['cp x C:/Users/me/AppData/Roaming/App/x', 'cp x /mnt/c/Users/me/AppData/Roaming/App/x'])(
+      'does not allow a shell call spelling the app folder as %s',
+      script => {
+        expect(decide(set({ allow: ['Bash(cp:*)'] }, [APP]), shell(script, [script]))).toBeNull();
+      }
+    );
+
+    it('still allows a shell call that names an unrelated folder', () => {
+      const script = 'cp x D:/notes/x';
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, [APP]), shell(script, [script]))).toBe('allow');
+    });
+  });
+
+  it('keeps the case of a protected folder on linux', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const rules = set({ allow: [`Edit(/${HOME}/**)`] }, [`${HOME}/Library/App`]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/library/app/x.json`] })).toBe('allow');
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/Library/App/x.json`] })).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original);
+    }
   });
 
   it('does not allow a shell call naming a case variant of a permission file on macOS', () => {

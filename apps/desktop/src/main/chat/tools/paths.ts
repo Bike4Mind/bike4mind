@@ -307,7 +307,7 @@ export async function hostPhysicalTarget(target: string): Promise<string> {
 /**
  * `path`, plus its real path when a symlink makes the two differ, so a guard built from it holds
  * against targets the checks have resolved. A path that does not exist yet is spelled under its
- * nearest existing parent's real path. Sync, for the lists built at startup and the sandbox profile.
+ * nearest existing parent's real path. Sync, and runs per decision, so keep callers off hot loops.
  */
 export function withRealPath(path: string): string[] {
   const real = realpathSyncNearest(path);
@@ -318,7 +318,9 @@ export function withRealPath(path: string): string[] {
 export function realpathSyncNearest(path: string): string {
   try {
     return realpathSync.native(path);
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') return path;
     const parent = dirname(path);
     return parent === path ? path : join(realpathSyncNearest(parent), basename(path));
   }
