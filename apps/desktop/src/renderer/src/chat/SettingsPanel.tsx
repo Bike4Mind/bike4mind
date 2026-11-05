@@ -37,10 +37,12 @@ import {
   ServerIcon,
   ShieldIcon,
   SlidersIcon,
+  SoundIcon,
   SparkIcon,
   SubSessionsIcon,
 } from './icons';
 import { nestedSessionsSummary, useNestedSessions } from './nestedSessions';
+import { useOrchestratorSound } from './orchestrator/chime';
 import { columnStackSx, contentColumnSx, thinScrollbarSx } from './layout';
 import { useCostDisplayPreference } from './costDisplay';
 import { tokenRateSummary, useTokenRateSetting } from './tokenRate';
@@ -157,6 +159,25 @@ function nestedSessionsEntry(enabled: boolean, toggle: () => void): ConfigEntry 
           }}
         />
       </Stack>
+    ),
+  };
+}
+
+function orchestratorSoundEntry(enabled: boolean, toggle: () => void): ConfigEntry {
+  return {
+    id: 'orchestrator-sound',
+    icon: <SoundIcon />,
+    label: 'Orchestrator sounds',
+    summary: enabled ? 'A chime when an agent needs you or a run finishes.' : 'Off.',
+    control: (
+      <Switch
+        size="sm"
+        checked={enabled}
+        onChange={toggle}
+        slotProps={{
+          input: { 'aria-label': 'Orchestrator sounds', 'data-testid': 'settings-orchestrator-sound-switch' },
+        }}
+      />
     ),
   };
 }
@@ -394,6 +415,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
   const [claudeImport, setClaudeImport, importError, retryImport] = useClaudeImport();
   const [worktreeDefault, toggleWorktreeDefault] = useWorktreeByDefault();
   const [nestedSessions, toggleNestedSessions] = useNestedSessions();
+  const [orchestratorSound, toggleOrchestratorSound] = useOrchestratorSound();
   const [localContext, setLocalContext, localContextError, localContextFit] = useLocalContextSetting();
   const [modelServers, setModelServers, modelServersError] = useModelServers();
   const curatedList = useCuratedListSettings();
@@ -404,6 +426,7 @@ function useSettingsEntries(auth: AuthState | null): Record<SettingsSection, Con
       suggestionsEntry(suggestions, toggleSuggestions, suggestionModel),
       worktreeEntry(worktreeDefault, toggleWorktreeDefault),
       nestedSessionsEntry(nestedSessions, toggleNestedSessions),
+      orchestratorSoundEntry(orchestratorSound, toggleOrchestratorSound),
       localContextEntry(localContext, next => void setLocalContext(next), localContextError, localContextFit),
       tokenRateEntry(showTokenRate, toggleTokenRate),
       curatedListEntry(

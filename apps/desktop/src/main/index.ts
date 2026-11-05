@@ -21,6 +21,7 @@ import { persistConsoleWarnings } from './logFile';
 import { registerUpdates } from './update';
 import { registerTerminals } from './terminal';
 import { registerUsage } from './usage';
+import { registerAttention } from './attention';
 import { appWindows } from './windows';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
@@ -126,6 +127,7 @@ void app.whenReady().then(async () => {
   // After ready, not before: safeStorage is only usable once the app is ready, and the vault
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
+  registerAttention();
   registerAccount(auth);
   registerUsage(auth);
   const fleet = registerFleet();

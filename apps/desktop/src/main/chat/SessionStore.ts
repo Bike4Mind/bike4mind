@@ -15,6 +15,7 @@ import type {
 } from '@shared/chat';
 import { SESSION_TITLE_MAX_LENGTH } from '@shared/chat';
 import type { WorkspaceOwner } from '@shared/worktreeRemoval';
+import { summarizeSession } from '@shared/agentOutcome';
 import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport';
 import { normalizeGeneration, type GenerationSettings } from '@shared/generation';
 import { storedReasoningEffortSetting } from './reasoningEffort';
@@ -43,12 +44,14 @@ export function deriveTitle(prompt: string): string {
 }
 
 /**
- * A session file as it is stored, which carries one field the rest of the app never sees.
+ * A session file as it is stored, which carries two fields the rest of the app never sees.
  *
  * `approvalModeLaunch` stamps a 'full' approval mode with the run of the app that chose it.
  * A file written by an earlier run reads back as 'ask' - see `normalizeApprovalMode`.
+ * `orchestrateLaunch` does the same for `orchestrate`, which also lifts a gate (on spawning), so
+ * it lasts one run of the app as 'full' does and reads back as off after a relaunch.
  */
-type StoredSession = ChatSession & { approvalModeLaunch?: string };
+type StoredSession = ChatSession & { approvalModeLaunch?: string; orchestrateLaunch?: string };
 
 /**
  * The approval mode a stored session actually gets, which is not always the one on disk.
@@ -99,7 +102,8 @@ export interface CreateOptions {
  * `list` never mistakes it for a session.
  */
 const SUMMARY_INDEX = '.summary-index';
-const SUMMARY_INDEX_VERSION = 1;
+// Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
+const SUMMARY_INDEX_VERSION = 4;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
@@ -148,11 +152,6 @@ async function projectOnDisk(project: ChatProject): Promise<boolean> {
     }
   }
   return true;
-}
-
-function summarize(session: ChatSession): ChatSessionSummary {
-  const { messages, spawnSuggestions: _suggestions, ...summary } = session;
-  return { ...summary, messageCount: messages.length };
 }
 
 /**
@@ -416,7 +415,7 @@ export class SessionStore implements SessionWritesStore {
       messages: [],
     };
     await this.write(directory, session);
-    return summarize(session);
+    return summarizeSession(session);
   }
 
   /** Capture identity before an asynchronous operation that must not cross accounts. */
@@ -486,7 +485,7 @@ export class SessionStore implements SessionWritesStore {
           }
           const session = await this.read(directory, id);
           if (!session) continue;
-          const summary = summarize(session);
+          const summary = summarizeSession(session);
           index.set(id, { size: info.size, mtimeMs: info.mtimeMs, summary });
           changed = true;
           sessions[position] = summary;
@@ -583,9 +582,9 @@ export class SessionStore implements SessionWritesStore {
       if (parsed.version !== SUMMARY_INDEX_VERSION || parsed.defaults !== this.summaryDefaults()) return index;
       for (const [id, entry] of Object.entries(parsed.entries ?? {})) {
         if (!isValidSessionId(id) || !entry?.summary || typeof entry.size !== 'number') continue;
-        // 'full' is scoped to the launch that chose it (see normalizeApprovalMode), so a summary
-        // carrying it from an earlier run is stale by definition.
-        if (entry.summary.approvalMode === 'full') continue;
+        // 'full' and orchestrate are scoped to the launch that chose them (see StoredSession), so
+        // a summary carrying either from an earlier run is stale by definition.
+        if (entry.summary.approvalMode === 'full' || entry.summary.orchestrate) continue;
         index.set(id, entry);
       }
     } catch {
@@ -788,6 +787,15 @@ export class SessionStore implements SessionWritesStore {
     return this.mutate(id, session => {
       if (pinned) session.pinned = true;
       else delete session.pinned;
+      return true;
+    });
+  }
+
+  /** Turn Orchestrate on or off. Leaves `updatedAt` alone, as pinning does. */
+  async setOrchestrate(id: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (orchestrate) session.orchestrate = true;
+      else delete session.orchestrate;
       return true;
     });
   }
@@ -1165,7 +1173,7 @@ export class SessionStore implements SessionWritesStore {
       const outcome = change(session);
       if (outcome === null) return null;
       if (outcome) await this.write(directory, session);
-      return summarize(session);
+      return summarizeSession(session);
     });
   }
 
@@ -1230,6 +1238,9 @@ export class SessionStore implements SessionWritesStore {
       ...(grantedDirectories.length > 0 ? { grantedDirectories } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),
+      ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
+        ? { orchestrate: true }
+        : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(origin ? { origin } : {}),
@@ -1248,6 +1259,7 @@ export class SessionStore implements SessionWritesStore {
     const record: StoredSession = {
       ...session,
       ...(session.approvalMode === 'full' ? { approvalModeLaunch: this.launchId } : {}),
+      ...(session.orchestrate ? { orchestrateLaunch: this.launchId } : {}),
     };
     await mkdir(directory, { recursive: true });
     // Write-then-rename, as the auth vault does: a crash mid-write would otherwise truncate a

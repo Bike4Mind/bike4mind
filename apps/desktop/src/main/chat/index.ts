@@ -72,6 +72,7 @@ import { SidebarSectionStore } from './SidebarSectionStore';
 import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
+import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
 import { AttachmentStore } from './AttachmentStore';
 import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
@@ -141,6 +142,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { permissionProtectedRoots, toolProtectedPaths } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
@@ -454,7 +456,7 @@ export function registerChat(
     claudeCode,
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
-    protectedRoots: [userData, join(home, '.claude'), dirname(MANAGED_SETTINGS_PATH)],
+    protectedRoots: permissionProtectedRoots(userData, home, dirname(MANAGED_SETTINGS_PATH)),
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -708,7 +710,7 @@ export function registerChat(
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
-    protectedPaths: [userData],
+    protectedPaths: toolProtectedPaths(userData),
     get deferredTools() {
       return deferredTools.current();
     },
@@ -813,6 +815,7 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
+  registerSessionOrchestrateIpc(ipcMain, service);
   // Validated here rather than trusted, for the same reason the folder grant goes through a
   // native picker: this is the only door to the approval mode, so an unrecognised value must
   // not reach the store and land as something looser than the user asked for.

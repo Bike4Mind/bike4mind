@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { withRealPath } from './paths';
 import { broadPathWarning, inspectDirectory, inspectDirectoryRequest, requestDirectory } from './requestDirectoryTool';
 
 describe('inspectDirectoryRequest', () => {
@@ -82,6 +83,31 @@ describe('inspectDirectoryRequest', () => {
 
   it("refuses the app's own protected folders", async () => {
     await expect(inspect(wanted, { protectedPaths: [home] })).resolves.toMatchObject({ kind: 'refused' });
+  });
+
+  describe('an app folder whose own path runs through a symlink', () => {
+    let config: string;
+    let app: string;
+    let protectedPaths: string[];
+
+    beforeEach(async () => {
+      config = join(base, 'config');
+      app = join(config, 'App');
+      await mkdir(join(app, 'sessions'), { recursive: true });
+      await mkdir(join(config, 'Other'));
+      await symlink(config, join(base, 'cfg-link'));
+      protectedPaths = withRealPath(join(base, 'cfg-link', 'App'));
+    });
+
+    it('refuses the real folder and anything beneath it', async () => {
+      for (const path of [app, join(app, 'sessions'), join(base, 'cfg-link', 'App')]) {
+        await expect(inspect(path, { protectedPaths })).resolves.toMatchObject({ kind: 'refused' });
+      }
+    });
+
+    it('still asks for a sibling of the app folder', async () => {
+      await expect(inspect(join(config, 'Other'), { protectedPaths })).resolves.toMatchObject({ kind: 'ask' });
+    });
   });
 
   it('requires a reason', async () => {
