@@ -155,20 +155,24 @@ export interface StoredModelSettings {
   settings: Map<string, ModelSettings>;
   /** By model: values kept in the file but treated as unset. */
   unsupported: Map<string, UnsupportedModelSetting[]>;
+  /**
+   * By model: the known field of the wrong type or broken (`generation.temperature`, ...), or null when
+   * the entry itself is not a set of settings. Only that model's reads and saves fail.
+   */
+  invalid: Map<string, string | null>;
   /** Every entry by its key, including ones Desktop does not recognize, so a rewrite keeps them. */
   entries: Map<string, unknown>;
   /** The file's top-level keys besides `models`. */
   rest: Record<string, unknown>;
 }
 
-/** A recognized model whose entry, or one known field of it (`field`), is of the wrong type or broken. */
-export interface InvalidModelSetting {
-  modelId: string;
-  field: string | null;
+export function emptyStoredModelSettings(): StoredModelSettings {
+  return { settings: new Map(), unsupported: new Map(), invalid: new Map(), entries: new Map(), rest: {} };
 }
 
-export function emptyStoredModelSettings(): StoredModelSettings {
-  return { settings: new Map(), unsupported: new Map(), entries: new Map(), rest: {} };
+/** A number JSON can hold; a hand-edited 1e999 parses to Infinity, which would be written back as null. */
+function isStorableNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 /** A stored value: usable, of the right type but beyond this version, or of the wrong type. */
@@ -176,7 +180,7 @@ type StoredRead<T> = { value: T } | 'unsupported' | 'broken';
 type StoredScalarField = 'effort' | 'context' | 'draftTokens' | 'keepAlive';
 
 function readGenerationField(field: GenerationField, value: unknown): StoredRead<number> {
-  if (typeof value !== 'number') return 'broken';
+  if (!isStorableNumber(value)) return 'broken';
   const parsed = parseGenerationInput({ [field]: value })?.[field];
   return parsed === undefined ? 'unsupported' : { value: parsed };
 }
@@ -187,16 +191,15 @@ function readStoredField(field: StoredScalarField, value: unknown): StoredRead<u
       if (typeof value !== 'string') return 'broken';
       return isModelEffort(value) ? { value } : 'unsupported';
     case 'draftTokens':
-      if (typeof value !== 'number') return 'broken';
+      if (!isStorableNumber(value)) return 'broken';
       return isDraftTokens(value) ? { value } : 'unsupported';
     case 'keepAlive':
-      if (typeof value !== 'number') return 'broken';
+      if (!isStorableNumber(value)) return 'broken';
       return isKeepAlive(value) ? { value } : 'unsupported';
     case 'context': {
       if (!isRecord(value) || typeof value.mode !== 'string') return 'broken';
-      if (value.mode === 'fixed' && typeof value.tokens !== 'number') return 'broken';
-      if (value.mode === 'auto' && value.maxTokens !== undefined && typeof value.maxTokens !== 'number')
-        return 'broken';
+      if (value.mode === 'fixed' && !isStorableNumber(value.tokens)) return 'broken';
+      if (value.mode === 'auto' && value.maxTokens !== undefined && !isStorableNumber(value.maxTokens)) return 'broken';
       const context = parseModelContextSetting(value);
       return context ? { value: context } : 'unsupported';
     }
@@ -234,23 +237,45 @@ function parseStoredEntry(
 }
 
 /**
- * The file's settings by model, or the first recognized model holding a known field of the wrong type;
- * null when it is not a settings file at all. Unknown fields and unrecognized keys are kept in `entries`.
+ * The file's settings by model, with each recognized model holding a known field of the wrong type in
+ * `invalid`; null when it is not a settings file at all. Unknown fields and unrecognized keys are kept in `entries`.
  */
-export function parseModelSettingsFile(raw: unknown): StoredModelSettings | { invalid: InvalidModelSetting } | null {
+export function parseModelSettingsFile(raw: unknown): StoredModelSettings | null {
   if (!isRecord(raw) || !isRecord(raw.models)) return null;
-  const settings = new Map<string, ModelSettings>();
-  const unsupported = new Map<string, UnsupportedModelSetting[]>();
-  const entries = new Map(Object.entries(raw.models));
-  for (const [id, entry] of entries) {
+  const stored = emptyStoredModelSettings();
+  stored.entries = new Map(Object.entries(raw.models));
+  for (const [id, entry] of stored.entries) {
     if (!isModelSettingsId(id)) continue;
     const parsed = parseStoredEntry(entry);
-    if ('field' in parsed) return { invalid: { modelId: id, field: parsed.field } };
-    if (!isEmptyModelSettings(parsed.settings)) settings.set(id, parsed.settings);
-    if (parsed.unsupported.length > 0) unsupported.set(id, parsed.unsupported);
+    if ('field' in parsed) {
+      stored.invalid.set(id, parsed.field);
+      continue;
+    }
+    if (!isEmptyModelSettings(parsed.settings)) stored.settings.set(id, parsed.settings);
+    if (parsed.unsupported.length > 0) stored.unsupported.set(id, parsed.unsupported);
   }
-  const rest = Object.fromEntries(Object.entries(raw).filter(([key]) => key !== 'models'));
-  return { settings, unsupported, entries, rest };
+  stored.rest = Object.fromEntries(Object.entries(raw).filter(([key]) => key !== 'models'));
+  return stored;
+}
+
+/** Whether `written`, a value after a JSON round trip, still holds `value`; false where a number became null. */
+export function sameJsonValue(value: unknown, written: unknown): boolean {
+  if (Array.isArray(value)) {
+    return (
+      Array.isArray(written) &&
+      written.length === value.length &&
+      value.every((item, index) => sameJsonValue(item, written[index]))
+    );
+  }
+  if (isRecord(value)) {
+    if (!isRecord(written)) return false;
+    const keys = Object.keys(value);
+    return (
+      keys.length === Object.keys(written).length &&
+      keys.every(key => Object.hasOwn(written, key) && sameJsonValue(value[key], written[key]))
+    );
+  }
+  return value === written;
 }
 
 /**

@@ -150,25 +150,84 @@ describe('ModelSettingsStore', () => {
     [{ effort: 3 }, 'has an invalid effort for'],
     ['high', 'has an entry for'],
   ])(
-    'rejects a hand-edited known value of the wrong type %j by file, model and field, and never writes over it',
+    'rejects only the model whose known value %j is of the wrong type, by file, model and field, and keeps its entry as written',
     async (entry, problem) => {
       const path = await fileIn();
-      const content = JSON.stringify({ models: { [GEMMA]: { effort: 'low' }, [QWEN]: entry } });
-      await writeFile(path, content, 'utf8');
-      const store = new ModelSettingsStore(path);
-      await expect(store.get(GEMMA)).rejects.toThrow(
-        `The model settings file ${path} ${problem} "${QWEN}"${typeof entry === 'string' ? ' that is not a set of settings' : ''}. Fix it, or delete it`
-      );
-      await expect(store.set(GEMMA, { effort: 'high' })).rejects.toThrow(ModelSettingsFileError);
-      expect(await readFile(path, 'utf8')).toBe(content);
+      await writeFile(path, JSON.stringify({ models: { [GEMMA]: { effort: 'low' }, [QWEN]: entry } }), 'utf8');
+      const warn = vi.fn();
+      const store = new ModelSettingsStore(path, warn);
+      const message = `The model settings file ${path} ${problem} "${QWEN}"${typeof entry === 'string' ? ' that is not a set of settings' : ''}. Fix it, or delete it`;
+      await expect(store.get(QWEN)).rejects.toThrow(message);
+      await expect(store.unsupported(QWEN)).rejects.toThrow(ModelSettingsFileError);
+      await expect(store.set(QWEN, { effort: 'high' })).rejects.toThrow(message);
+      expect(await store.get(GEMMA)).toEqual({ effort: 'low' });
+      await store.set(GEMMA, { effort: 'high' });
+      const reopened = new ModelSettingsStore(path);
+      expect(await reopened.get(GEMMA)).toEqual({ effort: 'high' });
+      expect(JSON.parse(await readFile(path, 'utf8')).models[QWEN]).toEqual(entry);
+      await expect(reopened.get(QWEN)).rejects.toThrow(message);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(message));
     }
   );
+
+  it.each([
+    ['a known field', `{"${QWEN}": {"draftTokens": 1e999}}`, `has an invalid draftTokens for "${QWEN}"`],
+    [
+      'a generation field',
+      `{"${QWEN}": {"generation": {"topK": -1e999}}}`,
+      `has an invalid generation.topK for "${QWEN}"`,
+    ],
+  ])(
+    'takes a number too large for JSON in %s for a broken value, which a save elsewhere cannot write as null',
+    async (_, models, problem) => {
+      const path = await fileIn();
+      const content = `{"models": ${models}}`;
+      await writeFile(path, content, 'utf8');
+      const store = new ModelSettingsStore(path);
+      await expect(store.get(QWEN)).rejects.toThrow(problem);
+      await expect(store.set(GEMMA, { effort: 'high' })).rejects.toThrow(
+        `has a number for "${QWEN}" too large to save back as written`
+      );
+      expect(await readFile(path, 'utf8')).toBe(content);
+      const reopened = new ModelSettingsStore(path);
+      expect(await reopened.get(GEMMA)).toEqual({});
+      await expect(reopened.get(QWEN)).rejects.toThrow(problem);
+    }
+  );
+
+  it('never saves an unknown field holding a number too large for JSON as null', async () => {
+    const path = await fileIn();
+    const content = `{"models": {"${QWEN}": {"effort": "low", "futureOnly": 1e999}}}`;
+    await writeFile(path, content, 'utf8');
+    const store = new ModelSettingsStore(path);
+    expect(await store.get(QWEN)).toEqual({ effort: 'low' });
+    await expect(store.set(QWEN, { effort: 'high' })).rejects.toThrow(ModelSettingsFileError);
+    expect(await readFile(path, 'utf8')).toBe(content);
+    expect(await new ModelSettingsStore(path).get(QWEN)).toEqual({ effort: 'low' });
+  });
+
+  it('stamps what it wrote, so an edit landing right after its write is read before the next save', async () => {
+    const path = await fileIn();
+    const store = new ModelSettingsStore(path);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    vi.mocked(rename).mockImplementationOnce(async (from, to) => {
+      await actual.rename(from, to);
+      await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'high' }, [GEMMA]: { keepAlive: 300 } } }));
+    });
+    await store.set(QWEN, { effort: 'low' });
+    await store.set(GEMMA, { keepAlive: 3600 });
+    expect(JSON.parse(await readFile(path, 'utf8')).models).toEqual({
+      [QWEN]: { effort: 'high' },
+      [GEMMA]: { keepAlive: 3600 },
+    });
+  });
 
   it('quotes a model id in the error on one line and cuts a long one', async () => {
     const path = await fileIn();
     const id = `local:ollama:a\nb${'x'.repeat(300)}`;
     await writeFile(path, JSON.stringify({ models: { [id]: { effort: 3 } } }), 'utf8');
-    const error = await new ModelSettingsStore(path).get(QWEN).catch((reason: Error) => reason);
+    const error = await new ModelSettingsStore(path).get(id).catch((reason: Error) => reason);
     expect((error as Error).message).toContain('has an invalid effort for "local:ollama:a\\nbxxx');
     expect((error as Error).message).toContain('xxx.... Fix it');
     expect((error as Error).message).not.toContain('\n');

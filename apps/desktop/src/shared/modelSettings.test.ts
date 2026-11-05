@@ -4,6 +4,7 @@ import {
   parseModelSettingsFile,
   parseModelSettingsInput,
   quotedForMessage,
+  sameJsonValue,
   storedModelEntry,
   type ModelSettings,
 } from './modelSettings';
@@ -12,7 +13,7 @@ const QWEN = 'local:ollama:qwen3.8:27b';
 
 function settingsOf(raw: unknown): [string, ModelSettings][] {
   const parsed = parseModelSettingsFile(raw);
-  if (!parsed || 'invalid' in parsed) throw new Error(`not read: ${JSON.stringify(parsed)}`);
+  if (!parsed || parsed.invalid.size > 0) throw new Error(`not read: ${JSON.stringify(parsed?.invalid)}`);
   return [...parsed.settings];
 }
 
@@ -26,7 +27,7 @@ describe('parseModelSettingsFile', () => {
     ) as Record<string, unknown>;
     expect(Object.hasOwn(models, '__proto__')).toBe(true);
     const parsed = parseModelSettingsFile({ version: 9, models });
-    if (!parsed || 'invalid' in parsed) throw new Error('not read');
+    if (!parsed || parsed.invalid.size > 0) throw new Error('not read');
     expect([...parsed.settings]).toEqual([[QWEN, { generation: { temperature: 0.6 }, effort: 'high' }]]);
     expect(Object.fromEntries(parsed.entries)).toEqual(models);
     expect(parsed.rest).toEqual({ version: 9 });
@@ -43,11 +44,17 @@ describe('parseModelSettingsFile', () => {
     [{ context: { mode: 'auto', maxTokens: null } }, 'context'],
     [{ draftTokens: '2' }, 'draftTokens'],
     [{ keepAlive: '1h' }, 'keepAlive'],
+    [{ draftTokens: Infinity }, 'draftTokens'],
+    [{ keepAlive: -Infinity }, 'keepAlive'],
+    [{ generation: { temperature: Infinity } }, 'generation.temperature'],
+    [{ context: { mode: 'fixed', tokens: Infinity } }, 'context'],
+    [{ context: { mode: 'auto', maxTokens: Infinity } }, 'context'],
     [7, null],
-  ])('names the model and the known field of %j that holds the wrong type', (entry, field) => {
-    expect(parseModelSettingsFile({ models: { 'local:ollama:other': {}, [QWEN]: entry } })).toEqual({
-      invalid: { modelId: QWEN, field },
-    });
+  ])('names the known field of %j that holds the wrong type for that model only', (entry, field) => {
+    const parsed = parseModelSettingsFile({ models: { 'local:ollama:other': { effort: 'low' }, [QWEN]: entry } });
+    expect([...(parsed?.invalid ?? [])]).toEqual([[QWEN, field]]);
+    expect([...(parsed?.settings ?? [])]).toEqual([['local:ollama:other', { effort: 'low' }]]);
+    expect(parsed?.entries.get(QWEN)).toEqual(entry);
   });
 
   it.each([
@@ -61,7 +68,7 @@ describe('parseModelSettingsFile', () => {
     ['keepAlive', { keepAlive: 2 }, 2],
   ])('lists %s of the right type beyond this version as unsupported and leaves it unset', (field, entry, value) => {
     const parsed = parseModelSettingsFile({ models: { [QWEN]: entry } });
-    if (!parsed || 'invalid' in parsed) throw new Error('not read');
+    if (!parsed || parsed.invalid.size > 0) throw new Error('not read');
     expect(parsed.unsupported.get(QWEN)).toEqual([{ field, value }]);
     expect(parsed.settings.has(QWEN)).toBe(false);
   });
@@ -90,6 +97,17 @@ describe('quotedForMessage', () => {
     const long = quotedForMessage(`local:ollama:${'x'.repeat(1000)}`);
     expect(long).toHaveLength(120);
     expect(long.endsWith('...')).toBe(true);
+  });
+});
+
+describe('sameJsonValue', () => {
+  it('tells a value that survives a JSON round trip from one that does not', () => {
+    const value = { a: [1, { b: 'c' }], d: null, e: -0 };
+    expect(sameJsonValue(value, JSON.parse(JSON.stringify(value)))).toBe(true);
+    const large = { a: [1, { b: Infinity }] };
+    expect(sameJsonValue(large, JSON.parse(JSON.stringify(large)))).toBe(false);
+    expect(sameJsonValue({ a: 1 }, { a: 1, b: 2 })).toBe(false);
+    expect(sameJsonValue([1], { 0: 1 })).toBe(false);
   });
 });
 

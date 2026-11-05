@@ -5,8 +5,8 @@ import {
   emptyStoredModelSettings,
   parseModelSettingsFile,
   quotedForMessage,
+  sameJsonValue,
   storedModelEntry,
-  type InvalidModelSetting,
   type ModelSettings,
   type StoredModelSettings,
   type UnsupportedModelSetting,
@@ -25,7 +25,7 @@ export class ModelSettingsFileError extends Error {
   }
 }
 
-function invalidProblem({ modelId, field }: InvalidModelSetting): string {
+function invalidProblem(modelId: string, field: string | null): string {
   const model = quotedForMessage(modelId);
   return field === null
     ? `has an entry for ${model} that is not a set of settings`
@@ -44,22 +44,22 @@ export class ModelSettingsStore {
   private writing: Promise<unknown> = Promise.resolve();
   /** The last failure logged, so a file that stays unreadable is logged once rather than on every read. */
   private lastWarning: string | null = null;
-  private readonly loggedUnsupported = new Set<string>();
+  private readonly logged = new Set<string>();
 
   constructor(
     private readonly filePath: string,
     private readonly warn: (message: string) => void = () => {}
   ) {}
 
-  private async stamp(): Promise<string | null> {
-    const stats = await stat(this.filePath).catch(() => null);
+  private async stamp(path = this.filePath): Promise<string | null> {
+    const stats = await stat(path).catch(() => null);
     return stats ? `${stats.mtimeMs}:${stats.size}` : null;
   }
 
   /**
-   * A missing file holds no defaults. Any other failure, an unparseable or wrong-shape file or a known
-   * field of the wrong type included, rejects and is not cached, so a fixed or deleted file is read again
-   * next time and set() never writes over a file it could not read.
+   * A missing file holds no defaults. Any other failure, an unparseable or wrong-shape file, rejects and
+   * is not cached, so a fixed or deleted file is read again next time and set() never writes over a file
+   * it could not read. A model whose own entry is broken fails alone, in entryError.
    */
   private read(): Promise<Loaded> {
     if (this.loaded) return this.loaded;
@@ -76,7 +76,6 @@ export class ModelSettingsStore {
           }
           const parsed = parseModelSettingsFile(raw);
           if (!parsed) throw new ModelSettingsFileError(this.filePath, 'does not hold model settings');
-          if ('invalid' in parsed) throw new ModelSettingsFileError(this.filePath, invalidProblem(parsed.invalid));
           return { stored: parsed, stamp };
         },
         (error: NodeJS.ErrnoException) => {
@@ -87,7 +86,7 @@ export class ModelSettingsStore {
       .then(
         loaded => {
           this.lastWarning = null;
-          this.logUnsupported(loaded.stored);
+          this.logEntries(loaded.stored);
           return loaded;
         },
         (error: unknown) => {
@@ -102,32 +101,56 @@ export class ModelSettingsStore {
     return loading;
   }
 
-  private logUnsupported(stored: StoredModelSettings): void {
+  private logOnce(key: string, message: string): void {
+    if (this.logged.has(key)) return;
+    this.logged.add(key);
+    this.warn(message);
+  }
+
+  private logEntries(stored: StoredModelSettings): void {
+    for (const [modelId, field] of stored.invalid) {
+      this.logOnce(
+        JSON.stringify(['invalid', modelId, field]),
+        `MODEL SETTINGS: ${this.entryError(stored, modelId)?.message}`
+      );
+    }
     for (const [modelId, values] of stored.unsupported) {
       for (const { field, value } of values) {
-        const key = JSON.stringify([modelId, field, value]);
-        if (this.loggedUnsupported.has(key)) continue;
-        this.loggedUnsupported.add(key);
-        this.warn(
+        this.logOnce(
+          JSON.stringify(['unsupported', modelId, field, value]),
           `MODEL SETTINGS: ${this.filePath} holds ${field} ${quotedForMessage(value)} for ${quotedForMessage(modelId)}, which this version of Desktop does not use; it is kept as written.`
         );
       }
     }
   }
 
-  /** Rejects when the file cannot be read or parsed, so neither the Models screen nor a turn takes blanks for it. */
+  private entryError(stored: StoredModelSettings, modelId: string): ModelSettingsFileError | null {
+    const field = stored.invalid.get(modelId);
+    return field === undefined ? null : new ModelSettingsFileError(this.filePath, invalidProblem(modelId, field));
+  }
+
+  /** The model's entry as read, rejecting when the file or that model's entry cannot be used. */
+  private async readEntry(modelId: string): Promise<StoredModelSettings> {
+    const { stored } = await this.read();
+    const error = this.entryError(stored, modelId);
+    if (error) throw error;
+    return stored;
+  }
+
+  /** Rejects when the file or this model's entry cannot be read, so neither the Models screen nor a turn takes blanks for it. */
   async get(modelId: string): Promise<ModelSettings> {
-    return (await this.read()).stored.settings.get(modelId) ?? {};
+    return (await this.readEntry(modelId)).settings.get(modelId) ?? {};
   }
 
   /** The model's stored values this version keeps in the file but does not use, for the Models screen to name. */
   async unsupported(modelId: string): Promise<UnsupportedModelSetting[]> {
-    return (await this.read()).stored.unsupported.get(modelId) ?? [];
+    return (await this.readEntry(modelId)).unsupported.get(modelId) ?? [];
   }
 
   /**
    * Replaces one model's defaults; an empty set removes them. Fields and entries Desktop does not know
-   * or support (a newer version's) are written back as they were. Writes run one at a time.
+   * or support (a newer version's), and other models' broken entries, are written back as they were.
+   * Writes run one at a time.
    */
   set(modelId: string, settings: ModelSettings): Promise<ModelSettings> {
     const done = this.writing.then(async () => {
@@ -138,26 +161,42 @@ export class ModelSettingsStore {
         loaded = await this.read();
       }
       const { stored } = loaded;
+      const entryError = this.entryError(stored, modelId);
+      if (entryError) throw entryError;
       const entries = new Map(stored.entries);
       const entry = storedModelEntry(entries.get(modelId), settings);
       if (entry) entries.set(modelId, entry);
       else entries.delete(modelId);
       const file = { ...stored.rest, models: Object.fromEntries(entries) };
+      const text = JSON.stringify(file, null, 2);
+      const written: unknown = JSON.parse(text);
+      if (!sameJsonValue(file, written)) {
+        throw new ModelSettingsFileError(this.filePath, this.unwritable(file, written));
+      }
       await mkdir(dirname(this.filePath), { recursive: true });
       const temporary = `${this.filePath}.${randomUUID()}.tmp`;
+      let stamp: string | null;
       try {
-        await writeFile(temporary, JSON.stringify(file, null, 2), { encoding: 'utf8', mode: 0o600 });
+        await writeFile(temporary, text, { encoding: 'utf8', mode: 0o600 });
+        // A rename keeps the size and modification time, and stamping the target after it could take in an edit.
+        stamp = await this.stamp(temporary);
         await rename(temporary, this.filePath);
       } catch (error) {
         await rm(temporary, { force: true });
         throw error;
       }
-      const written = parseModelSettingsFile(file);
-      const stamp = await this.stamp();
-      this.loaded = written && !('invalid' in written) ? Promise.resolve({ stored: written, stamp }) : null;
+      const parsed = parseModelSettingsFile(written);
+      this.loaded = parsed ? Promise.resolve({ stored: parsed, stamp }) : null;
       return settings;
     });
     this.writing = done.catch(() => undefined);
     return done;
+  }
+
+  private unwritable(file: { models: Record<string, unknown> }, written: unknown): string {
+    const writtenModels = (written as { models?: Record<string, unknown> }).models ?? {};
+    const modelId = Object.keys(file.models).find(id => !sameJsonValue(file.models[id], writtenModels[id]));
+    const where = modelId === undefined ? 'outside its models' : `for ${quotedForMessage(modelId)}`;
+    return `has a number ${where} too large to save back as written`;
   }
 }

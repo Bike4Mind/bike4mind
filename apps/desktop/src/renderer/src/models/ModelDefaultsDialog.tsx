@@ -381,13 +381,12 @@ function ModelDefaultsForm({
   const save = async () => {
     // Only what the user changed here is rewritten; everything else goes back exactly as stored, including
     // values this model's controls do not draw or would clamp.
-    const stored = loaded ?? {};
-    const base: ModelSettings = clearedAll ? {} : stored;
-    const storedDrafts = draftsOf(stored.generation);
+    const base: ModelSettings = clearedAll ? {} : (loaded ?? {});
+    const baseDrafts = draftsOf(base.generation);
     const generation: GenerationSettings = { ...base.generation };
     for (const { field, control } of fields) {
       const text = drafts[field]?.trim() ?? '';
-      if (text === (storedDrafts[field] ?? '')) continue;
+      if (text === (baseDrafts[field] ?? '')) continue;
       const value = text ? requestGeneration({ [field]: Number(text) }, { [field]: control })[field] : undefined;
       if (value !== undefined) generation[field] = value;
       else delete generation[field];
@@ -395,10 +394,10 @@ function ModelDefaultsForm({
     const pick = <T,>(changed: boolean, current: T | undefined, kept: T | undefined) => (changed ? current : kept);
     const next: ModelSettings = {
       ...(Object.keys(generation).length > 0 ? { generation } : {}),
-      effort: pick(effort !== (stored.effort ?? null), effort ?? undefined, base.effort),
-      context: pick(!sameContext(context, stored.context ?? null), context ?? undefined, base.context),
-      draftTokens: pick(draftText.trim() !== (stored.draftTokens?.toString() ?? ''), draftTokens, base.draftTokens),
-      keepAlive: pick(keepAlive !== (stored.keepAlive ?? null), keepAlive ?? undefined, base.keepAlive),
+      effort: pick(effort !== (base.effort ?? null), effort ?? undefined, base.effort),
+      context: pick(!sameContext(context, base.context ?? null), context ?? undefined, base.context),
+      draftTokens: pick(draftText.trim() !== (base.draftTokens?.toString() ?? ''), draftTokens, base.draftTokens),
+      keepAlive: pick(keepAlive !== (base.keepAlive ?? null), keepAlive ?? undefined, base.keepAlive),
     };
     for (const key of Object.keys(next) as (keyof ModelSettings)[]) if (next[key] === undefined) delete next[key];
     setSaving(true);
@@ -538,12 +537,13 @@ function ModelDefaultsForm({
                       setEffort(value && value !== 'default' ? (value as ModelEffort) : null)
                     }
                     sx={{ width: 140, flexShrink: 0 }}
-                    slotProps={{ button: { 'aria-label': 'Thinking level' } }}
-                    data-testid="model-defaults-effort-select"
+                    slotProps={{
+                      button: { 'aria-label': 'Thinking level', 'data-testid': 'model-defaults-effort-select' },
+                    }}
                   >
                     <Option value="default">Model default</Option>
                     {levels.map(level => (
-                      <Option key={level} value={level}>
+                      <Option key={level} value={level} data-testid={`model-defaults-effort-option-${level}`}>
                         {EFFORT_LABELS[level]}
                       </Option>
                     ))}

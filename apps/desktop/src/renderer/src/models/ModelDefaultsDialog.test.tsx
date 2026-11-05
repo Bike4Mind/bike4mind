@@ -758,6 +758,26 @@ describe('ModelDefaultsDialog load options', () => {
     await click('model-defaults-save-btn');
     expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, {});
   });
+
+  it('saves the stored values typed or picked again after Clear all', async () => {
+    offer = OLLAMA_OFFER;
+    stored = {
+      generation: { temperature: 0.7 },
+      effort: 'high',
+      context: { mode: 'fixed', tokens: 65536 },
+      draftTokens: 2,
+      keepAlive: 3600,
+    };
+    await render(GPT_OSS);
+    await click('model-defaults-clear-btn');
+    await fill('temperature', '0.7');
+    await pick('effort', 'high');
+    await pick('context', '65536');
+    await fill('draft', '2');
+    await pick('keep-alive', '3600');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenLastCalledWith(GPT_OSS.id, stored);
+  });
 });
 
 describe('contextSent', () => {
