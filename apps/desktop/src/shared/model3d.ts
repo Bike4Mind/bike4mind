@@ -129,8 +129,8 @@ function escapeRegExp(text: string): string {
  *
  * A scoped pattern match rather than a parser: the params block is found by its export line and
  * brace-matched, and within it exactly one `key: { ... value: <number>` or bare `key: <number>` must
- * match, the number being the whole value (not `10 * 2` or `1e+3`). Zero or several matches return
- * null so the caller reports "not saved" instead of guessing.
+ * match, the number being the whole value (not `10 * 2`). Zero or several matches return null so
+ * the caller reports "not saved" instead of guessing.
  */
 export function writeParamValue(source: string, key: string, value: number): string | null {
   if (!Number.isFinite(value)) return null;
@@ -153,7 +153,7 @@ export function writeParamValue(source: string, key: string, value: number): str
   if (end < 0) return null;
   const block = source.slice(start, end + 1);
   const pattern = new RegExp(
-    `(['"]?\\b${escapeRegExp(key)}\\b['"]?\\s*:\\s*(?:\\{[^{}]*?\\bvalue\\s*:\\s*)?)(-?\\d+(?:\\.\\d+)?(?:e-?\\d+)?)(?=\\s*[,}\\r\\n])`,
+    `((?<![\\w$-])(['"]?)${escapeRegExp(key)}\\2\\s*:\\s*(?:\\{[^{}]*?\\bvalue\\s*:\\s*)?)(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)(?=\\s*[,}\\r\\n])`,
     'g'
   );
   const matches = [...block.matchAll(pattern)];

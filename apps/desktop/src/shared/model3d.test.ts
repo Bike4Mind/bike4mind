@@ -56,7 +56,23 @@ describe('writeParamValue', () => {
 
   it('refuses a value that is an expression rather than a plain number', () => {
     expect(writeParamValue(SOURCE.replace('value: 60,', 'value: 10 * 2,'), 'width', 80)).toBeNull();
-    expect(writeParamValue(SOURCE.replace('value: 60,', 'value: 1e+3,'), 'width', 80)).toBeNull();
+  });
+
+  it('accepts exponent notation, including what toPrecision writes for large values', () => {
+    expect(writeParamValue(SOURCE.replace('value: 60,', 'value: 1e+3,'), 'width', 80)).toContain('value: 80,');
+    const huge = writeParamValue(SOURCE, 'width', 1e21);
+    expect(huge).toContain('value: 1e+21,');
+    expect(writeParamValue(huge ?? '', 'width', 70)).toContain('value: 70,');
+  });
+
+  it('matches quoted keys but not a hyphenated key that ends in the name', () => {
+    const quoted = SOURCE.replace('width:', "'width':");
+    expect(writeParamValue(quoted, 'width', 80)).toContain("'width': { value: 80,");
+    const hyphen = SOURCE.replace('width:', "'outer-width':");
+    expect(writeParamValue(hyphen, 'width', 80)).toBeNull();
+    const both = hyphen.replace('lidRatio:', '"width":');
+    expect(writeParamValue(both, 'width', 0.5)).toContain('"width": { value: 0.5,');
+    expect(writeParamValue(both, 'width', 0.5)).toContain("'outer-width': { value: 60,");
   });
 
   it('handles fractional values', () => {
