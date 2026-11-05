@@ -62,7 +62,7 @@ export interface LocalServerSupervisorDeps {
   /** Lists the servers Desktop runs while they run, for `adopt`; without it nothing is listed or adopted. */
   records?: StoreFile;
   /** Seals a llama-server key in `records`; without one that works, llama-server is neither listed nor adopted. */
-  cipher?: SecretCipher;
+  cipher?: SecretCipher & { getSelectedStorageBackend?(): string };
   /** Defaults to this computer's (hostProcessProbe). */
   processes?: ProcessProbe;
   adoptedTiming?: AdoptedTiming;
@@ -81,6 +81,7 @@ export class LocalServerSupervisor {
   private readonly launchers: Launchers;
   private readonly processes: ProcessProbe;
   private readonly records = new Map<string, OwnedRecord>();
+  private readonly unverified = new Map<string, OwnedRecord>();
   private writing: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: LocalServerSupervisorDeps) {
@@ -99,10 +100,10 @@ export class LocalServerSupervisor {
     let listedCount: number;
     try {
       const text = await file.read();
-      const { cipher } = this.deps;
+      const cipher = this.sealer();
       found = readOwnedRecords(
         text,
-        cipher?.isEncryptionAvailable() ? sealed => cipher.decryptString(Buffer.from(sealed, 'base64')) : undefined
+        cipher ? sealed => cipher.decryptString(Buffer.from(sealed, 'base64')) : undefined
       );
       listedCount = ownedEntryCount(text);
     } catch (error) {
@@ -110,7 +111,13 @@ export class LocalServerSupervisor {
       return;
     }
     for (const record of found) {
-      if (this.slots.has(record.id) || !accepts(record) || !(await this.stillRuns(record))) continue;
+      if (this.slots.has(record.id) || !accepts(record)) continue;
+      const runs = await this.stillRuns(record);
+      if (runs === null) {
+        this.unverified.set(record.id, record);
+        continue;
+      }
+      if (!runs) continue;
       const handle = adoptedHandle(record, this.processes, this.deps.adoptedTiming);
       const slot: Slot = {
         request: { runtime: record.runtime, port: record.port, settings: record.settings },
@@ -122,14 +129,26 @@ export class LocalServerSupervisor {
       this.records.set(record.id, record);
       this.watch(record.id, slot, handle);
     }
-    if (this.records.size !== listedCount) await this.persist();
+    if (this.records.size + this.unverified.size !== listedCount) await this.persist();
   }
 
-  private async stillRuns(record: OwnedRecord): Promise<boolean> {
-    const startTime = await this.processes.startTime(record.pid).catch(() => null);
-    if (!sameStartTime(startTime, record.startTime)) return false;
-    if (!(await this.processes.leadsGroup(record.pid).catch(() => false))) return false;
-    return this.processes.listening(record.port).catch(() => false);
+  /** Null when the probe cannot tell after a retry; the record is then kept for the next launch. */
+  private async stillRuns(record: OwnedRecord): Promise<boolean | null> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        if (!sameStartTime(await this.processes.startTime(record.pid), record.startTime)) return false;
+        if (!(await this.processes.leadsGroup(record.pid))) return false;
+        return await this.processes.listening(record.port).catch(() => false);
+      } catch {
+        if (attempt > 0) return null;
+      }
+    }
+  }
+
+  /** A key is sealed only with a real keychain; Linux's basic_text backend uses a hardcoded password. */
+  private sealer() {
+    const { cipher } = this.deps;
+    return cipher?.isEncryptionAvailable() && cipher.getSelectedStorageBackend?.() !== 'basic_text' ? cipher : null;
   }
 
   owned(id: string): OwnedServer | null {
@@ -201,13 +220,20 @@ export class LocalServerSupervisor {
     if (!slot.handle) return;
     slot.busy = 'stopping';
     this.deps.changed(id);
+    const { handle } = slot;
     try {
-      await slot.handle.stop();
-    } finally {
-      if (this.slots.get(id) === slot) this.slots.delete(id);
-      await this.forget(id);
-      this.deps.changed(id);
+      await handle.stop();
+    } catch (error) {
+      // A server that survived SIGKILL keeps its slot and record, so Desktop still shows it running.
+      if (handle.running) {
+        slot.busy = null;
+        this.deps.changed(id);
+        throw error;
+      }
     }
+    if (this.slots.get(id) === slot) this.slots.delete(id);
+    await this.forget(id);
+    this.deps.changed(id);
   }
 
   private watch(id: string, slot: Slot, handle: ServerHandle): void {
@@ -229,10 +255,11 @@ export class LocalServerSupervisor {
   /** Lists a server this run started, for `adopt`; one whose start time cannot be read is never adopted, so not listed. */
   private async remember(id: string, slot: Slot, handle: ServerHandle): Promise<void> {
     if (!this.deps.records) return;
-    if (handle.apiKey && !this.deps.cipher?.isEncryptionAvailable()) return;
+    if (handle.apiKey && !this.sealer()) return;
     const startTime = await this.processes.startTime(handle.pid).catch(() => null);
     if (!startTime || this.slots.get(id) !== slot || !handle.running) return;
     const { runtime, port, settings } = slot.request;
+    this.unverified.delete(id);
     this.records.set(id, {
       id,
       runtime,
@@ -254,10 +281,10 @@ export class LocalServerSupervisor {
   private persist(): Promise<void> {
     const file = this.deps.records;
     if (!file) return Promise.resolve();
-    const { cipher } = this.deps;
+    const cipher = this.sealer();
     const contents = writeOwnedRecords(
-      [...this.records.values()],
-      cipher?.isEncryptionAvailable() ? key => cipher.encryptString(key).toString('base64') : undefined
+      [...[...this.unverified.values()].filter(({ id }) => !this.records.has(id)), ...this.records.values()],
+      cipher ? key => cipher.encryptString(key).toString('base64') : undefined
     );
     this.writing = this.writing
       .then(() => file.write(contents))

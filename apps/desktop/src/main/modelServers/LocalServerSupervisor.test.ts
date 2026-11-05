@@ -368,13 +368,13 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
 
   it('never takes one back on its pid alone, and drops the records it does not take', async () => {
     const records = [
-      { ...RECORD, id: 'reused', pid: 1 },
+      { ...RECORD, id: 'reused', pid: 5 },
       { ...RECORD, id: 'gone', pid: 2 },
       { ...RECORD, id: 'unread', pid: 3 },
       { ...RECORD, id: 'refused', pid: 4 },
     ];
     const file = memoryFile(JSON.stringify({ version: 1, servers: records }));
-    const { probe } = processes({ 1: '1700000000:999', 4: RECORD.startTime });
+    const { probe } = processes({ 5: '1700000000:999', 4: RECORD.startTime });
     const { instance } = adopter(file, probe);
     await instance.adopt(record => record.id !== 'refused');
     for (const { id } of records) expect(instance.owned(id)).toBeNull();
@@ -385,6 +385,95 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     await notListening.adopt(() => true);
     expect(notListening.owned('a')).toBeNull();
     expect(listed(quiet)).toEqual([]);
+  });
+
+  const unreadable = (failures: number): ProcessProbe => {
+    const { probe } = processes({ 4321: RECORD.startTime });
+    let left = failures;
+    return {
+      ...probe,
+      startTime: async pid => {
+        if (left-- > 0) throw new Error('ps timed out');
+        return probe.startTime(pid);
+      },
+    };
+  };
+
+  it('keeps the record of a server whose process it cannot read, and takes it back once it can', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
+    const stuck = adopter(file, unreadable(Infinity)).instance;
+    await stuck.adopt(() => true);
+    expect(stuck.owned('a')).toBeNull();
+    expect(listed(file)).toEqual([RECORD]);
+
+    const next = adopter(file, unreadable(0)).instance;
+    await next.adopt(() => true);
+    expect(next.owned('a')).not.toBeNull();
+  });
+
+  it('retries one failed read at launch before it takes a server back', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
+    const { instance } = adopter(file, unreadable(1));
+    await instance.adopt(() => true);
+    expect(instance.owned('a')).not.toBeNull();
+    expect(listed(file)).toEqual([RECORD]);
+  });
+
+  it('treats a failed read as still running, so it keeps polling and still signals on Stop', async () => {
+    const { probe, signals } = processes({ 4321: RECORD.startTime });
+    let failing = true;
+    const flaky: ProcessProbe = {
+      ...probe,
+      startTime: async pid => {
+        if (failing) throw new Error('EMFILE');
+        return probe.startTime(pid);
+      },
+    };
+    const adopted = adoptedHandle({ ...RECORD, runtime: 'ollama', settings: {} }, flaky, { pollMs: 5 });
+    await new Promise(done => setTimeout(done, 40));
+    expect(adopted.running).toBe(true);
+    failing = false;
+    await adopted.stop();
+    expect(signals).toEqual([[4321, 'SIGTERM']]);
+    expect(adopted.running).toBe(false);
+  });
+
+  it('keeps the slot and record of a server that outlives SIGKILL, and says Stop failed', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
+    const { probe, signals } = processes({ 4321: RECORD.startTime });
+    const immortal: ProcessProbe = { ...probe, signal: (pid, signal) => void signals.push([pid, signal]) };
+    const { instance } = adopter(file, immortal);
+    await instance.adopt(() => true);
+    await expect(instance.stop('a')).rejects.toThrow(/did not exit/);
+    expect(signals.map(([, signal]) => signal)).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(instance.owned('a')).not.toBeNull();
+    expect(instance.busy('a')).toBeNull();
+    expect(listed(file)).toEqual([RECORD]);
+  });
+
+  it('seals a router key only with a keychain backend, not basic_text', async () => {
+    const basic = { ...cipher, getSelectedStorageBackend: () => 'basic_text' };
+    const file = memoryFile();
+    const { instance } = adopter(file, processes({ 4321: RECORD.startTime }).probe, {
+      cipher: basic,
+      handle: handle('k-zz'),
+    });
+    await instance.start('a', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(file.contents).toBeNull();
+
+    const stored = memoryFile(JSON.stringify({ version: 1, servers: [{ ...ROUTER, sealedKey: sealed('k-zz') }] }));
+    const adopting = adopter(stored, processes({ 4321: RECORD.startTime }).probe, { cipher: basic }).instance;
+    await adopting.adopt(() => true);
+    expect(adopting.owned('a')).toBeNull();
+
+    const real = memoryFile();
+    const keychain = { ...cipher, getSelectedStorageBackend: () => 'gnome_libsecret' };
+    const sealing = adopter(real, processes({ 4321: RECORD.startTime }).probe, {
+      cipher: keychain,
+      handle: handle('k-zz'),
+    }).instance;
+    await sealing.start('a', { runtime: 'llama-server', port: 8090, settings: { modelsDir: '/m' } });
+    expect(listed(real)[0].sealedKey).toBe(sealed('k-zz'));
   });
 
   it('notices when a server it took back exits on its own', async () => {
@@ -429,7 +518,7 @@ describe('hostProcessProbe', () => {
   };
   const proc = (files: Record<string, string>) => async (path: string) => {
     if (path in files) return files[path];
-    throw new Error(`ENOENT ${path}`);
+    throw Object.assign(new Error(`ENOENT ${path}`), { code: 'ENOENT' });
   };
   const BOOT = '/proc/sys/kernel/random/boot_id';
 
@@ -508,6 +597,49 @@ describe('hostProcessProbe', () => {
       expect.objectContaining({ env: expect.objectContaining({ LC_ALL: 'C', TZ: 'UTC' }) }),
       expect.any(Function)
     );
+  });
+
+  it('rejects instead of reporting a gone process when it cannot tell on Linux', async () => {
+    const denied = async (path: string) => {
+      if (path === '/proc/4321/stat') throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      return proc({ [BOOT]: 'aaaa-1111\n' })(path);
+    };
+    const probe = hostProcessProbe('linux', { readText: denied });
+    await expect(probe.startTime(4321)).rejects.toThrow('EACCES');
+    await expect(probe.leadsGroup(4321)).rejects.toThrow('EACCES');
+    const noBoot = hostProcessProbe('linux', { readText: proc({ '/proc/4321/stat': statLine(4321) }) });
+    await expect(noBoot.startTime(4321)).rejects.toThrow();
+  });
+
+  const ps =
+    (error: (Error & { code?: unknown }) | null, out = '') =>
+    (_file: string, _args: string[], _options: unknown, done: (e: Error | null, out: string) => void) =>
+      done(error, out);
+
+  it('rejects on a ps timeout or spawn error, and reads none only when ps finds no such process', async () => {
+    const timeout = hostProcessProbe('darwin', {
+      execFile: ps(Object.assign(new Error('timed out'), { killed: true })),
+    });
+    await expect(timeout.startTime(4321)).rejects.toThrow('timed out');
+    await expect(timeout.leadsGroup(4321)).rejects.toThrow('timed out');
+    const missing = hostProcessProbe('darwin', { execFile: ps(Object.assign(new Error('ps'), { code: 'ENOENT' })) });
+    await expect(missing.startTime(4321)).rejects.toThrow();
+    const none = hostProcessProbe('darwin', { execFile: ps(Object.assign(new Error('ps'), { code: 1 })) });
+    expect(await none.startTime(4321)).toBeNull();
+    expect(await none.leadsGroup(4321)).toBe(false);
+  });
+
+  it('asks ps for the macOS process group and requires it to be the pid', async () => {
+    const run = vi.fn(ps(null, ' 4321\n'));
+    const probe = hostProcessProbe('darwin', { execFile: run });
+    expect(await probe.leadsGroup(4321)).toBe(true);
+    expect(run).toHaveBeenCalledWith(
+      'ps',
+      ['-o', 'pgid=', '-p', '4321'],
+      expect.objectContaining({ timeout: 2_000, env: expect.objectContaining({ LC_ALL: 'C', TZ: 'UTC' }) }),
+      expect.any(Function)
+    );
+    expect(await hostProcessProbe('darwin', { execFile: ps(null, '100\n') }).leadsGroup(4321)).toBe(false);
   });
 
   it('signals the process group with the negative pid, and the process alone when that fails', () => {

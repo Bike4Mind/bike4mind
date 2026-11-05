@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   OllamaServeError,
   findOllamaBinary,
@@ -206,7 +206,7 @@ describe('startOllamaServe', () => {
       { signal: controller.signal, startTimeoutMs: 10_000 },
       { FAKE_OLLAMA_MODE: 'silent', FAKE_OLLAMA_PID_FILE: pidFile }
     );
-    await new Promise(done => setTimeout(done, 300));
+    await vi.waitFor(() => readFile(pidFile, 'utf8'), { timeout: 5_000 });
     controller.abort(reason);
     await expect(starting).rejects.toBe(reason);
     const pid = Number(await readFile(pidFile, 'utf8'));

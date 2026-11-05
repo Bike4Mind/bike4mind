@@ -24,9 +24,12 @@ export interface OwnedRecord {
 }
 
 export interface ProcessProbe {
-  /** When `pid` started, compared only with sameStartTime; null when it is not running or this platform cannot say. */
+  /**
+   * When `pid` started, compared only with sameStartTime; null when it is definitely not running or this platform
+   * cannot say. Rejects when it cannot tell (timeout, unreadable), which callers treat as still running.
+   */
   startTime(pid: number): Promise<string | null>;
-  /** Whether `pid` leads its own process group, which `signal` ends; always true where start time is not read per group. */
+  /** Whether `pid` leads its own process group, which `signal` ends; rejects when it cannot tell, true on Windows. */
   leadsGroup(pid: number): Promise<boolean>;
   /** Whether something listens on 127.0.0.1:port. */
   listening(port: number): Promise<boolean>;
@@ -106,30 +109,53 @@ function procStatFields(stat: string): string[] {
   return stat.slice(stat.lastIndexOf(')') + 2).split(' ');
 }
 
+/** The text of a /proc file; null only when the process is definitely gone, any other failure rejects. */
+async function readProc(read: ReadText, path: string): Promise<string | null> {
+  try {
+    return await read(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ESRCH') return null;
+    throw error;
+  }
+}
+
 async function linuxStartTime(pid: number, read: ReadText): Promise<string | null> {
-  const stat = await read(`/proc/${pid}/stat`).catch(() => null);
-  if (!stat) return null;
+  const stat = await readProc(read, `/proc/${pid}/stat`);
+  if (stat === null) return null;
   const fields = procStatFields(stat);
-  if (fields[0] === 'Z' || !/^\d+$/.test(fields[19] ?? '')) return null;
+  if (fields[0] === 'Z') return null;
+  if (!/^\d+$/.test(fields[19] ?? '')) throw new Error(`Unreadable /proc/${pid}/stat.`);
   // Start ticks count from boot, so only the same boot makes them comparable.
-  const boot = (await read('/proc/sys/kernel/random/boot_id').catch(() => '')).trim();
-  return boot ? `${boot}:${fields[19]}` : null;
+  const boot = (await read('/proc/sys/kernel/random/boot_id')).trim();
+  if (!boot) throw new Error('Unreadable boot id.');
+  return `${boot}:${fields[19]}`;
 }
 
 async function linuxLeadsGroup(pid: number, read: ReadText): Promise<boolean> {
-  const stat = await read(`/proc/${pid}/stat`).catch(() => null);
-  return !!stat && procStatFields(stat)[2] === String(pid);
+  const stat = await readProc(read, `/proc/${pid}/stat`);
+  return stat !== null && procStatFields(stat)[2] === String(pid);
 }
 
-function macStartTime(pid: number, run: ExecFileLike): Promise<string | null> {
-  return new Promise(resolve => {
+/** ps output for one pid; null only when ps says there is no such process (exit 1, no output), any other failure rejects. */
+function psField(field: string, pid: number, run: ExecFileLike): Promise<string | null> {
+  return new Promise((resolve, reject) => {
     run(
       'ps',
-      ['-o', 'lstart=', '-p', String(pid)],
+      ['-o', `${field}=`, '-p', String(pid)],
       { timeout: 2_000, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' } },
-      (error, stdout) => resolve(error ? null : stdout.trim() || null)
+      (error, stdout) => {
+        const text = stdout.trim();
+        if (!error && text) resolve(text);
+        else if (error && (error as { code?: unknown }).code === 1 && !text) resolve(null);
+        else reject(error ?? new Error('ps printed nothing.'));
+      }
     );
   });
+}
+
+async function macLeadsGroup(pid: number, run: ExecFileLike): Promise<boolean> {
+  return (await psField('pgid', pid, run)) === String(pid);
 }
 
 type ReadText = (path: string) => Promise<string>;
@@ -158,9 +184,14 @@ export function hostProcessProbe(
       platform === 'linux'
         ? linuxStartTime(pid, readText)
         : platform === 'darwin'
-          ? macStartTime(pid, run)
+          ? psField('lstart', pid, run)
           : Promise.resolve(null),
-    leadsGroup: pid => (platform === 'linux' ? linuxLeadsGroup(pid, readText) : Promise.resolve(true)),
+    leadsGroup: pid =>
+      platform === 'linux'
+        ? linuxLeadsGroup(pid, readText)
+        : platform === 'darwin'
+          ? macLeadsGroup(pid, run)
+          : Promise.resolve(true),
     listening: async port => !(await loopbackPortFree(port, platform)),
     signal: (pid, signal) => {
       try {
@@ -194,7 +225,14 @@ export function adoptedHandle(
   let stopping = false;
   let settle: (exit: Exit) => void = () => undefined;
   const exited = new Promise<Exit>(done => (settle = done));
-  const gone = async () => !sameStartTime(await probe.startTime(record.pid).catch(() => null), record.startTime);
+  // A probe that cannot tell counts as still running; the next poll asks again.
+  const gone = async () => {
+    try {
+      return !sameStartTime(await probe.startTime(record.pid), record.startTime);
+    } catch {
+      return false;
+    }
+  };
   const finish = () => {
     if (!running) return;
     running = false;
@@ -228,7 +266,8 @@ export function adoptedHandle(
           probe.signal(record.pid, 'SIGKILL');
           killed = true;
         } else if (killed && Date.now() >= killAt + stopTimeoutMs) {
-          break;
+          stopping = false;
+          throw new Error(`Process ${record.pid} did not exit after SIGKILL.`);
         }
         await pause(Math.min(pollMs, 100));
       }
