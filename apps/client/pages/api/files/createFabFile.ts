@@ -16,6 +16,7 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
   organizationRepository,
+  userRepository,
   FabFile,
   User,
   withTransaction,
@@ -171,8 +172,9 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         if (params.fileSize <= 0) throw new BadRequestError('File size must be positive');
         const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
         pending = await admitPendingUploads(req, 1, [ownerOrganizationId]);
-        const quotaUser = ownerOrganizationId ? user : await requesterScopedUsers(req, User).findById(user.id);
+        const quotaUser = ownerOrganizationId ? user : await userRepository.findById(user.id);
         if (!quotaUser) throw new BadRequestError('User not found');
+        // Before consumeFileUploadBudget so a quota refusal costs no hourly allowance; the service re-checks at create.
         await checkStorageLimitForOwner(
           { user: quotaUser, organizationId: ownerOrganizationId, pendingBytes: pending.bytesFor(ownerOrganizationId) },
           params.fileSize,

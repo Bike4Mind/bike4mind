@@ -54,7 +54,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: { listByLake: h.listByLake },
   fabFileRepository: { update: vi.fn() },
-  userRepository: {},
+  userRepository: { findById: h.userFindById },
   FabFile: { create: h.fabFileCreate },
   User: { findById: h.userFindById },
   withTransaction: (fn: () => Promise<unknown>) => fn(),
