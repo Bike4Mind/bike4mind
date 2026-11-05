@@ -12,6 +12,7 @@ describe('describeImportHistoryFailure', () => {
     [`Unexpected token 'x', "xyz" is not valid JSON`, 'damaged_export'],
     ['Unable to read conversations.json from archive', 'damaged_export'],
     ['invalid stored block lengths', 'damaged_export'],
+    ['Unexpected non-whitespace character after JSON at position 12', 'damaged_export'],
     ['incorrect header check', 'damaged_export'],
   ])('maps %j to %s', (raw, kind) => {
     expect(describeImportHistoryFailure(raw).kind).toBe(kind);
@@ -23,14 +24,18 @@ describe('describeImportHistoryFailure', () => {
     expect(describeImportHistoryFailure('Unexpected end of JSON input').retryable).toBe(false);
   });
 
-  it.each([undefined, null, '', 'User not found: 64f0c0ffee', 'connect ECONNRESET 10.0.0.1:27017', 'Failed to import notebook "JSON notes"'])(
-    'falls back to a generic, retryable reason for %j',
-    raw => {
-      const reason = describeImportHistoryFailure(raw);
-      expect(reason.kind).toBe('unknown');
-      expect(reason.retryable).toBe(true);
-    }
-  );
+  it.each([
+    undefined,
+    null,
+    '',
+    'User not found: 64f0c0ffee',
+    'connect ECONNRESET 10.0.0.1:27017',
+    'Failed to import notebook "JSON notes"',
+  ])('falls back to a generic, retryable reason for %j', raw => {
+    const reason = describeImportHistoryFailure(raw);
+    expect(reason.kind).toBe('unknown');
+    expect(reason.retryable).toBe(true);
+  });
 
   it('never echoes the raw error, which can carry ids, paths or hosts', () => {
     const raw = 'Unable to open archive: /tmp/1700000000000.zip';
