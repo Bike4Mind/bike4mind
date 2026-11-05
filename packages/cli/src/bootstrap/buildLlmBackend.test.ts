@@ -459,11 +459,14 @@ describe('defaultLlmBackendDeps.detectOllama', () => {
       )
     );
     const abort = new AbortController();
+    const started = Date.now();
     const probe = defaultLlmBackendDeps.detectOllama(abort.signal);
 
     abort.abort();
 
+    // The probe's own timeout is 1.5s; settling sooner means the abort reached fetch.
     await expect(probe).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(500);
   });
 
   it('returns null when nothing listens there', async () => {
