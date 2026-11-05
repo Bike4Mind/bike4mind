@@ -33,13 +33,17 @@ function memoryStore(initial: AuthTokens | null) {
       cached = durable;
       return durable;
     }),
-    setAuthTokens: vi.fn(async (next: AuthTokens) => {
+    setAuthTokens: vi.fn(async (next: AuthTokens, expectedRefreshToken?: string) => {
+      if (expectedRefreshToken !== undefined && durable?.refreshToken !== expectedRefreshToken) return false;
       durable = next;
       cached = next;
+      return true;
     }),
-    clearAuthTokens: vi.fn(async () => {
+    clearAuthTokens: vi.fn(async (expectedRefreshToken?: string) => {
+      if (expectedRefreshToken !== undefined && durable?.refreshToken !== expectedRefreshToken) return false;
       durable = null;
       cached = null;
+      return true;
     }),
     isAuthenticated: vi.fn(async () => cached !== null),
   } satisfies TokenStore;
@@ -145,6 +149,39 @@ describe('AuthenticatedApiClient refresh failures', () => {
     await rejection(client.get('/api/identify'));
 
     expect(store.clearAuthTokens).toHaveBeenCalledWith(stored.refreshToken);
+  });
+
+  it('keeps a sign-in saved between the re-read and the clear, without reporting a clear', async () => {
+    const memory = memoryStore(tokens());
+    const newer = tokens({ accessToken: 'access-9', refreshToken: 'refresh-9' });
+    const reload = memory.store.reloadAuthTokens.getMockImplementation()!;
+    let reads = 0;
+    memory.store.reloadAuthTokens.mockImplementation(async () => {
+      const read = await reload();
+      // The second read is the one after the rejection; another process signs in right after it.
+      if (++reads === 2) memory.writeBehind(newer);
+      return read;
+    });
+    const { client, onTokensCleared } = build(memory.store, vi.fn().mockRejectedValue(httpError(401)));
+
+    await expect(client.refreshSession()).resolves.toEqual(newer);
+    expect(memory.durable()).toEqual(newer);
+    expect(onTokensCleared).not.toHaveBeenCalled();
+  });
+
+  it('does not save the rotated tokens over a logout that landed after the post-exchange check', async () => {
+    const memory = memoryStore(tokens());
+    const reload = memory.store.reloadAuthTokens.getMockImplementation()!;
+    let reads = 0;
+    memory.store.reloadAuthTokens.mockImplementation(async () => {
+      const read = await reload();
+      if (++reads === 2) memory.writeBehind(null);
+      return read;
+    });
+    const { client } = build(memory.store, vi.fn().mockResolvedValue(grant(1)));
+
+    await expect(client.refreshSession()).rejects.toThrow(MESSAGES.notLoggedIn);
+    expect(memory.durable()).toBeNull();
   });
 
   it('words a rejected refresh and one that could not complete apart when the host says how', async () => {

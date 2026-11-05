@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hang, json, startFakeServer, type FakeServer, type Handler } from '@bike4mind/local-models/testing';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { ApiClient } from './ApiClient.js';
-import { checkSavedSignIn, settleSignInRefresh } from './savedSignIn.js';
+import { checkSavedSignIn, settleSignInRefresh, startupMode, type SavedSignIn } from './savedSignIn.js';
 
 const HOUR = 3_600_000;
 const stale = {
@@ -30,6 +30,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await server?.close();
   server = null;
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await rm(dir, { recursive: true, force: true });
 });
@@ -50,6 +51,25 @@ const check = (store: ConfigStore, baseUrl: string, timeoutMs?: number) =>
   checkSavedSignIn(store, rejected => new ApiClient(baseUrl, store).refreshSession(rejected), timeoutMs);
 
 const onDisk = async () => (JSON.parse(await readFile(configPath, 'utf-8')) as { auth?: typeof stale }).auth ?? null;
+
+/** Starts `other` (another process's write) just before the first rename of a new config file into place. */
+function interleaveFirstConfigWrite(other: () => Promise<unknown>): { done: () => Promise<void> } {
+  const realRename = fsPromises.rename.bind(fsPromises);
+  let started: Promise<unknown> | null = null;
+  vi.spyOn(fsPromises, 'rename').mockImplementation((async (...args: Parameters<typeof realRename>) => {
+    if (!started && String(args[1]).endsWith('config.json')) {
+      started = other();
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    return realRename(...args);
+  }) as typeof fsPromises.rename);
+  return {
+    done: async () => {
+      await started;
+      vi.mocked(fsPromises.rename).mockRestore();
+    },
+  };
+}
 
 describe('checkSavedSignIn', () => {
   it('is signed out with no saved sign-in, and asks nothing', async () => {
@@ -176,6 +196,28 @@ describe('checkSavedSignIn', () => {
   });
 });
 
+describe('startupMode', () => {
+  const statuses: [string, SavedSignIn][] = [
+    ['signed-out', { status: 'signed-out' }],
+    ['expired', { status: 'expired' }],
+    ['unchecked', { status: 'unchecked', reason: 'timed out' }],
+  ];
+
+  it('stays on the sign-in when it is valid, whether or not local models answer', () => {
+    const signedIn: SavedSignIn = { status: 'signed-in', tokens: stale };
+    expect(startupMode(signedIn, true)).toBe('signed-in');
+    expect(startupMode(signedIn, false)).toBe('signed-in');
+  });
+
+  it.each(statuses)('chats on local models when %s and one answers', (_label, signIn) => {
+    expect(startupMode(signIn, true)).toBe('local');
+  });
+
+  it.each(statuses)('opens the sign-in flow when %s and none answers', (_label, signIn) => {
+    expect(startupMode(signIn, false)).toBe('sign-in');
+  });
+});
+
 describe('ConfigStore.reloadAuthTokens', () => {
   it('returns what another process saved since this store loaded, and serves it from then on', async () => {
     const store = await savedStore();
@@ -297,8 +339,10 @@ describe('ConfigStore writes within one process', () => {
     let saved!: () => void;
     const savedGate = new Promise<void>(resolve => (saved = resolve));
     vi.spyOn(fsPromises, 'rename').mockImplementation((async (...args: Parameters<typeof realRename>) => {
-      renaming = true;
-      await renameGate;
+      if (String(args[1]).endsWith('config.json')) {
+        renaming = true;
+        await renameGate;
+      }
       return realRename(...args);
     }) as typeof fsPromises.rename);
     vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
@@ -379,11 +423,114 @@ describe('ConfigStore saves across processes', () => {
     await store.getAuthTokens();
     await new ConfigStore(configPath).setAuthTokens(newer);
 
-    await store.clearAuthTokens(stale.refreshToken);
+    expect(await store.clearAuthTokens(stale.refreshToken)).toBe(false);
     expect(await onDisk()).toEqual(newer);
 
-    await store.clearAuthTokens(newer.refreshToken);
+    expect(await store.clearAuthTokens(newer.refreshToken)).toBe(true);
     expect(await onDisk()).toBeNull();
+  });
+
+  it('keeps a sign-in another process saves while this one is writing its settings', async () => {
+    const mine = await savedStore();
+    await mine.getAuthTokens();
+    const theirs = new ConfigStore(configPath);
+    await theirs.getAuthTokens();
+    const theirSave = interleaveFirstConfigWrite(() => theirs.setAuthTokens(newer));
+
+    await mine.save({ defaultModel: 'x' });
+    await theirSave.done();
+
+    expect(await onDisk()).toEqual(newer);
+  });
+
+  it('keeps a sign-in another process saves while this one is switching backend', async () => {
+    const mine = await savedStore();
+    await mine.getAuthTokens();
+    const theirs = new ConfigStore(configPath);
+    await theirs.getAuthTokens();
+    const theirSave = interleaveFirstConfigWrite(() => theirs.setAuthTokens(newer));
+
+    await mine.switchApiEnvironment('dev');
+    await theirSave.done();
+
+    const file = JSON.parse(await readFile(configPath, 'utf-8')) as { auth?: unknown; authByEnv?: object };
+    expect(file.auth).toBeUndefined();
+    expect(Object.values(file.authByEnv ?? {})).toEqual([newer]);
+  });
+
+  it('does not save a refreshed sign-in over a logout that landed after the refresh checked the file', async () => {
+    const mine = await savedStore();
+    await mine.getAuthTokens();
+    const theirs = new ConfigStore(configPath);
+    await theirs.getAuthTokens();
+    const baseUrl = await refreshServer(
+      json({ access_token: 'access-new', refresh_token: 'refresh-new', expires_in: 1800, token_type: 'Bearer' })
+    );
+    const reload = mine.reloadAuthTokens.bind(mine);
+    let loggedOut = false;
+    vi.spyOn(mine, 'reloadAuthTokens').mockImplementation(async () => {
+      const read = await reload();
+      // The read after the exchange answered is the refresh's last check; the logout lands right after it.
+      if (!loggedOut && (server?.requests.length ?? 0) > 0) {
+        loggedOut = true;
+        await theirs.clearAuthTokens();
+      }
+      return read;
+    });
+
+    await expect(new ApiClient(baseUrl, mine).refreshSession(stale.accessToken)).rejects.toThrow();
+
+    expect(loggedOut).toBe(true);
+    expect(await onDisk()).toBeNull();
+  });
+
+  it('refuses to save settings over a file it could not read, keeping the sign-in on it', async () => {
+    const mine = await savedStore();
+    await mine.getAuthTokens();
+    await new ConfigStore(configPath).setAuthTokens(newer);
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      if (String(args[0]) === configPath) throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      return realRead(...args);
+    }) as typeof fsPromises.readFile);
+
+    await expect(mine.save({ defaultModel: 'x' })).rejects.toThrow(configPath);
+    vi.mocked(fsPromises.readFile).mockRestore();
+
+    expect(await onDisk()).toEqual(newer);
+  });
+
+  it('finishes a sign-in save before a model server credential reloads the config', async () => {
+    const store = await savedStore();
+    await store.getAuthTokens();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    let releaseSecond!: () => void;
+    const secondGate = new Promise<void>(resolve => (releaseSecond = resolve));
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    let reads = 0;
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      // Holds the sign-in save's read, then whatever read of the file comes next, so the two can overlap.
+      if (String(args[0]) === configPath && ++reads <= 2) await (reads === 1 ? gate : secondGate);
+      return realRead(...args);
+    }) as typeof fsPromises.readFile);
+
+    const saving = store.setAuthTokens(newer);
+    await vi.waitFor(() => expect(reads).toBe(1));
+    const crediting = store.setModelServerCredential('gpu-box', 'secret-1');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    release();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    releaseSecond();
+    await Promise.all([saving, crediting]);
+    vi.mocked(fsPromises.readFile).mockRestore();
+
+    const file = JSON.parse(await readFile(configPath, 'utf-8')) as {
+      auth?: unknown;
+      modelServerCredentials?: Record<string, { secret: string }>;
+    };
+    expect(file.auth).toEqual(newer);
+    expect(file.modelServerCredentials?.['gpu-box']).toEqual({ secret: 'secret-1' });
   });
 
   it('names the file but never echoes its contents when it is not JSON at load', async () => {
@@ -475,6 +622,37 @@ describe('concurrent refreshes across b4m processes', () => {
 
     await expect(locking).rejects.toThrow('still refreshing');
     expect(work).not.toHaveBeenCalled();
+  });
+
+  it('stands down when a lock it just made is replaced before it confirmed it', async () => {
+    const work = vi.fn(async () => 'ran');
+    const realOpen = fsPromises.open.bind(fsPromises);
+    vi.spyOn(fsPromises, 'open').mockImplementation((async (...args: Parameters<typeof realOpen>) => {
+      const handle = await realOpen(...args);
+      if (String(args[0]) === lockPath()) {
+        // Another process removes the new lock as stale and makes its own, as a racing breaker would.
+        setTimeout(() => {
+          void writeFile(
+            lockPath(),
+            JSON.stringify({ pid: process.pid, hostname: os.hostname(), at: Date.now(), nonce: 'other' })
+          );
+        }, 20);
+      }
+      return handle;
+    }) as typeof fsPromises.open);
+
+    await expect(new ConfigStore(configPath).withRefreshLock(work, 400)).rejects.toThrow('still refreshing');
+    expect(work).not.toHaveBeenCalled();
+  });
+
+  it('leaves in place a lock another process made while this one held it', async () => {
+    const replaced = JSON.stringify({ pid: process.pid, hostname: os.hostname(), at: Date.now(), nonce: 'other' });
+
+    await new ConfigStore(configPath).withRefreshLock(async () => {
+      await writeFile(lockPath(), replaced);
+    }, 1_000);
+
+    expect(await readFile(lockPath(), 'utf-8')).toBe(replaced);
   });
 
   it('keeps the lock it broke when re-reading it briefly fails', async () => {

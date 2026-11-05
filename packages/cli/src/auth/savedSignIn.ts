@@ -57,6 +57,12 @@ export type SavedSignIn =
   /** The refresh could not complete (network, timeout, 5xx); the tokens are kept for the next run. */
   | { status: 'unchecked'; reason: string };
 
+/** How an interactive start proceeds: on the sign-in, on local models signed out, or into the sign-in flow. */
+export function startupMode(signIn: SavedSignIn, localBackendBuilt: boolean): 'signed-in' | 'local' | 'sign-in' {
+  if (signIn.status === 'signed-in') return 'signed-in';
+  return localBackendBuilt ? 'local' : 'sign-in';
+}
+
 /**
  * The saved sign-in at startup. The access token lasts minutes and the refresh token weeks, so an expired
  * access token is refreshed (through `refresh`, the shared refresh path) before the run is called signed out.

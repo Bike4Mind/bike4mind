@@ -17,9 +17,13 @@ export interface AuthTokens {
  */
 export interface TokenStore {
   getAuthTokens(): Promise<AuthTokens | null>;
-  setAuthTokens(tokens: AuthTokens): Promise<void>;
-  /** With `expectedRefreshToken`, clears only while storage still holds that refresh token. */
-  clearAuthTokens(expectedRefreshToken?: string): Promise<void>;
+  /**
+   * With `expectedRefreshToken`, saves only while storage still holds that refresh token. Resolves
+   * false when it did not save; a store with no such check may resolve nothing.
+   */
+  setAuthTokens(tokens: AuthTokens, expectedRefreshToken?: string): Promise<boolean | void>;
+  /** With `expectedRefreshToken`, clears only while storage still holds that refresh token. Resolves as setAuthTokens. */
+  clearAuthTokens(expectedRefreshToken?: string): Promise<boolean | void>;
   isAuthenticated(): Promise<boolean>;
   /**
    * Read the tokens straight from durable storage, bypassing any in-memory cache. Optional: a

@@ -405,15 +405,28 @@ const ProjectLocalConfigSchema = z.object({
 export const REFRESH_LOCK_STALE_MS = 30_000;
 export const REFRESH_LOCK_WAIT_MS = 40_000;
 const REFRESH_LOCK_POLL_MS = 100;
-const REFRESH_LOCK_REREAD_TRIES = 5;
-const REFRESH_LOCK_REREAD_PAUSE_MS = 20;
+/** The config write lock is held only from a read of the file to its rename. */
+const CONFIG_LOCK_STALE_MS = 10_000;
+const CONFIG_LOCK_WAIT_MS = 15_000;
+const CONFIG_LOCK_POLL_MS = 10;
+const LOCK_REREAD_TRIES = 5;
+const LOCK_REREAD_PAUSE_MS = 20;
 
-interface RefreshLockFile {
+interface LockFile {
   pid?: unknown;
   hostname?: unknown;
   at?: unknown;
   nonce?: unknown;
 }
+
+interface LockFileOptions {
+  waitMs: number;
+  staleMs: number;
+  pollMs: number;
+  heldMessage: string;
+}
+
+const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /** True when no process `pid` exists on this host. EPERM means one exists that this user cannot signal. */
 function holderIsGone(pid: number): boolean {
@@ -1452,16 +1465,28 @@ export class ConfigStore {
 
   /** Read-modify-write against the file, so a login in another terminal is not undone. */
   async setModelServerCredential(serverId: string, secret: string): Promise<void> {
-    await this.reloadFromDisk();
-    const current = await this.readModelServerCredentialsStrict();
-    await this.save({ modelServerCredentials: { ...current, [serverId]: { secret } } });
+    await this.updateModelServerCredentials(current => ({ ...current, [serverId]: { secret } }));
   }
 
   async clearModelServerCredential(serverId: string): Promise<void> {
-    await this.reloadFromDisk();
-    const { [serverId]: removed, ...rest } = await this.readModelServerCredentialsStrict();
-    void removed;
-    await this.save({ modelServerCredentials: rest });
+    await this.updateModelServerCredentials(current => {
+      const { [serverId]: removed, ...rest } = current;
+      void removed;
+      return rest;
+    });
+  }
+
+  private async updateModelServerCredentials(
+    change: (current: Record<string, { secret: string }>) => Record<string, { secret: string }>
+  ): Promise<void> {
+    // Reloaded inside exclusive(), so no other write in this store sees the config emptied mid-reload.
+    await this.lockedWrite(
+      async () => {
+        const next = change(await this.readModelServerCredentialsStrict());
+        await this.writeGlobal({ modelServerCredentials: next });
+      },
+      () => this.reloadFromDisk()
+    );
   }
 
   /**
@@ -1479,20 +1504,45 @@ export class ConfigStore {
   }
 
   /**
+   * Runs a read-modify-write of the config file under exclusive() and then the config write lock. Lock order
+   * everywhere: the refresh lock, then exclusive(), then the config write lock. Loading (which may reset and write)
+   * happens before the write lock is taken, since that lock is not reentrant.
+   */
+  private lockedWrite<T>(work: () => Promise<T>, prepare?: () => Promise<void>): Promise<T> {
+    return this.exclusive(async () => {
+      if (prepare) await prepare();
+      if (!this.globalConfig) await this.load();
+      await this.init();
+      return this.withConfigWriteLock(work);
+    });
+  }
+
+  private withConfigWriteLock<T>(work: () => Promise<T>): Promise<T> {
+    return this.withLockFile(path.join(path.dirname(this.configPath), 'config.json.lock'), work, {
+      waitMs: CONFIG_LOCK_WAIT_MS,
+      staleMs: CONFIG_LOCK_STALE_MS,
+      pollMs: CONFIG_LOCK_POLL_MS,
+      heldMessage: 'Another b4m process is still saving settings',
+    });
+  }
+
+  /**
    * The sign-in and backend fields as the file holds them now; another process may have signed in or switched
-   * since this store loaded. A field the file holds in an unexpected shape keeps this store's value.
+   * since this store loaded. No file, or JSON that is not an object, means none are set. A file that cannot be read
+   * or parsed rejects, so a save never writes this store's copy over a sign-in it failed to read. A field in an
+   * unexpected shape keeps this store's value.
    */
   private async diskAuthFields(own: CliConfig): Promise<Pick<CliConfig, 'auth' | 'authByEnv' | 'apiConfig'>> {
-    const mine = { auth: own.auth, authByEnv: own.authByEnv, apiConfig: own.apiConfig };
-    let disk: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return mine;
-      disk = parsed as Record<string, unknown>;
-    } catch {
-      return mine;
-    }
-    const pick = <T>(key: keyof typeof mine, schema: z.ZodType<T>, fallback: T | undefined): T | undefined => {
+    const none = { auth: undefined, authByEnv: undefined, apiConfig: undefined };
+    const text = await this.readConfigText();
+    if (text === null) return none;
+    const disk = this.parseConfigText(text);
+    if (!disk) return none;
+    const pick = <T>(
+      key: 'auth' | 'authByEnv' | 'apiConfig',
+      schema: z.ZodType<T>,
+      fallback: T | undefined
+    ): T | undefined => {
       if (!Object.prototype.hasOwnProperty.call(disk, key) || disk[key] === undefined) return undefined;
       const parsed = schema.safeParse(disk[key]);
       return parsed.success ? parsed.data : fallback;
@@ -1518,7 +1568,16 @@ export class ConfigStore {
     if (!this.globalConfig) {
       await this.load();
     }
+    await this.withConfigWriteLock(() => this.writeGlobal(config, opts));
+  }
+
+  /** persistGlobal's read-modify-write of the file; the caller holds the config write lock. */
+  private async writeGlobal(
+    config?: GlobalConfigPatch,
+    opts?: { clearFeatures?: boolean; authFields?: Pick<CliConfig, 'auth' | 'authByEnv' | 'apiConfig'> }
+  ): Promise<void> {
     const global = this.globalConfig!;
+    const authFields = opts?.authFields ?? (await this.diskAuthFields(global));
 
     if (config) {
       // The security-critical, repo-launderable fields never flow through a
@@ -1581,7 +1640,7 @@ export class ConfigStore {
     if (!opts?.clearFeatures) {
       this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
-    const contents = { ...this.globalConfig, ...(opts?.authFields ?? (await this.diskAuthFields(this.globalConfig))) };
+    const contents = { ...this.globalConfig, ...authFields };
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
@@ -1741,69 +1800,73 @@ export class ConfigStore {
     return config.auth || null;
   }
 
-  /** Save the sign-in for this process's backend, leaving the rest of the file as another process may have left it. */
-  async setAuthTokens(tokens: AuthTokens): Promise<void> {
-    await this.saveAuthSlot(tokens);
+  /**
+   * Save the sign-in for this process's backend, leaving the rest of the file as another process may have left it.
+   * With `expectedRefreshToken`, saves only while the saved sign-in still holds that token; resolves whether it saved.
+   */
+  async setAuthTokens(tokens: AuthTokens, expectedRefreshToken?: string): Promise<boolean> {
+    return this.saveAuthSlot(tokens, expectedRefreshToken);
   }
 
   /**
    * Clear the sign-in for this process's backend (logout), leaving other backends' sign-ins alone. With
    * `expectedRefreshToken`, clears only while the saved sign-in still holds that token, so a newer one is kept.
+   * Resolves whether it cleared.
    */
-  async clearAuthTokens(expectedRefreshToken?: string): Promise<void> {
-    await this.saveAuthSlot(undefined, expectedRefreshToken);
+  async clearAuthTokens(expectedRefreshToken?: string): Promise<boolean> {
+    return this.saveAuthSlot(undefined, expectedRefreshToken);
   }
 
   /**
    * Write only this process's sign-in slot into the file as it is now: `auth` when the file's active backend
    * is this process's, otherwise `authByEnv[<this backend>]`. Another process's backend switch and sign-in survive.
    */
-  private async saveAuthSlot(tokens: AuthTokens | undefined, expectedRefreshToken?: string): Promise<void> {
+  private async saveAuthSlot(tokens: AuthTokens | undefined, expectedRefreshToken?: string): Promise<boolean> {
     await this.load();
-    await this.exclusive(async () => {
-      if (!this.globalConfig) await this.load();
-      const text = await this.readConfigText();
-      if (text === null) {
-        if (expectedRefreshToken !== undefined && this.globalConfig!.auth?.refreshToken !== expectedRefreshToken) {
-          return;
-        }
-        const g = this.globalConfig!;
-        g.auth = tokens;
-        await this.persistGlobal(undefined, {
-          authFields: { auth: tokens, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
-        });
-        return;
-      }
-      const file = this.parseConfigText(text);
-      if (!file) throw new Error(`Could not save the sign-in to ${this.configPath}: it does not hold a JSON object`);
-      const myKey = this.envKey();
-      const mySlotInAuth = this.fileEnvKey(file) === myKey;
-      const byEnv: Record<string, unknown> =
-        typeof file.authByEnv === 'object' && file.authByEnv !== null && !Array.isArray(file.authByEnv)
-          ? { ...file.authByEnv }
-          : {};
-      if (expectedRefreshToken !== undefined) {
-        const held: unknown = mySlotInAuth
-          ? file.auth
-          : Object.prototype.hasOwnProperty.call(byEnv, myKey)
-            ? byEnv[myKey]
-            : undefined;
-        const heldRefresh =
-          typeof held === 'object' && held !== null ? (held as { refreshToken?: unknown }).refreshToken : undefined;
-        if (heldRefresh !== expectedRefreshToken) return;
-      }
-      if (mySlotInAuth) {
-        if (tokens) file.auth = tokens;
-        else delete file.auth;
-      } else {
-        if (tokens) byEnv[myKey] = tokens;
-        else delete byEnv[myKey];
-        file.authByEnv = byEnv;
-      }
-      await this.writeConfigFile(JSON.stringify(file, null, 2));
-      this.globalConfig!.auth = tokens;
-      if (this.config) this.config.auth = tokens;
-    });
+    return this.lockedWrite(() => this.writeAuthSlot(tokens, expectedRefreshToken));
+  }
+
+  private async writeAuthSlot(tokens: AuthTokens | undefined, expectedRefreshToken?: string): Promise<boolean> {
+    const text = await this.readConfigText();
+    if (text === null) {
+      if (expectedRefreshToken !== undefined) return false;
+      const g = this.globalConfig!;
+      g.auth = tokens;
+      await this.writeGlobal(undefined, {
+        authFields: { auth: tokens, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
+      });
+      return true;
+    }
+    const file = this.parseConfigText(text);
+    if (!file) throw new Error(`Could not save the sign-in to ${this.configPath}: it does not hold a JSON object`);
+    const myKey = this.envKey();
+    const mySlotInAuth = this.fileEnvKey(file) === myKey;
+    const byEnv: Record<string, unknown> =
+      typeof file.authByEnv === 'object' && file.authByEnv !== null && !Array.isArray(file.authByEnv)
+        ? { ...file.authByEnv }
+        : {};
+    if (expectedRefreshToken !== undefined) {
+      const held: unknown = mySlotInAuth
+        ? file.auth
+        : Object.prototype.hasOwnProperty.call(byEnv, myKey)
+          ? byEnv[myKey]
+          : undefined;
+      const heldRefresh =
+        typeof held === 'object' && held !== null ? (held as { refreshToken?: unknown }).refreshToken : undefined;
+      if (heldRefresh !== expectedRefreshToken) return false;
+    }
+    if (mySlotInAuth) {
+      if (tokens) file.auth = tokens;
+      else delete file.auth;
+    } else {
+      if (tokens) byEnv[myKey] = tokens;
+      else delete byEnv[myKey];
+      file.authByEnv = byEnv;
+    }
+    await this.writeConfigFile(JSON.stringify(file, null, 2));
+    this.globalConfig!.auth = tokens;
+    if (this.config) this.config.auth = tokens;
+    return true;
   }
 
   private envKey(): string {
@@ -1863,12 +1926,19 @@ export class ConfigStore {
    * directory. Waits at most `waitMs`, then rejects without running `work`.
    */
   async withRefreshLock<T>(work: () => Promise<T>, waitMs = REFRESH_LOCK_WAIT_MS): Promise<T> {
-    const lockPath = path.join(path.dirname(this.configPath), 'auth-refresh.lock');
+    return this.withLockFile(path.join(path.dirname(this.configPath), 'auth-refresh.lock'), work, {
+      waitMs,
+      staleMs: REFRESH_LOCK_STALE_MS,
+      pollMs: REFRESH_LOCK_POLL_MS,
+      heldMessage: 'Another b4m process is still refreshing the sign-in',
+    });
+  }
+
+  /** Runs `work` holding the lockfile `lockPath` against other processes. Not reentrant. */
+  private async withLockFile<T>(lockPath: string, work: () => Promise<T>, opts: LockFileOptions): Promise<T> {
     const nonce = uuidv4();
-    const deadline = Date.now() + waitMs;
-    const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const deadline = Date.now() + opts.waitMs;
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
-    let brokeStale = false;
     for (;;) {
       let created = false;
       try {
@@ -1886,56 +1956,80 @@ export class ConfigStore {
         if (!held) throw error;
       }
       if (created) {
-        if (!brokeStale) break;
-        // Two waiters can break the same stale lock, and one may then remove the other's new one: confirm ours stands.
-        await pause(REFRESH_LOCK_POLL_MS * 2);
-        let standing = await this.readRefreshLock(lockPath);
-        // A read can fail transiently (EBUSY on Windows); retry briefly instead of waiting out the stale window.
-        for (let retry = 0; standing === null && retry < REFRESH_LOCK_REREAD_TRIES; retry++) {
-          await pause(REFRESH_LOCK_REREAD_PAUSE_MS);
-          standing = await this.readRefreshLock(lockPath);
+        // A waiter that judged an older lock stale may have removed this one just after it was made: confirm it stands.
+        await pause(opts.pollMs * 2);
+        if ((await this.readLockFileSteadily(lockPath))?.nonce === nonce) break;
+      } else {
+        const stale = await this.staleLockFile(lockPath, opts.staleMs);
+        if (stale) {
+          await this.removeLockFileIf(lockPath, stale.nonce);
+          continue;
         }
-        if (standing?.nonce === nonce) break;
-        brokeStale = false;
-      } else if (await this.refreshLockIsStale(lockPath)) {
-        await fs.rm(lockPath, { force: true });
-        brokeStale = true;
-        continue;
       }
-      if (Date.now() >= deadline) {
-        throw new Error(`Another b4m process is still refreshing the sign-in (${lockPath} is held)`);
-      }
-      await pause(REFRESH_LOCK_POLL_MS);
+      if (Date.now() >= deadline) throw new Error(`${opts.heldMessage} (${lockPath} is held)`);
+      await pause(opts.pollMs);
     }
     try {
       return await work();
     } finally {
-      if ((await this.readRefreshLock(lockPath))?.nonce === nonce) await fs.rm(lockPath, { force: true });
+      await this.removeLockFileIf(lockPath, nonce);
     }
   }
 
-  private async readRefreshLock(lockPath: string): Promise<RefreshLockFile | null> {
+  private async readLockFile(lockPath: string): Promise<LockFile | null> {
     try {
       const parsed: unknown = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
-      return typeof parsed === 'object' && parsed !== null ? (parsed as RefreshLockFile) : null;
+      return typeof parsed === 'object' && parsed !== null ? (parsed as LockFile) : null;
     } catch {
       return null;
     }
   }
 
-  private async refreshLockIsStale(lockPath: string): Promise<boolean> {
-    const lock = await this.readRefreshLock(lockPath);
-    if (lock && lock.hostname === hostname() && typeof lock.pid === 'number' && holderIsGone(lock.pid)) return true;
+  /** A read can fail transiently (EBUSY on Windows); retry briefly instead of giving up the lock. */
+  private async readLockFileSteadily(lockPath: string): Promise<LockFile | null> {
+    let lock = await this.readLockFile(lockPath);
+    for (let retry = 0; lock === null && retry < LOCK_REREAD_TRIES; retry++) {
+      await pause(LOCK_REREAD_PAUSE_MS);
+      lock = await this.readLockFile(lockPath);
+    }
+    return lock;
+  }
+
+  /** The lock as read when it is abandoned, else null. */
+  private async staleLockFile(lockPath: string, staleMs: number): Promise<{ nonce: unknown } | null> {
+    const lock = await this.readLockFile(lockPath);
+    const seen = { nonce: lock?.nonce };
+    if (lock && lock.hostname === hostname() && typeof lock.pid === 'number' && holderIsGone(lock.pid)) return seen;
     let at = typeof lock?.at === 'number' && Number.isFinite(lock.at) ? lock.at : null;
     if (at === null) {
       // Unreadable or still being written by its creator: age it by the file itself.
       try {
         at = (await fs.stat(lockPath)).mtimeMs;
       } catch {
-        return false;
+        return null;
       }
     }
-    return Date.now() - at > REFRESH_LOCK_STALE_MS;
+    return Date.now() - at > staleMs ? seen : null;
+  }
+
+  /**
+   * Removes the lock only if it still carries `nonce`. It is moved aside before it is checked, so a lock another
+   * process made in the meantime is put back rather than deleted.
+   */
+  private async removeLockFileIf(lockPath: string, nonce: unknown): Promise<void> {
+    const aside = `${lockPath}.${uuidv4()}.aside`;
+    try {
+      await fs.rename(lockPath, aside);
+    } catch {
+      return;
+    }
+    try {
+      if ((await this.readLockFileSteadily(aside))?.nonce !== nonce) {
+        await fs.link(aside, lockPath).catch(() => undefined);
+      }
+    } finally {
+      await fs.rm(aside, { force: true });
+    }
   }
 
   /** The sign-in `text` (the config file) holds for the environment keyed `envKey`, without echoing its bytes in errors. */
@@ -1986,13 +2080,12 @@ export class ConfigStore {
    */
   async setCustomApiUrl(url: string | null): Promise<void> {
     await this.load();
-    await this.exclusive(async () => {
-      if (!this.globalConfig) await this.load();
+    await this.lockedWrite(async () => {
       const g = this.globalConfig!;
       // Reset to the build-time default service (null) or set a self-hosted URL.
       g.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
       const disk = await this.diskAuthFields(g);
-      await this.persistGlobal(undefined, { authFields: { ...disk, apiConfig: g.apiConfig } });
+      await this.writeGlobal(undefined, { authFields: { ...disk, apiConfig: g.apiConfig } });
     });
   }
 
@@ -2000,13 +2093,12 @@ export class ConfigStore {
   async markEndpointChosen(): Promise<void> {
     await this.load();
     if (this.globalConfig!.apiConfig?.endpointChosen) return;
-    await this.exclusive(async () => {
-      if (!this.globalConfig) await this.load();
+    await this.lockedWrite(async () => {
       const g = this.globalConfig!;
       const disk = await this.diskAuthFields(g);
       g.apiConfig = { ...g.apiConfig, endpointChosen: true };
       if (disk.apiConfig?.endpointChosen) return;
-      await this.persistGlobal(undefined, {
+      await this.writeGlobal(undefined, {
         authFields: { ...disk, apiConfig: { ...disk.apiConfig, endpointChosen: true } },
       });
     });
@@ -2044,8 +2136,7 @@ export class ConfigStore {
     }
     const envName = getEnvironmentName(newApiConfig);
 
-    return this.exclusive(async () => {
-      if (!this.globalConfig) await this.load();
+    return this.lockedWrite(async () => {
       const g = this.globalConfig!;
       const wasHere = normalizeEnvKey(g.apiConfig?.customUrl || getDefaultApiUrl()) === normalizeEnvKey(newUrl);
       // The swap starts from the file, which another process may have switched or signed in since this one loaded.
@@ -2056,7 +2147,7 @@ export class ConfigStore {
       g.authByEnv = swap.changed ? swap.authByEnv : disk.authByEnv;
       g.auth = swap.auth; // undefined -> user will be prompted to /login
       if (swap.changed || !disk.apiConfig?.endpointChosen) {
-        await this.persistGlobal(undefined, { authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig } });
+        await this.writeGlobal(undefined, { authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig } });
       } else {
         this.config = await this.computeMerged();
       }

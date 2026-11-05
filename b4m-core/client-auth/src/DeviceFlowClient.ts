@@ -182,7 +182,8 @@ export class DeviceFlowClient {
         refresh_token: refreshToken,
         client_id: this.clientId,
       },
-      { timeout: this.refreshTimeoutMs }
+      // `timeout` alone resets on every byte; the signal bounds the whole exchange, inside the 30s lock stale limit.
+      { timeout: this.refreshTimeoutMs, signal: AbortSignal.timeout(this.refreshTimeoutMs) }
     );
 
     return response.data;

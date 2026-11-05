@@ -28,8 +28,10 @@ export async function handleApiCommand(options: ApiCommandOptions): Promise<void
     }
     const { url } = result;
 
-    await configStore.setCustomApiUrl(url);
-    await configStore.clearAuthTokens();
+    await configStore.withRefreshLock(async () => {
+      await configStore.setCustomApiUrl(url);
+      await configStore.clearAuthTokens();
+    });
 
     console.log(`\n✅ API URL set to ${url}`);
     console.log('🔓 Authentication cleared');
@@ -37,8 +39,10 @@ export async function handleApiCommand(options: ApiCommandOptions): Promise<void
     return;
   }
 
-  await configStore.setCustomApiUrl(null);
-  await configStore.clearAuthTokens();
+  await configStore.withRefreshLock(async () => {
+    await configStore.setCustomApiUrl(null);
+    await configStore.clearAuthTokens();
+  });
 
   // Report what the CLI will resolve now that the custom URL is gone, so the
   // user isn't left guessing (or surprised by a source-mode local-dev default).

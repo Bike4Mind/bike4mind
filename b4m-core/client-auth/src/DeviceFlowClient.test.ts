@@ -66,6 +66,18 @@ describe('DeviceFlowClient.refreshToken', () => {
     expect(await refreshTimeout(BASE)).toBe(25_000);
     expect(await refreshTimeout({ ...BASE, refreshTimeoutMs: 5_000 })).toBe(5_000);
   });
+
+  it('aborts a refresh that keeps trickling bytes once the whole exchange passes the bound', async () => {
+    let signal: AbortSignal | undefined;
+    axios.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      new Promise((_resolve, reject) => {
+        signal = config.signal as AbortSignal | undefined;
+        signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      })) as AxiosAdapter;
+
+    await expect(new DeviceFlowClient({ ...BASE, refreshTimeoutMs: 50 }).refreshToken('rt')).rejects.toThrow();
+    expect(signal?.aborted).toBe(true);
+  });
 });
 
 describe('DeviceFlowClient.pollForToken', () => {

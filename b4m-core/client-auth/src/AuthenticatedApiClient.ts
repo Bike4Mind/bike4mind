@@ -358,7 +358,16 @@ export class AuthenticatedApiClient {
         return current;
       }
       if (current) {
-        await this.clearStoredTokens(`refresh token rejected by the server (HTTP ${status})`, presented.refreshToken);
+        const reason = `refresh token rejected by the server (HTTP ${status})`;
+        this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
+        const cleared = await this.tokenStore.clearAuthTokens(presented.refreshToken);
+        if (cleared === false) {
+          // Storage moved on between the read above and the clear: keep whatever it holds now.
+          const now = await this.readStoredTokens();
+          if (now) return now;
+        } else {
+          this.onTokensCleared?.(reason);
+        }
       }
       throw new SessionRevokedError(this.reauthMessages.refreshFailed);
     }
@@ -383,18 +392,17 @@ export class AuthenticatedApiClient {
       expiresAt: new Date(Date.now() + response.expires_in * 1000).toISOString(),
       userId: presented.userId,
     };
-    await this.tokenStore.setAuthTokens(next);
+    // The check above and this save are separate calls; the store re-checks so a logout in between stands.
+    if ((await this.tokenStore.setAuthTokens(next, presented.refreshToken)) === false) {
+      const now = await this.readStoredTokens();
+      if (!now) throw new NotAuthenticatedError(this.reauthMessages.notLoggedIn);
+      return now;
+    }
     return next;
   }
 
   private readStoredTokens(): Promise<AuthTokens | null> {
     return this.tokenStore.reloadAuthTokens ? this.tokenStore.reloadAuthTokens() : this.tokenStore.getAuthTokens();
-  }
-
-  private async clearStoredTokens(reason: string, expectedRefreshToken?: string): Promise<void> {
-    this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
-    await this.tokenStore.clearAuthTokens(expectedRefreshToken);
-    this.onTokensCleared?.(reason);
   }
 
   /**
