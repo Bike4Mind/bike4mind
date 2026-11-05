@@ -9,6 +9,11 @@ import { Resource } from 'sst';
 
 export type PurchaseReversalOutcome = 'no_purchase' | 'not_user' | 'no_stamp' | 'kept' | 'revoked';
 
+const REVERSAL_LABELS: Record<PurchaseReversalReason, string> = {
+  refunded: 'full refund',
+  dispute_lost: 'lost dispute',
+};
+
 /**
  * Records that a credit purchase was fully refunded or lost a dispute, and clears the buyer's
  * lastCreditsPurchasedAt (the paid-standing stamp) once no unreversed purchase backs it. Every step is
@@ -53,8 +58,13 @@ export async function reversePurchaseStanding(
       sendToClient(user.id, Resource.websocket.managementEndpoint, { action: 'invalidate_query', queryKey })
     )
   );
-  await postMessageToSlack(
-    `\u2139\uFE0F *Paid Standing Revoked* \u2014 ${reason === 'refunded' ? 'full refund' : 'lost dispute'} of payment ${paymentIntentId}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}`
-  );
+  // A retry after a Slack failure would hit 'no_stamp' and never post, so a failed alert must not fail the delivery.
+  try {
+    await postMessageToSlack(
+      `\u2139\uFE0F *Paid Standing Revoked* \u2014 ${REVERSAL_LABELS[reason]} of payment ${paymentIntentId}\n*User:* ${adminOwnerSlackRef({ ownerType: SubscriptionOwnerType.User, ownerId: user.id })}`
+    );
+  } catch (err) {
+    logger.warn(`Revoked paid standing of user ${user.id} but the Slack alert failed`, { err });
+  }
   return 'revoked';
 }

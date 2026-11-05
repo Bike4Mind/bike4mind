@@ -94,6 +94,13 @@ describe('reversePurchaseStanding', () => {
     expect(mocks.clearPurchaseStampIfUnchanged).not.toHaveBeenCalled();
   });
 
+  it('still reports the revocation when the Slack alert fails', async () => {
+    mocks.postMessageToSlack.mockRejectedValueOnce(new Error('slack down'));
+
+    expect(await reverse()).toBe('revoked');
+    expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
   it('throws on a DB failure so the webhook fails the delivery', async () => {
     mocks.markPurchaseReversed.mockRejectedValue(new Error('mongo down'));
 
