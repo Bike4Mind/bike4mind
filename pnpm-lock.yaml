@@ -2590,9 +2590,6 @@ importers:
       '@types/yargs':
         specifier: ^17.0.35
         version: 17.0.35
-      '@vitest/coverage-v8':
-        specifier: ^4.1.12
-        version: 4.1.12(vitest@4.1.12)
       ajv:
         specifier: ^8.20.0
         version: 8.20.0
