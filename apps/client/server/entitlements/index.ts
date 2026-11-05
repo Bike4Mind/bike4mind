@@ -34,7 +34,7 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import { entitlementsForPaidSubscription, holdsPaidStanding } from '@server/entitlements/paidStanding';
+import { resolvePaidStanding } from '@server/entitlements/paidStanding';
 import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -114,7 +114,8 @@ export async function getUserEntitlements(
   for (const key of partnerKeys) {
     keys.add(key);
   }
-  for (const key of entitlementsForPaidSubscription(activeSubscriptions)) {
+  const paidStanding = resolvePaidStanding(user, activeSubscriptions);
+  for (const key of paidStanding.subscriberKeys) {
     keys.add(key);
   }
   // Baseline access: every authenticated user holds the reserved `base` key, so
@@ -132,8 +133,7 @@ export async function getUserEntitlements(
   // paid standing alone (paidStanding.ts), never from a passthrough tag or any other source above.
   // An admin comps it with an `admin_grant` subscription row.
   const withoutPaidPlan = resolved.filter(key => key !== PAID_PLAN_ENTITLEMENT_KEY);
-  const holdsPaidPlan = holdsPaidStanding(user, activeSubscriptions);
-  return holdsPaidPlan ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
+  return paidStanding.holdsPaidStanding ? [...withoutPaidPlan, PAID_PLAN_ENTITLEMENT_KEY] : withoutPaidPlan;
 }
 
 /**
