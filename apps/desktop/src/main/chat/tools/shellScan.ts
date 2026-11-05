@@ -83,6 +83,13 @@ export interface ShellScan {
   writes: string[];
   /** Folders whose contents the script may rewrite, such as an archive's extraction folder. */
   writtenTrees: string[];
+  /**
+   * Set when a path operand is decided by something the scan cannot read: a variable, a substitution, an xargs
+   * replace string, a word joined across lines, or a folder a directory change may or may not have reached.
+   */
+  unread?: true;
+  /** A `git config` key the script sets that makes git run a program, such as `core.fsmonitor`. */
+  gitProgram?: string;
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
@@ -205,6 +212,15 @@ const TOUCHES_FILES = new Set([
 ]);
 
 const SUBSHELLS = new Set(['subshell', 'command_substitution', 'process_substitution']);
+
+/** Statements whose parts may run zero, one or many times, so a directory change in them may not happen. */
+const BRANCHES = new Set([
+  'if_statement',
+  'while_statement',
+  'for_statement',
+  'c_style_for_statement',
+  'case_statement',
+]);
 
 const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty']);
 
@@ -483,8 +499,13 @@ interface WordScope {
   home: string;
   cwd: string;
   previous: string;
+  /** A directory change may or may not have happened, so `cwd` and `previous` are guesses and a relative word is unread. */
+  lost: boolean;
   homeUsed(): void;
 }
+
+/** A POSIX, drive or UNC absolute path, which does not depend on the folder a command runs in. */
+const isAbsolutePath = (text: string): boolean => /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(text);
 
 const KNOWN_VARIABLE = /^\$(?:\{(HOME|PWD|OLDPWD)\}|(HOME|PWD|OLDPWD))$/;
 
@@ -514,8 +535,8 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
       const user = /^[A-Za-z_][\w.-]*$/.test(name);
       if (name === '' || user) scope.homeUsed();
       if (name === '') literal(scope.home);
-      else if (name === '+') literal(scope.cwd);
-      else if (name === '-') literal(scope.previous);
+      else if (name === '+' && !scope.lost) literal(scope.cwd);
+      else if (name === '-' && !scope.lost) literal(scope.previous);
       else if (user) literal(expandHome(`~${name}`, scope.home));
       else unknown();
     }
@@ -531,14 +552,15 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
     if (variable === 'HOME') {
       scope.homeUsed();
       literal(scope.home);
-    } else if (variable === 'PWD') {
+    } else if (variable === 'PWD' && !scope.lost) {
       literal(scope.cwd);
-    } else if (variable === 'OLDPWD') {
+    } else if (variable === 'OLDPWD' && !scope.lost) {
       literal(scope.previous);
     } else {
       unknown();
     }
   }
+  if (scope.lost && text !== '' && expandAt === null && !isAbsolutePath(text)) expandAt = 0;
   return { text, glob, expandAt };
 }
 
@@ -661,18 +683,122 @@ type Reach = 'read' | 'write';
 /** Programs that unpack an archive into a folder, so `inPlaceWrites` names their trees. */
 const UNPACKS = new Set(['tar', 'bsdtar', 'unzip', '7z', '7za', '7zz', 'cpio']);
 
+// The leading letters of each short-option word, so a cluster ending in a glued value (`-rt..`) still counts its flags.
 const shortFlags = (args: readonly string[]): string =>
-  args
-    .map(unquote)
-    .filter(arg => /^-[A-Za-z]+$/.test(arg))
-    .map(arg => arg.slice(1))
-    .join('');
+  args.map(arg => /^-([A-Za-z]+)/.exec(unquote(arg))?.[1] ?? '').join('');
+
+/** Short options of the copying programs whose value is the rest of their word, or the next word when they end it. */
+const COPY_VALUE_LETTERS = new Map([
+  ['cp', 'St'],
+  ['mv', 'St'],
+  ['ln', 'St'],
+  ['install', 'Stmog'],
+]);
+
+interface CopyTarget {
+  /** The word holding the folder: the option's own word when `glued`, else the word after it. */
+  index: number;
+  /** The folder as written, quotes kept unless the whole option word was quoted. */
+  value: string;
+  glued: boolean;
+}
+
+/** The folder a `cp`, `mv`, `ln` or `install` copies into by `-t`, `-rtDIR`, `--target-directory=DIR` or `--target DIR`. */
+function copyTarget(program: string, args: readonly string[]): CopyTarget | null {
+  const letters = COPY_VALUE_LETTERS.get(program);
+  if (letters === undefined) return null;
+  const next = (index: number): CopyTarget | null =>
+    index + 1 < args.length ? { index: index + 1, value: args[index + 1] as string, glued: false } : null;
+  for (let index = 0; index < args.length; index++) {
+    const raw = args[index] as string;
+    const arg = unquote(raw);
+    const offset = raw === arg ? 0 : 1;
+    if (arg === '--') return null;
+    if (arg.startsWith('--')) {
+      const equals = arg.indexOf('=');
+      const name = arg.slice(2, equals === -1 ? undefined : equals);
+      // getopt_long takes any unambiguous prefix, and no other long option of these starts with `t`.
+      if (name === '' || !'target-directory'.startsWith(name)) continue;
+      return equals === -1
+        ? next(index)
+        : { index, value: raw.slice(offset + equals + 1, raw.length - offset), glued: true };
+    }
+    if (!arg.startsWith('-')) continue;
+    for (let at = 1; at < arg.length; at++) {
+      const letter = arg[at] as string;
+      if (!letters.includes(letter)) continue;
+      if (letter === 't') {
+        return at + 1 < arg.length
+          ? { index, value: raw.slice(offset + at + 1, raw.length - offset), glued: true }
+          : next(index);
+      }
+      if (at + 1 === arg.length) index++;
+      break;
+    }
+  }
+  return null;
+}
+
+/** Whether a leading xargs builds its command around a replace string (`-I{}`, `-i`, `--replace`), which no scan can fill in. */
+function xargsReplaces(tokens: readonly string[]): boolean {
+  const xargs = WRAPPERS.get('xargs') ?? NO_OPTIONS;
+  let at = 0;
+  while (at < tokens.length && isWrapper(tokens[at] as string)) {
+    const end = pastWrapper(tokens, at);
+    if (programName(unquote(tokens[at] as string)) === 'xargs') {
+      for (const word of tokens.slice(at + 1, end).map(unquote)) {
+        if (word.startsWith('--')) {
+          if (longOptionName(xargs, word.slice(2).split('=')[0] as string) === 'replace') return true;
+          continue;
+        }
+        if (!word.startsWith('-')) continue;
+        for (const letter of word.slice(1)) {
+          if (letter === 'I' || letter === 'i') return true;
+          if (xargs.values.includes(letter) || xargs.glued?.includes(letter)) break;
+        }
+      }
+    }
+    if (end <= at) break;
+    at = end;
+  }
+  return false;
+}
+
+/** `git config` keys whose value is a program git runs, or a file of more config. Case is ignored, as git does. */
+const GIT_PROGRAM_CONFIG =
+  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass)|alias\..+|.+\.textconv|diff\.external|diff\..+\.command|credential(\..+)?\.helper|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|include(if\..+)?\.path)$/i;
+
+/** `git config` options whose value is the next word. */
+const GIT_CONFIG_VALUED = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']);
+
+/** `git config` forms that read or remove a key rather than set one. */
+const GIT_CONFIG_READS = /^(-l|--list|--get.*|--unset.*|--rename-section|--remove-section|--edit|-e)$/;
+
+/** The key a `git config` call sets when that key makes git run a program, else null. */
+function gitConfigProgram(tokens: readonly string[]): string | null {
+  const [git, sub, ...args] = commandTokens(tokens).map(unquote);
+  if (programName(git ?? '') !== 'git' || sub !== 'config') return null;
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index] as string;
+    if (GIT_CONFIG_READS.test(arg)) return null;
+    if (GIT_CONFIG_VALUED.has(arg)) index++;
+    else if (!arg.startsWith('-')) operands.push(arg);
+  }
+  if (operands[0] === 'set') operands.shift();
+  else if (/^(get|list|unset|edit|rename-section|remove-section)$/.test(operands[0] ?? '')) return null;
+  const [key, value] = operands;
+  return key !== undefined && value !== undefined && GIT_PROGRAM_CONFIG.test(key) ? key : null;
+}
 
 /**
  * The operands a command acts on as whole folders, by index into `args`, read (`grep -r`) or written (`rm -r`,
  * `mv`, a copy's destination, `find -delete`); `cwd` is the reach of a command that defaults to its folder.
  */
-function treeOperands(program: string, args: readonly string[]): { operands: Map<number, Reach>; cwd: Reach | null } {
+function treeOperands(
+  program: string,
+  args: readonly string[]
+): { operands: Map<number, Reach>; cwd: Reach | null; glued: Reach | null } {
   const operands = new Map<number, Reach>();
   const flags = shortFlags(args);
   const longs = new Set(args.map(unquote).filter(arg => arg.startsWith('--')));
@@ -680,13 +806,16 @@ function treeOperands(program: string, args: readonly string[]): { operands: Map
   const mark = (indices: readonly number[], reach: Reach): void => {
     for (const index of indices) operands.set(index, reach);
   };
-  // A copy writes its destination (the last operand, or `-t`'s value) and reads the rest.
+  let glued: Reach | null = null;
+  // A copy writes its destination (the last operand, or the target folder option's value) and reads the rest.
   const copy = (): void => {
-    const target = args.findIndex(arg => unquote(arg) === '-t' || unquote(arg).startsWith('--target-directory='));
-    const destination =
-      target === -1 ? positional.at(-1) : unquote(args[target] as string) === '-t' ? target + 1 : target;
+    const target = copyTarget(program, args);
     mark(positional, 'read');
-    if (destination !== undefined) operands.set(destination, 'write');
+    if (target?.glued) glued = 'write';
+    else {
+      const destination = target === null ? positional.at(-1) : target.index;
+      if (destination !== undefined) operands.set(destination, 'write');
+    }
   };
   // grep and rg take a pattern first unless `-e` or `-f` gives it.
   const searched = (): number[] =>
@@ -702,6 +831,7 @@ function treeOperands(program: string, args: readonly string[]): { operands: Map
       break;
     case 'mv':
       mark(positional, 'write');
+      if (copyTarget(program, args)?.glued) glued = 'write';
       break;
     case 'cp':
     case 'scp':
@@ -715,7 +845,7 @@ function treeOperands(program: string, args: readonly string[]): { operands: Map
       const paths = positional.filter(index => end === -1 || index < end);
       if (!args.some(arg => (RUNS_A_PROGRAM.find as RegExp).test(unquote(arg)))) break;
       mark(paths, 'write');
-      return { operands, cwd: paths.length === 0 ? 'write' : null };
+      return { operands, cwd: paths.length === 0 ? 'write' : null, glued };
     }
     case 'grep':
     case 'egrep':
@@ -731,7 +861,7 @@ function treeOperands(program: string, args: readonly string[]): { operands: Map
       if (!recursive) break;
       const files = searched();
       mark(files, 'read');
-      return { operands, cwd: files.length === 0 ? 'read' : null };
+      return { operands, cwd: files.length === 0 ? 'read' : null, glued };
     }
     case 'tar':
     case 'bsdtar':
@@ -739,7 +869,7 @@ function treeOperands(program: string, args: readonly string[]): { operands: Map
       mark(positional, 'read');
       break;
   }
-  return { operands, cwd: null };
+  return { operands, cwd: null, glued };
 }
 
 /** Options whose value is a folder or file, so an expansion there is an unread path. */
@@ -2372,7 +2502,18 @@ export async function scanShell(
     // Folders whose `.claude` holds settings this session may load: its own and each shared root's.
     const settingsBases = await Promise.all([startDirectory, ...roots].map(base => realpathNearest(base)));
     // Path operands (file commands, redirects, cd) a variable or substitution decides; their command is never coverable.
-    let unreadOperands = 0;
+    // Bash joins a word across a backslash-newline that the parser splits, so such a script reads nothing for sure.
+    let unreadOperands = /\S\\\r?\n\S/.test(command) ? 1 : 0;
+    const joinsLines = unreadOperands > 0;
+    // A `cd` that CDPATH may redirect lands somewhere the scan cannot tell.
+    const cdPath = /CDPATH/.test(command) || process.env.CDPATH !== undefined;
+    // Nesting depth of conditionals, loops and function bodies: a directory change there may not happen.
+    let branching = 0;
+    // Statements that are a side of an `&&`/`||` list, whose failure visitList accounts for.
+    const listMembers = new Set<number>();
+    // Directory changes seen so far, so a function body that changes directory loses the folder wherever it runs.
+    let directoryChanges = 0;
+    let gitProgram: string | null = null;
     const directories = new Set<string>();
     const ungranted = new Set<string>();
     const envFiles = new Set<string>();
@@ -2397,6 +2538,7 @@ export async function scanShell(
         home,
         cwd: shellPath(state.cwd),
         previous: shellPath(state.previous),
+        lost: state.lost,
         homeUsed: () => {
           if (!homeKnown) homeGuessed = true;
         },
@@ -2457,6 +2599,7 @@ export async function scanShell(
     ): Promise<string | null> => {
       if (reader === 'windows') {
         const [device, text] = windowsDevicePath(raw);
+        if (state.lost && !isAbsolutePath(device + text)) unreadOperands++;
         return checkWord(literalWord(text), device, cwd, probe, reader, reach);
       }
       const words = operandWords(raw, scope());
@@ -2524,7 +2667,25 @@ export async function scanShell(
       return landed?.inside && landed.physical !== null ? landed.physical : (landed?.lexical ?? null);
     };
 
-    const state = { cwd: startDirectory, previous: startDirectory, stack: [] as string[] };
+    /**
+     * Where the scan believes bash is. `lost` once a directory change may or may not have happened, from which
+     * point every relative operand is unread; `stackLost` once the pushd stack is no longer known.
+     */
+    const state = {
+      cwd: startDirectory,
+      previous: startDirectory,
+      stack: [] as { cwd: string; lost: boolean }[],
+      lost: false,
+      previousLost: false,
+      stackLost: false,
+    };
+    type Place = typeof state;
+    const snapshot = (): Place => ({ ...state, stack: [...state.stack] });
+    const restore = (place: Place): void => {
+      Object.assign(state, place, { stack: [...place.stack] });
+    };
+    const samePlace = (a: Place, b: Place): boolean =>
+      a.cwd === b.cwd && a.lost === b.lost && a.stack.length === b.stack.length && a.stackLost === b.stackLost;
 
     const run = async (node: Node): Promise<void> => {
       const unreadBefore = unreadOperands;
@@ -2538,16 +2699,37 @@ export async function scanShell(
       const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
       if (wrapped !== undefined) noteWrites(wrapped, wrappedRest);
       const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd);
+      // In-place writes come back resolved against a folder that may not be where bash is.
+      if (state.lost && inPlace.files.length + inPlace.trees.length > 0) unreadOperands++;
       for (const file of inPlace.files) noteWrite(file);
       for (const tree of inPlace.trees) noteWrite(tree, writtenTrees);
 
       if (CHANGES_DIRECTORY.has(program)) {
+        directoryChanges++;
         // Later operands resolve against a folder the scan cannot name, so no prefix rule covers the script.
-        if (await changeDirectory(program, rest)) {
+        const statement = node.parent?.type === 'redirected_statement' ? node.parent : node;
+        if (await changeDirectory(program, rest, listMembers.has(statement.id))) {
           commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
         }
         return;
       }
+      // `command cd`, `builtin cd`, `eval` and `source` can move bash without the scan following, and `dirs` edits the stack.
+      const inner = programName(unquote(wrapped ?? ''));
+      const builtin = program === 'builtin' ? programName(unquote(rest[0] ?? '')) : '';
+      if (
+        CHANGES_DIRECTORY.has(inner) ||
+        CHANGES_DIRECTORY.has(builtin) ||
+        ['eval', 'source', '.'].includes(inner) ||
+        ['eval', 'source', '.'].includes(builtin)
+      ) {
+        directoryChanges++;
+        state.lost = true;
+        state.stackLost = true;
+      }
+      if (inner === 'dirs' || builtin === 'dirs') state.stackLost = true;
+      if (xargsReplaces(tokens)) unreadOperands++;
+      const configured = gitConfigProgram(withoutWrappers(tokens));
+      gitProgram ??= configured;
 
       const normalised = commandTokens(tokens);
       const assignments = node.namedChildren.filter(child => child?.type === 'variable_assignment');
@@ -2571,7 +2753,12 @@ export async function scanShell(
       const opaque = opaqueForm(tokens);
       const name = programName(unquote(wrapped ?? ''));
       const coverable =
-        !assigns && !writes && !arithmetic && droppedOnlySafeOptions(tokens) && !runsOpaqueScript(name, wrappedRest);
+        !assigns &&
+        !writes &&
+        !arithmetic &&
+        configured === null &&
+        droppedOnlySafeOptions(tokens) &&
+        !runsOpaqueScript(name, wrappedRest);
       // Exact rules must name the unsafe syntax too: dropping an assignment or output redirect
       // would let `Bash(git status)` cover `GIT_CONFIG_PARAMETERS=... git status` or a file write.
       const original = node.parent?.type === 'redirected_statement' ? node.parent.text : node.text;
@@ -2588,7 +2775,10 @@ export async function scanShell(
       if (reason) {
         outbound.add(reason);
         const computed = tokens.some(isDynamic);
-        sends.push({ reason, target: assigns || computed ? null : repositoryWrite(tokens.map(unquote), state.cwd) });
+        sends.push({
+          reason,
+          target: assigns || computed || state.lost ? null : repositoryWrite(tokens.map(unquote), state.cwd),
+        });
       }
       // wslconfig is the legacy tool for WSL itself (`/u` unregisters a distro, `/t` stops one).
       if (programName(unquote(withoutWrappers(tokens)[0] ?? '')) === 'wslconfig') ungranted.add(WSL_MANAGEMENT);
@@ -2666,7 +2856,12 @@ export async function scanShell(
           await check(arg, state.cwd, probe, 'program', reachAt(index));
         }
       }
-      if (trees.cwd) await checkArgument(literalWord('.'), trees.cwd, true);
+      if (trees.cwd) {
+        if (state.lost) unreadOperands++;
+        await checkArgument(literalWord('.'), trees.cwd, true);
+      }
+      const target = COPIES.has(name) ? copyTarget(name, wrappedRest) : null;
+      if (target?.glued) await check(target.value, state.cwd, false, 'program', trees.glued);
       if (UNPACKS.has(name)) {
         for (const tree of inPlace.trees) {
           for (const word of operandWords(tree, scope()) ?? []) await checkArgument(word, 'write', true);
@@ -2766,14 +2961,30 @@ export async function scanShell(
       for (const link of named ? [location, ...inside] : inside) createdLinks.add(guardForm(link));
     };
 
-    /** True when a glob or an expansion leaves the folder it moves to unknown. */
-    const changeDirectory = async (program: string, rest: string[]): Promise<boolean> => {
+    /**
+     * Follows a cd, pushd or popd. True when a glob or an expansion leaves the folder it moves to unknown.
+     *
+     * The move is followed only where it is certain to land: an existing folder, outside a conditional, loop or
+     * function body, with no CDPATH and no stack option (`-n`, `+N`, `-N`). Otherwise bash may be in either
+     * folder afterwards, and the state is marked lost.
+     */
+    const changeDirectory = async (program: string, rest: string[], inList: boolean): Promise<boolean> => {
+      const certain = branching === 0 && !cdPath;
+      const stackOption = rest.some(arg => /^[-+]./.test(unquote(arg)));
       if (program === 'popd') {
+        if (stackOption || state.stackLost) {
+          Object.assign(state, { lost: true, stackLost: true });
+          return false;
+        }
         const back = state.stack.pop();
         if (back) {
-          state.previous = state.cwd;
-          state.cwd = back;
+          Object.assign(state, { previous: state.cwd, previousLost: state.lost, cwd: back.cwd });
+          state.lost = back.lost || !certain;
         }
+        return false;
+      }
+      if (program === 'pushd' && (stackOption || rest.length === 0)) {
+        Object.assign(state, { lost: true, stackLost: true });
         return false;
       }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
@@ -2785,17 +2996,27 @@ export async function scanShell(
         words.length > 1 ||
         unreadOperands > unread ||
         words.some(word => readOperand(word, operandRules(state.cwd).dirname).start !== null);
-      if (next === null) return unknown;
-      if (program === 'pushd') state.stack.push(state.cwd);
-      state.previous = state.cwd;
-      state.cwd = next;
+      if (next === null) {
+        state.lost = true;
+        return unknown;
+      }
+      // In an `&&`/`||` list a failed cd is one of the outcomes visitList weighs, so only a lone one must exist.
+      const landed = inList || (await stat(next).catch(() => null))?.isDirectory() === true;
+      const fromLost = target === '-' && (state.previousLost || state.lost);
+      if (program === 'pushd') state.stack.push({ cwd: state.cwd, lost: state.lost });
+      Object.assign(state, { previous: state.cwd, previousLost: state.lost, cwd: next });
+      state.lost = unknown || fromLost || !certain || !landed;
       return unknown;
     };
 
     // Every reading is kept: a write recorded at a place the command never wrote only asks more often.
     const noteWrite = (raw: string, into = writes): void => {
       const text = expand(unquote(raw));
-      if (!text || isDynamic(text) || HARMLESS_REDIRECT_TARGETS.has(text)) return;
+      if (!text || HARMLESS_REDIRECT_TARGETS.has(text)) return;
+      if (isDynamic(text) || (state.lost && !isAbsolutePath(text))) {
+        unreadOperands++;
+        return;
+      }
       for (const target of operandTargets(state.cwd, text)) into.add(target);
     };
 
@@ -2827,8 +3048,7 @@ export async function scanShell(
       }
       if ((program === 'npm' || program === 'pnpm') && sub === 'pkg' && verb !== 'get') noteWrite('package.json');
       if (!COPIES.has(program)) return;
-      const option = rest.findIndex(arg => arg === '-t' || arg.startsWith('--target-directory='));
-      const target = option === -1 ? operands.at(-1) : (rest[option].split('=')[1] ?? rest[option + 1]);
+      const target = copyTarget(program, rest)?.value ?? operands.at(-1);
       if (target === undefined) return;
       noteWrite(target);
       for (const source of operands) {
@@ -2851,7 +3071,7 @@ export async function scanShell(
       await check(target.text, state.cwd);
     };
 
-    const visit = async (node: Node): Promise<void> => {
+    const visitNode = async (node: Node): Promise<void> => {
       if (node.type === 'command') return run(node);
       // `export X=..`, `declare -x X=..` and a statement-level `X=..` set the environment every
       // later command inherits - `GIT_CONFIG_PARAMETERS` runs code through a plain `git status` -
@@ -2880,20 +3100,8 @@ export async function scanShell(
         for (const child of node.children) if (child) await visit(child);
         return;
       }
-      if (node.type === 'redirected_statement' && hasWriteRedirect(node)) {
-        const body = node.childForFieldName('body');
-        if (body?.type === 'command') {
-          writtenCommands.add(body.id);
-        } else {
-          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
-        }
-      }
       if (node.type === 'redirected_statement') {
-        const before = unreadOperands;
-        for (const child of node.children) if (child) await visit(child);
-        if (unreadOperands > before) {
-          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
-        }
+        if (await visitRedirected(node)) state.lost = true;
         return;
       }
       if (node.type === 'file_redirect') {
@@ -2901,21 +3109,110 @@ export async function scanShell(
         return redirect(node);
       }
       if (SUBSHELLS.has(node.type) || node.type === 'pipeline') {
-        const saved = { cwd: state.cwd, previous: state.previous, stack: [...state.stack] };
+        const saved = snapshot();
         const isolate = SUBSHELLS.has(node.type);
         for (const child of node.children) {
           if (!child) continue;
-          if (!isolate) Object.assign(state, { cwd: saved.cwd, previous: saved.previous, stack: [...saved.stack] });
+          if (!isolate) restore(saved);
           await visit(child);
         }
-        Object.assign(state, saved);
+        restore(saved);
         return;
       }
       for (const child of node.children) if (child) await visit(child);
     };
 
+    /**
+     * A statement with redirects. The parser hangs `a && b > f` off the whole list, but bash opens `f` for `b`,
+     * where the list succeeds; true, as for visitList, when a failure could leave bash somewhere else.
+     */
+    const visitRedirected = async (node: Node): Promise<boolean> => {
+      if (hasWriteRedirect(node)) {
+        const body = node.childForFieldName('body');
+        if (body?.type === 'command') {
+          writtenCommands.add(body.id);
+        } else {
+          commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+        }
+      }
+      const before = unreadOperands;
+      let uncertain = false;
+      for (const child of node.children) {
+        if (child?.type === 'list') uncertain = (await visitList(child)) || uncertain;
+        else if (child) await visit(child);
+      }
+      if (unreadOperands > before) {
+        commands.push({ text: node.text, always: node.text, coverable: false, words: node.text });
+      }
+      return uncertain;
+    };
+
+    /**
+     * `a && b` or `a || b`, leaving the state where bash is when the list succeeds: `b` after `a &&` runs only
+     * once `a`, and any cd in it, succeeded. True when a failure could leave bash somewhere else.
+     */
+    const visitList = async (node: Node): Promise<boolean> => {
+      const [left, right] = node.namedChildren.filter(child => child !== null && child.type !== 'comment');
+      const operator = node.children.find(child => child?.type === '&&' || child?.type === '||')?.type;
+      if (!left || !right || node.namedChildren.length !== 2 || operator === undefined) {
+        for (const child of node.children) if (child) await visit(child);
+        return true;
+      }
+      const statement = async (child: Node): Promise<boolean> => {
+        if (child.type === 'list') return visitList(child);
+        listMembers.add(child.id);
+        if (child.type === 'redirected_statement') return visitRedirected(child);
+        await visit(child);
+        return false;
+      };
+      const before = snapshot();
+      const leftUncertain = await statement(left);
+      const middle = snapshot();
+      // `b` after `a ||` runs where a failed `a` left bash: where it started, or wherever its cd took it.
+      if (operator === '||' && (leftUncertain || !samePlace(before, middle))) state.lost = true;
+      const rightUncertain = await statement(right);
+      const after = snapshot();
+      if (operator === '||' && !samePlace(middle, after)) state.lost = true;
+      return leftUncertain || rightUncertain || !samePlace(before, middle) || !samePlace(middle, after);
+    };
+
+    const visit = async (node: Node): Promise<void> => {
+      if (node.type === 'list') {
+        if (await visitList(node)) state.lost = true;
+        return;
+      }
+      if (node.type === 'function_definition') {
+        // The body runs wherever the function is called, so it is read from no known folder.
+        const before = snapshot();
+        const changes = directoryChanges;
+        state.lost = true;
+        branching++;
+        try {
+          await visitNode(node);
+        } finally {
+          branching--;
+        }
+        restore(before);
+        if (directoryChanges > changes) Object.assign(state, { lost: true, stackLost: true });
+        return;
+      }
+      if (BRANCHES.has(node.type)) {
+        const before = snapshot();
+        branching++;
+        try {
+          await visitNode(node);
+        } finally {
+          branching--;
+        }
+        if (!samePlace(before, state)) state.lost = true;
+        return;
+      }
+      return visitNode(node);
+    };
+
     await visit(tree.rootNode);
     if (homeGuessed) return null;
+    if (joinsLines) for (const entry of commands) entry.coverable = false;
     return {
       commands,
       paths: [...paths],
@@ -2930,6 +3227,8 @@ export async function scanShell(
       readOnly: readOnly && !setsEnvironment && commands.length > 0,
       writes: [...writes],
       writtenTrees: [...writtenTrees],
+      ...(unreadOperands > 0 ? { unread: true as const } : {}),
+      ...(gitProgram ? { gitProgram } : {}),
     };
   } finally {
     tree.delete();
