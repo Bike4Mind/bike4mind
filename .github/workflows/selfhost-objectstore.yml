@@ -7,6 +7,8 @@ on:
       - 'compose.selfhost.yaml'
       - '.env.selfhost.example'
       - 'scripts/smoke_selfhost_objectstore.py'
+      - 'scripts/selfhost_backup.py'
+      - 'scripts/verify-compose-backup-restore.py'
       - '.github/workflows/selfhost-objectstore.yml'
   push:
     branches: [main]
@@ -15,6 +17,8 @@ on:
       - 'compose.selfhost.yaml'
       - '.env.selfhost.example'
       - 'scripts/smoke_selfhost_objectstore.py'
+      - 'scripts/selfhost_backup.py'
+      - 'scripts/verify-compose-backup-restore.py'
       - '.github/workflows/selfhost-objectstore.yml'
   workflow_dispatch:
 

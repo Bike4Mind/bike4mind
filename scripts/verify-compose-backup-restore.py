@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""Drill: back up a disposable Compose project, destroy it, restore into a fresh one.
+
+Seeds a sentinel user and a sentinel file in the real mongo + minio services, runs
+scripts/selfhost_backup.py backup and restore, and checks the same user and the same
+file sha256 come back. Needs built minio/createbuckets images (see SELF_HOST.md) and
+.env.selfhost. Python stdlib only. Removes only the projects it creates.
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+from pathlib import Path
+import secrets
+import shlex
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+BACKUP = ROOT / 'scripts' / 'selfhost_backup.py'
+MC_ALIAS = 'mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null; '
+
+
+def sh(cmd, **kwargs):
+    print('+', ' '.join(shlex.quote(str(c)) for c in cmd[:12]), flush=True)
+    return subprocess.run(cmd, cwd=ROOT, check=True, **kwargs)
+
+
+def require(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--env-file', default='.env.selfhost')
+    args = parser.parse_args(argv)
+    env_file = (ROOT / args.env_file).resolve()
+    if not env_file.is_file():
+        raise SystemExit(f'Configure {args.env_file} before running the drill')
+
+    base = ['docker', 'compose', '-f', str(ROOT / 'compose.selfhost.yaml'), '--env-file', str(env_file)]
+    config = json.loads(sh([*base, 'config', '--format', 'json'], stdout=subprocess.PIPE, text=True).stdout)
+    images = {s: config['services'][s].get('image') or f"{config['name']}-{s}" for s in ('minio', 'createbuckets')}
+    bucket = config['services']['createbuckets']['environment']['FAB_FILE_BUCKET']
+
+    tag = secrets.token_hex(4)
+    projects = {'src': 'b4m-backup-drill-src-' + tag, 'dst': 'b4m-backup-drill-dst-' + tag}
+    email = f'drill-{tag}@example.invalid'
+    payload = secrets.token_bytes(64 * 1024)
+    expected = hashlib.sha256(payload).hexdigest()
+    key = f'drill/{tag}.bin'
+
+    print('UTC:', datetime.datetime.now(datetime.timezone.utc).isoformat())
+    print('Revision:', sh(['git', 'rev-parse', 'HEAD'], stdout=subprocess.PIPE, text=True).stdout.strip())
+
+    with tempfile.TemporaryDirectory(prefix='b4m-backup-drill-') as directory:
+        override = Path(directory) / 'override.yaml'
+        override.write_text(
+            'services:\n'
+            + ''.join(
+                f'  {s}:\n    image: {json.dumps(images[s])}\n    pull_policy: never\n    build: !reset null\n'
+                for s in ('createbuckets',))
+            + f'  minio:\n    image: {json.dumps(images["minio"])}\n    pull_policy: never\n'
+              '    build: !reset null\n    ports: !reset []\n'
+            '  mongo:\n    ports: !reset []\n')
+        backup_dir = Path(directory) / 'backup'
+
+        def compose(project):
+            return ['docker', 'compose', '-p', project, '-f', str(ROOT / 'compose.selfhost.yaml'),
+                    '-f', str(override), '--env-file', str(env_file)]
+
+        def mc(project, script, **kwargs):
+            return sh([*compose(project), 'run', '--rm', '--no-deps', '-T', '--pull', 'never',
+                       '--entrypoint', '/bin/sh', 'createbuckets', '-ec', MC_ALIAS + script], **kwargs)
+
+        def mongosh(project, js):
+            return sh([*compose(project), 'exec', '-T', 'mongo', 'mongosh', '--quiet', '--eval', js],
+                      stdout=subprocess.PIPE, text=True).stdout.strip()
+
+        def file_sha(project):
+            out = mc(project, f'mc cat local/{shlex.quote(bucket)}/{shlex.quote(key)} | sha256sum',
+                     stdout=subprocess.PIPE, text=True).stdout
+            return out.split()[0]
+
+        try:
+            sh([*compose(projects['src']), 'up', '-d', '--no-build', '--wait', 'mongo', 'minio'])
+            sh([*compose(projects['src']), 'run', '--rm', '--no-deps', '--pull', 'never', 'createbuckets'])
+            user_id = mongosh(projects['src'],
+                              f'db.getSiblingDB("bike4mind").users.insertOne({{email: {json.dumps(email)}}}).insertedId.toString()')
+            mc(projects['src'], f'mc pipe local/{shlex.quote(bucket)}/{shlex.quote(key)}', input=payload)
+            require(file_sha(projects['src']) == expected, 'Seeded file does not read back in the source project')
+
+            cli = [sys.executable, '-I', str(BACKUP), '--env-file', str(env_file),
+                   '-f', str(ROOT / 'compose.selfhost.yaml'), '-f', str(override)]
+            sh([*cli, '-p', projects['src'], 'backup', '--dest', str(backup_dir)])
+            manifest = json.loads((backup_dir / 'manifest.json').read_text())
+            print('Manifest:', json.dumps(manifest))
+            require(manifest['buckets'][bucket]['objects'] >= 1, 'Manifest records no objects for the seeded bucket')
+
+            sh([*compose(projects['src']), 'down', '--volumes', '--remove-orphans'])
+
+            sh([*cli, '-p', projects['dst'], 'restore', '--from', str(backup_dir)])
+
+            found = mongosh(projects['dst'],
+                            f'JSON.stringify(db.getSiblingDB("bike4mind").users.find({{email: {json.dumps(email)}}}).toArray().map(u => u._id.toString()))')
+            require(json.loads(found) == [user_id], f'User not restored with the same _id: {found}')
+            print('PASS user: same _id and email restored', user_id, email)
+            require(file_sha(projects['dst']) == expected, 'Restored file sha256 differs')
+            print('PASS file sha256:', expected)
+        finally:
+            for project in projects.values():
+                subprocess.run([*compose(project), 'down', '--volumes', '--remove-orphans'], cwd=ROOT, check=False)
+
+
+if __name__ == '__main__':
+    main()
