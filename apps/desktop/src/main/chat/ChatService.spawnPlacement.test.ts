@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import {
   awaitsWorktree,
+  type BackgroundProcessInfo,
   type ChatSessionSummary,
   type ChatSpawnSuggestion,
   type ChatStreamEvent,
@@ -594,6 +595,43 @@ describe('ChatService spawn placement', () => {
 
     await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
     expect(waitFor).not.toHaveBeenCalled();
+  });
+
+  it("tells a spawned agent's first turn that its install is running, even when the install is slow to start", async () => {
+    // Upstream, since a worktree is cut from the freshly fetched base rather than local main.
+    const source = join(container, '..', 'source');
+    await writeFile(join(source, 'package.json'), '{"name":"demo"}\n', 'utf8');
+    await writeFile(join(source, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n", 'utf8');
+    await git(source, ['add', 'package.json', 'pnpm-lock.yaml']);
+    await git(source, ['commit', '--quiet', '-m', 'lockfile']);
+    vi.mocked(dependencies.maybeStart).mockRestore();
+    const registry = (dependencies as unknown as { registry: BackgroundProcessRegistry }).registry;
+    let install: BackgroundProcessInfo | null = null;
+    vi.spyOn(registry, 'start').mockImplementation(async request => {
+      // Slower than the rest of the launch, so a launch that does not wait for the plan races past it.
+      await new Promise(resolve => setTimeout(resolve, 200));
+      install = {
+        id: 'inst0001',
+        sessionId: request.sessionId,
+        command: request.command,
+        cwd: request.cwd,
+        status: 'running',
+        startedAt: new Date().toISOString(),
+        bufferedChars: 0,
+        droppedChars: 0,
+      };
+      return install;
+    });
+    vi.spyOn(registry, 'get').mockImplementation(() => install);
+
+    await spawnWith({ placement: 'worktree', branch: 'agent/install-announced' });
+    const worktree = await worktreeOf('agent/install-announced');
+    await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
+
+    const first = post.mock.calls.find(call => String(call[1]?.messages?.[1]?.content ?? '').includes(worktree));
+    const prompt = JSON.stringify(first?.[1]?.messages ?? []);
+    expect(prompt).toContain('Dependencies are installing in the background (handle inst0001');
+    expect(prompt).toContain('wait_seconds=');
   });
 
   it('starts no turn and leaks nothing when the agent is deleted while preparing', async () => {

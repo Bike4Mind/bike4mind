@@ -5354,7 +5354,9 @@ export class ChatService {
       }
       // The dependency install keeps running in the background: the turn starts now, and its
       // prompt says how to block on the install (bash_output wait_seconds) when node_modules is needed.
+      // Awaiting only the install's planning, so that first prompt already knows one is running.
       if (!failure) {
+        await this.deps.dependencies?.isInstalling(child.id);
         const interrupted = await this.launchInterruption(child.id);
         if (interrupted) failure = 'It was stopped before its first turn.';
         deleted = interrupted === 'deleted';
