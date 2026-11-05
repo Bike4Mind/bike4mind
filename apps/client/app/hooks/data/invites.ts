@@ -110,6 +110,30 @@ export function useShareDocument({
   });
 }
 
+export type BatchShareResponse = {
+  results: { id: string; ok: boolean; link?: string; error?: string; rateLimited?: boolean }[];
+  okCount: number;
+  rateLimitMessage?: string;
+};
+
+/** One POST /api/invites/batch for up to MAX_BULK_ITEMS files or notebooks; the caller chunks. */
+export function useBatchShare() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: {
+      type: InviteType.FabFile | InviteType.Session;
+      ids: string[];
+      recipients: string[];
+      description?: string;
+      permissions: string[];
+    }) => (await api.post<BatchShareResponse>('/api/invites/batch', data)).data,
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['invites/share'] });
+    },
+  });
+}
+
 export function useAcceptDocument({
   onSuccess,
   onSettled,

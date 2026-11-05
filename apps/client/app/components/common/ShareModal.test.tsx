@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { InviteType, IFabFileDocument, ISessionDocument } from '@bike4mind/common';
+import { InviteType, IFabFileDocument, ISessionDocument, MAX_BULK_ITEMS } from '@bike4mind/common';
 import {
   MAX_EMAIL_MESSAGE_LENGTH,
   MAX_EMAIL_RECIPIENTS,
@@ -21,6 +21,7 @@ import ShareDocumentModal from './ShareModal';
 const mocks = vi.hoisted(() => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
   mutateAsync: vi.fn(),
+  batchShare: vi.fn(),
   shareDocumentOptions: null as { onError?: (error: unknown) => void } | null,
   shareData: undefined as { link: string } | undefined,
   cancelInvite: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock('@client/app/hooks/data/invites', () => ({
     return { mutate: vi.fn(), mutateAsync: mocks.mutateAsync, data: mocks.shareData };
   },
   useCancelInvite: () => ({ mutate: mocks.cancelInvite, isPending: false }),
+  useBatchShare: () => ({ mutateAsync: mocks.batchShare }),
 }));
 vi.mock('@client/app/hooks/data/user', () => ({
   useUserRevokeSharing: () => ({ mutate: vi.fn() }),
@@ -342,60 +344,118 @@ describe('ShareModal - By Users tab', () => {
     expect(mocks.toast.error).toHaveBeenCalledTimes(1);
   });
 
-  it('aggregates a bulk share failure into one toast instead of a per-item duplicate', async () => {
-    // First file shares fine; the second's mutateAsync fails (e.g. an unresolved recipient),
-    // exercising the same onError path as the single-item case but through the bulk loop.
-    mocks.mutateAsync
-      .mockImplementationOnce(async () => ({}))
-      .mockImplementationOnce(async () => {
-        const error = { isAxiosError: true, response: { data: { message: 'Could not find a user for: x' } } };
-        mocks.shareDocumentOptions?.onError?.(error);
-        throw error;
-      });
+  const files = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `file-${i + 1}`, fileName: `f${i + 1}.pdf` }) as IFabFileDocument);
+  const allOk = async ({ ids }: { ids: string[] }) => ({
+    results: ids.map(id => ({ id, ok: true, link: `https://app.example.com/share/t-${id}` })),
+    okCount: ids.length,
+  });
 
-    const user = await openByUsersTab([
-      { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
-      { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
-    ]);
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'friend@test.com{Enter}');
+  it('shares a bulk selection with one batch request instead of one per item', async () => {
+    mocks.batchShare.mockImplementation(allOk);
+    const user = await openByUsersTab(files(5));
+    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
-    await waitFor(() => expect(mocks.mutateAsync).toHaveBeenCalledTimes(2));
-    // showBulkFeedback's own aggregate toast (a partial success -> toast.warning) is the only
-    // one that should fire; the per-item onError toast must stay suppressed for bulk shares.
-    expect(mocks.toast.warning).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.toast.success).toHaveBeenCalledWith('Successfully shared 5 files'));
+    expect(mocks.batchShare).toHaveBeenCalledTimes(1);
+    expect(mocks.batchShare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: InviteType.FabFile,
+        ids: ['file-1', 'file-2', 'file-3', 'file-4', 'file-5'],
+        recipients: ['friend@test.com'],
+      })
+    );
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it('splits a selection larger than MAX_BULK_ITEMS into one request per chunk', async () => {
+    mocks.batchShare.mockImplementation(allOk);
+    const user = await openByUsersTab(files(MAX_BULK_ITEMS + 1));
+    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.batchShare).toHaveBeenCalledTimes(2));
+    expect(mocks.batchShare.mock.calls[0][0].ids).toHaveLength(MAX_BULK_ITEMS);
+    expect(mocks.batchShare.mock.calls[1][0].ids).toEqual([`file-${MAX_BULK_ITEMS + 1}`]);
+  });
+
+  it('aggregates per-item failures from the batch response into one warning toast', async () => {
+    mocks.batchShare.mockResolvedValue({
+      results: [
+        { id: 'file-1', ok: true, link: 'https://app.example.com/share/t1' },
+        { id: 'file-2', ok: false, error: 'Could not find a user for: x' },
+      ],
+      okCount: 1,
+    });
+    const user = await openByUsersTab(files(2));
+    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.toast.warning).toHaveBeenCalledWith('Shared 1 file, but 1 failed: f2.pdf'));
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 
-  it('stops a bulk share at the first rate-limit refusal and says why', async () => {
-    mocks.mutateAsync
-      .mockImplementationOnce(async () => ({}))
-      .mockImplementationOnce(async () => {
-        const error = {
-          isAxiosError: true,
-          response: { status: 429, data: { message: 'Too many invitations. Try again later.' } },
-        };
-        mocks.shareDocumentOptions?.onError?.(error);
-        throw error;
-      });
-
-    const user = await openByUsersTab([
-      { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
-      { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
-      { id: 'file-3', fileName: 'c.pdf' } as IFabFileDocument,
-    ]);
-    const input = screen.getByTestId('share-modal-recipients-input');
-    await user.type(input, 'friend@test.com{Enter}');
+  it('reports a rate-limited batch with what was and was not shared', async () => {
+    mocks.batchShare.mockResolvedValue({
+      results: [
+        { id: 'file-1', ok: true, link: 'https://app.example.com/share/t1' },
+        { id: 'file-2', ok: false, rateLimited: true, error: 'Too many invitations. Try again later.' },
+        { id: 'file-3', ok: false, rateLimited: true, error: 'Too many invitations. Try again later.' },
+      ],
+      okCount: 1,
+      rateLimitMessage: 'Too many invitations. Try again later.',
+    });
+    const user = await openByUsersTab(files(3));
+    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
     await user.click(screen.getByTestId('share-modal-submit-button'));
 
     await waitFor(() =>
       expect(mocks.toast.error).toHaveBeenCalledWith(
-        'Too many invitations. Try again later. Shared 1 of 3 files. Not shared: b.pdf, c.pdf'
+        'Too many invitations. Try again later. Shared 1 of 3 files. Not shared: f2.pdf, f3.pdf'
       )
     );
-    expect(mocks.mutateAsync).toHaveBeenCalledTimes(2);
     expect(mocks.toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('does not send later chunks once a chunk is refused by the rate limit', async () => {
+    mocks.batchShare.mockRejectedValue({
+      isAxiosError: true,
+      response: { status: 429, data: { message: 'Slow down.' } },
+    });
+    const user = await openByUsersTab(files(MAX_BULK_ITEMS + 1));
+    await user.type(screen.getByTestId('share-modal-recipients-input'), 'friend@test.com{Enter}');
+    await user.click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledTimes(1));
+    expect(mocks.toast.error.mock.calls[0][0]).toMatch(/^Slow down\. Shared 0 of 101 files\./);
+    expect(mocks.batchShare).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ShareModal - bulk By Link tab', () => {
+  it('generates every link with one batch request and combines them into one share link', async () => {
+    mocks.batchShare.mockResolvedValue({
+      results: [
+        { id: 'file-1', ok: true, link: 'https://app.example.com/share/t1' },
+        { id: 'file-2', ok: true, link: 'https://app.example.com/share/t2' },
+      ],
+      okCount: 2,
+    });
+    renderModal([
+      { id: 'file-1', fileName: 'a.pdf' } as IFabFileDocument,
+      { id: 'file-2', fileName: 'b.pdf' } as IFabFileDocument,
+    ]);
+    await userEvent.setup().click(screen.getByTestId('share-modal-submit-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('share-modal-generated-link')).toHaveTextContent('https://app.example.com/share/t1,t2')
+    );
+    expect(mocks.batchShare).toHaveBeenCalledTimes(1);
+    expect(mocks.batchShare).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ['file-1', 'file-2'], recipients: [] })
+    );
+    expect(mocks.mutateAsync).not.toHaveBeenCalled();
   });
 });
 
