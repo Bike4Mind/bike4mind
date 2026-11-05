@@ -5,7 +5,12 @@ import {
   readOllamaSettings,
   type OllamaEnvironment,
 } from '@bike4mind/local-models';
-import { QUANTIZED_KV_CACHE_TYPES, type FlashAttention, type QuantizedKvCacheType } from '@shared/modelServers';
+import {
+  QUANTIZED_KV_CACHE_TYPES,
+  type FlashAttention,
+  type ModelServerLaunchSettings,
+  type QuantizedKvCacheType,
+} from '@shared/modelServers';
 
 /** The launch variables Settings shows for an Ollama Desktop did not start. */
 export const OBSERVED_OLLAMA_KEYS = [
@@ -46,6 +51,23 @@ export function observedKvCacheType(vars: Record<string, string>): QuantizedKvCa
   if (runtime.flashAttn === 'off') return undefined;
   const kv = runtime.kv && runtime.kv !== 'auto' ? runtime.kv.k : undefined;
   return QUANTIZED_KV_CACHE_TYPES.find(type => type === kv);
+}
+
+/** The launch settings that would start Ollama as these variables run it, and the variables that say so; null if none. */
+export function observedPrefill(
+  vars: Record<string, string>
+): { settings: ModelServerLaunchSettings; from: string } | null {
+  const kvCacheType = observedKvCacheType(vars);
+  const flashAttention = observedFlashAttention(vars);
+  const keys = [
+    ...(kvCacheType ? (['OLLAMA_KV_CACHE_TYPE'] as const) : []),
+    ...(flashAttention ? (['OLLAMA_FLASH_ATTENTION'] as const) : []),
+  ];
+  if (keys.length === 0) return null;
+  return {
+    settings: { ...(kvCacheType ? { kvCacheType } : {}), ...(flashAttention ? { flashAttention } : {}) },
+    from: keys.map(key => `${key}=${vars[key]}`).join(', '),
+  };
 }
 
 /** OLLAMA_FLASH_ATTENTION as Ollama reads it; undefined when unset or unreadable, which Ollama treats as auto. */

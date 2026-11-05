@@ -105,6 +105,11 @@ export interface ModelServerLaunchView {
   sizingKvCacheType: QuantizedKvCacheType | 'f16';
   /** The flash attention fit sizes this server's models with. */
   sizingFlashAttention: FlashAttention | 'auto';
+  /**
+   * What the launch form starts from while nothing is saved: the settings last read from an Ollama Desktop did not
+   * start here, kept after it stops, and the variables they came from ("OLLAMA_KV_CACHE_TYPE=q8_0").
+   */
+  prefill: { settings: ModelServerLaunchSettings; from: string } | null;
   /** What answers there, for "This <noun> was not started by Bike4Mind Desktop": "Ollama server", "llama-server". */
   noun: string;
 }

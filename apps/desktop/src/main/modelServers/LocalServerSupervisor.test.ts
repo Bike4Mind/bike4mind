@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
-import { observedFlashAttention, observedKvCacheType, observedLaunchVars } from './observedOllama';
+import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stopped: boolean };
 
@@ -171,6 +171,19 @@ describe('observed Ollama settings', () => {
     expect(observedKvCacheType({ OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_FLASH_ATTENTION: 'false' })).toBeUndefined();
     expect(observedKvCacheType({ OLLAMA_KV_CACHE_TYPE: 'f16' })).toBeUndefined();
     expect(observedKvCacheType({})).toBeUndefined();
+  });
+
+  it('prefills the launch settings that would run Ollama as it runs now, naming the variables', () => {
+    expect(observedPrefill({ OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_FLASH_ATTENTION: '1' })).toEqual({
+      settings: { kvCacheType: 'q8_0', flashAttention: 'on' },
+      from: 'OLLAMA_KV_CACHE_TYPE=q8_0, OLLAMA_FLASH_ATTENTION=1',
+    });
+    // Ollama keeps an f16 cache with flash attention off, so only that carries over.
+    expect(observedPrefill({ OLLAMA_KV_CACHE_TYPE: 'q4_0', OLLAMA_FLASH_ATTENTION: '0' })).toEqual({
+      settings: { flashAttention: 'off' },
+      from: 'OLLAMA_FLASH_ATTENTION=0',
+    });
+    expect(observedPrefill({ OLLAMA_NUM_PARALLEL: '2' })).toBeNull();
   });
 
   it('reads flash attention as Ollama does, leaving it unset at auto', () => {

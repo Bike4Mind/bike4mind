@@ -356,7 +356,13 @@ type LaunchDraft = {
   modelsDir: string;
 };
 
-function launchDraft(settings: ModelServerLaunchSettings): LaunchDraft {
+/** Saved settings win; with none saved, what Desktop read from the server fills the form. */
+function prefilled(launch: ModelServerLaunchView): boolean {
+  return launch.prefill !== null && Object.keys(launch.settings).length === 0;
+}
+
+function launchDraft(launch: ModelServerLaunchView): LaunchDraft {
+  const settings = prefilled(launch) && launch.prefill ? launch.prefill.settings : launch.settings;
   return {
     kv: settings.kvCacheType ?? 'f16',
     flash: settings.flashAttention ?? 'auto',
@@ -411,15 +417,15 @@ function LaunchSection({
   onAction: (action: ModelServerLaunchAction) => Promise<boolean>;
 }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<LaunchDraft>(() => launchDraft(launch.settings));
+  const [draft, setDraft] = useState<LaunchDraft>(() => launchDraft(launch));
   const [problem, setProblem] = useState<string | null>(null);
   const locked = launchLockedMessage(launch);
   const disabled = busy || !!launch.busy || locked !== null;
   const ollama = launch.runtime === 'ollama';
 
   useEffect(() => {
-    if (!open) setDraft(launchDraft(launch.settings));
-  }, [open, launch.settings]);
+    if (!open) setDraft(launchDraft(launch));
+  }, [open, launch]);
 
   if (launch.owner === 'remote') {
     if (server.kind !== 'ollama') return null;
@@ -578,6 +584,13 @@ function LaunchSection({
               ? 'Ollama reads these when it starts, for every model it loads. A q8_0 or q4_0 cache uses less memory and needs flash attention.'
               : 'llama-server serves every GGUF file in the models folder and loads each one when a chat first asks for it.'}
           </Typography>
+          {prefilled(launch) && launch.prefill && (
+            <Typography level="body-xs" textColor="text.tertiary" data-testid="model-servers-launch-prefilled">
+              {launch.owner === 'other'
+                ? `Filled in from what this server runs with: ${launch.prefill.from}.`
+                : `Filled in from the Ollama that ran here: ${launch.prefill.from}. Save to start with these.`}
+            </Typography>
+          )}
           {problem && (
             <Alert size="sm" color="danger" variant="soft" data-testid="model-servers-launch-error">
               {problem}

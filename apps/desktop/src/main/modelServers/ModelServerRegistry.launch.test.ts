@@ -270,6 +270,19 @@ describe('ModelServerRegistry launching servers', () => {
     expect(localSpecsChanged).toHaveBeenCalledTimes(3);
   });
 
+  it('offers what an unmanaged Ollama ran with as the launch prefill, also after it stops', async () => {
+    const { registry, up } = setup({ readOllamaEnv: async () => ({ OLLAMA_KV_CACHE_TYPE: 'q8_0' }) });
+    await registry.check('local');
+    expect((await local(registry)).launch?.prefill).toBeNull();
+    up.add(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    const prefill = { settings: { kvCacheType: 'q8_0' }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
+    expect((await local(registry)).launch).toMatchObject({ owner: 'other', prefill });
+    up.delete(LOCAL_OLLAMA_URL);
+    await registry.check('local');
+    expect((await local(registry)).launch).toMatchObject({ owner: 'none', canStart: true, prefill });
+  });
+
   it('never reads the settings of the Ollama it started', async () => {
     const readOllamaEnv = vi.fn(async () => ({ OLLAMA_KV_CACHE_TYPE: 'q4_0' }));
     const { registry } = setup({ readOllamaEnv });

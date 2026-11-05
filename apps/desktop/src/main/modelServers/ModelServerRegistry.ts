@@ -69,7 +69,7 @@ import { LocalServerSupervisor, type Launchers } from './LocalServerSupervisor';
 import { withLocalNetworkHint } from './localNetworkHint';
 import { loopbackPortFree } from './loopbackPort';
 import { credentialHeaders, type ModelServerRecord, type ModelServerStore } from './ModelServerStore';
-import { observedFlashAttention, observedKvCacheType, observedLaunchVars } from './observedOllama';
+import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
 import { OpenAICompatibleChat } from './OpenAICompatibleChat';
 
 export const LOCAL_OLLAMA_URL = 'http://127.0.0.1:11434';
@@ -184,6 +184,8 @@ interface LaunchState {
   observed: Record<string, string> | null;
   observedAt: number;
   observedVersion: string | null;
+  /** The last readable `observed`, kept after that server stops so Desktop can start one like it. */
+  lastObserved: Record<string, string> | null;
   /** The cache type and flash attention sizing last used, so a change can expire what was sized with the old ones. */
   sizedWith: string;
 }
@@ -915,6 +917,7 @@ export class ModelServerRegistry {
     const owned = this.supervisor.owned(id);
     const busy = this.supervisor.busy(id);
     const settingsProblem = launchSettingsProblem(settings, target.runtime);
+    const lastObserved = target.runtime === 'ollama' ? (this.launchStates.get(id)?.lastObserved ?? null) : null;
     return {
       runtime: target.runtime,
       owner,
@@ -926,6 +929,7 @@ export class ModelServerRegistry {
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
+      prefill: lastObserved && owner !== 'remote' ? observedPrefill(lastObserved) : null,
       noun: nounOf(target),
     };
   }
@@ -950,7 +954,9 @@ export class ModelServerRegistry {
     const target = this.launchTarget(id);
     if (!target) return;
     const state = this.launchState(id);
-    if (target.runtime !== 'ollama' || this.ownerOf(id) !== 'other') {
+    const owner = this.ownerOf(id);
+    if (target.runtime !== 'ollama' || owner === 'remote') state.lastObserved = null;
+    if (target.runtime !== 'ollama' || owner !== 'other') {
       state.observed = null;
       state.observedAt = 0;
     } else if (
@@ -960,6 +966,7 @@ export class ModelServerRegistry {
     ) {
       const env = (await this.deps.readOllamaEnv?.(target.url).catch(() => null)) ?? null;
       state.observed = env ? observedLaunchVars(env) : null;
+      if (state.observed) state.lastObserved = state.observed;
       state.observedAt = Date.now();
       state.observedVersion = target.health.version;
     }
@@ -969,7 +976,13 @@ export class ModelServerRegistry {
   private launchState(id: string): LaunchState {
     let state = this.launchStates.get(id);
     if (!state) {
-      state = { observed: null, observedAt: 0, observedVersion: null, sizedWith: sizingKey(undefined, undefined) };
+      state = {
+        observed: null,
+        observedAt: 0,
+        observedVersion: null,
+        lastObserved: null,
+        sizedWith: sizingKey(undefined, undefined),
+      };
       this.launchStates.set(id, state);
     }
     return state;

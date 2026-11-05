@@ -478,6 +478,7 @@ describe('ModelServersSettings launch settings', () => {
       observed: null,
       sizingKvCacheType: 'f16',
       sizingFlashAttention: 'auto',
+      prefill: null,
       noun: 'Ollama server',
       ...over,
     };
@@ -555,6 +556,37 @@ describe('ModelServersSettings launch settings', () => {
     await clickId('model-servers-launch-settings-btn');
     expect((byTestId('model-servers-launch-save-btn') as HTMLButtonElement).disabled).toBe(true);
     expect(byTestId('model-servers-launch-kv-select')?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('fills the form in from the Ollama that ran here while nothing is saved, and saves it', async () => {
+    const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
+    await show({ ...LOCAL, launch: launch({ prefill }) });
+    await clickId('model-servers-launch-settings-btn');
+    expect(byTestId('model-servers-launch-prefilled')?.textContent).toBe(
+      'Filled in from the Ollama that ran here: OLLAMA_KV_CACHE_TYPE=q8_0. Save to start with these.'
+    );
+    expect(byTestId('model-servers-launch-kv-select')?.textContent).toContain('q8_0');
+    await clickId('model-servers-launch-save-btn');
+    expect(update).toHaveBeenLastCalledWith('local', { launch: { kvCacheType: 'q8_0' } });
+  });
+
+  it('keeps saved launch settings over what it read from the server', async () => {
+    const prefill = { settings: { kvCacheType: 'q8_0' as const }, from: 'OLLAMA_KV_CACHE_TYPE=q8_0' };
+    await show({ ...LOCAL, launch: launch({ prefill, settings: { flashAttention: 'on' } }) });
+    await clickId('model-servers-launch-settings-btn');
+    expect(byTestId('model-servers-launch-prefilled')).toBeNull();
+    await clickId('model-servers-launch-save-btn');
+    expect(update).toHaveBeenLastCalledWith('local', { launch: { flashAttention: 'on' } });
+  });
+
+  it('shows the values an unmanaged Ollama runs with in its disabled form', async () => {
+    const prefill = { settings: { flashAttention: 'off' as const }, from: 'OLLAMA_FLASH_ATTENTION=0' };
+    await show({ ...LOCAL, launch: launch({ owner: 'other', canStart: false, prefill }) });
+    await clickId('model-servers-launch-settings-btn');
+    expect(byTestId('model-servers-launch-prefilled')?.textContent).toBe(
+      'Filled in from what this server runs with: OLLAMA_FLASH_ATTENTION=0.'
+    );
+    expect(byTestId('model-servers-launch-flash-select')?.textContent).toContain('Off');
   });
 
   it('names the flash attention fit sizes an unmanaged server with when it is not auto', async () => {
