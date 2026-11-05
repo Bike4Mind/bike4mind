@@ -112,7 +112,9 @@ export class LocalServerSupervisor {
       this.deps.logger.warn(`MODEL SERVERS: could not read the servers Desktop ran: ${String(error)}`);
       return;
     }
-    const candidates = found.filter(record => !this.slots.has(record.id) && accepts(record));
+    const firstOfId = found.filter((record, at) => found.findIndex(other => other.id === record.id) === at);
+    const candidates = firstOfId.filter(record => !this.slots.has(record.id) && accepts(record));
+    let reset = false;
     const verdicts = await Promise.all(candidates.map(record => this.stillRuns(record)));
     for (const [index, record] of candidates.entries()) {
       const runs = verdicts[index];
@@ -132,13 +134,15 @@ export class LocalServerSupervisor {
         starting: null,
       };
       this.slots.set(record.id, slot);
-      this.records.set(record.id, record);
+      const { unverifiedLaunches, ...fresh } = record;
+      this.records.set(record.id, fresh);
+      if (unverifiedLaunches) reset = true;
       this.watch(record.id, slot, handle);
     }
-    if (this.unverified.size > 0 || this.records.size !== listedCount) await this.persist();
+    if (this.unverified.size > 0 || this.records.size !== listedCount || reset) await this.persist();
   }
 
-  /** Null when the probe cannot tell after a retry; the record is then kept for the next launch. */
+  /** Null when the probe cannot tell after a retry; the record is then kept for later launches, up to three that cannot read it. */
   private async stillRuns(record: OwnedRecord): Promise<boolean | null> {
     for (let attempt = 0; ; attempt++) {
       try {
@@ -259,13 +263,13 @@ export class LocalServerSupervisor {
     });
   }
 
-  /** Lists a server this run started, for `adopt`; one whose start time cannot be read is never adopted, so not listed. */
   private async remember(id: string, slot: Slot, handle: ServerHandle): Promise<void> {
     // Any new start for this id supersedes a record an earlier launch could not read.
     const stale = this.unverified.delete(id);
     if (!(await this.list(id, slot, handle)) && stale) await this.persist();
   }
 
+  /** Lists a server this run started, for `adopt`; one whose start time cannot be read is never adopted, so not listed. */
   private async list(id: string, slot: Slot, handle: ServerHandle): Promise<boolean> {
     if (!this.deps.records) return false;
     if (handle.apiKey && !this.sealer()) return false;

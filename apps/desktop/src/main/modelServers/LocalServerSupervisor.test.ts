@@ -411,6 +411,22 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     expect(next.owned('a')).not.toBeNull();
   });
 
+  it('starts the count over for a record it takes back', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [{ ...RECORD, unverifiedLaunches: 3 }] }));
+    const { instance } = adopter(file, processes({ 4321: RECORD.startTime }).probe);
+    await instance.adopt(() => true);
+    expect(instance.owned('a')).not.toBeNull();
+    expect(listed(file)).toEqual([RECORD]);
+  });
+
+  it('takes back the first entry for an id and ignores the rest', async () => {
+    const twin = { ...RECORD, pid: 4322 };
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD, twin] }));
+    const { instance } = adopter(file, processes({ 4321: RECORD.startTime, 4322: RECORD.startTime }).probe);
+    await instance.adopt(() => true);
+    expect(listed(file)).toEqual([RECORD]);
+  });
+
   it('drops a record whose process stays unreadable for more than three launches', async () => {
     const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
     for (const launches of [1, 2, 3]) {
