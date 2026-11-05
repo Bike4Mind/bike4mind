@@ -75,6 +75,7 @@ const cases: {
   },
 ];
 
+const extras = { setSessionHistory: vi.fn(), settleLocalModel: vi.fn() };
 let root: Root;
 let host: HTMLElement;
 let conversation: ConversationController;
@@ -87,12 +88,16 @@ function Harness({ id }: { id: string }) {
 
 beforeEach(() => {
   onSummaryChanged.mockReset();
+  extras.setSessionHistory.mockReset();
+  extras.settleLocalModel.mockReset();
   const chat: Record<string, unknown> = {
     getSession: async (id: string) => sessionFor(id),
     getQueuedMessages: async () => [],
     onSessionSummary: (_listener: (summary: ChatSessionSummary) => void) => () => {},
     onQueueChanged: () => () => {},
     onStreamEvent: (_listener: (event: ChatStreamEvent) => void) => () => {},
+    setSessionHistory: extras.setSessionHistory,
+    settleLocalModel: extras.settleLocalModel,
   };
   for (const entry of cases) {
     saves[entry.save] = vi.fn<Save>();
@@ -197,5 +202,37 @@ describe('setModel notice', () => {
     });
 
     expect(conversation.notice).toContain('disk full');
+  });
+});
+
+describe.each([
+  { name: 'setHistory', fn: 'setSessionHistory', call: (c: ConversationController) => c.setHistory(true) },
+  { name: 'settleLocalModel', fn: 'settleLocalModel', call: (c: ConversationController) => c.settleLocalModel() },
+] as const)('$name rejection', entry => {
+  it('reports a rejection as a notice instead of throwing', async () => {
+    extras[entry.fn].mockRejectedValue(new Error('disk full'));
+    await act(async () => root.render(<Harness id="s1" />));
+    await act(async () => {
+      await expect(entry.call(conversation)).resolves.toBeUndefined();
+    });
+    expect(conversation.notice).toContain('disk full');
+  });
+
+  it('shows no notice for a rejection after the chat was switched', async () => {
+    let reject: (error: Error) => void = () => {};
+    extras[entry.fn].mockReturnValue(new Promise((_, fail) => (reject = fail)));
+    await act(async () => root.render(<Harness id="s1" />));
+    let pending: Promise<void> = Promise.resolve();
+    await act(async () => {
+      pending = entry.call(conversation);
+    });
+    await act(async () => root.render(<Harness id="s2" />));
+
+    await act(async () => {
+      reject(new Error('disk full'));
+      await pending;
+    });
+
+    expect(conversation.notice).toBeNull();
   });
 });

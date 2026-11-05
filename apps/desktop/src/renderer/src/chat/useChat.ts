@@ -1188,7 +1188,15 @@ export function useConversation(
 
   const settleLocalModel = useCallback(async () => {
     if (!sessionId) return;
-    const settled = await window.b4m.chat.settleLocalModel(sessionId);
+    let settled: Awaited<ReturnType<typeof window.b4m.chat.settleLocalModel>>;
+    try {
+      settled = await window.b4m.chat.settleLocalModel(sessionId);
+    } catch (error) {
+      if (activeSessionId.current === sessionId) {
+        setNotice(`Could not settle the local model. ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return;
+    }
     if (!settled || activeSessionId.current !== sessionId) return;
     if (settled.notice) setNotice(settled.notice);
     setSession(current => (current?.id === sessionId ? { ...current, model: settled.session.model } : current));
@@ -1207,7 +1215,9 @@ export function useConversation(
         );
         onSummaryChanged(updated);
       } catch (error) {
-        setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+        if (activeSessionId.current === sessionId) {
+          setNotice(`Could not update local history. ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     },
     [sessionId, session?.id, onSummaryChanged]
