@@ -34,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
 interface FakeMigrationFile {
   id: number;
   name: string;
-  up: (ctx?: { startedAt: Date }) => Promise<void>;
+  up: (ctx?: { startedAt: Date }) => Promise<void | { incomplete: true; reason: string }>;
   down: () => Promise<void>;
 }
 
@@ -143,6 +143,18 @@ describe('MigrationManager - applied-set selection (M0)', () => {
     const [b] = (m2.up as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(a.startedAt).toBeInstanceOf(Date);
     expect(b.startedAt).toBe(a.startedAt);
+  });
+
+  it('up() leaves an incomplete migration pending and still runs the ones after it', async () => {
+    const m1 = migration(1);
+    const m2 = migration(2);
+    (m1.up as ReturnType<typeof vi.fn>).mockResolvedValue({ incomplete: true, reason: 'ran out of time' });
+    fakeAvailableMigrations = [m1, m2];
+
+    await new MigrationManager(new Logger()).up(null);
+
+    expect(m2.up).toHaveBeenCalledOnce();
+    expect(migrationDocs.map(d => d.id)).toEqual([2]);
   });
 
   it('up() runs nothing when every migration is already applied, regardless of id order', async () => {

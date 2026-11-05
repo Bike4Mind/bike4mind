@@ -66,7 +66,11 @@ export class MigrationManager {
 
       logger.log(`Running migration ${migration.id}: ${migration.name}`);
       try {
-        await migration.up({ startedAt });
+        const result = await migration.up({ startedAt });
+        if (result?.incomplete) {
+          logger.warn(`Migration ${migration.id} ${migration.name} incomplete, left pending: ${result.reason}`);
+          continue;
+        }
         await Migration.create({ id: migration.id, name: migration.name });
         logger.log(`Migration ${migration.id} ${migration.name} completed`);
       } catch (error: unknown) {

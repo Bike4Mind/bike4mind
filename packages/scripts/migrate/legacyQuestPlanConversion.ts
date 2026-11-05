@@ -250,7 +250,7 @@ export async function convertLegacyQuestPlans(deps: {
   };
 
   let stoppedEarly = false;
-  // One query per page: ids that name no live account (deleted, or not an ObjectId).
+  // One query per page: the ids that name a live account (a non-ObjectId never does).
   const existingUsers = async (ids: string[]): Promise<Set<string>> => {
     const valid = [...new Set(ids)].filter(id => Types.ObjectId.isValid(id));
     if (valid.length === 0) return new Set();
