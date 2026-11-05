@@ -1,5 +1,6 @@
 import {
   THROTTLE_SOURCES,
+  ACCOUNT_DELETION_SOURCES,
   THROTTLE_TIERS,
   USER_RISK_SIGNAL_TYPES,
   VERIFIED_SLACK_IDENTITY_FILTER,
@@ -286,6 +287,18 @@ const UserThrottleSchema = new Schema(
     source: { type: String, enum: [...THROTTLE_SOURCES], required: true },
     changedAt: { type: Date, required: true },
     changedBy: { type: String, required: false },
+  },
+  { _id: false }
+);
+
+const UserDeletionSchema = new Schema(
+  {
+    requestedAt: { type: Date, required: true },
+    scheduledFor: { type: Date, required: true },
+    source: { type: String, enum: [...ACCOUNT_DELETION_SOURCES], required: true },
+    purgeStartedAt: { type: Date, required: false },
+    purgeLeaseId: { type: String, required: false },
+    purgeLeaseExpiresAt: { type: Date, required: false },
   },
   { _id: false }
 );
@@ -655,7 +668,7 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     if (validIds.length === 0) return [];
     return this.model
       .find({ _id: { $in: convertIds(validIds) } })
-      .select('name email username lastActiveAt isOnline photoUrl');
+      .select('name email emailVerified username lastActiveAt isOnline photoUrl');
   }
 
   /**
@@ -690,6 +703,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
+  async findAdminTargetsByIds(ids: string[]) {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return [];
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('email username isAdmin adminPermissions')
+      .lean();
+    return docs.map(d => ({
+      id: String(d._id),
+      email: d.email ?? undefined,
+      username: d.username ?? undefined,
+      isAdmin: d.isAdmin ?? undefined,
+      adminPermissions: d.adminPermissions ? [...d.adminPermissions] : undefined,
+    }));
+  }
+
   /**
    * Emailed users among `ids`, excluding any that carry `deletedAt` (mirrors the same guard
    * `findBySlackUserId` applies) - narrower than `findByIds` so a notification addressee
@@ -702,6 +731,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       .select('email')
       .lean({ virtuals: true });
     return docs.map(d => ({ id: String(d._id), email: String(d.email) }));
+  }
+
+  /** Accounts whose self-serve deletion grace period ended at or before `now`, oldest first; served by user_deletion_scheduledFor. */
+  async findDeletionDueUserIds(now: Date, limit: number): Promise<string[]> {
+    const docs = await this.model
+      // $type repeats the partial index's filter, without which the planner cannot use it.
+      .find({ 'deletion.scheduledFor': { $type: 'date', $lte: now } })
+      .select('_id')
+      .sort({ 'deletion.scheduledFor': 1 })
+      .limit(limit)
+      .lean();
+    return docs.map(d => String(d._id));
   }
 
   /** Other accounts that signed up from this exact IP, newest first; served by user_signupMeta_ip. */
@@ -777,6 +818,18 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       { new: true }
     );
     return result;
+  }
+
+  /**
+   * Clears lastCreditsPurchasedAt only while it still equals `stamp`, so a purchase landing after the
+   * caller read it (which rewrites the stamp) survives. Resolves whether the stamp was cleared.
+   */
+  async clearPurchaseStampIfUnchanged(userId: string, stamp: Date): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: userId, lastCreditsPurchasedAt: stamp },
+      { $set: { lastCreditsPurchasedAt: null } }
+    );
+    return result.modifiedCount === 1;
   }
 
   /**
@@ -1297,6 +1350,10 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
             ),
             default: undefined,
           },
+          blocked: {
+            type: new Schema({ at: { type: Date, required: true } }, { _id: false }),
+            default: undefined,
+          },
         },
         { _id: false }
       ),
@@ -1315,6 +1372,16 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     throttle: { type: UserThrottleSchema, required: false, default: undefined },
     riskSignals: { type: [UserRiskSignalSchema], required: false, default: undefined },
     disputePending: { type: Boolean, required: false, default: false },
+    deletion: { type: UserDeletionSchema, required: false, default: undefined },
+    accountDataExportLease: {
+      type: new Schema(
+        { id: { type: String, required: true }, expiresAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+      select: false,
+    },
     // No pre-save hook required; enforcement is via requireNonSystemUser() helper, not document-level.
     // Queries for human users MUST use { isSystem: { $ne: true } } - default: false does NOT backfill existing docs.
     isSystem: { type: Boolean, default: false },
@@ -1667,8 +1734,8 @@ UserSchema.index({ createdAt: 1, 'signupMeta.ja4': 1 }, { name: 'user_signup_fin
 // full users collection. Explicit name so the migration and autoIndex (mongo.ts) agree - see the
 // authProviders_strategy_id note above.
 UserSchema.index({ organizationId: 1 }, { name: 'user_organizationId' });
-// Serves the per-organization org_invite unlock cap (apps/client/server/credits/orgInviteUnlock.ts).
-// Sparse: only accounts an org invite unlocked carry the field. Explicit name so the migration
+// Serves the per-organization lookup of accounts an org invite unlocked.
+// Sparse: only those accounts carry the field. Explicit name so the migration
 // 20260921235968 and autoIndex (mongo.ts) agree.
 UserSchema.index({ 'signupGrant.unlockedOrgId': 1 }, { sparse: true, name: 'signupGrant_unlockedOrgId' });
 UserSchema.index({ createdAt: 1 });
@@ -1715,6 +1782,11 @@ UserSchema.index(
 );
 // Serves the inviter's referral counts (invited, active). Built by the ensure-referral-inviter-indexes migration.
 UserSchema.index({ referredByUserId: 1 }, { name: 'user_referredByUserId' });
+// Serves the account deletion purge job's scan for grace periods that have ended.
+UserSchema.index(
+  { 'deletion.scheduledFor': 1 },
+  { partialFilterExpression: { 'deletion.scheduledFor': { $type: 'date' } }, name: 'user_deletion_scheduledFor' }
+);
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 
 // Add text index for fast user search in admin panel

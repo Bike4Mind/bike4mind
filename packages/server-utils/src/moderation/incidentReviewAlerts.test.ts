@@ -99,18 +99,21 @@ describe('withReviewerAlerts', () => {
     });
   });
 
-  it('does not alert for an incident recorded with a verdict already set', async () => {
-    const { deps, incidents } = setup();
-    vi.mocked(deps.incidents.record).mockResolvedValue({
-      id: 'incident-123',
-      createdAt: CREATED_AT,
-      reviewStatus: 'false_positive',
-    });
+  it.each(['false_positive', 'no_action'] as const)(
+    'does not alert for an incident recorded with a %s verdict already set',
+    async reviewStatus => {
+      const { deps, incidents } = setup();
+      vi.mocked(deps.incidents.record).mockResolvedValue({
+        id: 'incident-123',
+        createdAt: CREATED_AT,
+        reviewStatus,
+      });
 
-    await incidents.record(INPUT);
+      await incidents.record(INPUT);
 
-    expect(deps.sendEmail).not.toHaveBeenCalled();
-  });
+      expect(deps.sendEmail).not.toHaveBeenCalled();
+    }
+  );
 
   it('never includes image data, links to stored files, or user content in the alert', async () => {
     const { deps, incidents } = setup();

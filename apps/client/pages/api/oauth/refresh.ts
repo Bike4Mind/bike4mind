@@ -1,3 +1,4 @@
+import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
@@ -102,17 +103,13 @@ const handler = baseApi({ auth: false })
 
       // Legacy JWT refresh token: lazily migrate onto a session. impersonatedBy is re-stamped so
       // an impersonated session keeps the marker across refresh (logout.ts's guard depends on it).
-      const migrated = await authSessionService.issueSession(
-        user.id,
-        {
-          createdVia: 'legacy-migration',
-          clientId: client_id,
-          tokenVersion: user.tokenVersion ?? 0,
-          impersonatedBy: payload.impersonatedBy,
-          device: buildSessionDevice(req),
-        },
-        { db: { authSessions: authSessionRepository }, signAccessToken, logger: req.logger }
-      );
+      const migrated = await issueSessionForRequest(req, user.id, {
+        createdVia: 'legacy-migration',
+        clientId: client_id,
+        tokenVersion: user.tokenVersion ?? 0,
+        impersonatedBy: payload.impersonatedBy,
+        device: buildSessionDevice(req),
+      });
 
       return res.json({
         access_token: migrated.accessToken,

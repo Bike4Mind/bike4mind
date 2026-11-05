@@ -65,6 +65,8 @@ export interface NumericControl {
   step: number;
   /** What the model runs with while the setting is untouched; absent when Desktop cannot know it. */
   default?: number;
+  /** The model's own default when it was above `max` and `default` was clamped, so a later `max` can re-derive it. */
+  unclampedDefault?: number;
   /** Max output with no default because, untouched, a reply runs until the model stops or the context is full. */
   unlimitedDefault?: true;
   /** Shown at `value` and not editable. Nothing is sent for a locked control. */

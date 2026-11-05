@@ -150,6 +150,7 @@ export const DEFAULT_MANIFEST = {
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   questExportQueue: { kind: 'queue', optional: true },
+  accountDataExportQueue: { kind: 'queue', optional: true },
   dataLakeCleanupQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a

@@ -217,8 +217,8 @@ const PHRASES: Record<string, ToolPhrases> = {
     active: 'Generating a sound effect...',
   },
   session_list: {
-    didAlone: 'Listed the sessions in this project',
-    toAlone: 'list the sessions in this project',
+    didAlone: 'Listed sessions',
+    toAlone: 'list sessions',
     many: n => `Listed the sessions ${n} times`,
     active: 'Listing sessions...',
   },

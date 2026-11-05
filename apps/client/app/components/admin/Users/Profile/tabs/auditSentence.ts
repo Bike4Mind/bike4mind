@@ -20,6 +20,8 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.subscription.removed': 'Removed the subscription',
   'user.subscriptions.canceled': 'Canceled the Stripe subscriptions',
   'billing.comp.changed': 'Changed a comp',
+  'billing.subscription.cancel_scheduled': 'Scheduled cancellation at period end',
+  'billing.subscription.resumed': 'Resumed the subscription',
   'user.api_key.generated': 'Generated an API key',
   'user.api_key.rate_limit_updated': 'Changed API key rate limits',
   'user.api_key.rate_limit_reset': 'Reset API key rate limits',
@@ -33,6 +35,8 @@ const ACTION_SENTENCES: Readonly<Record<string, string>> = {
   'user.role.admin_revoked': 'Revoked the Super Admin role',
   'user.storage.recalculated': 'Recalculated storage',
   'user.created': 'Created the account',
+  'user.credits.grant_blocked': 'Blocked signup credit grants and rewards',
+  'user.credits.grant_unblocked': 'Resumed signup credit grants and rewards',
 };
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {

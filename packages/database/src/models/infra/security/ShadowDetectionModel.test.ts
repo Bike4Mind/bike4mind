@@ -16,6 +16,7 @@ const detection = (overrides: Partial<RecordShadowDetectionInput> = {}): RecordS
   signals: [{ key: 'ipSignups', label: 'Signups from this IP', observed: 3, threshold: 1 }],
   windowMinutes: 180,
   group: null,
+  payment: null,
   detectedAt: new Date('2026-10-01T00:00:00Z'),
   ...overrides,
 });
@@ -50,6 +51,36 @@ describe('shadowDetectionRepository', () => {
         revision: 0,
       },
     ]);
+  });
+
+  it('round-trips the payment evidence of a paymentRisk detection', async () => {
+    const paymentDetection = detection({
+      detector: 'paymentRisk',
+      wouldAction: 'contain',
+      network: null,
+      payment: {
+        paymentIntentId: 'pi_1',
+        chargeId: null,
+        kind: 'subscription',
+        outcome: 'failed',
+        amount: null,
+        currency: null,
+        riskLevel: null,
+        livemode: true,
+      },
+    });
+    const id = await shadowDetectionRepository.record(paymentDetection);
+
+    const { data } = await shadowDetectionRepository.list({ detector: 'paymentRisk', limit: 10 });
+    expect(data).toEqual([{ id, ...paymentDetection, verdict: null, verdicts: [], revision: 0 }]);
+  });
+
+  it('reads a record written before payment evidence existed as having none', async () => {
+    const { payment: _payment, ...legacy } = detection();
+    await ShadowDetectionModel.collection.insertOne({ ...legacy, verdict: null, verdicts: [], revision: 0 });
+
+    const { data } = await shadowDetectionRepository.list({ limit: 10 });
+    expect(data[0]?.payment).toBeNull();
   });
 
   it('lists newest first, filters by detector and verdict, and reports truncation', async () => {

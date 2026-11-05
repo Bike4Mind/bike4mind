@@ -369,7 +369,7 @@ describe('OpenAICompatibleChat generation settings', () => {
     expect(model.thinkingAlwaysOn).toBe(true);
   });
 
-  it('completes an auxiliary request on a strict OpenAI-compatible product', async () => {
+  it('runs a thinking-off turn on an unknown product without a chat_template_kwargs field', async () => {
     const { fetch: upstream } = server();
     const fetch: FetchLike = async (url, init) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;

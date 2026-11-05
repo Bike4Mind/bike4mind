@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const m = vi.hoisted(() => ({
   findById: vi.fn(),
+  findUserById: vi.fn(),
   record: vi.fn(),
   requireStepUp: vi.fn(),
   sign: vi.fn(),
@@ -10,7 +11,10 @@ const m = vi.hoisted(() => ({
   adminApiOptions: undefined as unknown,
 }));
 
-vi.mock('@bike4mind/database', () => ({ imageModerationIncidentRepository: { findById: m.findById } }));
+vi.mock('@bike4mind/database', () => ({
+  imageModerationIncidentRepository: { findById: m.findById },
+  userRepository: { findById: m.findUserById },
+}));
 vi.mock('@server/middlewares/adminApi', () => ({
   adminApi: (options: unknown) => {
     m.adminApiOptions = options;
@@ -38,21 +42,19 @@ const makeReq = (over: Record<string, unknown> = {}) => ({
   query: { id: ID },
   ...over,
 });
+const USER_ID = 'cccccccccccccccccccccccc';
 const INCIDENT = {
   id: ID,
-  userId: 'user-1',
+  userId: USER_ID,
   createdAt: new Date('2026-10-30T10:00:00Z'),
-  surface: 'upload',
+  surface: 'generation',
   reviewStatus: undefined,
-  fabFileId: 'bbbbbbbbbbbbbbbbbbbbbbbb',
-  sessionId: 'session-9',
-  questId: 'quest-9',
-  provider: 'bfl',
-  model: 'flux-pro-1.1',
-  labels: [{ name: 'Explicit', parentName: '', confidence: 97.31, _id: 'drop-me' }],
+  provider: 'example-provider',
+  model: 'example-model',
+  sessionId: 'dddddddddddddddddddddddd',
+  questId: 'eeeeeeeeeeeeeeeeeeeeeeee',
+  labels: [{ name: 'Explicit Nudity', parentName: 'Explicit', confidence: 97.5 }],
   alertedAt: new Date('2026-10-30T10:01:00Z'),
-  reportedBy: 'admin-7',
-  falsePositiveBy: 'admin-8',
 };
 const READY = { availability: 'ready', url: 'https://signed.example/img', expiresAt: '2026-10-30T10:05:00.000Z' };
 
@@ -61,6 +63,10 @@ describe('admin/moderation-incidents/[id]/view', () => {
     vi.clearAllMocks();
     m.order = [];
     m.findById.mockResolvedValue(INCIDENT);
+    m.findUserById.mockImplementation(async () => {
+      m.order.push('user');
+      return { id: USER_ID, email: 'flagged@example.com' };
+    });
     m.requireStepUp.mockResolvedValue(undefined);
     m.record.mockImplementation(async () => void m.order.push('audit'));
     m.sign.mockImplementation(async () => {
@@ -69,11 +75,13 @@ describe('admin/moderation-incidents/[id]/view', () => {
     });
   });
 
-  it('records the view before signing the image and returns metadata only, uncached', async () => {
+  it('records the view before signing the image or reading the user, and returns the review context uncached', async () => {
     const res = makeRes();
     await runHandler(makeReq(), res);
 
-    expect(m.order).toEqual(['audit', 'sign']);
+    expect(m.order[0]).toBe('audit');
+    expect([...m.order].sort()).toEqual(['audit', 'sign', 'user']);
+    expect(m.findUserById).toHaveBeenCalledWith(USER_ID);
     expect(m.record).toHaveBeenCalledWith(
       expect.objectContaining({ user: expect.anything() }),
       expect.objectContaining({
@@ -87,53 +95,61 @@ describe('admin/moderation-incidents/[id]/view', () => {
     expect(res.json).toHaveBeenCalledWith({
       id: ID,
       createdAt: INCIDENT.createdAt,
-      surface: 'upload',
+      surface: 'generation',
       reviewStatus: 'pending_review',
-      provider: 'bfl',
-      model: 'flux-pro-1.1',
-      labels: [{ name: 'Explicit', parentName: '', confidence: 97.31 }],
+      previousReviewStatus: null,
+      user: { id: USER_ID, email: 'flagged@example.com' },
+      labels: [{ name: 'Explicit Nudity', parentName: 'Explicit', confidence: 97.5 }],
+      provider: 'example-provider',
+      model: 'example-model',
+      sessionId: INCIDENT.sessionId,
+      questId: INCIDENT.questId,
+      fabFileId: null,
+      ncmecReportId: null,
       alertedAt: INCIDENT.alertedAt,
       lastReminderAt: null,
       reportedAt: null,
-      ncmecReportId: null,
-      reportChannel: null,
       falsePositiveAt: null,
-      previousReviewStatus: null,
       image: READY,
     });
   });
 
-  it('never returns a user, session, quest, file or reviewer reference', async () => {
-    const res = makeRes();
-    await runHandler(makeReq(), res);
-    const body = JSON.stringify((res.json as ReturnType<typeof vi.fn>).mock.calls[0][0]);
-    expect(body).not.toMatch(/user-1|session-9|quest-9|fabFile|bbbb|admin-7|admin-8|drop-me/);
-  });
-
-  it('returns the prior verdict and report details once one is recorded', async () => {
+  it('returns the times a reminder and a prior verdict were recorded', async () => {
+    const lastReminderAt = new Date('2026-10-31T08:00:00Z');
     const reportedAt = new Date('2026-10-31T09:00:00Z');
     const falsePositiveAt = new Date('2026-10-30T12:00:00Z');
+    m.findById.mockResolvedValue({ ...INCIDENT, lastReminderAt, reportedAt, falsePositiveAt });
+    const res = makeRes();
+    await runHandler(makeReq(), res);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ lastReminderAt, reportedAt, falsePositiveAt }));
+  });
+
+  it('keeps the user id when the account is gone, and nulls what the incident never had', async () => {
+    m.findUserById.mockResolvedValue(null);
     m.findById.mockResolvedValue({
       ...INCIDENT,
-      reviewStatus: 'reported',
-      ncmecReportId: 'RPT-1',
-      reportChannel: 'manual',
-      reportedAt,
-      falsePositiveAt,
-      previousReviewStatus: 'false_positive',
+      surface: undefined,
+      sessionId: undefined,
+      questId: undefined,
+      labels: undefined,
     });
     const res = makeRes();
     await runHandler(makeReq(), res);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        reviewStatus: 'reported',
-        ncmecReportId: 'RPT-1',
-        reportChannel: 'manual',
-        reportedAt,
-        falsePositiveAt,
-        previousReviewStatus: 'false_positive',
+        surface: null,
+        user: { id: USER_ID, email: null },
+        labels: [],
+        sessionId: null,
+        questId: null,
       })
     );
+  });
+
+  it('does not look the user up when the view cannot be recorded', async () => {
+    m.record.mockRejectedValue(new Error('audit write failed'));
+    await expect(runHandler(makeReq(), makeRes())).rejects.toThrow('audit write failed');
+    expect(m.findUserById).not.toHaveBeenCalled();
   });
 
   it('accepts JWT sessions only, never an API key', () => {
@@ -145,6 +161,7 @@ describe('admin/moderation-incidents/[id]/view', () => {
       runHandler(makeReq({ user: { id: 'delegate', isAdmin: false, adminPermissions: ['users:moderate'] } }), makeRes())
     ).rejects.toThrow('Admin access required');
     expect(m.findById).not.toHaveBeenCalled();
+    expect(m.findUserById).not.toHaveBeenCalled();
     expect(m.record).not.toHaveBeenCalled();
     expect(m.sign).not.toHaveBeenCalled();
   });
@@ -152,6 +169,8 @@ describe('admin/moderation-incidents/[id]/view', () => {
   it('propagates a missing step-up without auditing or signing', async () => {
     m.requireStepUp.mockRejectedValue(new Error('Recent verification required'));
     await expect(runHandler(makeReq(), makeRes())).rejects.toThrow('Recent verification required');
+    expect(m.findById).not.toHaveBeenCalled();
+    expect(m.findUserById).not.toHaveBeenCalled();
     expect(m.record).not.toHaveBeenCalled();
     expect(m.sign).not.toHaveBeenCalled();
   });
@@ -172,9 +191,11 @@ describe('admin/moderation-incidents/[id]/view', () => {
   });
 
   it('keeps a recorded status', async () => {
-    m.findById.mockResolvedValue({ ...INCIDENT, reviewStatus: 'false_positive' });
+    m.findById.mockResolvedValue({ ...INCIDENT, reviewStatus: 'reported', previousReviewStatus: 'no_action' });
     const res = makeRes();
     await runHandler(makeReq(), res);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ reviewStatus: 'false_positive' }));
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewStatus: 'reported', previousReviewStatus: 'no_action' })
+    );
   });
 });

@@ -51,13 +51,16 @@ function hasCookie(name: string): boolean {
  *
  * None of these cookies are essential to running the app, so none are written until consent
  * allows it - see flushUtmCapture below for why a refused capture is held rather than dropped.
+ *
+ * Returns whether this load is a campaign landing, whatever consent says, so other bootstrap
+ * readers share this rule instead of re-parsing the URL.
  */
-export function captureUtmParams(): void {
-  if (typeof window === 'undefined') return;
+export function captureUtmParams(): boolean {
+  if (typeof window === 'undefined') return false;
 
   const params = new URLSearchParams(window.location.search);
   const source = params.get('utm_source');
-  if (!source) return;
+  if (!source) return false;
 
   const utm: Record<string, string> = { source };
   const medium = params.get('utm_medium');
@@ -69,6 +72,7 @@ export function captureUtmParams(): void {
 
   pending = encodeURIComponent(JSON.stringify(utm));
   flushUtmCapture();
+  return true;
 }
 
 // The landing campaign, captured but not yet written because consent does not (yet) allow it.

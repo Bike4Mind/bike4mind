@@ -4,10 +4,12 @@ import {
   type IUsageEventRepository,
   type IUserApiKeyRepository,
   type IUserRepository,
+  type SignupProtectionRepository,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { isAdminBlockedEmailDomain, isDisposableEmail } from './disposableEmail';
+import { isInSignupBurst, signupDomain } from './signupBurstDetector';
 import { isSignupGrantHeldForReview } from './signupRisk';
 import { scoreSignupRisk } from './signupRiskScore';
 
@@ -20,6 +22,7 @@ export interface RefreshSignupRiskScoreAdapters {
     userApiKeys: Pick<IUserApiKeyRepository, 'findFirstCreatedAtByUserId'>;
     usageEvents: Pick<IUsageEventRepository, 'creditsSpentByUser'>;
     adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames' | 'findBySettingName'>;
+    signupDomainReviews: Pick<SignupProtectionRepository, 'findReview'>;
   };
   logger: Pick<Logger, 'warn'>;
   now?: Date;
@@ -40,12 +43,14 @@ export async function refreshSignupRiskScore(
     if (!user) return;
     const signedUpAt = new Date(user.createdAt);
     const email = user.email ?? '';
+    const domain = email ? signupDomain(email) : null;
 
-    const [settings, firstKeyAt, creditsSpentFirst24h, adminBlocked] = await Promise.all([
+    const [settings, firstKeyAt, creditsSpentFirst24h, adminBlocked, domainReview] = await Promise.all([
       getSettingsMap({ adminSettings: db.adminSettings }),
       db.userApiKeys.findFirstCreatedAtByUserId(user.id),
       db.usageEvents.creditsSpentByUser(user.id, signedUpAt, new Date(signedUpAt.getTime() + DAY_MS)),
       email ? isAdminBlockedEmailDomain(email, { adminSettings: db.adminSettings }) : false,
+      domain ? db.signupDomainReviews.findReview(domain) : null,
     ]);
     const scoring = getSettingsValue('signupRiskScoring', settings, SignupRiskScoringSchema.parse({}));
 
@@ -55,8 +60,9 @@ export async function refreshSignupRiskScore(
         // The disposable list counts here even where blockDisposableEmails is off: that toggle
         // exists to work around a false positive in the list, which a weighted score tolerates.
         riskyDomain: email ? isDisposableEmail(email) || adminBlocked : null,
-        // No producer yet; filled in once burst detection stores cohort membership.
-        burstCohort: null,
+        burstCohort: domain
+          ? !!domainReview && isInSignupBurst(domainReview, { id: user.id, createdAt: signedUpAt })
+          : null,
         isDatacenter: user.signupMeta?.isDatacenter ?? null,
         minutesToFirstApiKey: firstKeyAt ? (firstKeyAt.getTime() - signedUpAt.getTime()) / MINUTE_MS : null,
         creditsSpentFirst24h,

@@ -148,4 +148,42 @@ describe('spendReconciliation cron', () => {
     expect(row.deltaUsd).toBe(100);
     expect(row.deltaPct).toBe(100);
   });
+
+  describe('runSpendReconciliation', () => {
+    const logger = { log: vi.fn(), error: vi.fn() } as never;
+
+    it('skips every provider without connecting when no admin key is set', async () => {
+      const configMod = await import('@bike4mind/server-utils/utils/config');
+      const cfg = configMod.Config as Record<string, unknown>;
+      cfg.ANTHROPIC_ADMIN_API_KEY = 'not-configured';
+      cfg.OPENAI_ADMIN_API_KEY = undefined;
+      try {
+        const { runSpendReconciliation } = await import('./spendReconciliation');
+        const result = await runSpendReconciliation({ logger });
+
+        expect(result).toEqual({ reconciled: 0, skipped: 2, failed: 0 });
+        expect(mockAnthropicFetch).not.toHaveBeenCalled();
+        expect(mockOpenAIFetch).not.toHaveBeenCalled();
+        expect(mockAppend).not.toHaveBeenCalled();
+        expect(mockConnectDB).not.toHaveBeenCalled();
+        expect(mockMonthlyCogsByProvider).not.toHaveBeenCalled();
+      } finally {
+        cfg.ANTHROPIC_ADMIN_API_KEY = 'sk-ant-admin01-test';
+        cfg.OPENAI_ADMIN_API_KEY = 'sk-openai-test';
+      }
+    });
+
+    it('derives the reconciled months from the injected now', async () => {
+      mockAnthropicFetch.mockResolvedValue(null);
+      mockOpenAIFetch.mockResolvedValue({ providerUsd: 1, breakdown: {} });
+      const { runSpendReconciliation } = await import('./spendReconciliation');
+
+      const result = await runSpendReconciliation({ logger, now: new Date('2027-01-02T06:00:00Z') });
+
+      expect(mockOpenAIFetch.mock.calls.map(c => c[1])).toEqual(['2026-12', '2027-01']);
+      expect(result).toEqual({ reconciled: 2, skipped: 2, failed: 0 });
+      expect(mockAppend).toHaveBeenCalledTimes(2);
+      expect(mockConnectDB).not.toHaveBeenCalled();
+    });
+  });
 });

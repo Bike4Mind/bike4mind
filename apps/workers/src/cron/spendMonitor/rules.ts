@@ -8,7 +8,12 @@ export type SpendThresholds = {
   accountSpikeRatio: number;
   accountSpikeFloorCredits: number;
   accountCeilingCredits: number;
+  /** Replace the account floor and ceiling for scopes resolved as trusted (see trust.ts). */
+  trustedAccountSpikeFloorCredits: number;
+  trustedAccountCeilingCredits: number;
 };
+
+export type AccountTier = 'standard' | 'trusted';
 
 export type SpendBreach = {
   rule: SpendRuleId;
@@ -18,6 +23,8 @@ export type SpendBreach = {
   value: number;
   baseline: number | null;
   ratio: number | null;
+  /** Set on account-level breaches of a trusted scope. */
+  trusted?: true;
 };
 
 export type ScopeObservation = {
@@ -77,18 +84,26 @@ export function evaluatePlatform(
   ];
 }
 
-export function evaluateScope(obs: ScopeObservation, t: SpendThresholds): SpendBreach[] {
+/** A trusted scope gets higher limits, never a mute: past its own ceiling it still pages. */
+export function evaluateScope(
+  obs: ScopeObservation,
+  t: SpendThresholds,
+  tier: AccountTier = 'standard'
+): SpendBreach[] {
   const rules = scopeRules(obs.scopeType);
   if (!rules) return []; // platform and model scopes are not account-level spend
+  const trusted = tier === 'trusted';
+  const spikeFloor = trusted ? t.trustedAccountSpikeFloorCredits : t.accountSpikeFloorCredits;
+  const ceiling = trusted ? t.trustedAccountCeilingCredits : t.accountCeilingCredits;
   const ratio = ratioOf(obs);
   const breaches: SpendBreach[] = [];
-  if (isSpike(obs, ratio, t.accountSpikeRatio, t.accountSpikeFloorCredits)) {
+  if (isSpike(obs, ratio, t.accountSpikeRatio, spikeFloor)) {
     breaches.push(breach(rules.spike, obs, 'warning', ratio));
   }
-  if (obs.value >= t.accountCeilingCredits) {
+  if (obs.value >= ceiling) {
     breaches.push(breach(rules.ceiling, obs, 'critical', ratio));
   }
-  return breaches;
+  return trusted ? breaches.map(b => ({ ...b, trusted: true as const })) : breaches;
 }
 
 function scopeRules(scopeType: SpendRollupScopeType): { spike: SpendRuleId; ceiling: SpendRuleId } | null {

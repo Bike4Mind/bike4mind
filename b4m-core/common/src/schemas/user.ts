@@ -224,6 +224,7 @@ const SELF_VIEW_PASSTHROUGH_FIELDS = {
   lastCreditsPurchasedAt: true,
   apiKeyTrustApproved: true,
   newAccountSpendCapLifted: true,
+  deletion: true,
 } as const satisfies Record<SelfViewPassthroughField, true>;
 
 /** A redacted integration object: only the named non-secret subfields survive. */

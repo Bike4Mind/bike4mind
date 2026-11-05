@@ -49,9 +49,13 @@ export const ADMIN_AUDIT_CATALOGUE = {
     write: 'strict',
     escalatesAboveGrantThreshold: true,
   },
+  'user.credits.grant_blocked': { category: 'credits', severity: 'notice', write: 'strict' },
+  'user.credits.grant_unblocked': { category: 'credits', severity: 'notice', write: 'strict' },
   'user.credits.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'user.subscription.denied': { category: 'credits', severity: 'critical', write: 'bestEffort' },
   'billing.comp.changed': { category: 'credits', severity: 'notice', write: 'strict' },
+  'billing.subscription.cancel_scheduled': { category: 'credits', severity: 'critical', write: 'strict' },
+  'billing.subscription.resumed': { category: 'credits', severity: 'critical', write: 'strict' },
 
   'user.role.admin_granted': { category: 'access', severity: 'critical', write: 'strict' },
   'user.role.admin_revoked': { category: 'access', severity: 'critical', write: 'strict' },
@@ -182,6 +186,8 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'integration.slack_app.reconnected': { category: 'settings', severity: 'critical', write: 'strict' },
   'integration.slack_app.manifest_updated': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'integration.slack_workspace.deactivated': { category: 'settings', severity: 'critical', write: 'strict' },
+  // A channel's messages leave Slack as a file; recorded for both the direct download and the queued job.
+  'integration.slack_channel.exported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
   'identity.sso_provider.created': { category: 'identity', severity: 'critical', write: 'strict' },
   'identity.sso_provider.updated': { category: 'identity', severity: 'critical', write: 'strict' },
   'identity.sso_provider.deleted': { category: 'identity', severity: 'critical', write: 'strict' },
@@ -283,6 +289,10 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.voice_agent.updated': { category: 'settings', severity: 'info', write: 'bestEffort' },
   'settings.voice_agent.deleted': { category: 'settings', severity: 'notice', write: 'bestEffort' },
 
+  // Preference arena: the comparison pairs raters vote on
+  'settings.arena_pair.imported': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.arena_pair.retired': { category: 'settings', severity: 'notice', write: 'bestEffort' },
+  'settings.arena_pair.restored': { category: 'settings', severity: 'info', write: 'bestEffort' },
   // Handler coverage: signup and org access
   'org.partner_signup_rule.created': { category: 'access', severity: 'notice', write: 'strict' },
   'org.partner_signup_rule.updated': { category: 'access', severity: 'notice', write: 'strict' },
@@ -337,6 +347,9 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'settings.agent_ops.repaired': { category: 'settings', severity: 'info', write: 'bestEffort' },
 
   'audit.exported': { category: 'support', severity: 'info', write: 'bestEffort' },
+  // info, not critical: a sign-off row must never itself enter the review queue. The review document is the source of truth.
+  'audit.reviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
+  'audit.unreviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
 
   'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;

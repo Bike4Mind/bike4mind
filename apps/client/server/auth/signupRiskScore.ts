@@ -1,5 +1,6 @@
 import {
   adminSettingsRepository,
+  signupProtectionRepository,
   usageEventRepository,
   userApiKeyRepository,
   userRepository,
@@ -18,6 +19,7 @@ export function refreshSignupRiskScore(userId: string, logger: Pick<Logger, 'war
       userApiKeys: userApiKeyRepository,
       usageEvents: usageEventRepository,
       adminSettings: adminSettingsRepository,
+      signupDomainReviews: signupProtectionRepository,
     },
     logger,
   });

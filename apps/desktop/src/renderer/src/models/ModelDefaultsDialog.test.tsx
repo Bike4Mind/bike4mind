@@ -198,6 +198,22 @@ describe('ModelDefaultsDialog', () => {
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
   });
 
+  it('does not bring a cleared default back when a field then holds text it cannot parse', async () => {
+    stored = { generation: { temperature: 0.6 } };
+    await render(QWEN);
+    await click('model-defaults-clear-btn');
+    const temperature = input('temperature');
+    Object.defineProperty(temperature, 'validity', { configurable: true, value: { badInput: true } });
+    await fill('temperature', '');
+    await act(async () => {
+      temperature.focus();
+      temperature.blur();
+    });
+    expect(temperature.value).toBe('');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, {});
+  });
+
   it('disables Save after a failed read, so it cannot clear what is stored', async () => {
     (window as unknown as { b4m: { chat: { getModelSettings: unknown } } }).b4m.chat.getModelSettings = vi.fn(
       async () => {

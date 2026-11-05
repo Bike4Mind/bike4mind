@@ -50,8 +50,7 @@ const PROVIDERS: ProviderConfig[] = [
   },
 ];
 
-function getReconcileMonths(): string[] {
-  const now = new Date();
+function getReconcileMonths(now: Date): string[] {
   const current = now.toISOString().slice(0, 7);
   // Previous month.
   const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
@@ -59,20 +58,28 @@ function getReconcileMonths(): string[] {
   return [previous, current];
 }
 
-export async function handler(_event: unknown, context: Context) {
-  const logger = new Logger().withMetadata(contextToLogs(context));
+export interface SpendReconciliationResult {
+  reconciled: number;
+  skipped: number;
+  failed: number;
+}
 
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
-  logger.log('[SpendReconciliation] Connected to database');
-
-  const months = getReconcileMonths();
-  // getReconcileMonths() only ever uses the current and previous month.
-  const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
-
+/**
+ * Shared by the hosted handler and the self-host worker. The caller owns the DB connection
+ * and the stage (it only appears in the caller's logger metadata).
+ */
+export async function runSpendReconciliation({
+  logger,
+  now = new Date(),
+}: {
+  logger: Logger;
+  now?: Date;
+}): Promise<SpendReconciliationResult> {
   let reconciled = 0;
   let skipped = 0;
   let failed = 0;
 
+  const configured: { providerConfig: ProviderConfig; key: string }[] = [];
   for (const providerConfig of PROVIDERS) {
     const key = providerConfig.getKey();
     if (!key || key === 'not-configured') {
@@ -80,7 +87,19 @@ export async function handler(_event: unknown, context: Context) {
       skipped++;
       continue;
     }
+    configured.push({ providerConfig, key });
+  }
 
+  if (configured.length === 0) {
+    logger.log(`[SpendReconciliation] Done: no provider admin key configured, ${skipped} skipped`);
+    return { reconciled, skipped, failed };
+  }
+
+  const months = getReconcileMonths(now);
+  // getReconcileMonths() only ever uses the current and previous month.
+  const internalCogs = await usageEventRepository.monthlyCogsByProvider(2);
+
+  for (const { providerConfig, key } of configured) {
     for (const month of months) {
       try {
         const result = await providerConfig.fetch(key, month);
@@ -122,9 +141,15 @@ export async function handler(_event: unknown, context: Context) {
   }
 
   logger.log(`[SpendReconciliation] Done: ${reconciled} reconciled, ${skipped} skipped, ${failed} failed`);
+  return { reconciled, skipped, failed };
+}
 
-  return {
-    statusCode: 200,
-    body: JSON.stringify({ reconciled, skipped, failed }),
-  };
+export async function handler(_event: unknown, context: Context) {
+  const logger = new Logger().withMetadata(contextToLogs(context));
+
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage), logger);
+  logger.log('[SpendReconciliation] Connected to database');
+
+  const result = await runSpendReconciliation({ logger });
+  return { statusCode: 200, body: JSON.stringify(result) };
 }

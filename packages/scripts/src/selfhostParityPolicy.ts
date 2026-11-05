@@ -29,6 +29,13 @@ function reviewed(
 
 const gap = (id: string, fingerprint: string, signals: string[] = []): ParityPolicyEntry =>
   reviewed(id, fingerprint, 'pending', signals);
+// A gap whose reason is specific to the entry: who reaches it on self-host and what wiring it needs.
+// The registered-but-unconsumed ones must stay in sync with REGISTERED_WITHOUT_CONSUMER in
+// b4m-core/resource/src/manifestCoverage.test.ts.
+const gapBecause = (id: string, fingerprint: string, reason: string, signals: string[] = []): ParityPolicyEntry => ({
+  ...reviewed(id, fingerprint, 'pending', signals),
+  reason,
+});
 const broker = (id: string, fingerprint: string, signals: string[] = []): ParityPolicyEntry =>
   reviewed(id, fingerprint, 'excluded', signals);
 // Excluded because the capability only exists on the hosted deployment, so the reason is per entry.
@@ -50,6 +57,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     '9ecd499546afefc96b5204f91ccaa0292f7eaf73bce58d0bf91a30adda3497e7',
     'Hosted CloudWatch account census on monitored stages; no local notification destination is configured.',
     ['cloudwatch:PutMetricData', 'cloudwatch:namespace', 'import:@aws-sdk/client-cloudwatch']
+  ),
+  broker(
+    'queue:infra/accountDeletionSweepDeadLetter.ts:accountDeletionSweepDlq',
+    '981813c22390623a538fe68a3b6bd1445b4a6aad7164a0485c95a687bad287a5'
   ),
   broker(
     'queue:infra/accountCreationAlarms.ts:AccountCreationMetricsDlq',
@@ -202,6 +213,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap('function:infra/mcp.ts:mcpHandler', '9922cb89dfbe95edef9f97ec6deed16e722cf48201db2c61e50381522f6060f8'),
   hostedOnly(
+    'function:infra/remoteMcp.ts:remoteMcpHandler',
+    '69d7d937077e31281f43012e903c58d74513036fd50296b764855fc6c90e1b70',
+    'Isolates hosted custom-MCP egress outside the VPC; self-host runs the same RemoteMcpClient in-process by design.'
+  ),
+  hostedOnly(
     'function:infra/queues.ts:PublishThumbnailRenderer',
     'a250460c0bc75a4ff9c0176e6dd4655883ec598578667051d5ae2de9c911d441',
     'Renders publish thumbnails for the hosted-only publishThumbnailQueue, invoked synchronously by its handler; it packages a Lambda-only headless Chromium the self-host worker image does not ship.'
@@ -235,35 +251,39 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/dlqAlarms.ts:DlqAlarmHandlerDlq',
     'a39800cfa48e2ecb2ab17d226bb6fde51c9222a75c61f822abe291e9692d938e'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailIngestion.ts:emailAnalysisQueue',
     'be7217e0e5579a751bc81aa5108d1d74ca0c62d31ee580076eeb8aa445296a64',
+    'Enqueued only by the inbound-email parser, which consumes emailIngestionQueue, so nothing produces it on self-host. Wire both together if inbound email is ever supported.',
     ['bedrock:InvokeModel']
   ),
   broker(
     'queue:infra/emailIngestion.ts:emailAnalysisQueueDLQ',
     '3293f56dff623e68c9514a4305754db7930dabcab9adbc52eb71e63ccecc7c7b'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailIngestion.ts:emailIngestionQueue',
     '7b7c3c3d44c1d0fb097fb10c57e5aadfe970e8d3d02f1246d9930357dad4fd3f',
+    'Filled only by the SES inbound-mail bucket notification, which self-host has no equivalent of. Registered in the manifest, but nothing produces or consumes it locally.',
     ['bedrock:*']
   ),
   broker(
     'queue:infra/emailIngestion.ts:emailIngestionQueueDLQ',
     'f44858b26f2ee8f4fb254d41d172e76694252114fb45ab805e510e34c3897f1a'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailMarketing.ts:emailBatchQueue',
-    '3d8d2085327f0b58158c1cd663e1c3a9481ad4f9d2230e117eb4f87cbc3c1b13'
+    '3d8d2085327f0b58158c1cd663e1c3a9481ad4f9d2230e117eb4f87cbc3c1b13',
+    'Fed only by the email job orchestrator (the emailJobQueue consumer), so it stays empty until emailJobQueue is wired. Wire the two together.'
   ),
   broker(
     'queue:infra/emailMarketing.ts:emailBatchQueueDLQ',
     'ff7a3dc9d711600848964bb4825fac5af480800f91d5018d6e02b08064a17d73'
   ),
-  gap(
+  gapBecause(
     'queue:infra/emailMarketing.ts:emailJobQueue',
-    'a12494303f6f19ebd909f57060c2fa52ad7b0f6b9867cf8f495c72990f7f296c'
+    'a12494303f6f19ebd909f57060c2fa52ad7b0f6b9867cf8f495c72990f7f296c',
+    'The admin email-job start and send routes enqueue here, but no self-host consumer runs the email job orchestrator, so a started job never sends. Needs a consumer and an outbound mail provider decision.'
   ),
   broker(
     'queue:infra/emailMarketing.ts:emailJobQueueDLQ',
@@ -299,9 +319,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:agentContinuationQueueDLQ',
     '6a36ae54a4e5ea35b9c34a06d407cee8281bcd6284eeeecf35d7c530dd0c6ffb'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:agentProactiveMessageQueue',
     '3f5dec679a326d5dd3cc12bfed1a94c51bed95f53e9db4abf6beecad50b13766',
+    'The session trigger-proactive-messages route enqueues here and no self-host consumer drains it, so triggered messages are never sent. The handler is in open core: candidate to wire.',
     ['bedrock:*', 'cloudwatch:PutMetricData']
   ),
   broker(
@@ -332,7 +353,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeResearchQueue',
-      fingerprint: 'aa9d24462438aa8606d17172f4862e1a734dd3a757ff0a4ecef4788ca9200968',
+      fingerprint: '3a9b488dfde2c34eb54305da804fc929d994469218d4f3db3d107b0097bb3b50',
     }
   ),
   broker(
@@ -345,17 +366,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:dataLakeTaxonomyQueue',
-      fingerprint: 'bad415856ad2da7522db31c1d9d6c8f911fdf35f0e419940a285cb911d2ccc06',
+      fingerprint: 'a48e7806704fea864f4073b0300167cb69e2944a03d603bfe56915f74395e648',
     }
   ),
   broker(
     'queue:infra/queues.ts:dataLakeTaxonomyQueueDLQ',
     '09d613eb6bffdc733600b1b2dbb9a68496671babcfb7a2b8769c84b5d65d9bbd'
   ),
-  gap('queue:infra/queues.ts:deepAgentWakeQueue', '7fabc060e567ba3872895852fdecd1c0a371fa8cfbfa14966a1fd89e0dd57ad1', [
-    'bedrock:InvokeModel',
-    'cloudwatch:PutMetricData',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:deepAgentWakeQueue',
+    '7fabc060e567ba3872895852fdecd1c0a371fa8cfbfa14966a1fd89e0dd57ad1',
+    'Deep agent enrollment (/api/deep-agent/spin) enqueues wakes, and self-host runs neither this consumer nor the wake cron, so an enrolled agent never wakes. The handler is in open core: candidate to wire.',
+    ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
+  ),
   broker(
     'queue:infra/queues.ts:deepAgentWakeQueueDLQ',
     '2daf534b0ed080ebdbaf3f323032db39f5ab06e345ebc0df5a73babd0f8c1bb8'
@@ -366,7 +389,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:driveDisconnectPurgeQueue',
-      fingerprint: '11d8a787c6cf3e38b396466d8dec8a49b29619226f1e6145257620bfd9e6c912',
+      fingerprint: '7d86b571c68129c4940eebe4babb0d965cabd1375907278e59c20dc32f0ce28e',
     }
   ),
   broker(
@@ -379,7 +402,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:driveLakeIngestQueue',
-      fingerprint: '3835a3f49efecf5a8e0875926cef3fe1be290c672c1b77cfa4e0817e3bcef77e',
+      fingerprint: '392c1ba25bc116274ed09c7c21258c57681318260d9f8aa0333c113bcd9cf7dc',
     }
   ),
   broker(
@@ -392,7 +415,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileChunkQueue',
-      fingerprint: '3a682c55370341d5fe0134d03ccd0d09d2b0196c60d966c5095e010100b6089d',
+      fingerprint: 'b3a40b736a135257141ab6e80e1467c981ca2c753b6e388b1f0557bf2464fdd9',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -410,7 +433,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:fabFileVectorizeQueue',
-      fingerprint: '3137094f513ed5c4cb58c4f9d56c9c81b71737e2ac612b5744fc131211217dbc',
+      fingerprint: '89f8304348807d6d64119e82e8dec81c57d88a0e61ac6c3376de2baba1095e7f',
     },
     ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
   ),
@@ -424,7 +447,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationCallbackQueue',
-      fingerprint: '04807f1187ac175552a61f8c593ccb001db67764917cc0ebdcb8c2098c537840',
+      fingerprint: 'd88569b5284be544c2bddd766df8fbfa582bac23b2d414d3e12d1f5ae7d4407f',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -439,7 +462,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:generationJobQueue',
-      fingerprint: '738cafdafc905266563fbcb7542432c9bc9885db7b0dfc7f330d9f8c7cdc5c2e',
+      fingerprint: '64c290d3c22367ffa488ffefbc21aaf8fbd7ec708d89258f0a793d2ffb3d357e',
     }
   ),
   wired(
@@ -448,7 +471,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeIngestQueue',
-      fingerprint: '2cba8c241b35c8afe19d5ec006bfd795a270c2e5a46bb3862ce0bc42d16b0775',
+      fingerprint: '60bb49a15625d64d3bb2e7dff8e4a443bc725081fed8f29d05b80292673b6c8b',
     }
   ),
   broker(
@@ -461,7 +484,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:githubLakeRevokeQueue',
-      fingerprint: '535d9443af7845f51b3852eaaa23b260b4b340a95eec31fa277781fe987b60f3',
+      fingerprint: '18d94554a329b6c46b58d86b64fbb8a223433c6bacb223cb7cae3d32f2633001',
     }
   ),
   broker(
@@ -482,7 +505,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:imageEditQueue',
-      fingerprint: 'e993330f209a15ea9eaa79ef9a94e2a5ba5b9470c510985b58e0f4fd13e7fe4f',
+      fingerprint: '96503c103a2a84ae7a113a0e66b177bdf90b883db398e59eb3958cd498a44ba4',
     },
     ['bedrock:*']
   ),
@@ -496,13 +519,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:imageGenerationQueue',
-      fingerprint: '14f22647b0a942fd7c882db8af6db7592c5815bcb2293ecf8d7ecd3e286e001b',
+      fingerprint: '6dbf07e110dbf49055fc46aa365d0a8e7ac8183f94bca04791d8184a54ebc315',
     },
     ['bedrock:*']
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:lakeInconsistencyModelQueue',
-    '96472053d974d831a53b57c6bf25016e2ca4fbb2949e6f331cc0af0beceff337'
+    '96472053d974d831a53b57c6bf25016e2ca4fbb2949e6f331cc0af0beceff337',
+    'Optional. Reached only from the inconsistencies route behind the off-by-default EnableLakeModelInconsistencyDetection flag, which refuses the run when no URL is set. Leave it unset on self-host until a consumer is wired.'
   ),
   broker(
     'queue:infra/queues.ts:lakeInconsistencyModelQueueDLQ',
@@ -525,10 +549,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:libreoncologyAudioRenderQueueDLQ',
     '2ee2385d94d02b314ad0029cadb2c26a937f5a674ff43eb5a82816c228b00b6c'
   ),
-  gap('queue:infra/queues.ts:liveOpsTriageQueue', 'e2750f4996f43c5ed1b574c18b535468dc562c2fb3315879bafc3c10c3871372', [
-    'cloudwatch:PutMetricData',
-    'import:@aws-sdk/client-cloudwatch',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:liveOpsTriageQueue',
+    'e2750f4996f43c5ed1b574c18b535468dc562c2fb3315879bafc3c10c3871372',
+    'The admin live-ops trigger route enqueues here and no self-host consumer drains it. The hosted handler uses the CloudWatch client, so wiring needs a local metrics decision first.',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   broker(
     'queue:infra/queues.ts:liveOpsTriageQueueDLQ',
     '396277d7176e9e4839b55c3f4f43ba8107c46a9262e8cfa5859bff0b50bba37b'
@@ -590,6 +616,19 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     },
     ['bedrock:InvokeModel']
   ),
+  wired(
+    'queue:infra/queues.ts:accountDataExportQueue',
+    '83f9304409d24acf226c16c5ead6b6ba487a29bd14b376830576f7c53d69863b',
+    {
+      source: 'apps/workers/src/selfhost/accountDataExportQueue.ts',
+      symbol: 'registerAccountDataExportQueue',
+      fingerprint: 'de56c6ae60e8ab28932b6554f84f5ff06d4e4ee1558c9bff95592c25fee263fb',
+    }
+  ),
+  broker(
+    'queue:infra/queues.ts:accountDataExportQueueDLQ',
+    '8234bb46aa2d71c0b2303134eb96ad2918c4735483c21631faa46b1b27736d60'
+  ),
   broker(
     'queue:infra/queues.ts:questExportQueueDLQ',
     '25de3f067cc3dbb3aa93798220af65df41849f0baad7ef6cd008e56706335966'
@@ -600,7 +639,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'queue:researchEngineQueue',
-      fingerprint: '20aa0a632db4611c5b987e74a4414867cd51be32ad8c10e4be67e750323bcb95',
+      fingerprint: 'ef07ea6baad27ff1cffe6d411ba990abd391ed5d60b7b3e454045bcf96b6a4bb',
     },
     ['bedrock:*']
   ),
@@ -622,10 +661,12 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:riskEvidenceQueueDLQ',
     'c0f2898d8395eaa08e1c942c2697bdb2180b5d7ea4ce4cb969ae1411db1659fc'
   ),
-  gap('queue:infra/queues.ts:secopsTriageQueue', 'a1112e855d9bd5bbfd10645e4c5e3c6635c31f3b740b640b198026333aa66863', [
-    'cloudwatch:PutMetricData',
-    'import:@aws-sdk/client-cloudwatch',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:secopsTriageQueue',
+    'a1112e855d9bd5bbfd10645e4c5e3c6635c31f3b740b640b198026333aa66863',
+    'Not registered. The admin security-dashboard ingest routes enqueue here; triage works on Prowler and AWS security findings that self-host does not produce.',
+    ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
+  ),
   broker(
     'queue:infra/queues.ts:secopsTriageQueueDLQ',
     '5dae60c15cdbc4e123e5ffaafcfdfecbe658a3ac123be20c976beab0dd4f3c2a'
@@ -635,30 +676,38 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:slackExportQueueDLQ',
     'e6f709c7a77ad92a6420578b8802c7199d3580045da4a245ec379dca2b2f2a84'
   ),
-  gap('queue:infra/queues.ts:sreFixQueue', '8105f1b3043f3f0d5c48cb53a593c61a5d9539176905f4e1e256248b8c4ddfbd'),
+  gapBecause(
+    'queue:infra/queues.ts:sreFixQueue',
+    '8105f1b3043f3f0d5c48cb53a593c61a5d9539176905f4e1e256248b8c4ddfbd',
+    'Reached from the SRE Slack approval path and, on hosted, an EventBridge rule. Part of the SRE pipeline with sreJobQueue, which self-host does not run; decide the two together.'
+  ),
   broker('queue:infra/queues.ts:sreFixQueueDLQ', '209afa13455584e3d213f4664f8bb372f97c4047b441a13c140c10a2d3b9950c'),
-  gap('queue:infra/queues.ts:sreJobQueue', '3d20154baf287fd6b05e5ebc5e574208837dab2089e7521cb48d6a7bdf804dee', [
-    'bedrock:InvokeModel',
-    'cloudwatch:PutMetricData',
-  ]),
+  gapBecause(
+    'queue:infra/queues.ts:sreJobQueue',
+    '3d20154baf287fd6b05e5ebc5e574208837dab2089e7521cb48d6a7bdf804dee',
+    'Not registered. The admin SRE rerun/retry routes and the GitHub SRE webhook enqueue here; the handler needs Bedrock and CloudWatch, which self-host does not provide.',
+    ['bedrock:InvokeModel', 'cloudwatch:PutMetricData']
+  ),
   broker('queue:infra/queues.ts:sreJobQueueDLQ', '37a9ace9b78c31a34324c565734ddad57f611e999c69c55b2052ed020cca1435'),
   gap('queue:infra/queues.ts:tavernHeartbeatQueue', '5ece4ce114a9900aeb8e5ce9f67c415d42d1623c8a3bdf99098e93ee613294f4'),
   broker(
     'queue:infra/queues.ts:tavernHeartbeatQueueDLQ',
     '3f2e2017042d9cc8ad66385424a377b2e04b2f1d137b3fcd2b229f1d277966b7'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:webhookDeliveryQueue',
     'def1706d75b2672b2e5cd7edfe51faa7acbf9f281776537f1468036cdb762768',
+    'Not registered, so the webhook retry and replay-dlq admin routes answer 503. The handler is in open core: it needs a self-host consumer before the queue is registered.',
     ['cloudwatch:PutMetricData']
   ),
   broker(
     'queue:infra/queues.ts:webhookDeliveryQueueDLQ',
     '489b16bdceaf15867423fcbfab9344b5e36cefcdbd6473c595f6604d440ad271'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:whatsNewGenerationQueue',
     '7df5242a93aeaf78aa95a16ddb7595d308df55e9ca19a3273809dac56b69b856',
+    'Not registered. Only the release-notes pipeline (releaseNotes.dispatch) produces it, and self-host has no release pipeline.',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
@@ -670,9 +719,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:whatsNewGenerationQueueDLQ',
     'e57a7345766ccd52531a45ce89ad2c994bc132aae123cf9664c62a15dad70b47'
   ),
-  gap(
+  gapBecause(
     'queue:infra/queues.ts:whatsNewHighlightsQueue',
     '606bf264dcf3693c1579a07bd828bc627684657e755851c8f289fb9798437011',
+    'Not registered, so the admin generate-highlights route fails. Needs the same content-generation decision as whatsNewGenerationQueue.',
     [
       'bedrock:InvokeModel',
       'bedrock:InvokeModelWithResponseStream',
@@ -779,9 +829,14 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     symbol: 'registerCreditLotSweep',
     fingerprint: 'a8c89b47317a1c5821c18a6b5769c2bb20b64c1bafe69660994db5827757c7bd',
   }),
-  gap(
+  wired(
     'schedule:infra/cron.ts:creditPurchaseReconciliation',
     '8455f96cc2ce815f18eab081597232ffd8b01ab372d4c04fa6a8d19fcbe3aef3',
+    {
+      source: 'apps/workers/src/selfhost/creditPurchaseReconciliation.ts',
+      symbol: 'registerCreditPurchaseReconciliation',
+      fingerprint: 'c22db348c12bb6a0d38bf36e8568a868cc26baa9cc64a4e5cb68fda52aa87124',
+    },
     ['cloudwatch:PutMetricData', 'import:@aws-sdk/client-cloudwatch']
   ),
   hostedOnly(
@@ -795,7 +850,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:dataLakeBatchReconcile',
-      fingerprint: 'deca71c82499bf1803d2b31fd69c5df689c3f4fcb5841188349f929021931910',
+      fingerprint: '1c45147d07aa830cbea5e15505f8285ce9eb518e1cde83ae788ad3694a8c6903',
     },
     ['cloudwatch:PutMetricData']
   ),
@@ -805,7 +860,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:dataLakeResearchSchedule',
-      fingerprint: '8b58157131e329dfa6b5f68913d41ff3b8fe0cc20f558e52a8f2f3ea975e1072',
+      fingerprint: '8f91dcfd637c7a89721d88f85c83295c283905e7e224e6ded55569f1c2c450ef',
     }
   ),
   gap('schedule:infra/cron.ts:deepAgentWakeCron', 'b05e0f009dc9cacd227b7fc7a75120981412ec2ba9273c1717f1a175411dbed7'),
@@ -894,7 +949,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/main.ts',
       symbol: 'schedule:modelDiscovery',
-      fingerprint: '5e62ad16f76dbe1e162dc92589b1cd278711b06e80d5353cb6bf1747e7ce517c',
+      fingerprint: '15a9caf7c32239adccec59cb6240a7915fb557e51f7a5806725a8a5e6429f962',
     },
     ['bedrock:GetFoundationModelAvailability', 'bedrock:ListFoundationModels', 'cloudwatch:PutMetricData']
   ),
@@ -980,7 +1035,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       fingerprint: '9f57dd7788c58e8c80541ed80e9def95959a8ab62567866fe35d4c9ca6b98ec9',
     }
   ),
-  gap('schedule:infra/cron.ts:spendReconciliation', '61025c6700b007379156ef0b8fdfc06ca05bb1b10aa774948e8ff410ca9f7975'),
+  wired(
+    'schedule:infra/cron.ts:spendReconciliation',
+    '61025c6700b007379156ef0b8fdfc06ca05bb1b10aa774948e8ff410ca9f7975',
+    {
+      source: 'apps/workers/src/selfhost/spendReconciliation.ts',
+      symbol: 'registerSpendReconciliation',
+      fingerprint: 'ca9cbea76249daab2f0359e7faecad3f4dcd80c3269a0481a74e9a69a41a6d8b',
+    }
+  ),
   wired(
     'schedule:infra/cron.ts:storageReconciliation',
     '5d1eb362eae9f41ec77081db00b41f18e7af165448331a564ad5634f09e9932f',
@@ -993,7 +1056,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/apiProbeDetector.ts:apiProbeDetector',
-    '37284ab76c0c69632160d2a02c67b9547fc36ef1f806ccd69a5939bafc8e0cee',
+    'f7e60fec7cdc2408ca023c2afed7c6f9145983675cf1256c5d70862b3d4d9d8b',
     'Queries the hosted server function CloudWatch log group; a portable deployment has none.',
     [
       'bedrock:*',
@@ -1033,6 +1096,15 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       source: 'apps/workers/src/selfhost/signupIpRetention.ts',
       symbol: 'registerSignupIpRetention',
       fingerprint: '0c313edef4ce27ecfa5a27f06f3eb3765dd6b22efd7cbe2d17278623b20deef4',
+    }
+  ),
+  wired(
+    'schedule:infra/cron.ts:accountDeletionSweep',
+    '72fa5618555abfbf8b8133e0724f50ef538a6b7bc953cde266003a042f61c946',
+    {
+      source: 'apps/workers/src/selfhost/accountDeletionSweep.ts',
+      symbol: 'registerAccountDeletionSweep',
+      fingerprint: 'd47912b4a94290136beeaa4844ae281be958dd0985d89d5eb766e6cae67971e6',
     }
   ),
   wired(

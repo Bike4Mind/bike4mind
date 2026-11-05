@@ -77,6 +77,62 @@ describe('GrantPackagesTab', () => {
     expect(screen.getByTestId('grant-package-row-p3')).toHaveTextContent('2 / 5');
   });
 
+  const listOf = (rows: unknown[]) =>
+    fetchGrantPackages.mockResolvedValue({
+      data: rows,
+      meta: { currentPage: 1, totalPages: 1, total: rows.length },
+      reasonPolicy: { singleGrantCredits: 50_000, dailyTotalCredits: 200_000 },
+    });
+  const usage = { codes: 3, activeCodes: 2, nextCodeExpiry: null, partnerDomains: 2, enabledPartnerDomains: 1 };
+
+  it('asks the list for usage', async () => {
+    renderTab();
+    await screen.findByTestId('grant-package-row-p1');
+    expect(fetchGrantPackages).toHaveBeenCalledWith({ page: 1, limit: 25, usage: true });
+  });
+
+  it('shows linked codes, partner domains and the next code expiry', async () => {
+    const expiry = '2026-07-01T12:00:00.000Z';
+    listOf([
+      { ...row, usage: { ...usage, nextCodeExpiry: expiry } },
+      { ...row, id: 'p2', usage },
+    ]);
+    renderTab();
+    expect(await screen.findByTestId('grant-package-codes-p1')).toHaveTextContent('2 active / 3');
+    expect(screen.getByTestId('grant-package-domains-p1')).toHaveTextContent('1');
+    expect(screen.getByTestId('grant-package-next-expiry-p1')).toHaveTextContent(
+      new Date(expiry).toLocaleDateString('en-US')
+    );
+    expect(screen.getByTestId('grant-package-next-expiry-p2')).toHaveTextContent('-');
+  });
+
+  it.each([
+    ['total cap reached', { totalCap: 1, redeemedTotal: 1 }, 'Cap reached'],
+    ['total cap of 0', { totalCap: 0, redeemedTotal: 0, redeemedToday: 0 }, 'Cap reached'],
+    ['daily cap reached', { totalCap: 10, dailyCap: 1, redeemedTotal: 1, redeemedToday: 1 }, 'Daily cap reached'],
+    ['both reached, total wins', { totalCap: 1, dailyCap: 1, redeemedTotal: 1, redeemedToday: 1 }, 'Cap reached'],
+  ])('flags %s on the row', async (_name, over, label) => {
+    listOf([{ ...row, ...over }]);
+    renderTab();
+    expect(await screen.findByTestId('grant-package-cap-reached-p1')).toHaveTextContent(new RegExp(`^${label}$`));
+  });
+
+  it.each([
+    ['under the caps', { totalCap: 5, dailyCap: 2, redeemedTotal: 1, redeemedToday: 1 }],
+    ['no daily cap, many today', { totalCap: 50, dailyCap: null, redeemedTotal: 9, redeemedToday: 9 }],
+  ])('shows no cap chip %s', async (_name, over) => {
+    listOf([{ ...row, ...over }]);
+    renderTab();
+    await screen.findByTestId('grant-package-row-p1');
+    expect(screen.queryByTestId('grant-package-cap-reached-p1')).toBeNull();
+  });
+
+  it('opens the edit form from the row', async () => {
+    renderTab();
+    fireEvent.click(await screen.findByTestId('grant-package-edit-btn-p1'));
+    expect(screen.getByTestId('grant-package-name-input')).toHaveValue('Launch');
+  });
+
   it('disables Create while the list is loading', async () => {
     fetchGrantPackages.mockReturnValue(new Promise(() => undefined));
     renderTab();

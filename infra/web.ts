@@ -29,6 +29,7 @@ import {
 } from './emailIngestion';
 import { eventBus } from './eventBus';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import {
   fabFileChunkQueue,
@@ -42,6 +43,7 @@ import {
   slackExportQueue,
   githubWebhookQueue,
   questExportQueue,
+  accountDataExportQueue,
   publishThumbnailQueue,
   publishThumbnailQueueDLQ,
   dataLakeCleanupQueue,
@@ -85,6 +87,7 @@ import {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  accountDataExportQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueue,
   tavernHeartbeatQueueDLQ,
@@ -140,6 +143,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'github-webhook': githubWebhookQueueDLQ.url,
     'webhook-delivery': webhookDeliveryQueueDLQ.url,
     'quest-export': questExportQueueDLQ.url,
+    'account-data-export': accountDataExportQueueDLQ.url,
     'liveops-triage': liveOpsTriageQueueDLQ.url,
     'email-ingestion': emailIngestionQueueDLQ.url,
     'email-analysis': emailAnalysisQueueDLQ.url,
@@ -202,6 +206,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     slackExportQueue: slackExportQueue.url,
     githubWebhookQueue: githubWebhookQueue.url,
     questExportQueue: questExportQueue.url,
+    accountDataExportQueue: accountDataExportQueue.url,
     whatsNewHighlightsQueue: whatsNewHighlightsQueue.url,
     whatsNewGenerationQueue: whatsNewGenerationQueue.url,
     liveOpsTriageQueue: liveOpsTriageQueue.url,
@@ -265,6 +270,7 @@ export const web = new sst.aws.Nextjs(
       chatCompletion,
       imageProcessor,
       mcpHandler,
+      remoteMcpHandler,
       fabFileBucket,
       generatedImagesBucket,
       appFilesBucket,

@@ -102,13 +102,12 @@ import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
 import { forgetLocalContexts, OllamaLocal } from './OllamaLocal';
 import { registerModelServersIpc } from '../modelServers/ipc';
-import { LocalModels } from '../modelServers/LocalModels';
+import { LocalModels, optionCatalogSampling, type CatalogSamplingHook } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
-import type { CatalogSampling } from '@shared/generation';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -389,8 +388,8 @@ export function registerChat(
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
     pinnedProjectors?(): ReadonlyMap<string, number>;
-    /** The curated family sampling for an installed Ollama model; see ModelHubService.catalogSampling. */
-    catalogSampling?(ollamaName: string): CatalogSampling | undefined;
+    /** The curated family sampling for an installed local model; see ModelHubService.catalogSampling. */
+    catalogSampling?: CatalogSamplingHook;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
@@ -521,8 +520,8 @@ export function registerChat(
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing),
     modelServers,
-    // Matched by name on every server; requestGeneration keeps each server to the fields it takes.
-    option => hooks.catalogSampling?.(option.name)
+    // Matched on every server; requestGeneration keeps each server to the fields it takes.
+    optionCatalogSampling(hooks.catalogSampling)
   );
   const models = new ModelCatalog(
     {
@@ -1075,6 +1074,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => service.queuedMessages(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
     service.cancelQueued(sessionId, queuedId)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatGetHeldRelays, (_event, sessionId: string) => service.heldRelaysFor(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatResolveHeldRelay, (_event, sessionId: string, heldId: string, deliver: boolean) =>
+    service.resolveHeldRelay(sessionId, heldId, deliver === true)
   );
   ipcMain.handle(IPC_CHANNELS.chatSendQueuedNow, (_event, sessionId: string, queuedId: string) =>
     service.sendQueuedNow(sessionId, queuedId)

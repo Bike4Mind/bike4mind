@@ -1,5 +1,5 @@
 import type { INetworkMeta } from '@bike4mind/common';
-import { ja4FingerprintSchema } from '@bike4mind/common';
+import { ForbiddenError, ja4FingerprintSchema } from '@bike4mind/common';
 import { authEventRepository, User } from '@bike4mind/database';
 import { isDeployedStage } from '@bike4mind/server-utils/utils/config';
 import { getClientIp, getClientNetwork, type ClientIpRequest } from '@bike4mind/server-utils/utils/ip';
@@ -7,6 +7,7 @@ import { CLOUDFRONT_VIEWER_JA4_HEADER } from '@bike4mind/server-utils/utils/trus
 import { DATACENTER_ASNS } from './datacenterAsns';
 import { requestRiskEvidenceRefresh } from './riskEvidence';
 import { alertSignupNetworkBurst } from './signupNetworkAlerts';
+import { withAccountNotPurging } from './withAccountNotPurging';
 
 // x-amzn-waf- + the InsertHeaders name of the forward-anon-ip-label / forward-bot-signal-label rules
 // in infra/waf/bike4mind-api-protection-dev.json.
@@ -93,14 +94,17 @@ export async function recordSignupNetwork(opts: {
 /** Log a login AuthEvent. Never throws: a lost row must not fail the sign-in. */
 export async function recordLoginEvent(opts: { req: NetworkRequest; userId: string; method: string }): Promise<void> {
   try {
-    await authEventRepository.record({
-      ...readNetworkMeta(opts.req),
-      userId: opts.userId,
-      type: 'login',
-      method: opts.method,
-    });
+    await withAccountNotPurging(opts.userId, () =>
+      authEventRepository.record({
+        ...readNetworkMeta(opts.req),
+        userId: opts.userId,
+        type: 'login',
+        method: opts.method,
+      })
+    );
   } catch (err) {
     warnNotRecorded('login event', err);
+    if (err instanceof ForbiddenError) return;
   }
   await requestRiskEvidenceRefreshSafely(opts.userId, 'login');
 }

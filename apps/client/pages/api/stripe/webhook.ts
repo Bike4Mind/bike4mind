@@ -42,6 +42,7 @@ import {
   forfeitSignupUnlock,
 } from '@server/credits/paymentUnlockForfeit';
 import { clawbackRefundCredits } from '@server/billing/refundClawback';
+import { reversePurchaseStanding } from '@server/billing/purchaseReversal';
 import { respondToEarlyFraudWarning } from '@server/billing/earlyFraudWarning';
 import { propagateAccountRisk } from '@server/billing/linkedAccounts';
 import { notifyCanceledForNonPayment, notifyPaymentFailed } from '@server/billing/paymentFailureNotice';
@@ -139,6 +140,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
               currency: intent.currency,
               outcome: 'succeeded',
               chargeRef: intent.latest_charge,
+              livemode: intent.livemode,
             },
             req.logger
           );
@@ -254,6 +256,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           currency: intent.currency,
           outcome: 'succeeded',
           chargeRef: intent.latest_charge,
+          livemode: intent.livemode,
         },
         req.logger
       );
@@ -603,6 +606,13 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
     case 'charge.dispute.closed': {
       const dispute = event.data.object;
+      const paymentIntentId =
+        typeof dispute.payment_intent === 'string' ? dispute.payment_intent : dispute.payment_intent?.id;
+
+      // A lost dispute reverses the purchase; disputePending stays set for manual review.
+      if (dispute.status === 'lost' && paymentIntentId) {
+        await reversePurchaseStanding({ paymentIntentId, reason: 'dispute_lost' }, req.logger);
+      }
 
       // Only act when the merchant wins - lost disputes stay flagged pending manual review
       if (dispute.status !== 'won') {
@@ -612,8 +622,6 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
 
       // Find the user via payment intent -> credit transaction, same lookup as charge.dispute.created
       let user = null;
-      const paymentIntentId =
-        typeof dispute.payment_intent === 'string' ? dispute.payment_intent : dispute.payment_intent?.id;
 
       if (paymentIntentId) {
         const originalTx = await creditTransactionRepository.findByPaymentIntentId(paymentIntentId);
@@ -664,6 +672,16 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           });
         } catch (err: unknown) {
           reversalError = err;
+        }
+      }
+
+      // Also before the refund-list guard. `refunded` is true only once the whole charge is refunded.
+      let standingError: unknown;
+      if (refundPaymentIntentId && charge.refunded === true) {
+        try {
+          await reversePurchaseStanding({ paymentIntentId: refundPaymentIntentId, reason: 'refunded' }, req.logger);
+        } catch (err: unknown) {
+          standingError = err;
         }
       }
 
@@ -718,7 +736,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       } catch (err: unknown) {
         payerError = err;
       }
-      if (payerError ?? reversalError) throw payerError ?? reversalError;
+      const refundError = payerError ?? reversalError ?? standingError;
+      if (refundError) throw refundError;
       break;
     }
 
@@ -810,6 +829,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             currency: intent.currency,
             outcome: 'failed',
             chargeRef: failedCharge ?? intent.last_payment_error?.charge,
+            livemode: intent.livemode,
             fallbackCardFingerprint: intent.last_payment_error?.payment_method?.card?.fingerprint ?? null,
           },
           req.logger

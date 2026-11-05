@@ -124,4 +124,15 @@ describe('AuditEntryDrawer', () => {
     expect(row.getAttribute('role')).toBeNull();
     expect(row.getAttribute('tabindex')).toBeNull();
   });
+
+  it('renders the review section only when given one', () => {
+    const { rerender } = render(<AuditEntryDrawer entry={makeAuditEntry()} onClose={vi.fn()} />, {
+      wrapper: TestWrapper,
+    });
+    expect(screen.queryByTestId('review-slot')).toBeNull();
+    rerender(
+      <AuditEntryDrawer entry={makeAuditEntry()} onClose={vi.fn()} reviewSection={<div data-testid="review-slot" />} />
+    );
+    expect(screen.getByTestId('review-slot')).toBeTruthy();
+  });
 });

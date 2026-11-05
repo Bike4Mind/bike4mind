@@ -17,8 +17,12 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown)
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
 
 const mockAdminRevenue = vi.hoisted(() => vi.fn());
+const mockAdminRevenueTrend = vi.hoisted(() => vi.fn());
 const mockStripeConfigured = vi.hoisted(() => vi.fn());
-vi.mock('@server/admin/revenue/adminRevenue', () => ({ adminRevenue: mockAdminRevenue }));
+vi.mock('@server/admin/revenue/adminRevenue', () => ({
+  adminRevenue: mockAdminRevenue,
+  adminRevenueTrend: mockAdminRevenueTrend,
+}));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({ isStripeConfigured: mockStripeConfigured }));
 
 import handler from '../revenue';
@@ -66,6 +70,20 @@ describe('GET /api/admin/revenue', () => {
     expect(mockAdminRevenue).toHaveBeenCalledWith('30d');
   });
 
+  it('returns only the snapshot trend for part=trend, without computing the live totals', async () => {
+    const trend = [{ date: '2026-10-29', mrr: 1_000, payingCount: 1 }];
+    mockAdminRevenueTrend.mockResolvedValue(trend);
+    const res = await call({ part: 'trend' });
+    expect(res._getJSONData()).toEqual({ stripeConfigured: true, trend });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(mockAdminRevenue).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown part with 400', async () => {
+    expect((await call({ part: 'everything' }))._getStatusCode()).toBe(400);
+    expect(mockAdminRevenueTrend).not.toHaveBeenCalled();
+  });
+
   it('rejects an unknown range with 400', async () => {
     expect((await call({ range: '7d' }))._getStatusCode()).toBe(400);
     expect(mockAdminRevenue).not.toHaveBeenCalled();
@@ -76,5 +94,7 @@ describe('GET /api/admin/revenue', () => {
     const res = await call({});
     expect(res._getJSONData()).toEqual({ stripeConfigured: false });
     expect(mockAdminRevenue).not.toHaveBeenCalled();
+    expect((await call({ part: 'trend' }))._getJSONData()).toEqual({ stripeConfigured: false });
+    expect(mockAdminRevenueTrend).not.toHaveBeenCalled();
   });
 });

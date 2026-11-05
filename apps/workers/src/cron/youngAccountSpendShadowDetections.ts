@@ -89,6 +89,7 @@ export function buildYoungAccountSpendShadowDetection(input: {
     ],
     windowMinutes,
     group: null,
+    payment: null,
     // The window end, not the clock, so a retried or redriven run records the same detection.
     detectedAt: window.end,
   };

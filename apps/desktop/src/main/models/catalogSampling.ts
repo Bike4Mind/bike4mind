@@ -1,6 +1,7 @@
 import type { HubFamily, HubManifest } from '@bike4mind/common';
-import { curatedBuildForRef } from '@bike4mind/local-models';
+import { curatedBuildForInstalled } from '@bike4mind/local-models';
 import { normalizeGeneration, type CatalogSampling, type GenerationSettings } from '@shared/generation';
+import { modelfileParameter } from '../chat/modelControls';
 
 type FamilySampling = NonNullable<HubFamily['sampling']['thinking']>;
 
@@ -16,14 +17,40 @@ function toGeneration(sampling: FamilySampling | undefined): GenerationSettings 
   });
 }
 
+const SAMPLING_PARAMETERS = [
+  'temperature',
+  'top_p',
+  'top_k',
+  'min_p',
+  'repeat_penalty',
+  'presence_penalty',
+] as const satisfies readonly (keyof FamilySampling)[];
+
+/** True when the Modelfile sets a sampling value the family's thinking sampling does not, so the model's own wins. */
+function setsOtherSampling(parameters: string | undefined, family: HubFamily): boolean {
+  return SAMPLING_PARAMETERS.some(key => {
+    const set = modelfileParameter(parameters, key);
+    return set !== undefined && set !== family.sampling.thinking?.[key];
+  });
+}
+
 /**
- * The family sampling for the reviewed build Ollama lists as `ollamaName`, under any spelling of its
- * pull ref; undefined for any other model, or a family that states none.
+ * The family sampling for the curated build a server lists as `name` with weights blob `modelBlob`, matched as
+ * curatedBuildForInstalled does (a pull ref seeds even when the weights differ from the pin); undefined for any
+ * other model, or a family that states none. A model keeps its own sampling PARAMETERs over the seed when it sets
+ * any that differ, whichever way it was matched.
  */
-export function catalogSampling(manifest: HubManifest, ollamaName: string): CatalogSampling | undefined {
-  const reviewed = curatedBuildForRef(manifest, ollamaName);
+export function catalogSampling(
+  manifest: HubManifest,
+  name: string,
+  modelBlob?: string,
+  parameters?: string,
+  hasAdapter?: boolean
+): CatalogSampling | undefined {
+  const reviewed = curatedBuildForInstalled(manifest, { name, modelBlob, hasAdapter });
   const family = reviewed ? manifest.families[reviewed.entry.family] : undefined;
-  if (!family) return undefined;
+  if (!reviewed || !family) return undefined;
+  if (setsOtherSampling(parameters, family)) return undefined;
   const thinking = toGeneration(family.sampling.thinking);
   const nonThinking = toGeneration(family.sampling.nonThinking);
   if (!thinking && !nonThinking) return undefined;
