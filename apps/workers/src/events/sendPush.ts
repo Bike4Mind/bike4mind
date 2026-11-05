@@ -161,7 +161,13 @@ export async function deliverPush(
           return;
         }
         if (isUnregistered(response)) {
-          if (await deps.tokens.removeByToken(token, { sid })) pruned++;
+          try {
+            if (await deps.tokens.removeByToken(token, { sid })) pruned++;
+          } catch (pruneError) {
+            logger.warn('[Push] failed to prune an unregistered device token', {
+              error: pruneError instanceof Error ? pruneError.message : String(pruneError),
+            });
+          }
           return;
         }
         if (response.reason === 'BadDeviceToken') {

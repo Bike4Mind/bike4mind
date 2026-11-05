@@ -333,6 +333,23 @@ describe('deliverPush', () => {
     await expect(deliverPush(EVENT, partial.deps, logger)).resolves.toMatchObject({ delivered: 1, failed: 1 });
   });
 
+  it('counts a failed prune as one failed device without throwing or retrying', async () => {
+    const { deps } = makeDeps([{ token: 'dead', environment: 'production' }], {
+      respond: () => ({ status: 410, reason: 'Unregistered' }),
+    });
+    vi.mocked(deps.tokens.removeByToken).mockRejectedValueOnce(new Error('db down'));
+
+    await expect(deliverPush(EVENT, deps, logger)).resolves.toEqual({
+      status: 'sent',
+      failed: 1,
+      pruned: 0,
+      delivered: 0,
+    });
+    expect(logger.warn).toHaveBeenCalledWith('[Push] failed to prune an unregistered device token', {
+      error: 'db down',
+    });
+  });
+
   it.each([
     ['an unregistered token', { status: 410, reason: 'Unregistered' }],
     ['a config error', { status: 400, reason: 'DeviceTokenNotForTopic' }],
