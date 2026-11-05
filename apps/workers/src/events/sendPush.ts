@@ -16,7 +16,13 @@ import { Logger } from '@bike4mind/observability';
 import { withEventContext } from '@workers/utils/eventContext';
 import { NotificationEvents } from '@server/utils/eventBus';
 import { truncateForPush } from '@server/utils/pushNotifications';
-import { apnsSigningKeyError, createHttp2ApnsTransport, readApnsConfig, type ApnsTransport } from './sendPush.apns';
+import {
+  apnsSigningKeyError,
+  createHttp2ApnsTransport,
+  readApnsConfig,
+  type ApnsConfig,
+  type ApnsTransport,
+} from './sendPush.apns';
 
 /**
  * `notification.push` consumer: delivers to the user's device tokens over APNs.
@@ -265,29 +271,44 @@ export async function loadPushRecipient(userId: string): Promise<PushRecipient |
   };
 }
 
+// Held across warm invocations: Apple asks providers to keep APNs connections open.
+let shared: { config: ApnsConfig; transport: ApnsTransport } | undefined;
+
+function transportFor(config: ApnsConfig): ApnsTransport {
+  const held = shared;
+  if (
+    held &&
+    held.config.keyId === config.keyId &&
+    held.config.teamId === config.teamId &&
+    held.config.key === config.key &&
+    held.config.topic === config.topic
+  ) {
+    return held.transport;
+  }
+  held?.transport.close();
+  shared = { config, transport: createHttp2ApnsTransport(config) };
+  return shared.transport;
+}
+
 const handleWithContext = withEventContext(async (event, logger) => {
   const payload = NotificationEvents.Push.schema.parse(event.properties);
   logger.updateMetadata({ handler: 'sendPush', userId: payload.userId, category: payload.category });
 
   const config = readApnsConfig();
   if (!config) return;
-  const transport = createHttp2ApnsTransport(config);
-  try {
-    await deliverPush(
-      payload,
-      {
-        tokens: pushTokenRepository,
-        sessions: authSessionRepository,
-        loadRecipient: loadPushRecipient,
-        transport,
-        topic: config.topic,
-        appUrl: process.env.APP_URL,
-      },
-      logger
-    );
-  } finally {
-    transport.close();
-  }
+  const transport = transportFor(config);
+  await deliverPush(
+    payload,
+    {
+      tokens: pushTokenRepository,
+      sessions: authSessionRepository,
+      loadRecipient: loadPushRecipient,
+      transport,
+      topic: config.topic,
+      appUrl: process.env.APP_URL,
+    },
+    logger
+  );
 });
 
 /**

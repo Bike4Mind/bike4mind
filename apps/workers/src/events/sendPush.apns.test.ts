@@ -181,6 +181,32 @@ describe('createHttp2ApnsTransport', () => {
     expect(sessions.get(APNS_HOSTS.production)!.close).toHaveBeenCalled();
   });
 
+  it('opens a new session once the held one has been idle past the window', async () => {
+    let nowMs = Date.UTC(2029, 0, 1);
+    const transport = createHttp2ApnsTransport(CONFIG, () => nowMs);
+    const request = { environment: 'production' as const, headers: {}, payload: '{}' };
+    await transport.send({ ...request, deviceToken: 'a' });
+    const first = sessions.get(APNS_HOSTS.production)!;
+
+    nowMs += 3 * 60_000;
+    await transport.send({ ...request, deviceToken: 'b' });
+    expect(h.connect).toHaveBeenCalledTimes(1);
+
+    nowMs += 4 * 60_000 + 1;
+    await transport.send({ ...request, deviceToken: 'c' });
+    expect(h.connect).toHaveBeenCalledTimes(2);
+    expect(first.close).toHaveBeenCalled();
+  });
+
+  it('opens a new session after the held one emits close', async () => {
+    const transport = createHttp2ApnsTransport(CONFIG);
+    const request = { environment: 'production' as const, headers: {}, payload: '{}' };
+    await transport.send({ ...request, deviceToken: 'a' });
+    sessions.get(APNS_HOSTS.production)!.emit('close');
+    await transport.send({ ...request, deviceToken: 'b' });
+    expect(h.connect).toHaveBeenCalledTimes(2);
+  });
+
   it('reuses the provider token until 45 minutes and signs a fresh one after', async () => {
     // Far from Date.now() so a token cached by an earlier test cannot match.
     let nowMs = Date.UTC(2030, 0, 1);

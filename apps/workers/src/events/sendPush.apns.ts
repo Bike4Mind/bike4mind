@@ -88,18 +88,34 @@ export type ApnsTransport = {
 };
 
 const REQUEST_TIMEOUT_MS = 10_000;
+// An AWS NAT gateway silently drops connections idle for 350s, which a frozen Lambda cannot observe.
+const SESSION_IDLE_MS = 4 * 60_000;
 
-/** One HTTP/2 session per gateway host, opened on first use and held until close(). */
-export function createHttp2ApnsTransport(config: ApnsConfig, now: () => number = Date.now): ApnsTransport {
+/** One HTTP/2 session per gateway host, opened on first use and held until close() or idle expiry. */
+export function createHttp2ApnsTransport(
+  config: ApnsConfig,
+  now: () => number = Date.now
+): ApnsTransport {
   const sessions = new Map<string, http2.ClientHttp2Session>();
+  const lastUsedMs = new Map<string, number>();
 
   const sessionFor = (host: string) => {
     const existing = sessions.get(host);
-    if (existing && !existing.closed && !existing.destroyed) return existing;
+    const idle = now() - (lastUsedMs.get(host) ?? 0) > SESSION_IDLE_MS;
+    if (existing && !existing.closed && !existing.destroyed && !idle) {
+      lastUsedMs.set(host, now());
+      return existing;
+    }
+    if (existing && !existing.closed && !existing.destroyed) existing.close();
     const session = http2.connect(host);
+    const forget = () => {
+      if (sessions.get(host) === session) sessions.delete(host);
+    };
     // A session-level error also fails each in-flight stream, which is where it is reported.
-    session.on('error', () => sessions.delete(host));
+    session.on('error', forget);
+    session.on('close', forget);
     sessions.set(host, session);
+    lastUsedMs.set(host, now());
     return session;
   };
 
