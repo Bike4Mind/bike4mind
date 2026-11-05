@@ -62,7 +62,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { GenerationSettings } from './generation';
-import type { ModelLoadOffer, ModelSettings } from './modelSettings';
+import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
@@ -173,6 +173,7 @@ export const IPC_CHANNELS = {
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
+  chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
   chatSetModelSettings: 'chat:set-model-settings',
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
@@ -767,6 +768,8 @@ export interface DesktopApi {
     setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
     /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
     getModelSettings(modelId: string): Promise<ModelSettings | null>;
+    /** Values the settings file holds for this model that this version keeps but does not use. Null for an id that is not one. */
+    getUnsupportedModelSettings(modelId: string): Promise<UnsupportedModelSetting[] | null>;
     /** Replace a device-side model's defaults; `{}` clears them. Null when the id or set is not valid. */
     setModelSettings(modelId: string, settings: ModelSettings): Promise<ModelSettings | null>;
     /**

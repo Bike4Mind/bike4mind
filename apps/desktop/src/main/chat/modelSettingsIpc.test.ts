@@ -77,6 +77,21 @@ describe('registerModelSettingsIpc', () => {
     expect(await readFile(path, 'utf8')).toBe('[]');
   });
 
+  it('lists the values a model holds that this version keeps but does not use', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-model-settings-ipc-'));
+    roots.push(directory);
+    const path = join(directory, 'model-settings.json');
+    await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'ultra' } } }), 'utf8');
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const handle = (channel: string, listener: (...args: never[]) => unknown) =>
+      void handlers.set(channel, listener as never);
+    registerModelSettingsIpc({ handle }, new ModelSettingsStore(path));
+    const unsupported = (id: unknown) =>
+      handlers.get(IPC_CHANNELS.chatGetUnsupportedModelSettings)?.({ sender: {} }, id);
+    expect(await unsupported(QWEN)).toEqual([{ field: 'effort', value: 'ultra' }]);
+    expect(await unsupported('gpt-5')).toBeNull();
+  });
+
   it.each([42, 'gpt-5', ''])('answers null for the model id %j', async id => {
     const { get, set } = await setup();
     expect(await get(id)).toBeNull();

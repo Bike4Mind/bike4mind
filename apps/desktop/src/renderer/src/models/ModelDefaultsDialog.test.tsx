@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatModelOption } from '@shared/chat';
-import type { ModelLoadOffer, ModelSettings } from '@shared/modelSettings';
+import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from '@shared/modelSettings';
 import type { LoadedModelState } from '@shared/models';
 import { desktopTheme } from '../theme';
 import { contextSizeLabel } from '@shared/localContextSetting';
@@ -72,6 +72,7 @@ const OLLAMA_OFFER: ModelLoadOffer = {
 let root: Root;
 let host: HTMLElement;
 let stored: ModelSettings;
+let unsupported: UnsupportedModelSetting[];
 let offer: ModelLoadOffer;
 let loadedState: LoadedModelState;
 const setModelSettings = vi.fn<(modelId: string, settings: ModelSettings) => Promise<ModelSettings | null>>();
@@ -79,6 +80,7 @@ const getModelLoadOffer = vi.fn<(modelId: string, draftTokens?: number) => Promi
 
 beforeEach(() => {
   stored = {};
+  unsupported = [];
   offer = {};
   loadedState = { kind: 'unloaded' };
   setModelSettings.mockReset();
@@ -86,7 +88,12 @@ beforeEach(() => {
   getModelLoadOffer.mockReset();
   getModelLoadOffer.mockImplementation(async () => offer);
   (window as unknown as { b4m: unknown }).b4m = {
-    chat: { getModelSettings: vi.fn(async () => stored), setModelSettings, getModelLoadOffer },
+    chat: {
+      getModelSettings: vi.fn(async () => stored),
+      getUnsupportedModelSettings: vi.fn(async () => unsupported),
+      setModelSettings,
+      getModelLoadOffer,
+    },
     models: { getLoadedState: vi.fn(async () => loadedState) },
   };
   host = document.createElement('div');
@@ -208,7 +215,7 @@ describe('ModelDefaultsDialog', () => {
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.6 } });
   });
 
-  it('saves a thinking level only for a model that lists levels', async () => {
+  it('saves a stored thinking level back as it was, on a model that lists levels or not', async () => {
     stored = { effort: 'high' };
     await render(GPT_OSS);
     await click('model-defaults-save-btn');
@@ -216,7 +223,43 @@ describe('ModelDefaultsDialog', () => {
 
     await render(QWEN);
     await click('model-defaults-save-btn');
-    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, {});
+    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, { effort: 'high' });
+  });
+
+  it('saves a hidden topK and an unlisted xhigh level back as stored when another field changes', async () => {
+    stored = { generation: { temperature: 0.6, topK: 30 }, effort: 'xhigh' };
+    await render(GPT_OSS);
+    await fill('temperature', '0.7');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(GPT_OSS.id, {
+      generation: { temperature: 0.7, topK: 30 },
+      effort: 'xhigh',
+    });
+  });
+
+  it('saves an untouched stored value past what the control allows unclamped', async () => {
+    stored = { generation: { temperature: 0.6, topK: 500 } };
+    await render(QWEN);
+    expect(input('topK').value).toBe('500');
+    await fill('temperature', '0.7');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.7, topK: 500 } });
+  });
+
+  it('clears the fields it does not draw too on Clear all', async () => {
+    stored = { generation: { topK: 30 }, effort: 'xhigh' };
+    await render(GPT_OSS);
+    await click('model-defaults-clear-btn');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(GPT_OSS.id, {});
+  });
+
+  it('names a stored value this version keeps but does not use', async () => {
+    unsupported = [{ field: 'effort', value: 'ultra' }];
+    await render(GPT_OSS);
+    expect(
+      [...document.querySelectorAll('[data-testid="model-defaults-unsupported-note"]')].map(n => n.textContent)
+    ).toEqual(['effort "ultra" is kept in the settings file but not used by this version of Desktop.']);
   });
 
   it('clears every field, and saving that clears the stored defaults', async () => {

@@ -147,22 +147,80 @@ describe('ModelSettingsStore', () => {
 
   it.each([
     [{ generation: { temperature: '0.6', topK: 20 } }, 'has an invalid generation.temperature for'],
-    [{ effort: 'wild' }, 'has an invalid effort for'],
+    [{ effort: 3 }, 'has an invalid effort for'],
     ['high', 'has an entry for'],
   ])(
-    'rejects a hand-edited known value %j by file, model and field, and never writes over it',
+    'rejects a hand-edited known value of the wrong type %j by file, model and field, and never writes over it',
     async (entry, problem) => {
       const path = await fileIn();
       const content = JSON.stringify({ models: { [GEMMA]: { effort: 'low' }, [QWEN]: entry } });
       await writeFile(path, content, 'utf8');
       const store = new ModelSettingsStore(path);
       await expect(store.get(GEMMA)).rejects.toThrow(
-        `The model settings file ${path} ${problem} ${QWEN}${typeof entry === 'string' ? ' that is not a set of settings' : ''}. Fix it, or delete it`
+        `The model settings file ${path} ${problem} "${QWEN}"${typeof entry === 'string' ? ' that is not a set of settings' : ''}. Fix it, or delete it`
       );
       await expect(store.set(GEMMA, { effort: 'high' })).rejects.toThrow(ModelSettingsFileError);
       expect(await readFile(path, 'utf8')).toBe(content);
     }
   );
+
+  it('quotes a model id in the error on one line and cuts a long one', async () => {
+    const path = await fileIn();
+    const id = `local:ollama:a\nb${'x'.repeat(300)}`;
+    await writeFile(path, JSON.stringify({ models: { [id]: { effort: 3 } } }), 'utf8');
+    const error = await new ModelSettingsStore(path).get(QWEN).catch((reason: Error) => reason);
+    expect((error as Error).message).toContain('has an invalid effort for "local:ollama:a\\nbxxx');
+    expect((error as Error).message).toContain('xxx.... Fix it');
+    expect((error as Error).message).not.toContain('\n');
+  });
+
+  it('keeps a value of the right type beyond this version, unused, through saves to it and to others', async () => {
+    const path = await fileIn();
+    await writeFile(
+      path,
+      JSON.stringify({ models: { [QWEN]: { effort: 'ultra', keepAlive: 3600, generation: { topK: 1.5 } } } }),
+      'utf8'
+    );
+    const warn = vi.fn();
+    const store = new ModelSettingsStore(path, warn);
+    expect(await store.get(QWEN)).toEqual({ keepAlive: 3600 });
+    expect(await store.unsupported(QWEN)).toEqual([
+      { field: 'generation.topK', value: 1.5 },
+      { field: 'effort', value: 'ultra' },
+    ]);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('holds effort "ultra" for'));
+    await store.set(GEMMA, { effort: 'low' });
+    await store.set(QWEN, { keepAlive: 300, generation: { temperature: 0.5 } });
+    expect(JSON.parse(await readFile(path, 'utf8')).models[QWEN]).toEqual({
+      generation: { topK: 1.5, temperature: 0.5 },
+      effort: 'ultra',
+      keepAlive: 300,
+    });
+    expect(await new ModelSettingsStore(path).unsupported(QWEN)).toHaveLength(2);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the file again before a save when it changed by hand since it was read', async () => {
+    const path = await fileIn();
+    await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'low' } } }), 'utf8');
+    const store = new ModelSettingsStore(path);
+    expect(await store.get(QWEN)).toEqual({ effort: 'low' });
+    await writeFile(
+      path,
+      JSON.stringify({ models: { [QWEN]: { effort: 'high' }, [GEMMA]: { keepAlive: 300 } } }),
+      'utf8'
+    );
+    await store.set(GEMMA, { keepAlive: 3600 });
+    expect(JSON.parse(await readFile(path, 'utf8')).models).toEqual({
+      [QWEN]: { effort: 'high' },
+      [GEMMA]: { keepAlive: 3600 },
+    });
+    const broken = '{"models": {';
+    await writeFile(path, broken, 'utf8');
+    await expect(store.set(QWEN, { effort: 'medium' })).rejects.toThrow(ModelSettingsFileError);
+    expect(await readFile(path, 'utf8')).toBe(broken);
+  });
 
   it('keeps fields and entries it does not know when it rewrites the file for another model', async () => {
     const path = await fileIn();

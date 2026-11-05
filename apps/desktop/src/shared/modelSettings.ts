@@ -5,7 +5,7 @@
  */
 
 import { parseLocalModelId, REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from './chat';
-import { GENERATION_FIELDS, normalizeGeneration, parseGenerationInput, type GenerationSettings } from './generation';
+import { GENERATION_FIELDS, parseGenerationInput, type GenerationField, type GenerationSettings } from './generation';
 import { parseModelContextSetting, type LocalContextSize, type ModelContextSetting } from './localContextSetting';
 import type { QuantizedKvCacheType } from './modelServers';
 
@@ -135,88 +135,155 @@ export function parseModelSettingsInput(raw: unknown): ModelSettings | null {
 const STORED_FIELDS: ReadonlySet<string> = new Set(['generation', 'effort', 'context', 'draftTokens', 'keepAlive']);
 const GENERATION_FIELD_NAMES: ReadonlySet<string> = new Set(GENERATION_FIELDS);
 
+const CONTEXT_FIELDS: ReadonlySet<string> = new Set(['mode', 'tokens', 'maxTokens']);
+
+/** A value as JSON for a message or a log line, cut to `max` characters. */
+export function quotedForMessage(value: unknown, max = 120): string {
+  const text = JSON.stringify(value) ?? String(value);
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
+}
+
+/** A known field holding a value of the right type that this version does not support, such as a newer one's. */
+export interface UnsupportedModelSetting {
+  /** `effort`, `context`, `generation.topK`, ... */
+  field: string;
+  value: unknown;
+}
+
 /** The settings file as read: what Desktop uses, plus every entry and top-level key as written. */
 export interface StoredModelSettings {
   settings: Map<string, ModelSettings>;
+  /** By model: values kept in the file but treated as unset. */
+  unsupported: Map<string, UnsupportedModelSetting[]>;
   /** Every entry by its key, including ones Desktop does not recognize, so a rewrite keeps them. */
   entries: Map<string, unknown>;
   /** The file's top-level keys besides `models`. */
   rest: Record<string, unknown>;
 }
 
-/** A recognized model whose entry, or one known field of it (`field`), holds a value Desktop cannot use. */
+/** A recognized model whose entry, or one known field of it (`field`), is of the wrong type or broken. */
 export interface InvalidModelSetting {
   modelId: string;
   field: string | null;
 }
 
 export function emptyStoredModelSettings(): StoredModelSettings {
-  return { settings: new Map(), entries: new Map(), rest: {} };
+  return { settings: new Map(), unsupported: new Map(), entries: new Map(), rest: {} };
 }
 
-/** One stored entry, read strictly: a known field with a bad value is named, unknown fields are left for the writer. */
-function parseStoredEntry(raw: unknown): { settings: ModelSettings } | { field: string | null } {
+/** A stored value: usable, of the right type but beyond this version, or of the wrong type. */
+type StoredRead<T> = { value: T } | 'unsupported' | 'broken';
+type StoredScalarField = 'effort' | 'context' | 'draftTokens' | 'keepAlive';
+
+function readGenerationField(field: GenerationField, value: unknown): StoredRead<number> {
+  if (typeof value !== 'number') return 'broken';
+  const parsed = parseGenerationInput({ [field]: value })?.[field];
+  return parsed === undefined ? 'unsupported' : { value: parsed };
+}
+
+function readStoredField(field: StoredScalarField, value: unknown): StoredRead<unknown> {
+  switch (field) {
+    case 'effort':
+      if (typeof value !== 'string') return 'broken';
+      return isModelEffort(value) ? { value } : 'unsupported';
+    case 'draftTokens':
+      if (typeof value !== 'number') return 'broken';
+      return isDraftTokens(value) ? { value } : 'unsupported';
+    case 'keepAlive':
+      if (typeof value !== 'number') return 'broken';
+      return isKeepAlive(value) ? { value } : 'unsupported';
+    case 'context': {
+      if (!isRecord(value) || typeof value.mode !== 'string') return 'broken';
+      if (value.mode === 'fixed' && typeof value.tokens !== 'number') return 'broken';
+      if (value.mode === 'auto' && value.maxTokens !== undefined && typeof value.maxTokens !== 'number')
+        return 'broken';
+      const context = parseModelContextSetting(value);
+      return context ? { value: context } : 'unsupported';
+    }
+  }
+}
+
+/** One stored entry: a known field of the wrong type is named; one beyond this version is listed and left unset. */
+function parseStoredEntry(
+  raw: unknown
+): { settings: ModelSettings; unsupported: UnsupportedModelSetting[] } | { field: string | null } {
   if (!isRecord(raw)) return { field: null };
   const settings: ModelSettings = {};
+  const unsupported: UnsupportedModelSetting[] = [];
   if (raw.generation !== undefined) {
     const stored = raw.generation;
     if (!isRecord(stored)) return { field: 'generation' };
+    const generation: GenerationSettings = {};
     for (const field of GENERATION_FIELDS) {
-      if (Object.hasOwn(stored, field) && !parseGenerationInput({ [field]: stored[field] }))
-        return { field: `generation.${field}` };
+      if (!Object.hasOwn(stored, field)) continue;
+      const read = readGenerationField(field, stored[field]);
+      if (read === 'broken') return { field: `generation.${field}` };
+      if (read === 'unsupported') unsupported.push({ field: `generation.${field}`, value: stored[field] });
+      else generation[field] = read.value;
     }
-    const generation = normalizeGeneration(stored);
-    if (generation) settings.generation = generation;
+    if (Object.keys(generation).length > 0) settings.generation = generation;
   }
-  if (raw.effort !== undefined) {
-    if (!isModelEffort(raw.effort)) return { field: 'effort' };
-    settings.effort = raw.effort;
+  for (const field of ['effort', 'context', 'draftTokens', 'keepAlive'] as const) {
+    if (raw[field] === undefined) continue;
+    const read = readStoredField(field, raw[field]);
+    if (read === 'broken') return { field };
+    if (read === 'unsupported') unsupported.push({ field, value: raw[field] });
+    else Object.assign(settings, { [field]: read.value });
   }
-  if (raw.context !== undefined) {
-    const context = parseModelContextSetting(raw.context);
-    if (!context) return { field: 'context' };
-    settings.context = context;
-  }
-  if (raw.draftTokens !== undefined) {
-    if (!isDraftTokens(raw.draftTokens)) return { field: 'draftTokens' };
-    settings.draftTokens = raw.draftTokens;
-  }
-  if (raw.keepAlive !== undefined) {
-    if (!isKeepAlive(raw.keepAlive)) return { field: 'keepAlive' };
-    settings.keepAlive = raw.keepAlive;
-  }
-  return { settings };
+  return { settings, unsupported };
 }
 
 /**
- * The file's settings by model, or the first recognized model holding a bad known value; null when it
- * is not a settings file at all. Unknown fields and unrecognized keys are kept in `entries`, never read.
+ * The file's settings by model, or the first recognized model holding a known field of the wrong type;
+ * null when it is not a settings file at all. Unknown fields and unrecognized keys are kept in `entries`.
  */
 export function parseModelSettingsFile(raw: unknown): StoredModelSettings | { invalid: InvalidModelSetting } | null {
   if (!isRecord(raw) || !isRecord(raw.models)) return null;
   const settings = new Map<string, ModelSettings>();
+  const unsupported = new Map<string, UnsupportedModelSetting[]>();
   const entries = new Map(Object.entries(raw.models));
   for (const [id, entry] of entries) {
     if (!isModelSettingsId(id)) continue;
     const parsed = parseStoredEntry(entry);
     if ('field' in parsed) return { invalid: { modelId: id, field: parsed.field } };
     if (!isEmptyModelSettings(parsed.settings)) settings.set(id, parsed.settings);
+    if (parsed.unsupported.length > 0) unsupported.set(id, parsed.unsupported);
   }
-  return { settings, entries, rest: Object.fromEntries(Object.entries(raw).filter(([key]) => key !== 'models')) };
+  const rest = Object.fromEntries(Object.entries(raw).filter(([key]) => key !== 'models'));
+  return { settings, unsupported, entries, rest };
 }
 
-/** The entry to write for `settings`, keeping what the stored entry held that Desktop does not know; undefined when nothing is left. */
+/**
+ * The entry to write for `settings`. What the stored entry held that this version does not know, or
+ * holds beyond what it supports, stays as written unless `settings` sets that field. Undefined when empty.
+ */
 export function storedModelEntry(previous: unknown, settings: ModelSettings): Record<string, unknown> | undefined {
   const stored = isRecord(previous) ? previous : {};
   const storedGeneration = isRecord(stored.generation) ? stored.generation : {};
+  const keptGeneration = Object.entries(storedGeneration).filter(([key, value]) => {
+    if (!GENERATION_FIELD_NAMES.has(key)) return true;
+    const field = key as GenerationField;
+    return settings.generation?.[field] === undefined && readGenerationField(field, value) === 'unsupported';
+  });
   const generation = Object.fromEntries([
-    ...Object.entries(storedGeneration).filter(([key]) => !GENERATION_FIELD_NAMES.has(key)),
+    ...keptGeneration,
     ...Object.entries(settings.generation ?? {}).filter(([, value]) => value !== undefined),
   ]);
+  const kept = (field: StoredScalarField): unknown =>
+    stored[field] !== undefined && readStoredField(field, stored[field]) === 'unsupported' ? stored[field] : undefined;
+  const storedContextExtras = isRecord(stored.context)
+    ? Object.fromEntries(Object.entries(stored.context).filter(([key]) => !CONTEXT_FIELDS.has(key)))
+    : {};
+  const known: [string, unknown][] = [
+    ['generation', Object.keys(generation).length > 0 ? generation : undefined],
+    ['effort', settings.effort ?? kept('effort')],
+    ['context', settings.context ? { ...storedContextExtras, ...settings.context } : kept('context')],
+    ['draftTokens', settings.draftTokens ?? kept('draftTokens')],
+    ['keepAlive', settings.keepAlive ?? kept('keepAlive')],
+  ];
   const entry = Object.fromEntries([
     ...Object.entries(stored).filter(([key]) => !STORED_FIELDS.has(key)),
-    ...(Object.keys(generation).length > 0 ? [['generation', generation] as const] : []),
-    ...Object.entries(settings).filter(([key, value]) => key !== 'generation' && value !== undefined),
+    ...known.filter(([, value]) => value !== undefined),
   ]);
   return Object.keys(entry).length > 0 ? entry : undefined;
 }

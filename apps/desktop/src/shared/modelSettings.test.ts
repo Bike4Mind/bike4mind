@@ -3,6 +3,7 @@ import {
   isModelSettingsId,
   parseModelSettingsFile,
   parseModelSettingsInput,
+  quotedForMessage,
   storedModelEntry,
   type ModelSettings,
 } from './modelSettings';
@@ -33,19 +34,42 @@ describe('parseModelSettingsFile', () => {
 
   it.each([
     [{ generation: { temperature: '0.6' } }, 'generation.temperature'],
-    [{ generation: { topK: 1.5 } }, 'generation.topK'],
     [{ generation: { temperature: null } }, 'generation.temperature'],
     [{ generation: 'warm' }, 'generation'],
-    [{ effort: 'wild' }, 'effort'],
-    [{ effort: 'default' }, 'effort'],
-    [{ context: { mode: 'fixed', tokens: 400 } }, 'context'],
-    [{ draftTokens: 99 }, 'draftTokens'],
-    [{ keepAlive: 2 }, 'keepAlive'],
+    [{ effort: 3 }, 'effort'],
+    [{ context: 'auto' }, 'context'],
+    [{ context: { mode: 1 } }, 'context'],
+    [{ context: { mode: 'fixed', tokens: '400' } }, 'context'],
+    [{ context: { mode: 'auto', maxTokens: null } }, 'context'],
+    [{ draftTokens: '2' }, 'draftTokens'],
+    [{ keepAlive: '1h' }, 'keepAlive'],
     [7, null],
-  ])('names the model and the known field of %j that holds a bad value', (entry, field) => {
+  ])('names the model and the known field of %j that holds the wrong type', (entry, field) => {
     expect(parseModelSettingsFile({ models: { 'local:ollama:other': {}, [QWEN]: entry } })).toEqual({
       invalid: { modelId: QWEN, field },
     });
+  });
+
+  it.each([
+    ['generation.topK', { generation: { topK: 1.5 } }, 1.5],
+    ['generation.temperature', { generation: { temperature: 9 } }, 9],
+    ['effort', { effort: 'ultra' }, 'ultra'],
+    ['effort', { effort: 'default' }, 'default'],
+    ['context', { context: { mode: 'fixed', tokens: 400 } }, { mode: 'fixed', tokens: 400 }],
+    ['context', { context: { mode: 'stretch', tokens: 'any' } }, { mode: 'stretch', tokens: 'any' }],
+    ['draftTokens', { draftTokens: 99 }, 99],
+    ['keepAlive', { keepAlive: 2 }, 2],
+  ])('lists %s of the right type beyond this version as unsupported and leaves it unset', (field, entry, value) => {
+    const parsed = parseModelSettingsFile({ models: { [QWEN]: entry } });
+    if (!parsed || 'invalid' in parsed) throw new Error('not read');
+    expect(parsed.unsupported.get(QWEN)).toEqual([{ field, value }]);
+    expect(parsed.settings.has(QWEN)).toBe(false);
+  });
+
+  it('reads the supported fields of an entry that also holds an unsupported one', () => {
+    expect(settingsOf({ models: { [QWEN]: { effort: 'ultra', keepAlive: -1, generation: { topK: 20 } } } })).toEqual([
+      [QWEN, { generation: { topK: 20 }, keepAlive: -1 }],
+    ]);
   });
 
   it.each([null, 'text', [], { models: [] }, { models: 'x' }, {}, { model: {} }])(
@@ -60,6 +84,15 @@ describe('parseModelSettingsFile', () => {
   });
 });
 
+describe('quotedForMessage', () => {
+  it('quotes a value as JSON on one line and cuts it to the limit with an ASCII ellipsis', () => {
+    expect(quotedForMessage('local:ollama:a\nb')).toBe('"local:ollama:a\\nb"');
+    const long = quotedForMessage(`local:ollama:${'x'.repeat(1000)}`);
+    expect(long).toHaveLength(120);
+    expect(long.endsWith('...')).toBe(true);
+  });
+});
+
 describe('storedModelEntry', () => {
   it('writes the new settings over the known fields and keeps the unknown ones, inside generation too', () => {
     expect(
@@ -68,6 +101,36 @@ describe('storedModelEntry', () => {
         { generation: { topK: 20 }, keepAlive: -1 }
       )
     ).toEqual({ futureOnly: { a: 1 }, generation: { bogus: [1], topK: 20 }, keepAlive: -1 });
+  });
+
+  it('keeps a value beyond this version unless the new settings set that field', () => {
+    const stored = {
+      generation: { temperature: 0.6, topK: 1.5 },
+      effort: 'ultra',
+      context: { mode: 'stretch' },
+      draftTokens: 99,
+      keepAlive: 2,
+    };
+    expect(storedModelEntry(stored, { generation: { temperature: 0.7 } })).toEqual({
+      ...stored,
+      generation: { topK: 1.5, temperature: 0.7 },
+    });
+    expect(storedModelEntry(stored, { effort: 'low', keepAlive: -1, generation: { topK: 20 } })).toEqual({
+      generation: { topK: 20 },
+      effort: 'low',
+      context: { mode: 'stretch' },
+      draftTokens: 99,
+      keepAlive: -1,
+    });
+  });
+
+  it('keeps unknown keys inside context when a new context is written', () => {
+    expect(
+      storedModelEntry(
+        { context: { mode: 'fixed', tokens: 32768, rope: { factor: 2 } } },
+        { context: { mode: 'auto', maxTokens: 65536 } }
+      )
+    ).toEqual({ context: { rope: { factor: 2 }, mode: 'auto', maxTokens: 65536 } });
   });
 
   it('keeps an entry that only holds unknown fields after a clear, and drops one with nothing left', () => {

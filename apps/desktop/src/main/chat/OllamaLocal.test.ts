@@ -1870,6 +1870,7 @@ describe('OllamaLocal context sizing', () => {
       });
       const local = new OllamaLocal(undefined, sizing(AUTO_LOCAL_CONTEXT, 13), undefined, read);
       expect((await local.models()).map(model => model.id)).toEqual([longTurn.model]);
+      expect(await local.contextFit()).toEqual({});
       await expect(local.stream(longTurn, () => undefined)).rejects.toThrow(
         '/data/model-settings.json is not valid JSON'
       );
