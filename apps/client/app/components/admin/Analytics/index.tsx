@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Alert, Box, Button, Input, Skeleton, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
+import { toast } from 'sonner';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import type {
   AnalyticsAccounts,
@@ -158,7 +159,7 @@ const AnalyticsTab = () => {
   const customIncomplete = query.range === 'custom' && (!query.from || !query.to);
   const customInverted = query.range === 'custom' && !!query.from && !!query.to && query.from > query.to;
   const queryReady = !customIncomplete && !customInverted;
-  const { data, isPending, isError, refetch } = useAnalyticsOverview(query, queryReady);
+  const { data, isPending, isError, isPlaceholderData, refetch } = useAnalyticsOverview(query, queryReady);
   const topAccounts = useAnalyticsTopAccounts(query, queryReady);
   const [exporting, setExporting] = useState(false);
 
@@ -195,6 +196,8 @@ const AnalyticsTab = () => {
     setExporting(true);
     try {
       await downloadAnalyticsExport(data, topAccounts.data);
+    } catch {
+      toast.error("Couldn't export the analytics. Try again.");
     } finally {
       setExporting(false);
     }
@@ -224,7 +227,15 @@ const AnalyticsTab = () => {
               variant="outlined"
               color="neutral"
               size="sm"
-              disabled={!data || isError || topAccounts.isPending || topAccounts.isError}
+              // Placeholder data is the previous range's, so either side could put another range in the zip.
+              disabled={
+                !data ||
+                isError ||
+                isPlaceholderData ||
+                topAccounts.isPending ||
+                topAccounts.isError ||
+                topAccounts.isPlaceholderData
+              }
               loading={exporting}
               onClick={() => void exportCsv()}
               data-testid="analytics-export-btn"

@@ -20,10 +20,12 @@ const mocks = vi.hoisted(() => {
   const get = vi.fn((url: string, config?: unknown) =>
     url.endsWith('/top-accounts') ? topAccounts(url, config) : overview(url, config)
   );
-  return { get, overview, topAccounts };
+  return { get, overview, topAccounts, download: vi.fn(), toastError: vi.fn() };
 });
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: mocks.get } }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
+vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
+vi.mock('./analyticsExport', () => ({ downloadAnalyticsExport: mocks.download }));
 // The cohorts section fetches on its own and is tested in CohortsSection.test.tsx; here only what the page hands it.
 vi.mock('./CohortsSection', () => ({
   CohortsSection: ({ signups }: { signups: string }) => <div data-testid="cohorts-stub" data-signups={signups} />,
@@ -188,6 +190,9 @@ beforeEach(() => {
   mocks.overview.mockResolvedValue({ data: overview() });
   mocks.topAccounts.mockReset();
   mocks.topAccounts.mockResolvedValue({ data: topAccounts() });
+  mocks.download.mockReset();
+  mocks.download.mockResolvedValue(undefined);
+  mocks.toastError.mockClear();
 });
 
 describe('analytics URL state', () => {
@@ -502,9 +507,36 @@ describe('AnalyticsTab', () => {
     });
 
     it('enables Export once both requests have loaded', async () => {
+      let resolveTop: (value: { data: AnalyticsTopAccounts }) => void = () => {};
+      mocks.topAccounts.mockReturnValue(new Promise(resolve => (resolveTop = resolve)));
       await renderPage('/admin?tab=analytics');
-      await screen.findByTestId('analytics-top-users-table');
+      await screen.findByTestId('analytics-active-users-chart');
+      expect(screen.getByTestId('analytics-export-btn')).toBeDisabled();
+
+      resolveTop({ data: topAccounts() });
       await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId('analytics-export-btn'));
+      await waitFor(() => expect(mocks.download).toHaveBeenCalledWith(overview(), topAccounts()));
+    });
+
+    it('disables Export while a new range loads, so the zip never mixes two ranges', async () => {
+      const router = await renderPage('/admin?tab=analytics');
+      await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
+
+      mocks.topAccounts.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(screen.getByTestId('analytics-range-7d'));
+      await waitFor(() => expect(router.state.location.search.range).toBe('7d'));
+      await waitFor(() => expect(mocks.topAccounts.mock.calls.at(-1)?.[1]).toEqual({ params: { range: '7d' } }));
+      expect(screen.getByTestId('analytics-export-btn')).toBeDisabled();
+    });
+
+    it('says so when the export fails', async () => {
+      mocks.download.mockRejectedValue(new Error('chunk failed'));
+      await renderPage('/admin?tab=analytics');
+      await waitFor(() => expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled());
+      fireEvent.click(screen.getByTestId('analytics-export-btn'));
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith("Couldn't export the analytics. Try again."));
+      expect(screen.getByTestId('analytics-export-btn')).not.toBeDisabled();
     });
 
     it('disables Export while top accounts have failed, so the zip never drops their files', async () => {
