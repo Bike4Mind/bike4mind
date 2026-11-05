@@ -711,19 +711,20 @@ describe('OpenAICompatibleChat max output on a context the server fixes', () => 
     return { fetch, bodies };
   }
 
-  it('keeps a limit that fits, lowers one that does not, and sends none without room', async () => {
+  it('keeps a limit that fits, lowers one that does not, and sends the cap, then the room the server counts, when the estimate leaves none', async () => {
     const server = vllm(4);
     const client = chat(server.fetch, 'vllm');
     await client.listModels();
     await collect(client, ask(400, 4096));
     await collect(client, ask(20_000, 4096));
     await collect(client, ask(30_000, 4096));
-    const [fits, lowered, none] = server.bodies.map(body => body.max_tokens as number | undefined);
+    const [fits, lowered, capped, room] = server.bodies.map(body => body.max_tokens as number | undefined);
     expect(fits).toBe(4096);
     expect(lowered).toBeGreaterThanOrEqual(256);
     expect(lowered).toBeLessThan(CONTEXT - 5000);
-    expect(none).toBeUndefined();
-    expect(server.bodies).toHaveLength(3);
+    expect(capped).toBe(4096);
+    expect(room).toBe(CONTEXT - 7500);
+    expect(server.bodies).toHaveLength(4);
   });
 
   it('asks again with max_tokens cut by the overshoot when the server counts the prompt longer than the estimate', async () => {

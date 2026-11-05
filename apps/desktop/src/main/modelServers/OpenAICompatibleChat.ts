@@ -383,7 +383,8 @@ export class OpenAICompatibleChat implements LocalChat {
       ? []
       : (request.tools ?? []).map(tool => ({ type: 'function', function: tool.toolSchema }));
     const context = this.contexts.get(model);
-    const limit = replyLimit(context, request.maxTokens, estimateTokens(toMessages(request.messages), tools));
+    const limit =
+      replyLimit(context, request.maxTokens, estimateTokens(toMessages(request.messages), tools)) ?? request.maxTokens;
     const post = (withTools: boolean, maxTokens: number | undefined) =>
       this.server.fetch(`${this.server.baseUrl}/v1/chat/completions`, {
         method: 'POST',

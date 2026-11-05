@@ -469,7 +469,7 @@ export function ChatShell({
   const defaultEffort = modelDefaults?.effort ?? null;
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
-  // Re-read on returning from the Models screen, where the defaults are edited.
+  // Re-read on opening a chat and on returning from the Models screen, where the defaults are edited.
   useEffect(() => {
     if (!defaultsModelId || !defaultsSessionId || screen !== 'conversation') return;
     let live = true;
