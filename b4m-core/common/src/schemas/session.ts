@@ -107,6 +107,9 @@ export const SessionUpdateRequestSchema = z.object({
 
 export type SessionUpdateRequest = z.infer<typeof SessionUpdateRequestSchema>;
 
+/** Most ids one bulk write request may carry; clients chunk larger selections into several requests. */
+export const MAX_BULK_ITEMS = 100;
+
 /** Path parameter for session-scoped endpoints, e.g. GET/PUT /api/sessions/{id}. */
 export const SessionIdParamSchema = z.object({
   id: z.string().min(1),

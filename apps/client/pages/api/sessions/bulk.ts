@@ -1,9 +1,13 @@
-import { SessionEvents } from '@bike4mind/common';
+import { BadRequestError, MAX_BULK_ITEMS, SessionEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
 import { sessionRepository } from '@bike4mind/database/auth';
+import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { z } from 'zod';
 import {
+  favoriteRepository,
+  sessionRepository as plainSessionRepository,
   projectRepository,
   fabFileRepository,
   sessionAgentConfigRepository,
@@ -12,6 +16,17 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
+
+const SessionIdsSchema = z.array(z.string().min(1)).max(MAX_BULK_ITEMS);
+
+const BulkWriteBodySchema = z
+  .object({ action: z.literal('favorite'), add: SessionIdsSchema, remove: SessionIdsSchema })
+  .refine(b => b.add.length + b.remove.length > 0, 'Provide at least one session id')
+  .refine(b => new Set([...b.add, ...b.remove]).size <= MAX_BULK_ITEMS, `At most ${MAX_BULK_ITEMS} session ids`)
+  .refine(b => !b.add.some(id => b.remove.includes(id)), 'A session id cannot be both added and removed');
+
+type BulkItemResult = { id: string; ok: boolean; error?: string };
+type BulkWriteResponse = { results: BulkItemResult[]; okCount: number };
 
 const handler = baseApi()
   /**
@@ -81,6 +96,45 @@ const handler = baseApi()
         });
       }
     )
+  )
+  .post(
+    asyncHandler<{}, BulkWriteResponse>(async (req, res) => {
+      const parsed = BulkWriteBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
+      }
+      const body = parsed.data;
+      const results: BulkItemResult[] = [];
+
+      const favoriteAdapters = { db: { sessions: plainSessionRepository, favorites: favoriteRepository } };
+      const add = [...new Set(body.add)];
+      const remove = [...new Set(body.remove)];
+      const operations = [
+        ...add.map(id => ({
+          id,
+          run: () => sessionService.addFavorite(req.user, { sessionId: id }, favoriteAdapters),
+        })),
+        ...remove.map(id => ({
+          id,
+          run: () => sessionService.deleteFavorite(req.user, { sessionId: id }, favoriteAdapters),
+        })),
+      ];
+      for (const { id, run } of operations) {
+        if (!isValidObjectId(id)) {
+          results.push({ id, ok: false, error: 'Invalid session id' });
+          continue;
+        }
+        try {
+          await run();
+          results.push({ id, ok: true });
+        } catch (error) {
+          req.logger.warn('[sessions/bulk] favorite update failed', { sessionId: id, error });
+          results.push({ id, ok: false, error: 'Update failed' });
+        }
+      }
+
+      return res.json({ results, okCount: results.filter(r => r.ok).length });
+    })
   );
 
 export const config = {

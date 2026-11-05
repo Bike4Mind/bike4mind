@@ -2,6 +2,7 @@ import { RefObject, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { MAX_BULK_ITEMS } from '@bike4mind/common';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDeleteSessions, useDownloadSession } from '@client/app/hooks/data/sessions';
 import { api } from '@client/app/contexts/ApiContext';
@@ -158,25 +159,32 @@ export function useBulkActions({
 
   const handleFavoriteSelected = async () => {
     const sessions = combinedSessions.filter(s => visibleSelectedIds.has(s.id));
+    if (sessions.length === 0) return;
 
-    // Batch favorite/unfavorite operations
+    const favoriteIds = new Set(filteredFavoriteSession.map(fav => fav.id));
+    let okCount = 0;
     try {
-      await Promise.all(
-        sessions.map(async session => {
-          const isFavorite = filteredFavoriteSession.some(fav => fav.id === session.id);
-          if (isFavorite) {
-            await api.delete(`/api/sessions/${session.id}/favorite`);
-          } else {
-            await api.post(`/api/sessions/${session.id}/favorite`);
-          }
-        })
-      );
+      for (let i = 0; i < sessions.length; i += MAX_BULK_ITEMS) {
+        const chunk = sessions.slice(i, i + MAX_BULK_ITEMS);
+        const { data } = await api.post<{ okCount: number }>('/api/sessions/bulk', {
+          action: 'favorite',
+          add: chunk.filter(s => !favoriteIds.has(s.id)).map(s => s.id),
+          remove: chunk.filter(s => favoriteIds.has(s.id)).map(s => s.id),
+        });
+        okCount += data.okCount;
+      }
 
-      queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
-      toast.success(`Updated favorites for ${sessions.length} item${sessions.length > 1 ? 's' : ''}`);
+      const total = sessions.length;
+      if (okCount === total) {
+        toast.success(`Updated favorites for ${total} item${total > 1 ? 's' : ''}`);
+      } else {
+        toast.warning(`Updated favorites for ${okCount} of ${total} items`);
+      }
       setSelectedItems(new Set());
     } catch (error) {
       toast.error('Failed to update favorites');
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
     }
   };
 

@@ -19,7 +19,13 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
   useDeleteSessions: () => ({ mutateAsync: mockMutateAsync, isPending: false }),
   useDownloadSession: () => ({ mutateAsync: vi.fn() }),
 }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const { mockPost, mockDelete, mockToast } = vi.hoisted(() => ({
+  mockPost: vi.fn(),
+  mockDelete: vi.fn(),
+  mockToast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+}));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: mockPost, delete: mockDelete } }));
+vi.mock('sonner', () => ({ toast: mockToast }));
 
 // Helpers
 
@@ -101,5 +107,66 @@ describe('useBulkActions — handleDeleteConfirm', () => {
 
     expect(mockMutateAsync).toHaveBeenCalledTimes(1);
     expect(mockMutateAsync).toHaveBeenCalledWith(['session-a']);
+  });
+});
+
+describe('useBulkActions - handleFavoriteSelected', () => {
+  const makeSessions = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `s${i}` }));
+
+  async function favorite(sessions: { id: string }[], favorites: { id: string }[] = []) {
+    const { result } = renderHook(() =>
+      useBulkActions({
+        ...defaultArgs,
+        combinedSessions: sessions as never,
+        filteredFavoriteSession: favorites,
+        selectableSessions: sessions,
+      })
+    );
+    act(() => result.current.handleToggleSelectAll());
+    await act(async () => {
+      await result.current.handleFavoriteSelected();
+    });
+  }
+
+  beforeEach(() => {
+    mockPost.mockImplementation(async (_url: string, body: { add: string[]; remove: string[] }) => ({
+      data: { okCount: body.add.length + body.remove.length },
+    }));
+  });
+
+  it('sends one bulk request for 10 items, splitting add and remove', async () => {
+    const sessions = makeSessions(10);
+    await favorite(sessions, [{ id: 's0' }, { id: 's1' }]);
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockPost).toHaveBeenCalledWith('/api/sessions/bulk', {
+      action: 'favorite',
+      add: sessions.slice(2).map(s => s.id),
+      remove: ['s0', 's1'],
+    });
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockToast.success).toHaveBeenCalled();
+  });
+
+  it('chunks 150 items into two requests', async () => {
+    await favorite(makeSessions(150));
+
+    expect(mockPost).toHaveBeenCalledTimes(2);
+    expect(mockPost.mock.calls.every(([url]) => url === '/api/sessions/bulk')).toBe(true);
+    expect(mockPost.mock.calls[0][1].add).toHaveLength(100);
+    expect(mockPost.mock.calls[1][1].add).toHaveLength(50);
+  });
+
+  it('reports a partial result when some items fail', async () => {
+    mockPost.mockResolvedValue({ data: { okCount: 7 } });
+    await favorite(makeSessions(10));
+
+    expect(mockToast.warning).toHaveBeenCalledWith('Updated favorites for 7 of 10 items');
+    expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
+  it('sends nothing for an empty selection', async () => {
+    await favorite([]);
+    expect(mockPost).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,8 @@ const { mockFindById, mockDeleteSession, mockLogEvent, mockWithTransaction, mock
   })
 );
 
+const mockFav = vi.hoisted(() => ({ add: vi.fn(), remove: vi.fn() }));
+
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
   'X-RateLimit-Remaining-Minute': '59',
@@ -55,6 +57,8 @@ vi.mock('@bike4mind/services', async orig => {
     sessionService: {
       ...(actual.sessionService as object),
       deleteSession: (...a: unknown[]) => mockDeleteSession(...a),
+      addFavorite: (...a: unknown[]) => mockFav.add(...a),
+      deleteFavorite: (...a: unknown[]) => mockFav.remove(...a),
     },
   };
 });
@@ -76,17 +80,22 @@ import { SessionEvents } from '@bike4mind/common';
 // Authenticates by API key for the same reason the /api/sessions/[id] suite does: apiKeyAuth sets
 // req.user and the real auth middleware then skips passport, so no auth stub is needed.
 function fire(sessionIds: string[]) {
-  const payload = JSON.stringify({ sessionIds });
+  return fireWith('DELETE', { sessionIds });
+}
+
+function fireWith(method: 'DELETE' | 'POST', body: unknown) {
+  const payload = JSON.stringify(body);
   const { req, res } = createMocks(
     {
-      method: 'DELETE',
+      method,
       url: '/api/sessions/bulk',
       headers: {
         'x-api-key': 'sk-test-valid-key',
         'content-type': 'application/json',
         'content-length': String(Buffer.byteLength(payload)),
       },
-      body: { sessionIds },
+      // any: deliberately malformed bodies are part of what the POST cases send.
+      body: body as any,
     },
     { eventEmitter: EventEmitter }
   );
@@ -94,30 +103,32 @@ function fire(sessionIds: string[]) {
   return { req: req as any, res: res as any };
 }
 
-describe('DELETE /api/sessions/bulk', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockWithTransaction.mockImplementation(async (fn: (s: unknown) => unknown) => fn(undefined));
-    // apiKeyAuth calls logEvent(...).catch(...), so the stub has to be thenable.
-    mockLogEvent.mockResolvedValue(undefined);
-    mockValidate.mockResolvedValue({
-      isValid: true,
-      keyId: 'k1',
-      userId: 'user-1',
-      scopes: [],
-      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
-    });
-    mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
-    mockFindById.mockResolvedValue({
-      id: 'user-1',
-      _id: 'user-1',
-      isBanned: false,
-      disputePending: false,
-      aupAcceptedVersion: 'grandfathered',
-    });
-    mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockWithTransaction.mockImplementation(async (fn: (s: unknown) => unknown) => fn(undefined));
+  // apiKeyAuth calls logEvent(...).catch(...), so the stub has to be thenable.
+  mockLogEvent.mockResolvedValue(undefined);
+  mockValidate.mockResolvedValue({
+    isValid: true,
+    keyId: 'k1',
+    userId: 'user-1',
+    scopes: [],
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
   });
+  mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+  mockFindById.mockResolvedValue({
+    id: 'user-1',
+    _id: 'user-1',
+    isBanned: false,
+    disputePending: false,
+    aupAcceptedVersion: 'grandfathered',
+  });
+  mockDeleteSession.mockResolvedValue({ id: 'other-session' });
+  mockFav.add.mockResolvedValue({});
+  mockFav.remove.mockResolvedValue({});
+});
 
+describe('DELETE /api/sessions/bulk', () => {
   it('runs each delete inside its own transaction', async () => {
     // Asserting the call count alone would pass on a route that opened a transaction and then ran
     // the cascade outside it, which is the shape that leaves files half-rewritten, so the service
@@ -173,5 +184,75 @@ describe('DELETE /api/sessions/bulk', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(mockDeleteSession).not.toHaveBeenCalled();
     expect(mockWithTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/sessions/bulk - favorite', () => {
+  const id = (n: number) => `65a0000000000000000000${String(n).padStart(2, '0')}`;
+
+  it('adds and removes favorites in one request and reports each result', async () => {
+    const { req, res } = fireWith('POST', { action: 'favorite', add: [id(1), id(2)], remove: [id(3)] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockFav.add).toHaveBeenCalledTimes(2);
+    expect(mockFav.remove).toHaveBeenCalledTimes(1);
+    expect(mockFav.add.mock.calls[0][1]).toEqual({ sessionId: id(1) });
+    expect(res._getJSONData()).toEqual({
+      okCount: 3,
+      results: [
+        { id: id(1), ok: true },
+        { id: id(2), ok: true },
+        { id: id(3), ok: true },
+      ],
+    });
+  });
+
+  it('fails an inaccessible or malformed id without failing the request', async () => {
+    mockFav.add.mockRejectedValueOnce(new Error('Session not found or not accessible'));
+    const { req, res } = fireWith('POST', { action: 'favorite', add: [id(1), 'not-an-id', id(2)], remove: [] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockFav.add).toHaveBeenCalledTimes(2);
+    expect(res._getJSONData()).toEqual({
+      okCount: 1,
+      results: [
+        { id: id(1), ok: false, error: 'Update failed' },
+        { id: 'not-an-id', ok: false, error: 'Invalid session id' },
+        { id: id(2), ok: true },
+      ],
+    });
+  });
+
+  it('de-duplicates ids', async () => {
+    const { req, res } = fireWith('POST', { action: 'favorite', add: [id(1), id(1)], remove: [] });
+    await handler(req, res);
+
+    expect(mockFav.add).toHaveBeenCalledTimes(1);
+    expect(res._getJSONData().okCount).toBe(1);
+  });
+
+  it.each([
+    ['empty lists', { action: 'favorite', add: [], remove: [] }],
+    ['a non-array', { action: 'favorite', add: id(1), remove: [] }],
+    ['an unknown action', { action: 'explode', add: [id(1)], remove: [] }],
+    ['an id in both lists', { action: 'favorite', add: [id(1)], remove: [id(1)] }],
+    ['more ids than the cap', { action: 'favorite', add: Array.from({ length: 101 }, (_, i) => `x${i}`), remove: [] }],
+    [
+      'a combined total over the cap',
+      {
+        action: 'favorite',
+        add: Array.from({ length: 60 }, (_, i) => `a${i}`),
+        remove: Array.from({ length: 60 }, (_, i) => `r${i}`),
+      },
+    ],
+  ])('rejects %s with 400 before touching the service', async (_, body) => {
+    const { req, res } = fireWith('POST', body);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockFav.add).not.toHaveBeenCalled();
+    expect(mockFav.remove).not.toHaveBeenCalled();
   });
 });
