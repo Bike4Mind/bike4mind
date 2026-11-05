@@ -231,7 +231,10 @@ async function showGenerated(context: ToolContext, media: MediaContext, ids: rea
     else failures.push(result.reason);
   }
   if (failures.length === 0) {
-    return `They are attached so you can see them too, in this reply only: ${shown.join(', ')}.`;
+    return (
+      `They are attached so you can see them too: ${shown.join(', ')}. They are shown again with the user's next ` +
+      'message; after that, save one with save_generated_image and file_read it to look again.'
+    );
   }
   const reason = [...new Set(failures)].join('; ');
   return (

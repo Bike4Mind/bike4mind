@@ -177,6 +177,7 @@ describe('generate_image', () => {
     expect(h.media[0]).toMatchObject({ kind: 'image', caption: 'a bicycle' });
     expect(h.shown).toEqual(['image/png']);
     expect(result).toMatch(/attached so you can see them too/);
+    expect(result).toMatch(/shown again with the user's next\s+message/);
     expect(result).toContain(h.media[0].url.split('/').pop());
     // The local media URL is the renderer's business, never the model's.
     expect(result).not.toContain('b4m-media://');
