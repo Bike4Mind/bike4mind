@@ -352,6 +352,45 @@ describe('ChatService spawn placement', () => {
     expect(seedPosted('do the thing')).toBe(false);
   });
 
+  /** The parent ends its turn after starting its agent, so only the agent's end is left to wake it. */
+  async function endParentTurn(): Promise<void> {
+    const stream = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
+    stream.write(frame({ type: 'content', text: 'Started it.' }));
+    stream.write(frame('[DONE]'));
+  }
+
+  async function agentsSettledWake(parentId: string): Promise<string> {
+    const wake = await vi.waitUntil(
+      async () => (await store.get(parentId))?.messages.find(message => message.automatic?.kind === 'agents-settled'),
+      { timeout: 5000, interval: 10 }
+    );
+    return wake.content;
+  }
+
+  it('wakes an Orchestrate parent when a delegated agent fails to get its worktree', async () => {
+    gate.fail = new Error('git worktree add timed out after 5 min.');
+    const { parent } = await delegate();
+    await endParentTurn();
+
+    const wake = await agentsSettledWake(parent.id);
+    expect(wake).toContain('"The thing"');
+    expect(wake).toContain(': failed.');
+  });
+
+  it('wakes an Orchestrate parent when a delegated agent is stopped during its install wait', async () => {
+    const install = holdInstall();
+    const { parent } = await delegate();
+    const spawned = await vi.waitUntil(child, { timeout: 5000, interval: 10 });
+    await vi.waitUntil(() => install.waitFor.mock.calls.length > 0, { timeout: 5000, interval: 5 });
+    await endParentTurn();
+    await vi.waitUntil(() => !service.isSessionBusy(parent.id), { timeout: 5000, interval: 5 });
+
+    service.stop(spawned.id);
+
+    const wake = await agentsSettledWake(parent.id);
+    expect(wake).toContain(': stopped');
+  });
+
   it('gives back the branch name a delegated spawn reserved when creating its session throws', async () => {
     const create = store.create.bind(store);
     vi.spyOn(store, 'create').mockImplementation((...args: Parameters<SessionStore['create']>) =>

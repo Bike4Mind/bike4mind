@@ -1458,18 +1458,6 @@ export class ChatService {
   }
 
   /**
-   * The worktrees of the agents this session started and that still exist, which the parent can
-   * read and write without asking: reviewing and combining their work is its job, and they sit
-   * under the repository's shared `.b4m/worktrees` (appWorktreeRoot), outside the parent's own
-   * folder whenever the parent is itself a linked worktree. Only a worktree the app cut for the
-   * child counts; a child that shares the parent's folder adds nothing. launchSpawned and
-   * cleanupDeletedSession bump the parent's scope so a running turn picks a change up.
-   *
-   * The child's stored fields are not trusted on their own, since a child can be re-pointed
-   * (updateProject): it must still be in the parent's repository, and its folder must exist
-   * under that repository's app worktree root once symlinks are resolved.
-   */
-  /**
    * Whether agentWorktrees can find anything, without listing every conversation on every turn:
    * the session called session_spawn at some point, or an agent was launched for it this run
    * (a started suggestion leaves no call in the parent).
@@ -1481,6 +1469,18 @@ export class ChatService {
     );
   }
 
+  /**
+   * The worktrees of the agents this session started and that still exist, which the parent can
+   * read and write without asking: reviewing and combining their work is its job, and they sit
+   * under the repository's shared `.b4m/worktrees` (appWorktreeRoot), outside the parent's own
+   * folder whenever the parent is itself a linked worktree. Only a worktree the app cut for the
+   * child counts; a child that shares the parent's folder adds nothing. launchSpawned and
+   * cleanupDeletedSession bump the parent's scope so a running turn picks a change up.
+   *
+   * The child's stored fields are not trusted on their own, since a child can be re-pointed
+   * (updateProject): it must still be in the parent's repository, and its folder must exist
+   * under that repository's app worktree root once symlinks are resolved.
+   */
   private async agentWorktrees(parentId: string, parentDirectory: string): Promise<string[]> {
     const sessions = await this.deps.store.list();
     const candidates = sessions.flatMap(entry => {
@@ -5379,6 +5379,12 @@ export class ChatService {
       this.deps.activity?.preparingEnded(child.id);
       if (!failure) this.flushQueue(child.id);
     }
+    // After `launching` is cleared: a kept session still counts as running until then.
+    if (failure) {
+      await this.wakeParentForAgents(parentId).catch((err: unknown) => {
+        this.deps.logger.warn(`CHAT: could not wake ${parentId}: ${err instanceof Error ? err.message : err}`);
+      });
+    }
   }
 
   /**
@@ -5454,7 +5460,6 @@ export class ChatService {
       outcome: 'aborted',
       lastReply: null,
     });
-    await this.wakeParentForAgents(parentId);
   }
 
   /**
@@ -5561,7 +5566,6 @@ export class ChatService {
     } finally {
       this.abandoning.delete(child.id);
     }
-    await this.wakeParentForAgents(parentId);
   }
 
   /**
