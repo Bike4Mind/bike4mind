@@ -140,6 +140,8 @@ import {
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import {
   shouldWithholdToolCall,
+  partitionRepeatedApprovedCalls,
+  REPEATED_APPROVED_CALL_OBSERVATION,
   resumeApprovedPauseAndGateConfidence,
   handleWithheldToolCalls,
   settleGatedCall as settleGatedCallImpl,
@@ -707,6 +709,7 @@ async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMc
       serverAgentConfig: {},
       autoApprovedCustomToolNames: [],
       approvalRequiredCustomToolNames: [],
+      customToolNames: [],
     };
   }
 }
@@ -735,6 +738,7 @@ async function loadMcpToolsForSession(
       serverAgentConfig: {},
       autoApprovedCustomToolNames: [],
       approvalRequiredCustomToolNames: [],
+      customToolNames: [],
     };
   }
   return loadMcpToolsSafe(userId, logger);
@@ -1503,8 +1507,14 @@ async function processExecution(
     // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
     //
     // Gated on the session's isolation contract - see `loadMcpToolsForSession`.
-    const { mcpToolsByServer, serverAgentConfig, autoApprovedCustomToolNames, approvalRequiredCustomToolNames } =
-      await loadMcpToolsForSession(session, execution.userId, logger);
+    const {
+      mcpToolsByServer,
+      serverAgentConfig,
+      autoApprovedCustomToolNames,
+      approvalRequiredCustomToolNames,
+      customToolNames,
+    } = await loadMcpToolsForSession(session, execution.userId, logger);
+    const customToolNameSet = new Set(customToolNames);
     const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     // MCP servers claimed exclusively by an agent (e.g. atlassian by
     // project_manager). Withheld from the parent LLM's tool list; reach the
@@ -2880,6 +2890,10 @@ async function processExecution(
     // See `resumeApprovedPauseAndGateConfidence` for the state machine itself - this is
     // only the wiring.
     const approvedPause = execution.pendingPermission?.approved ? execution.pendingPermission : undefined;
+    // Calls the resume below replays, checked against the next iteration only: a model that
+    // re-issues the identical custom connector write right after it ran gets an observation
+    // instead of a second card, which would ask the user to approve a duplicate.
+    let justReplayedCalls: GatedToolCall[] = [];
     if (approvedPause) {
       const { proceed } = await resumeApprovedPauseAndGateConfidence(
         {
@@ -2893,7 +2907,11 @@ async function processExecution(
           confidenceOverrides: execution.confidenceOverrides,
         },
         {
-          executeGatedToolCall: call => agent.executeGatedToolCall(call),
+          executeGatedToolCall: async call => {
+            const observation = await agent.executeGatedToolCall(call);
+            justReplayedCalls.push(call);
+            return observation;
+          },
           toCheckpoint: () => agent.toCheckpoint(),
           updatePermissionState: id => agentExecutionRepository.updatePermissionState(id, { pendingPermission: null }),
           updateCheckpoint: (id, checkpoint) =>
@@ -3259,6 +3277,28 @@ async function processExecution(
         return;
       }
       iterationResult = deadlineOutcome.result;
+
+      const { repeats: repeatedApprovedCalls, remaining: withheldAfterRepeatGuard } = partitionRepeatedApprovedCalls(
+        iterationResult.gatedToolCalls ?? [],
+        justReplayedCalls,
+        customToolNameSet
+      );
+      justReplayedCalls = [];
+      if (repeatedApprovedCalls.length > 0) {
+        for (const call of repeatedApprovedCalls) {
+          agent.replaceLastToolResultObservation(call.id, REPEATED_APPROVED_CALL_OBSERVATION);
+        }
+        logger.warn('[Permission] Answered an exact repeat of a just-approved call without a second card', {
+          executionId,
+          tools: repeatedApprovedCalls.map(call => call.name),
+        });
+        // The checkpoint below must carry the replaced observation, not the "awaiting approval" placeholder.
+        iterationResult = {
+          ...iterationResult,
+          checkpoint: agent.toCheckpoint(),
+          gatedToolCalls: withheldAfterRepeatGuard,
+        };
+      }
 
       iterationIndex = iterationResult.checkpoint.iteration;
 

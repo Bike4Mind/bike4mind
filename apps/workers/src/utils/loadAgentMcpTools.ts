@@ -38,6 +38,8 @@ export interface AgentMcpTools {
   autoApprovedCustomToolNames: string[];
   /** These tools must ignore remembered approvals (org policy or an explicit always-ask choice). */
   approvalRequiredCustomToolNames: string[];
+  /** Every offered custom connector tool id; the executor's repeat guard is scoped to these. */
+  customToolNames: string[];
 }
 
 /**
@@ -70,10 +72,17 @@ export async function loadAgentMcpTools(
   const mcpToolsByServer: AgentMcpTools['mcpToolsByServer'] = {};
   const autoApprovedCustomToolNames: string[] = [];
   const approvalRequiredCustomToolNames: string[] = [];
+  const customToolNames: string[] = [];
 
   if (!opts.enableMCPServer) {
     logger.info('[AgentExecutor][MCP] EnableMCPServer is off - 0 MCP tools loaded');
-    return { mcpToolsByServer, serverAgentConfig: {}, autoApprovedCustomToolNames, approvalRequiredCustomToolNames };
+    return {
+      mcpToolsByServer,
+      serverAgentConfig: {},
+      autoApprovedCustomToolNames,
+      approvalRequiredCustomToolNames,
+      customToolNames,
+    };
   }
 
   const servers = await deps.mcpServers.find({ enabled: true, userId: opts.userId });
@@ -131,6 +140,7 @@ export async function loadAgentMcpTools(
       for (const connection of await loadCustomMcpConnections(deps.customMcp, opts.userId, logger)) {
         const tools = generateCustomMcpTools(connection, { userId: opts.userId, host: deps.customMcp });
         mcpToolsByServer[connection.slug] = tools;
+        customToolNames.push(...tools.map(tool => tool.name));
         for (const tool of connection.tools) {
           const name = customMcpToolId(connection.slug, tool.name);
           if (!requiresMcpConnectionToolApproval(tool, connection.requireApprovalForAll)) {
@@ -164,5 +174,6 @@ export async function loadAgentMcpTools(
     serverAgentConfig: { selectedRepositories, githubUsername },
     autoApprovedCustomToolNames,
     approvalRequiredCustomToolNames,
+    customToolNames,
   };
 }

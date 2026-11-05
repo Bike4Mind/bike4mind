@@ -261,6 +261,7 @@ describe('loadAgentMcpTools - custom connectors', () => {
     });
     expect(loaded.autoApprovedCustomToolNames).toEqual(['acme__create']);
     expect(loaded.approvalRequiredCustomToolNames).toEqual(['acme__search']);
+    expect(loaded.customToolNames).toEqual(['acme__search', 'acme__create']);
     const approved = withAutoApprovedCustomTools(
       ['acme__search'],
       loaded.autoApprovedCustomToolNames,

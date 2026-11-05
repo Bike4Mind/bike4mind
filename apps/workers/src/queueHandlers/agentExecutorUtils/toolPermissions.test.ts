@@ -6,6 +6,7 @@ import {
   selectGatedToolCall,
   shouldWithholdToolCall,
   partitionApprovedPause,
+  partitionRepeatedApprovedCalls,
   resumeApprovedPause,
   resumeApprovedPauseAndGateConfidence,
   gateReplayConfidence,
@@ -913,5 +914,31 @@ describe('settleGatedCall', () => {
       expect.objectContaining({ executionId: 'exec_4', iteration: 2, toolCallId: 'toolu_2' })
     );
     expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('partitionRepeatedApprovedCalls', () => {
+  const guarded = new Set(['acme__create_note']);
+  const replayed: GatedToolCall = { id: 'a', name: 'acme__create_note', input: { title: 'T', body: 'B' } };
+
+  it('treats an identical custom call as a repeat, whatever its key order or encoding', () => {
+    const repeat: GatedToolCall = { id: 'b', name: 'acme__create_note', input: '{"body":"B","title":"T"}' };
+    expect(partitionRepeatedApprovedCalls([repeat], [replayed], guarded)).toEqual({ repeats: [repeat], remaining: [] });
+  });
+
+  it('keeps a call with different arguments gated', () => {
+    const other: GatedToolCall = { id: 'b', name: 'acme__create_note', input: { title: 'T2', body: 'B' } };
+    expect(partitionRepeatedApprovedCalls([other], [replayed], guarded)).toEqual({ repeats: [], remaining: [other] });
+  });
+
+  it('never short-circuits a tool outside the guarded set, such as a re-run shell command', () => {
+    const command: GatedToolCall = { id: 'a', name: 'bash_execute', input: { command: 'pnpm test' } };
+    const rerun: GatedToolCall = { ...command, id: 'b' };
+    expect(partitionRepeatedApprovedCalls([rerun], [command], guarded)).toEqual({ repeats: [], remaining: [rerun] });
+  });
+
+  it('keeps everything gated when nothing was just replayed', () => {
+    const call: GatedToolCall = { ...replayed, id: 'b' };
+    expect(partitionRepeatedApprovedCalls([call], [], guarded)).toEqual({ repeats: [], remaining: [call] });
   });
 });
