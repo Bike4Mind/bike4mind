@@ -1588,14 +1588,13 @@ export interface ChatSessionStatusEvent {
 }
 
 /**
- * What a session is doing before its first reply: cutting its worktree, waiting on that
- * worktree's dependency install, or starting the turn itself.
+ * What a session is doing before its first reply: cutting its worktree, or starting the turn
+ * itself. A worktree's dependency install is not a step: it runs alongside the first turn.
  */
-export type SessionSetupStep = 'worktree' | 'dependencies' | 'starting';
+export type SessionSetupStep = 'worktree' | 'starting';
 
 export const SESSION_SETUP_LABEL: Record<SessionSetupStep, string> = {
   worktree: 'Creating worktree',
-  dependencies: 'Installing dependencies',
   starting: 'Starting up',
 };
 

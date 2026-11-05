@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { BackgroundProcessRegistry } from '../tools/BackgroundProcessRegistry';
+import { MAX_WAIT_SECONDS } from '../tools/backgroundTools';
 import type { WorkspaceOutcome } from './workspace';
 
 export type PackageManager = 'pnpm' | 'yarn' | 'npm' | 'bun';
@@ -94,8 +95,8 @@ export interface InstallRequest {
 /**
  * Installs a freshly created worktree's dependencies.
  *
- * Doing it here moves the wait to the start of the session instead of whenever the model
- * happens to trip over the missing node_modules.
+ * Starting it here, alongside the session's first turn, overlaps the install with whatever the
+ * model does first; the prompt lines tell it how to block on the install once it needs it.
  *
  * Only ever after the app created the worktree itself: install scripts run arbitrary code, so
  * merely opening a folder must not trigger one.
@@ -188,15 +189,12 @@ function describe(
   const handle = `handle ${install.processId}, \`${install.command}\``;
   if (info.status === 'running') {
     return [
-      `Dependencies are installing in the background (${handle}). Do not poll it with bash_output:`,
-      'you are told automatically when it finishes. Do not start another install.',
+      `Dependencies are installing in the background (${handle}). Do not poll it with bash_output`,
+      'in a loop: you are told automatically when it finishes. Do not start another install.',
+      'Do work that does not need node_modules first. Once a step needs them, block on the install',
+      `with one bash_output call: id="${install.processId}", wait_seconds=${MAX_WAIT_SECONDS}.`,
       // A spawned agent's turn ending counts as the agent finishing, so it cannot wait by ending it.
-      ...(spawned
-        ? [
-            'Do other work that does not need node_modules first, and never call bash_output repeatedly',
-            'with the same id.',
-          ]
-        : []),
+      ...(spawned ? ['Never end your turn to wait for it: that reports you as finished. Wait with bash_output.'] : []),
     ];
   }
   if (info.status === 'killed') return [];

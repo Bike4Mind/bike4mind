@@ -11,7 +11,7 @@ import {
   type ChatQueueEvent,
 } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatService, MAX_CONCURRENT_SPAWNED, SPAWN_INSTALL_WAIT_MS } from './ChatService';
+import { ChatService, MAX_CONCURRENT_SPAWNED } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { AttachmentStore } from './AttachmentStore';
 import { MessageQueue } from './MessageQueue';
@@ -377,15 +377,15 @@ describe('ChatService spawn placement', () => {
     expect(wake).toContain(': failed.');
   });
 
-  it('wakes an Orchestrate parent when a delegated agent is stopped during its install wait', async () => {
-    const install = holdInstall();
+  it('wakes an Orchestrate parent when a delegated agent is stopped while it is preparing', async () => {
+    const release = holdWorktrees();
     const { parent } = await delegate();
     const spawned = await vi.waitUntil(child, { timeout: 5000, interval: 10 });
-    await vi.waitUntil(() => install.waitFor.mock.calls.length > 0, { timeout: 5000, interval: 5 });
     await endParentTurn();
     await vi.waitUntil(() => !service.isSessionBusy(parent.id), { timeout: 5000, interval: 5 });
 
     service.stop(spawned.id);
+    release();
 
     const wake = await agentsSettledWake(parent.id);
     expect(wake).toContain(': stopped');
@@ -564,78 +564,58 @@ describe('ChatService spawn placement', () => {
     expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
   });
 
-  /** Holds every install wait until the test settles it, as a running install would. */
-  function holdInstall() {
-    let settle: (outcome: InstallWait) => void = () => {};
-    const waitFor = vi.spyOn(dependencies, 'waitFor').mockImplementation(
-      () =>
-        new Promise<InstallWait>(resolve => {
-          settle = resolve;
-        })
-    );
-    return { waitFor, settle: (outcome: InstallWait) => settle(outcome) };
-  }
-
   /** Internal bookkeeping a spawn must give back however it ends. */
   function spawnBookkeeping(sessionId: string) {
     const internals = service as unknown as {
       spawnWatch: Map<string, unknown>;
       launching: Set<string>;
-      installWaits: Map<string, unknown>;
+      launchInterrupts: Map<string, unknown>;
     };
     return {
       watched: internals.spawnWatch.has(sessionId),
       launching: internals.launching.has(sessionId),
-      waiting: internals.installWaits.has(sessionId),
+      interrupted: internals.launchInterrupts.has(sessionId),
     };
   }
 
-  async function spawnAwaitingInstall(branch: string) {
-    const install = holdInstall();
+  /** A spawn held mid-cut, so the test can stop or delete it while it is still preparing. */
+  async function spawnHeldInWorktree(branch: string) {
+    const release = holdWorktrees();
     const { parent } = await spawnWith({ placement: 'worktree', branch });
-    const worktree = await worktreeOf(branch);
     const spawned = await child();
     if (!spawned) throw new Error('Child missing');
-    await vi.waitUntil(() => install.waitFor.mock.calls.length > 0, { timeout: 5000, interval: 5 });
-    return { ...install, worktree, spawned, parent };
+    return { release, parent, spawned };
   }
 
-  it("starts a spawned agent's first turn only once its install has settled", async () => {
-    const { waitFor, settle, worktree, spawned } = await spawnAwaitingInstall('agent/install-done');
+  it("starts a spawned agent's first turn without waiting on its dependency install", async () => {
+    const waitFor = vi.spyOn(dependencies, 'waitFor').mockReturnValue(new Promise<InstallWait>(() => {}));
+    await spawnWith({ placement: 'worktree', branch: 'agent/install-running' });
+    const worktree = await worktreeOf('agent/install-running');
 
-    expect(waitFor).toHaveBeenCalledWith(spawned.id, SPAWN_INSTALL_WAIT_MS);
-    await new Promise(resolve => setTimeout(resolve, 50));
-    expect(seedPosted(worktree)).toBe(false);
-    expect(service.isSessionBusy(spawned.id)).toBe(true);
-
-    settle('done');
     await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
+    expect(waitFor).not.toHaveBeenCalled();
   });
 
-  it('starts the first turn anyway when the install wait reaches its cap', async () => {
-    const { settle, worktree } = await spawnAwaitingInstall('agent/install-slow');
-
-    settle('timeout');
-    await vi.waitUntil(() => seedPosted(worktree), { timeout: 5000, interval: 5 });
-  });
-
-  it('starts no turn and leaks nothing when the agent is deleted during its install wait', async () => {
-    const { worktree, spawned } = await spawnAwaitingInstall('agent/install-deleted');
+  it('starts no turn and leaks nothing when the agent is deleted while preparing', async () => {
+    const { release, spawned } = await spawnHeldInWorktree('agent/prep-deleted');
 
     await service.deleteSession(spawned.id);
+    release();
     await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
     await new Promise(resolve => setTimeout(resolve, 50));
 
     expect(await store.get(spawned.id)).toBeNull();
-    expect(seedPosted(worktree)).toBe(false);
+    expect(seedPosted('do the thing')).toBe(false);
     expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
-    expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, waiting: false });
+    expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, interrupted: false });
   });
 
-  it('keeps an agent stopped during its install wait, with its task handed back unsent', async () => {
-    const { parent, worktree, spawned } = await spawnAwaitingInstall('agent/install-stopped');
+  it('keeps an agent stopped while preparing, with its task handed back unsent', async () => {
+    const { release, parent, spawned } = await spawnHeldInWorktree('agent/prep-stopped');
 
     service.stop(spawned.id);
+    release();
+    const worktree = await worktreeOf('agent/prep-stopped');
     await vi.waitUntil(() => !service.isSessionBusy(spawned.id), { timeout: 5000, interval: 5 });
     await vi.waitUntil(() => queueEvents.some(event => event.sessionId === spawned.id && event.returned), {
       timeout: 5000,
@@ -651,7 +631,7 @@ describe('ChatService spawn placement', () => {
     expect(kept?.messages.some(message => message.system && message.content.includes('do the thing'))).toBe(true);
     expect((await listWorktrees(main)).some(entry => entry.path === worktree)).toBe(true);
     expect(events.some(event => event.type === 'spawn-failed')).toBe(false);
-    expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, waiting: false });
+    expect(spawnBookkeeping(spawned.id)).toEqual({ watched: false, launching: false, interrupted: false });
 
     const round = await vi.waitUntil(() => streams[1], { timeout: 5000, interval: 5 });
     round.write(frame({ type: 'content', text: 'ok' }));

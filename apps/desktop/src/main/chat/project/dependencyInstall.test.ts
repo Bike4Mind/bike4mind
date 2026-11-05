@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import { DependencyInstaller, planInstall } from './dependencyInstall';
+import { MAX_WAIT_SECONDS } from '../tools/backgroundTools';
 
 let dir: string;
 
@@ -142,16 +143,17 @@ describe('DependencyInstaller', () => {
     expect(text).toContain('installing in the background');
     expect(text).toContain('abc12345');
     expect(text).toContain('Do not poll it with bash_output');
-    expect(text).not.toContain('Check with bash_output');
-    expect(text).not.toContain('never call bash_output repeatedly');
+    expect(text).toContain(`bash_output call: id="abc12345", wait_seconds=${MAX_WAIT_SECONDS}`);
+    expect(text).not.toContain('Never end your turn');
   });
 
-  it('tells a spawned agent to work on meanwhile rather than poll', async () => {
+  it('tells a spawned agent to block on the install inside its turn, never by ending it', async () => {
     const { installer } = await setup();
     await installer.maybeStart({ sessionId: 's1', workingDirectory: dir, outcome: 'created' });
     const text = installer.promptLines('s1', { spawned: true }).join('\n');
-    expect(text).toContain('Do other work');
-    expect(text).toContain('never call bash_output repeatedly');
+    expect(text).toContain('Do work that does not need node_modules first');
+    expect(text).toContain('wait_seconds=');
+    expect(text).toContain('Never end your turn to wait for it');
   });
 
   it('tells the model it finished, and stops mentioning it later', async () => {
