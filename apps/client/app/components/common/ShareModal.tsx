@@ -89,11 +89,13 @@ const showRateLimitedBulkFeedback = (
   successCount: number,
   totalCount: number,
   itemType: string,
-  unsharedItems: string[]
+  unsharedItems: string[],
+  done = 'Shared',
+  notDone = 'Not shared'
 ): 'partial' | 'failure' => {
   // Name what is left: re-sharing the whole selection would charge the already-shared items again.
   const unsharedPreview = unsharedItems.slice(0, 3).join(', ') + (unsharedItems.length > 3 ? '...' : '');
-  toast.error(`${message} Shared ${successCount} of ${totalCount} ${itemType}s. Not shared: ${unsharedPreview}`);
+  toast.error(`${message} ${done} ${successCount} of ${totalCount} ${itemType}s. ${notDone}: ${unsharedPreview}`);
   return successCount > 0 ? 'partial' : 'failure';
 };
 
@@ -371,7 +373,15 @@ const ShareDocumentModal = ({ id, onClose, type, open, name, users, ownerId, fil
           }
 
           if (rateLimitMessage) {
-            showRateLimitedBulkFeedback(rateLimitMessage, links.length, total, itemType, failedItems);
+            showRateLimitedBulkFeedback(
+              rateLimitMessage,
+              links.length,
+              total,
+              itemType,
+              failedItems,
+              'Generated links for',
+              'No link for'
+            );
           } else {
             showBulkFeedback(links.length, failedItems, itemType, 'generated links for');
           }
