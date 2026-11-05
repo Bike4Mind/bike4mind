@@ -6189,6 +6189,17 @@ export interface components {
       /** @description The visual prompt the portrait was generated from. */
       generation_prompt: string;
     };
+    generateAgentAvatarResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
     /** @example {} */
     generateAgentAvatarRequest: {
       /** @description An image model id. Omit to use the deployment image model. An unknown or non-image model is rejected with a 400. */
@@ -6198,13 +6209,46 @@ export interface components {
       /** @description The generated description. It is returned, not saved to the agent. */
       description: string;
     };
+    generateAgentDescriptionResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
     generateAgentSystemPromptResponse200: {
       /** @description The generated system prompt, already saved to the agent. */
       system_prompt: string;
     };
+    generateAgentSystemPromptResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
+    };
     enhanceAgentFieldResponse200: {
       /** @description The enhanced text. It is returned, not saved to the agent. */
       enhanced_value: string;
+    };
+    enhanceAgentFieldResponse422: {
+      error: string;
+      request_id?: string;
+      /**
+       * @deprecated
+       * @description Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this.
+       */
+      name?: string;
+      /** @enum {string} */
+      errorCode?: 'insufficient_credits' | 'spend_cap_exceeded';
     };
     /**
      * @example {
@@ -19089,7 +19133,7 @@ export interface operations {
           'application/json': components['schemas']['generateAgentAvatarResponse200'];
         };
       };
-      /** @description `image_model` is not an available image model (`errorCode: unknown_model`), no image model is configured, or the generated image would exceed the caller storage quota (`errorCode: storage_limit_exceeded`). Nothing is written. */
+      /** @description `image_model` is not an available image model (`errorCode: unknown_model`), no image model is configured, or the generated image would exceed the caller storage quota (`errorCode: storage_limit_exceeded`). The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. Nothing is written. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19182,7 +19226,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. */
+      /** @description Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. The caller cannot afford the model call, tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). Nothing is written. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19202,7 +19246,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['generateAgentAvatarResponse422'];
         };
       };
       /** @description Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: "token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`). */
@@ -19289,184 +19333,7 @@ export interface operations {
           'application/json': components['schemas']['generateAgentDescriptionResponse200'];
         };
       };
-      /** @description Missing or invalid credentials. */
-      401: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
-      403: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description Request quota per minute. */
-          'X-RateLimit-Limit-Minute'?: number;
-          /** @description Requests remaining in the current minute. */
-          'X-RateLimit-Remaining-Minute'?: number;
-          /** @description Unix epoch (seconds) when the minute window resets. */
-          'X-RateLimit-Reset-Minute'?: number;
-          /** @description Request quota per day. */
-          'X-RateLimit-Limit-Day'?: number;
-          /** @description Requests remaining in the current day. */
-          'X-RateLimit-Remaining-Day'?: number;
-          /** @description Unix epoch (seconds) when the day window resets. */
-          'X-RateLimit-Reset-Day'?: number;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
-        };
-      };
-      /** @description No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint. */
-      404: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description Request quota per minute. */
-          'X-RateLimit-Limit-Minute'?: number;
-          /** @description Requests remaining in the current minute. */
-          'X-RateLimit-Remaining-Minute'?: number;
-          /** @description Unix epoch (seconds) when the minute window resets. */
-          'X-RateLimit-Reset-Minute'?: number;
-          /** @description Request quota per day. */
-          'X-RateLimit-Limit-Day'?: number;
-          /** @description Requests remaining in the current day. */
-          'X-RateLimit-Remaining-Day'?: number;
-          /** @description Unix epoch (seconds) when the day window resets. */
-          'X-RateLimit-Reset-Day'?: number;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-      /** @description The path does not serve this HTTP method. */
-      405: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description The methods this path serves. GET implies HEAD. */
-          Allow?: string;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-      /** @description Request failed validation. */
-      422: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description Request quota per minute. */
-          'X-RateLimit-Limit-Minute'?: number;
-          /** @description Requests remaining in the current minute. */
-          'X-RateLimit-Remaining-Minute'?: number;
-          /** @description Unix epoch (seconds) when the minute window resets. */
-          'X-RateLimit-Reset-Minute'?: number;
-          /** @description Request quota per day. */
-          'X-RateLimit-Limit-Day'?: number;
-          /** @description Requests remaining in the current day. */
-          'X-RateLimit-Remaining-Day'?: number;
-          /** @description Unix epoch (seconds) when the day window resets. */
-          'X-RateLimit-Reset-Day'?: number;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-      /** @description Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: "token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`). */
-      429: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description Seconds to wait before retrying. */
-          'Retry-After'?: string;
-          /** @description Request quota per minute. */
-          'X-RateLimit-Limit-Minute'?: number;
-          /** @description Requests remaining in the current minute. */
-          'X-RateLimit-Remaining-Minute'?: number;
-          /** @description Unix epoch (seconds) when the minute window resets. */
-          'X-RateLimit-Reset-Minute'?: number;
-          /** @description Request quota per day. */
-          'X-RateLimit-Limit-Day'?: number;
-          /** @description Requests remaining in the current day. */
-          'X-RateLimit-Remaining-Day'?: number;
-          /** @description Unix epoch (seconds) when the day window resets. */
-          'X-RateLimit-Reset-Day'?: number;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-      /** @description The model or image provider failed to produce a result. Nothing is written; retry later. */
-      502: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description Request quota per minute. */
-          'X-RateLimit-Limit-Minute'?: number;
-          /** @description Requests remaining in the current minute. */
-          'X-RateLimit-Remaining-Minute'?: number;
-          /** @description Unix epoch (seconds) when the minute window resets. */
-          'X-RateLimit-Reset-Minute'?: number;
-          /** @description Request quota per day. */
-          'X-RateLimit-Limit-Day'?: number;
-          /** @description Requests remaining in the current day. */
-          'X-RateLimit-Remaining-Day'?: number;
-          /** @description Unix epoch (seconds) when the day window resets. */
-          'X-RateLimit-Reset-Day'?: number;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['ErrorResponse'];
-        };
-      };
-    };
-  };
-  generateAgentSystemPrompt: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path: {
-        id: string;
-      };
-      cookie?: never;
-    };
-    requestBody?: never;
-    responses: {
-      /** @description The saved system prompt. */
-      200: {
-        headers: {
-          /** @description Correlation id for this request; safe to log and quote in support requests. */
-          'X-Request-ID'?: string;
-          /** @description Request quota per minute. */
-          'X-RateLimit-Limit-Minute'?: number;
-          /** @description Requests remaining in the current minute. */
-          'X-RateLimit-Remaining-Minute'?: number;
-          /** @description Unix epoch (seconds) when the minute window resets. */
-          'X-RateLimit-Reset-Minute'?: number;
-          /** @description Request quota per day. */
-          'X-RateLimit-Limit-Day'?: number;
-          /** @description Requests remaining in the current day. */
-          'X-RateLimit-Remaining-Day'?: number;
-          /** @description Unix epoch (seconds) when the day window resets. */
-          'X-RateLimit-Reset-Day'?: number;
-          [name: string]: unknown;
-        };
-        content: {
-          'application/json': components['schemas']['generateAgentSystemPromptResponse200'];
-        };
-      };
-      /** @description The assistant cannot run: the feature is disabled or not configured on this deployment. Nothing is written. */
+      /** @description The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19559,7 +19426,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request failed validation. */
+      /** @description The caller cannot afford the model call, tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). Nothing is written. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19579,7 +19446,207 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
+          'application/json': components['schemas']['generateAgentDescriptionResponse422'];
+        };
+      };
+      /** @description Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: "token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`). */
+      429: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Seconds to wait before retrying. */
+          'Retry-After'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
           'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The model or image provider failed to produce a result. Nothing is written; retry later. */
+      502: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+    };
+  };
+  generateAgentSystemPrompt: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The saved system prompt. */
+      200: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['generateAgentSystemPromptResponse200'];
+        };
+      };
+      /** @description The assistant cannot run: the feature is disabled or not configured on this deployment. The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. Nothing is written. */
+      400: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description Missing or invalid credentials. */
+      401: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The API key lacks `agents:write`. The same status also answers a caller whose account has AI access revoked; that body carries only `error`, with no `required_scopes`. */
+      403: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ScopeForbiddenResponse'];
+        };
+      };
+      /** @description No agent with that id is yours. An agent shared with you, one that does not exist, a deleted agent and a malformed id are all reported as 404, so agent ids cannot be probed through this endpoint. */
+      404: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The path does not serve this HTTP method. */
+      405: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description The methods this path serves. GET implies HEAD. */
+          Allow?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['ErrorResponse'];
+        };
+      };
+      /** @description The caller cannot afford the model call, tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). Nothing is written. */
+      422: {
+        headers: {
+          /** @description Correlation id for this request; safe to log and quote in support requests. */
+          'X-Request-ID'?: string;
+          /** @description Request quota per minute. */
+          'X-RateLimit-Limit-Minute'?: number;
+          /** @description Requests remaining in the current minute. */
+          'X-RateLimit-Remaining-Minute'?: number;
+          /** @description Unix epoch (seconds) when the minute window resets. */
+          'X-RateLimit-Reset-Minute'?: number;
+          /** @description Request quota per day. */
+          'X-RateLimit-Limit-Day'?: number;
+          /** @description Requests remaining in the current day. */
+          'X-RateLimit-Remaining-Day'?: number;
+          /** @description Unix epoch (seconds) when the day window resets. */
+          'X-RateLimit-Reset-Day'?: number;
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['generateAgentSystemPromptResponse422'];
         };
       };
       /** @description Per-user rate limit exceeded, this agent system prompt was generated more recently than the admin-set interval allows, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: "token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`). */
@@ -19670,7 +19737,7 @@ export interface operations {
           'application/json': components['schemas']['enhanceAgentFieldResponse200'];
         };
       };
-      /** @description No model is available to run the enhancement on this deployment. */
+      /** @description No model is available to run the enhancement on this deployment. The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19763,7 +19830,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. */
+      /** @description Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. The caller cannot afford the model call, tagged `errorCode: "insufficient_credits"` (the balance is short, or the org member credit cap is exhausted). Nothing is written. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -19783,7 +19850,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ErrorResponse'];
+          'application/json': components['schemas']['enhanceAgentFieldResponse422'];
         };
       };
       /** @description Per-user rate limit exceeded, or the account used up its tokens-per-minute or concurrent-request allowance (`errorCode: "token_rate_limit_exceeded"`, with a `Retry-After` for when the window drains, or `"concurrency_limit_exceeded"`). */

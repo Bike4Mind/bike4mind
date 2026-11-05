@@ -185,7 +185,7 @@ const AUTHORING_FORBIDDEN =
   'carries only `error`, with no `required_scopes`.';
 
 const AUTHORING_400 =
-  'The assistant cannot run: the feature is disabled or not configured on this deployment. Nothing is written.';
+  'The assistant cannot run: the feature is disabled or not configured on this deployment.';
 
 const BILLING_400 =
   'The billing user or organization could not be resolved, or the API key bills an organization ' +
@@ -293,7 +293,7 @@ export const generateAgentSystemPromptContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The saved system prompt.', schema: GenerateAgentSystemPromptResponseSchema },
-    400: { description: `${AUTHORING_400} ${BILLING_400}`, schema: ApiErrorSchema },
+    400: { description: `${AUTHORING_400} ${BILLING_400} Nothing is written.`, schema: ApiErrorSchema },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
     422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
