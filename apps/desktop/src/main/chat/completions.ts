@@ -13,6 +13,14 @@ import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 export const DEFAULT_COMPLETIONS_PATH = '/api/ai/v1/completions';
 
 /**
+ * How long the completion POST waits for response headers (ms), overriding the shared client's
+ * 30 s. The server holds its headers until auth, model resolution and the credit hold are done,
+ * so a cold start or a queued request can take well past 30 s before any byte arrives. With a
+ * stream response axios stops this timer once headers land, so it never caps a long reply.
+ */
+export const COMPLETION_HEADER_TIMEOUT_MS = 120_000;
+
+/**
  * `content` is a string for an ordinary turn, or an array of provider-shaped blocks
  * (`tool_use`, `tool_result`, reasoning) when a turn carries tool traffic. The endpoint
  * accepts both - see CompletionMessageSchema in @bike4mind/common.
@@ -170,7 +178,7 @@ export async function streamCompletion(
           ...(request.cacheTtl ? { cacheTtl: request.cacheTtl } : {}),
         },
       },
-      { responseType: 'stream', signal }
+      { responseType: 'stream', signal, timeout: COMPLETION_HEADER_TIMEOUT_MS }
     );
   } catch (err) {
     if (signal?.aborted || (isAxiosError(err) && err.code === 'ERR_CANCELED')) return;
@@ -320,6 +328,13 @@ function toRequestError(error: unknown, body?: string): Error {
     }
     if (error.code === 'ECONNREFUSED') {
       return new Error('Cannot reach the Bike4Mind server. Check the environment and your connection.');
+    }
+    // Not retried here: the server does not cancel on disconnect, so the abandoned request may
+    // still run and bill, and a silent resend could charge the turn twice.
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      return new Error(
+        'The Bike4Mind server took too long to start replying, so this turn stopped. Send your message again to continue.'
+      );
     }
   }
   return error instanceof Error ? error : new Error(String(error));
