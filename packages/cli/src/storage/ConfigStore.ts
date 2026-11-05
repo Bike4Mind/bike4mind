@@ -405,6 +405,8 @@ const ProjectLocalConfigSchema = z.object({
 export const REFRESH_LOCK_STALE_MS = 30_000;
 export const REFRESH_LOCK_WAIT_MS = 40_000;
 const REFRESH_LOCK_POLL_MS = 100;
+const REFRESH_LOCK_REREAD_TRIES = 5;
+const REFRESH_LOCK_REREAD_PAUSE_MS = 20;
 
 interface RefreshLockFile {
   pid?: unknown;
@@ -890,8 +892,7 @@ export class ConfigStore {
    * effective config used for reads during the session.
    */
   private globalConfig: CliConfig | null = null;
-  /** Bumped by every save(), so a re-read of the file that straddled one does not overwrite what it saved. */
-  private saveGeneration = 0;
+  private serial: Promise<unknown> = Promise.resolve();
   /** Canonicalized (realpath'd) discovered project root, or null. */
   private projectRealPath: string | null = null;
   /** Whether the discovered project root is in the global `trustedProjects`. */
@@ -952,7 +953,13 @@ export class ConfigStore {
         }
 
         const data = await fs.readFile(this.configPath, 'utf-8');
-        const rawConfig = JSON.parse(data);
+        let rawConfig;
+        try {
+          rawConfig = JSON.parse(data);
+        } catch {
+          // The parser's message can quote the file's bytes, which may include a saved token.
+          throw new Error(`Could not load ${this.configPath}: it is not valid JSON.`);
+        }
 
         // Auto-migrate old environment-based API config to new simple format
         if (rawConfig.apiConfig && 'environment' in rawConfig.apiConfig) {
@@ -1460,17 +1467,51 @@ export class ConfigStore {
   /**
    * Save configuration to disk
    */
-  async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
-    // Bumped at both ends, so a sign-in re-read that starts while this save is in flight also stands down.
-    this.saveGeneration++;
-    try {
-      await this.persistGlobal(config, opts);
-    } finally {
-      this.saveGeneration++;
-    }
+  async save(config?: GlobalConfigPatch): Promise<void> {
+    await this.exclusive(() => this.persistGlobal(config));
   }
 
-  private async persistGlobal(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
+  /** Serializes this store's reads and writes of the config file, so one never interleaves with another. */
+  private exclusive<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.serial.then(work, work);
+    this.serial = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * The sign-in and backend fields as the file holds them now; another process may have signed in or switched
+   * since this store loaded. A field the file holds in an unexpected shape keeps this store's value.
+   */
+  private async diskAuthFields(own: CliConfig): Promise<Pick<CliConfig, 'auth' | 'authByEnv' | 'apiConfig'>> {
+    const mine = { auth: own.auth, authByEnv: own.authByEnv, apiConfig: own.apiConfig };
+    let disk: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return mine;
+      disk = parsed as Record<string, unknown>;
+    } catch {
+      return mine;
+    }
+    const pick = <T>(key: keyof typeof mine, schema: z.ZodType<T>, fallback: T | undefined): T | undefined => {
+      if (!Object.prototype.hasOwnProperty.call(disk, key) || disk[key] === undefined) return undefined;
+      const parsed = schema.safeParse(disk[key]);
+      return parsed.success ? parsed.data : fallback;
+    };
+    return {
+      auth: pick('auth', AuthTokensSchema, own.auth),
+      authByEnv: pick('authByEnv', z.record(z.string(), AuthTokensSchema), own.authByEnv),
+      apiConfig: pick('apiConfig', ApiConfigSchema, own.apiConfig),
+    };
+  }
+
+  /**
+   * Writes the global layer. The sign-in and backend fields are written as the file holds them, so a stale or
+   * signed-out process cannot undo another's sign-in; only `authFields` writers (a backend change, a reset) set them.
+   */
+  private async persistGlobal(
+    config?: GlobalConfigPatch,
+    opts?: { clearFeatures?: boolean; authFields?: Pick<CliConfig, 'auth' | 'authByEnv' | 'apiConfig'> }
+  ): Promise<void> {
     await this.init();
 
     // Ensure the global snapshot exists (first save on a fresh store).
@@ -1512,7 +1553,9 @@ export class ConfigStore {
       this.globalConfig = {
         ...global,
         ...rest,
-        auth: 'auth' in config ? config.auth : global.auth,
+        auth: global.auth,
+        authByEnv: global.authByEnv,
+        apiConfig: global.apiConfig,
         preferences: {
           ...global.preferences,
           ...(config.preferences || {}),
@@ -1538,10 +1581,11 @@ export class ConfigStore {
     if (!opts?.clearFeatures) {
       this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
+    const contents = { ...this.globalConfig, ...(opts?.authFields ?? (await this.diskAuthFields(this.globalConfig))) };
 
     try {
       // Persist ONLY the global layer, never the merged effective config.
-      await this.writeConfigFile(JSON.stringify(this.globalConfig, null, 2));
+      await this.writeConfigFile(JSON.stringify(contents, null, 2));
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
@@ -1567,8 +1611,12 @@ export class ConfigStore {
     this.rawMcpJsonServers = null;
     // clearFeatures: a reset must wipe the on-disk feature map too, not inherit it
     // via save()'s concurrent-writer disk-merge (reached e.g. from load()'s
-    // corrupt-config recovery path).
-    await this.save(undefined, { clearFeatures: true });
+    // corrupt-config recovery path). Not serialized: load() calls this, and a serialized write may call load().
+    const g = this.globalConfig;
+    await this.persistGlobal(undefined, {
+      clearFeatures: true,
+      authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
+    });
     return this.config!;
   }
 
@@ -1698,43 +1746,64 @@ export class ConfigStore {
     await this.saveAuthSlot(tokens);
   }
 
-  /** Clear the sign-in for this process's backend (logout), leaving other backends' sign-ins alone. */
-  async clearAuthTokens(): Promise<void> {
-    await this.saveAuthSlot(undefined);
+  /**
+   * Clear the sign-in for this process's backend (logout), leaving other backends' sign-ins alone. With
+   * `expectedRefreshToken`, clears only while the saved sign-in still holds that token, so a newer one is kept.
+   */
+  async clearAuthTokens(expectedRefreshToken?: string): Promise<void> {
+    await this.saveAuthSlot(undefined, expectedRefreshToken);
   }
 
   /**
    * Write only this process's sign-in slot into the file as it is now: `auth` when the file's active backend
    * is this process's, otherwise `authByEnv[<this backend>]`. Another process's backend switch and sign-in survive.
    */
-  private async saveAuthSlot(tokens: AuthTokens | undefined): Promise<void> {
+  private async saveAuthSlot(tokens: AuthTokens | undefined, expectedRefreshToken?: string): Promise<void> {
     await this.load();
-    const text = await this.readConfigText();
-    if (text === null) {
-      this.globalConfig!.auth = tokens;
-      await this.save();
-      return;
-    }
-    const file = this.parseConfigText(text) ?? {};
-    const myKey = this.envKey();
-    if (this.fileEnvKey(file) === myKey) {
-      if (tokens) file.auth = tokens;
-      else delete file.auth;
-    } else {
+    await this.exclusive(async () => {
+      if (!this.globalConfig) await this.load();
+      const text = await this.readConfigText();
+      if (text === null) {
+        if (expectedRefreshToken !== undefined && this.globalConfig!.auth?.refreshToken !== expectedRefreshToken) {
+          return;
+        }
+        const g = this.globalConfig!;
+        g.auth = tokens;
+        await this.persistGlobal(undefined, {
+          authFields: { auth: tokens, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
+        });
+        return;
+      }
+      const file = this.parseConfigText(text);
+      if (!file) throw new Error(`Could not save the sign-in to ${this.configPath}: it does not hold a JSON object`);
+      const myKey = this.envKey();
+      const mySlotInAuth = this.fileEnvKey(file) === myKey;
       const byEnv: Record<string, unknown> =
-        typeof file.authByEnv === 'object' && file.authByEnv !== null ? { ...file.authByEnv } : {};
-      if (tokens) byEnv[myKey] = tokens;
-      else delete byEnv[myKey];
-      file.authByEnv = byEnv;
-    }
-    this.saveGeneration++;
-    this.globalConfig!.auth = tokens;
-    if (this.config) this.config.auth = tokens;
-    try {
+        typeof file.authByEnv === 'object' && file.authByEnv !== null && !Array.isArray(file.authByEnv)
+          ? { ...file.authByEnv }
+          : {};
+      if (expectedRefreshToken !== undefined) {
+        const held: unknown = mySlotInAuth
+          ? file.auth
+          : Object.prototype.hasOwnProperty.call(byEnv, myKey)
+            ? byEnv[myKey]
+            : undefined;
+        const heldRefresh =
+          typeof held === 'object' && held !== null ? (held as { refreshToken?: unknown }).refreshToken : undefined;
+        if (heldRefresh !== expectedRefreshToken) return;
+      }
+      if (mySlotInAuth) {
+        if (tokens) file.auth = tokens;
+        else delete file.auth;
+      } else {
+        if (tokens) byEnv[myKey] = tokens;
+        else delete byEnv[myKey];
+        file.authByEnv = byEnv;
+      }
       await this.writeConfigFile(JSON.stringify(file, null, 2));
-    } finally {
-      this.saveGeneration++;
-    }
+      this.globalConfig!.auth = tokens;
+      if (this.config) this.config.auth = tokens;
+    });
   }
 
   private envKey(): string {
@@ -1779,13 +1848,14 @@ export class ConfigStore {
    */
   async reloadAuthTokens(): Promise<AuthTokens | null> {
     await this.load();
-    const generation = this.saveGeneration;
-    const text = await this.readConfigText();
-    const auth = text === null ? undefined : this.authForEnv(text, this.envKey());
-    if (generation !== this.saveGeneration) return this.globalConfig!.auth ?? null;
-    this.globalConfig!.auth = auth;
-    if (this.config) this.config.auth = auth;
-    return auth ?? null;
+    return this.exclusive(async () => {
+      if (!this.globalConfig) await this.load();
+      const text = await this.readConfigText();
+      const auth = text === null ? undefined : this.authForEnv(text, this.envKey());
+      this.globalConfig!.auth = auth;
+      if (this.config) this.config.auth = auth;
+      return auth ?? null;
+    });
   }
 
   /**
@@ -1819,7 +1889,13 @@ export class ConfigStore {
         if (!brokeStale) break;
         // Two waiters can break the same stale lock, and one may then remove the other's new one: confirm ours stands.
         await pause(REFRESH_LOCK_POLL_MS * 2);
-        if ((await this.readRefreshLock(lockPath))?.nonce === nonce) break;
+        let standing = await this.readRefreshLock(lockPath);
+        // A read can fail transiently (EBUSY on Windows); retry briefly instead of waiting out the stale window.
+        for (let retry = 0; standing === null && retry < REFRESH_LOCK_REREAD_TRIES; retry++) {
+          await pause(REFRESH_LOCK_REREAD_PAUSE_MS);
+          standing = await this.readRefreshLock(lockPath);
+        }
+        if (standing?.nonce === nonce) break;
         brokeStale = false;
       } else if (await this.refreshLockIsStale(lockPath)) {
         await fs.rm(lockPath, { force: true });
@@ -1910,18 +1986,30 @@ export class ConfigStore {
    */
   async setCustomApiUrl(url: string | null): Promise<void> {
     await this.load();
-    // Reset to the build-time default service (null) or set a self-hosted URL.
-    this.globalConfig!.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
-    await this.save();
+    await this.exclusive(async () => {
+      if (!this.globalConfig) await this.load();
+      const g = this.globalConfig!;
+      // Reset to the build-time default service (null) or set a self-hosted URL.
+      g.apiConfig = url === null ? { endpointChosen: true } : { customUrl: url, endpointChosen: true };
+      const disk = await this.diskAuthFields(g);
+      await this.persistGlobal(undefined, { authFields: { ...disk, apiConfig: g.apiConfig } });
+    });
   }
 
   /** Record that a backend was chosen, so the first-run picker is not shown again. */
   async markEndpointChosen(): Promise<void> {
     await this.load();
-    const g = this.globalConfig!;
-    if (g.apiConfig?.endpointChosen) return;
-    g.apiConfig = { ...g.apiConfig, endpointChosen: true };
-    await this.save();
+    if (this.globalConfig!.apiConfig?.endpointChosen) return;
+    await this.exclusive(async () => {
+      if (!this.globalConfig) await this.load();
+      const g = this.globalConfig!;
+      const disk = await this.diskAuthFields(g);
+      g.apiConfig = { ...g.apiConfig, endpointChosen: true };
+      if (disk.apiConfig?.endpointChosen) return;
+      await this.persistGlobal(undefined, {
+        authFields: { ...disk, apiConfig: { ...disk.apiConfig, endpointChosen: true } },
+      });
+    });
   }
 
   /**
@@ -1942,10 +2030,6 @@ export class ConfigStore {
     target: 'dev' | 'prod' | { customUrl: string }
   ): Promise<{ url: string; envName: string; changed: boolean; authenticated: boolean }> {
     await this.load();
-    const g = this.globalConfig!;
-
-    const prevUrl = g.apiConfig?.customUrl || getDefaultApiUrl();
-
     let newUrl: string;
     let newApiConfig: CliConfig['apiConfig'];
     if (target === 'prod') {
@@ -1960,26 +2044,24 @@ export class ConfigStore {
     }
     const envName = getEnvironmentName(newApiConfig);
 
-    const swap = swapActiveEnvAuth(g, prevUrl, newUrl);
-
-    // No-op when already pointed at the requested environment - leave auth alone.
-    if (!swap.changed) {
-      if (!g.apiConfig?.endpointChosen) {
-        g.apiConfig = newApiConfig;
-        await this.save();
+    return this.exclusive(async () => {
+      if (!this.globalConfig) await this.load();
+      const g = this.globalConfig!;
+      const wasHere = normalizeEnvKey(g.apiConfig?.customUrl || getDefaultApiUrl()) === normalizeEnvKey(newUrl);
+      // The swap starts from the file, which another process may have switched or signed in since this one loaded.
+      const disk = await this.diskAuthFields(g);
+      const swap = swapActiveEnvAuth(disk, disk.apiConfig?.customUrl || getDefaultApiUrl(), newUrl);
+      const apiConfig = swap.changed || !disk.apiConfig?.endpointChosen ? newApiConfig : disk.apiConfig;
+      g.apiConfig = apiConfig;
+      g.authByEnv = swap.changed ? swap.authByEnv : disk.authByEnv;
+      g.auth = swap.auth; // undefined -> user will be prompted to /login
+      if (swap.changed || !disk.apiConfig?.endpointChosen) {
+        await this.persistGlobal(undefined, { authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig } });
+      } else {
+        this.config = await this.computeMerged();
       }
-      return { url: newUrl, envName, changed: false, authenticated: isAuthTokenValid(g.auth) };
-    }
-
-    g.apiConfig = newApiConfig;
-    g.authByEnv = swap.authByEnv;
-    g.auth = swap.auth; // undefined -> user will be prompted to /login
-
-    // No-arg save() persists these global mutations and refreshes features from
-    // disk, so a concurrent `b4m plugin add` isn't reverted by this switch.
-    await this.save();
-
-    return { url: newUrl, envName, changed: true, authenticated: isAuthTokenValid(swap.auth) };
+      return { url: newUrl, envName, changed: !wasHere, authenticated: isAuthTokenValid(swap.auth) };
+    });
   }
 
   /**

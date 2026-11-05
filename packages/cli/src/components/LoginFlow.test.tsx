@@ -78,9 +78,34 @@ describe('LoginFlow', () => {
     expires_in: 600,
     interval: 5,
   });
-  const configStore = { setAuthTokens: vi.fn().mockResolvedValue(undefined) } as unknown as ConfigStore;
+  let lockHeld = false;
+  const savedUnderLock: boolean[] = [];
+  const configStore = {
+    setAuthTokens: vi.fn(async () => {
+      savedUnderLock.push(lockHeld);
+    }),
+    withRefreshLock: vi.fn(async (work: () => Promise<unknown>) => {
+      lockHeld = true;
+      try {
+        return await work();
+      } finally {
+        lockHeld = false;
+      }
+    }),
+  } as unknown as ConfigStore;
 
   afterEach(cleanup);
+
+  it('saves the sign-in while holding the refresh lock', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    identify.mockResolvedValue({});
+    savedUnderLock.length = 0;
+    render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(savedUnderLock).toEqual([true]));
+  });
 
   beforeEach(() => {
     vi.mocked(open).mockClear();
@@ -403,6 +428,7 @@ describe('LoginFlow', () => {
     let saved!: () => void;
     const store = {
       setAuthTokens: vi.fn(() => new Promise<void>(resolve => (saved = resolve))),
+      withRefreshLock: (work: () => Promise<unknown>) => work(),
     } as unknown as ConfigStore;
     const onSuccess = vi.fn();
     const onCancel = vi.fn();

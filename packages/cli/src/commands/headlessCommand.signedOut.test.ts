@@ -129,7 +129,10 @@ async function runSignedOut(
   local: string[] = []
 ) {
   passThrough = local;
-  await new ConfigStore().save(config);
+  const { apiConfig, ...settings } = config;
+  const store = new ConfigStore();
+  await store.save(settings);
+  if (apiConfig) await store.setCustomApiUrl(apiConfig.customUrl);
   const ollama = models
     ? ollamaFetch(models)
     : vi.fn(async () => {

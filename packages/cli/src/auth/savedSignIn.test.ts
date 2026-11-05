@@ -219,7 +219,7 @@ describe('ConfigStore.reloadAuthTokens', () => {
     const custom = { ...stale, accessToken: 'access-custom', refreshToken: 'refresh-custom' };
     const prod = { ...stale, accessToken: 'access-prod', refreshToken: 'refresh-prod' };
     const setup = new ConfigStore(configPath);
-    await setup.save({ apiConfig: { customUrl: 'https://self-hosted.example.com', endpointChosen: true } });
+    await setup.setCustomApiUrl('https://self-hosted.example.com');
     await setup.setAuthTokens(custom);
     const store = new ConfigStore(configPath);
     await store.getAuthTokens();
@@ -257,9 +257,9 @@ describe('ConfigStore.reloadAuthTokens', () => {
 
     const reloading = store.reloadAuthTokens();
     await vi.waitFor(() => expect(held).toBe(true));
-    await store.setAuthTokens(fresh);
+    const saving = store.setAuthTokens(fresh);
     release();
-    await reloading;
+    await Promise.all([reloading, saving]);
     vi.mocked(fsPromises.readFile).mockRestore();
     await store.save({});
 
@@ -268,31 +268,135 @@ describe('ConfigStore.reloadAuthTokens', () => {
   });
 });
 
-describe('ConfigStore.reloadAuthTokens during a save', () => {
-  it('keeps what a save already in flight wrote when the re-read straddles its end', async () => {
+describe('ConfigStore writes within one process', () => {
+  const fresh = { ...stale, accessToken: 'access-fresh', refreshToken: 'refresh-fresh' };
+
+  it('keeps a sign-in saved alongside a settings save', async () => {
+    for (let run = 0; run < 10; run++) {
+      const store = await savedStore();
+      await store.getAuthTokens();
+
+      await Promise.all([store.save({ defaultModel: `model-${run}` }), store.setAuthTokens(fresh)]);
+
+      const file = JSON.parse(await readFile(configPath, 'utf-8')) as { auth?: unknown; defaultModel?: string };
+      expect(file.auth).toEqual(fresh);
+      expect(file.defaultModel).toBe(`model-${run}`);
+      expect(await store.getAuthTokens()).toEqual(fresh);
+    }
+  });
+
+  it('does not re-read the file while a sign-in is being written to it', async () => {
     const store = await savedStore();
     await store.getAuthTokens();
     const before = await readFile(configPath, 'utf-8');
-    let release!: () => void;
-    const gate = new Promise<void>(resolve => (release = resolve));
+    const realRename = fsPromises.rename.bind(fsPromises);
     const realRead = fsPromises.readFile.bind(fsPromises);
+    let renaming = false;
+    let releaseRename!: () => void;
+    const renameGate = new Promise<void>(resolve => (releaseRename = resolve));
+    let saved!: () => void;
+    const savedGate = new Promise<void>(resolve => (saved = resolve));
+    vi.spyOn(fsPromises, 'rename').mockImplementation((async (...args: Parameters<typeof realRename>) => {
+      renaming = true;
+      await renameGate;
+      return realRename(...args);
+    }) as typeof fsPromises.rename);
     vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
-      if (String(args[0]) === configPath && new Error().stack?.includes('reloadAuthTokens')) {
-        await gate;
+      // A read that starts before the rename lands sees the old file, however late it returns.
+      if (renaming && String(args[0]) === configPath) {
+        await savedGate;
         return before;
       }
       return realRead(...args);
     }) as typeof fsPromises.readFile);
-    const fresh = { ...stale, accessToken: 'access-fresh', refreshToken: 'refresh-fresh' };
 
-    const saving = store.save({ auth: fresh });
+    const saving = store.setAuthTokens(fresh);
+    await vi.waitFor(() => expect(renaming).toBe(true));
     const reloading = store.reloadAuthTokens();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    renaming = false;
+    releaseRename();
     await saving;
-    release();
+    saved();
     await reloading;
-    vi.mocked(fsPromises.readFile).mockRestore();
+    vi.restoreAllMocks();
 
     expect(await store.getAuthTokens()).toEqual(fresh);
+  });
+});
+
+describe('ConfigStore saves across processes', () => {
+  const newer = { ...stale, accessToken: 'access-newer', refreshToken: 'refresh-newer' };
+
+  it('keeps a sign-in another process saved when a signed-out process saves its settings', async () => {
+    const signedOut = new ConfigStore(configPath);
+    await signedOut.load();
+    await new ConfigStore(configPath).setAuthTokens(newer);
+
+    await signedOut.save({ defaultModel: 'local-model' });
+
+    const file = JSON.parse(await readFile(configPath, 'utf-8')) as { auth?: unknown; defaultModel?: string };
+    expect(file.auth).toEqual(newer);
+    expect(file.defaultModel).toBe('local-model');
+  });
+
+  it('keeps the newer refresh token another process saved when this one saves with an older one', async () => {
+    const store = await savedStore();
+    expect(await store.getAuthTokens()).toEqual(stale);
+    await new ConfigStore(configPath).setAuthTokens(newer);
+
+    await store.trustTool('bash');
+
+    expect(await onDisk()).toEqual(newer);
+  });
+
+  it('switches backend from the sign-in the file holds, not the one this process loaded', async () => {
+    const store = new ConfigStore(configPath);
+    await store.load();
+    await new ConfigStore(configPath).setAuthTokens(newer);
+
+    await store.switchApiEnvironment('dev');
+
+    const file = JSON.parse(await readFile(configPath, 'utf-8')) as { auth?: unknown; authByEnv?: object };
+    expect(file.auth).toBeUndefined();
+    expect(Object.values(file.authByEnv ?? {})).toContainEqual(newer);
+  });
+
+  it('refuses to save a sign-in over a file that does not hold a JSON object, and leaves it as it was', async () => {
+    for (const contents of ['[]', 'null', '"x"', '42']) {
+      await rm(configPath, { force: true });
+      const store = await savedStore();
+      await store.getAuthTokens();
+      await writeFile(configPath, contents);
+
+      await expect(store.setAuthTokens(newer)).rejects.toThrow(configPath);
+      expect(await readFile(configPath, 'utf-8')).toBe(contents);
+    }
+  });
+
+  it('clears on a rejected refresh only while the file still holds the rejected token', async () => {
+    const store = await savedStore();
+    await store.getAuthTokens();
+    await new ConfigStore(configPath).setAuthTokens(newer);
+
+    await store.clearAuthTokens(stale.refreshToken);
+    expect(await onDisk()).toEqual(newer);
+
+    await store.clearAuthTokens(newer.refreshToken);
+    expect(await onDisk()).toBeNull();
+  });
+
+  it('names the file but never echoes its contents when it is not JSON at load', async () => {
+    await writeFile(configPath, '{"auth":{"accessToken":secret-token-123}}');
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const error = await new ConfigStore(configPath).load().catch((e: Error) => e);
+
+    expect((error as Error).message).toContain(configPath);
+    expect((error as Error).message).toContain('not valid JSON');
+    expect((error as Error).message).not.toContain('secret');
+    expect(JSON.stringify(printed.mock.calls.map(call => call.map(String)))).not.toContain('secret');
+    printed.mockRestore();
   });
 });
 
@@ -371,6 +475,27 @@ describe('concurrent refreshes across b4m processes', () => {
 
     await expect(locking).rejects.toThrow('still refreshing');
     expect(work).not.toHaveBeenCalled();
+  });
+
+  it('keeps the lock it broke when re-reading it briefly fails', async () => {
+    await writeFile(lockPath(), JSON.stringify({ pid: 1, at: Date.now() - 31_000, nonce: 'gone' }));
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    let failed = false;
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      const text = await realRead(...args);
+      if (!failed && String(args[0]) === lockPath() && !String(text).includes('"gone"')) {
+        failed = true;
+        throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      }
+      return text;
+    }) as typeof fsPromises.readFile);
+
+    try {
+      expect(await new ConfigStore(configPath).withRefreshLock(async () => 'ran', 1_000)).toBe('ran');
+      expect(failed).toBe(true);
+    } finally {
+      vi.mocked(fsPromises.readFile).mockRestore();
+    }
   });
 
   it('on Windows, waits out a lock still being deleted instead of failing', async () => {

@@ -137,6 +137,16 @@ describe('AuthenticatedApiClient refresh failures', () => {
     expect(onTokensCleared).toHaveBeenCalledWith(expect.stringContaining(`HTTP ${status}`));
   });
 
+  it('clears only the rejected refresh token, so the store can keep a newer one saved meanwhile', async () => {
+    const stored = tokens();
+    const { store } = memoryStore(stored);
+    const { client } = build(store, vi.fn().mockRejectedValue(httpError(401)));
+
+    await rejection(client.get('/api/identify'));
+
+    expect(store.clearAuthTokens).toHaveBeenCalledWith(stored.refreshToken);
+  });
+
   it('words a rejected refresh and one that could not complete apart when the host says how', async () => {
     const reauthMessages = { ...MESSAGES, refreshUnavailable: 'Could not reach the server.' };
     const rejected = build(memoryStore(tokens()).store, vi.fn().mockRejectedValue(httpError(401)), vi.fn(), {

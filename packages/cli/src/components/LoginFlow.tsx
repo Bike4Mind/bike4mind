@@ -166,13 +166,15 @@ export function LoginFlow({
         // Step 4: Calculate expiry time
         const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
 
-        // Step 5: Store tokens
-        await configStore.setAuthTokens({
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          expiresAt,
-          userId,
-        });
+        // Step 5: Store tokens, under the lock so a refresh in another b4m process cannot write over them.
+        await configStore.withRefreshLock(() =>
+          configStore.setAuthTokens({
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            expiresAt,
+            userId,
+          })
+        );
 
         setAccount({ userId });
         setStatus('success');

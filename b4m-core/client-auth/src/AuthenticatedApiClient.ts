@@ -357,7 +357,9 @@ export class AuthenticatedApiClient {
         this.logger.warn('AUTH: Refresh rejected for a token already replaced in storage; keeping the newer one');
         return current;
       }
-      if (current) await this.clearStoredTokens(`refresh token rejected by the server (HTTP ${status})`);
+      if (current) {
+        await this.clearStoredTokens(`refresh token rejected by the server (HTTP ${status})`, presented.refreshToken);
+      }
       throw new SessionRevokedError(this.reauthMessages.refreshFailed);
     }
     this.logger.debug('AUTH: Token refresh successful');
@@ -389,9 +391,9 @@ export class AuthenticatedApiClient {
     return this.tokenStore.reloadAuthTokens ? this.tokenStore.reloadAuthTokens() : this.tokenStore.getAuthTokens();
   }
 
-  private async clearStoredTokens(reason: string): Promise<void> {
+  private async clearStoredTokens(reason: string, expectedRefreshToken?: string): Promise<void> {
     this.logger.warn(`AUTH: Clearing stored tokens: ${reason}`);
-    await this.tokenStore.clearAuthTokens();
+    await this.tokenStore.clearAuthTokens(expectedRefreshToken);
     this.onTokensCleared?.(reason);
   }
 
