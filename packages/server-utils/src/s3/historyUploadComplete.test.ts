@@ -138,7 +138,7 @@ describe('historyUploadComplete failure inbox message', () => {
     const message = await failWith(new Error('conversations.json not found in archive'));
 
     expect(message).toBe(
-      "Your OpenAI import failed: This file doesn't look like a ChatGPT export (no conversations.json). " +
+      "Your ChatGPT import failed: This file doesn't look like a ChatGPT export (no conversations.json). " +
         'Export your history again and upload the new file.'
     );
     expect(message).not.toContain('try again later');

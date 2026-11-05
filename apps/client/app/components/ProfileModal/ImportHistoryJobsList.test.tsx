@@ -81,6 +81,16 @@ describe('ImportHistoryJobsList failed rows', () => {
     expect(screen.getByTestId('retry-import-job-1')).toBeInTheDocument();
   });
 
+  it('keeps a Notebook JSON failure generic and retryable', () => {
+    hooks.jobs = [makeJob({ source: 'Notebook', errorMessage: 'Unexpected token } in JSON at position 12' })];
+    renderList();
+
+    expect(screen.getByTestId('import-job-failure-reason-job-1')).toHaveTextContent(
+      'Something went wrong on our side while processing this import.'
+    );
+    expect(screen.getByTestId('retry-import-job-1')).toBeInTheDocument();
+  });
+
   it('never renders the raw error message', () => {
     const raw = 'ENOENT: no such file /tmp/import-user-123/upload.zip';
     hooks.jobs = [makeJob({ errorMessage: raw })];

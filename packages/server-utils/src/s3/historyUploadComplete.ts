@@ -1,4 +1,10 @@
-import { describeImportFailure, IChatHistoryItem, InboxType, ISession } from '@bike4mind/common';
+import {
+  describeImportFailure,
+  IChatHistoryItem,
+  importSourceDisplayName,
+  InboxType,
+  ISession,
+} from '@bike4mind/common';
 import { importHistoryService } from '@bike4mind/services';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
@@ -75,7 +81,7 @@ const failureInboxMessage = (source: importHistoryService.ImportSource, err: unk
   const advice = retryable
     ? 'Please try again later and/or contact support.'
     : 'Export your history again and upload the new file.';
-  return `Your ${source} import failed: ${reason} ${advice}`;
+  return `Your ${importSourceDisplayName(source)} import failed: ${reason} ${advice}`;
 };
 
 export const dispatch = withContext(async (event, context, logger) => {

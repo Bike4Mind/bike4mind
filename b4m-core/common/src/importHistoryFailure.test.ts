@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeImportFailure } from './importHistoryFailure';
+import { describeImportFailure, importSourceDisplayName } from './importHistoryFailure';
 
 const GENERIC = { reason: 'Something went wrong on our side while processing this import.', retryable: true };
 
@@ -11,9 +11,6 @@ describe('describeImportFailure', () => {
     });
     expect(describeImportFailure('conversations.json not found in archive', 'Claude').reason).toContain(
       'a Claude export'
-    );
-    expect(describeImportFailure('conversations.json not found in archive', 'Notebook').reason).toContain(
-      'a ChatGPT or Claude export'
     );
     expect(describeImportFailure('conversations.json not found in archive').reason).toContain(
       'a ChatGPT or Claude export'
@@ -32,11 +29,37 @@ describe('describeImportFailure', () => {
     });
   });
 
-  it('reports a damaged archive when conversations.json cannot be read', () => {
-    expect(describeImportFailure('Unable to read conversations.json from archive')).toEqual({
-      reason: 'This archive is damaged and conversations.json could not be read.',
+  // Exact yauzl 3.x / zlib messages for a zip that opens but whose entry cannot be read.
+  it.each([
+    'unexpected EOF',
+    'unsupported compression method: 99',
+    'entry is encrypted, and options.decodeFileData !== false',
+    'entry is encrypted and compressed, and options.decompress !== false. See also option decodeFileData.',
+    'strong encryption is not supported',
+    'file data overflows file bounds: 30 + 0 + 5000 > 120',
+    'multi-disk zip files are not supported: found disk number: 1',
+    'invalid stored block lengths',
+    'Unable to read conversations.json from archive',
+  ])('treats %s as a damaged file', message => {
+    expect(describeImportFailure(message, 'OpenAI')).toEqual({
+      reason: 'This file is damaged or is not a usable export.',
       retryable: false,
     });
+  });
+
+  // Notebook imports share the job model but none of the archive rules apply to them.
+  it.each([
+    'Unexpected token } in JSON at position 12',
+    'conversations.json not found in archive',
+    'unexpected EOF',
+    'end of central directory record signature not found',
+  ])('keeps a Notebook failure generic and retryable for %s', message => {
+    expect(describeImportFailure(message, 'Notebook')).toEqual(GENERIC);
+  });
+
+  it('shows OpenAI as ChatGPT', () => {
+    expect(importSourceDisplayName('OpenAI')).toBe('ChatGPT');
+    expect(importSourceDisplayName('Claude')).toBe('Claude');
   });
 
   it.each([
