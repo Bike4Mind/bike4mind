@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { ApiKeyScope } from '@bike4mind/common';
 
-const { handlers, baseOptions, release } = vi.hoisted(() => ({
+const { handlers, baseOptions, release, preview } = vi.hoisted(() => ({
   handlers: {} as Record<string, (req: unknown, res: unknown) => Promise<void>>,
   baseOptions: vi.fn(),
   release: vi.fn(),
+  preview: vi.fn(),
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: () => 'csrf' }));
@@ -27,8 +28,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@bike4mind/services', () => ({
-  userService: { MAX_BULK_RELEASE: 100, bulkReleaseHeldGrants: release },
+  userService: { MAX_BULK_RELEASE: 100, bulkReleaseHeldGrants: release, previewSignupGrantAction: preview },
 }));
+vi.mock('@bike4mind/database', () => ({ userRepository: { repo: true } }));
 vi.mock('@server/credits/heldSignupGrantAdapters', () => ({
   buildHeldGrantAdapters: () => ({ grant: {} }),
   heldGrantBatches: { batches: true },
@@ -57,6 +59,7 @@ const run = async (body: unknown, isAdmin = true, user: Record<string, unknown> 
 };
 beforeEach(() => {
   release.mockReset().mockResolvedValue({ batchId: 'b1', results: [] });
+  preview.mockReset().mockResolvedValue({ dryRun: true, results: [], undoUserIds: [] });
   audit.record.mockReset();
   audit.deny.mockReset().mockRejectedValue(Object.assign(new Error('own account'), { statusCode: 403 }));
 });
@@ -121,5 +124,43 @@ describe('POST /api/admin/held-signup-grants/release', () => {
     });
     expect(release).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('lowercases ids once for the self check, the dry run and the real run', async () => {
+    const upper = 'ABCDEF0123456789ABCDEF01';
+    const lower = upper.toLowerCase();
+    expect((await run({ userIds: [upper] }, true, { id: lower })).statusCode).toBe(403);
+    expect(audit.deny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        target: { kind: 'user', id: lower, displayName: lower },
+      })
+    );
+
+    await run({ userIds: [upper], dryRun: true });
+    expect(preview).toHaveBeenCalledWith({ action: 'release_held', userIds: [lower] }, expect.anything());
+
+    await run({ userIds: [upper] });
+    expect(release).toHaveBeenCalledWith({ actorId: 'admin-1', userIds: [lower] }, expect.anything());
+  });
+
+  describe('dry run', () => {
+    it('previews with the held-release classification and pays, audits and records nothing', async () => {
+      const res = await run({ userIds: [id(1)], dryRun: true });
+
+      expect(res.statusCode).toBe(200);
+      expect(preview).toHaveBeenCalledExactlyOnceWith(
+        { action: 'release_held', userIds: [id(1)] },
+        { users: { repo: true } }
+      );
+      expect(release).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('still refuses a non-admin and the admin own account', async () => {
+      expect((await run({ userIds: [id(1)], dryRun: true }, false)).statusCode).toBe(403);
+      expect((await run({ userIds: [id(1)], dryRun: true }, true, { id: id(1) })).statusCode).toBe(403);
+      expect(preview).not.toHaveBeenCalled();
+    });
   });
 });

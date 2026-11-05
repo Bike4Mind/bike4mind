@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const issueSession = vi.fn();
+const guardedWrite = vi.fn(async (_id: string, write: () => Promise<unknown>) => write());
+vi.mock('./withAccountNotPurging', () => ({
+  withAccountNotPurging: (...args: Parameters<typeof guardedWrite>) => guardedWrite(...args),
+}));
 
 vi.mock('@bike4mind/services', () => ({
   authSessionService: { issueSession: (...args: unknown[]) => issueSession(...args) },
@@ -19,6 +23,7 @@ const req = { headers: {} };
 describe('issueSessionForRequest', () => {
   beforeEach(() => {
     issueSession.mockReset();
+    guardedWrite.mockClear();
     recordLoginEvent.mockReset();
     issueSession.mockResolvedValue({ accessToken: 'a', refreshToken: 'r', sid: 's' });
   });
@@ -26,6 +31,7 @@ describe('issueSessionForRequest', () => {
   it('forwards clientId to the session service', async () => {
     await issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0, clientId: 'c1' });
     expect(issueSession).toHaveBeenCalledWith('u1', expect.objectContaining({ clientId: 'c1' }), expect.anything());
+    expect(guardedWrite).toHaveBeenCalledWith('u1', expect.any(Function));
   });
 
   it('leaves clientId unset when the caller passes none', async () => {

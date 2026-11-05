@@ -39,6 +39,9 @@ const apiKeyAuthSchema = z
 
 const noAuthSchema = z.object({ kind: z.literal('none') }).strict();
 
+/** Sign-in happens through the OAuth start route afterwards; nothing secret travels with the create. */
+const oauthAuthSchema = z.object({ kind: z.literal('oauth') }).strict();
+
 const displayNameSchema = z.string().trim().min(1).max(MCP_CONNECTION_LIMITS.displayNameLength);
 
 const presetIdSchema = z.custom<McpPresetId>(value => isMcpPresetId(value), 'Unknown connector preset');
@@ -51,7 +54,7 @@ export const mcpConnectionCreateBodySchema = z
     displayName: displayNameSchema,
     slug: McpConnectionSlugSchema.optional(),
     transport: z.enum(MCP_CONNECTION_TRANSPORTS).default('auto'),
-    auth: z.discriminatedUnion('kind', [noAuthSchema, apiKeyAuthSchema]),
+    auth: z.discriminatedUnion('kind', [noAuthSchema, apiKeyAuthSchema, oauthAuthSchema]),
   })
   .strict();
 

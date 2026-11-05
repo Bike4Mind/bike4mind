@@ -23,6 +23,7 @@ import { adminFocus } from '../shared/adminStyles';
 import { AnomalyBanner } from './AnomalyBanner';
 import { SignupActivityPanel } from '../Signups/SignupActivityPanel';
 import { useSignupTimeseries, useSignupVerdicts } from '../Signups/useSignupTimeseries';
+import { useAiAdvisory } from '@client/app/hooks/data/aiAdvisory';
 import ComplianceModal from './ComplianceModal';
 import CreateUserModal, { useCreateUserModal } from './CreateUserModal';
 import { exportUsersCsv } from './exportUsersCsv';
@@ -124,14 +125,20 @@ const UsersTab: React.FC = () => {
   const verdicts = verdictsQuery.data?.verdicts;
   // Until the chart loads, the verdicts query is disabled; it then counts as loading too.
   const verdictsLoading = rowIds.length > 0 && !verdictsQuery.isError && !chartQuery.isError && !verdicts;
+  // Same query as the dashboard strip's. A failed fetch only hides the badges: the list stands without them.
+  const aiAdvisoryQuery = useAiAdvisory();
+  const aiAdvisories = useMemo(
+    () => new Map((aiAdvisoryQuery.data?.advisories ?? []).map(advisory => [advisory.userId, advisory])),
+    [aiAdvisoryQuery.data]
+  );
   const columns = useMemo(
     () =>
       usersColumns({
         now: new Date(),
         maxSpend: Math.max(0, ...rows.map(row => row.spend30d ?? 0)),
-        verdict: { range: signupRange, verdicts, loading: verdictsLoading },
+        verdict: { range: signupRange, verdicts, loading: verdictsLoading, aiAdvisories },
       }),
-    [rows, signupRange, verdicts, verdictsLoading]
+    [rows, signupRange, verdicts, verdictsLoading, aiAdvisories]
   );
 
   // A selection made under one filter must not ride into a bulk run under another.

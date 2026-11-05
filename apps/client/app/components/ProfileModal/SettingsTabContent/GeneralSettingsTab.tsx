@@ -26,11 +26,14 @@ import VoicePreferenceSection from './VoicePreferenceSection';
 import DocxTemplateSection from './DocxTemplateSection';
 import PromptCacheDefaultCard from './PromptCacheDefaultCard';
 import { DeleteAllKnowledgeFilesConfirm, DeleteAllNotebooksConfirm } from './DeleteAllConfirmModals';
+import { DeleteAccountConfirm } from './DeleteAccountConfirmModal';
+import DownloadAccountDataRow from './DownloadAccountDataRow';
 import WorkspaceVisibilitySection from './WorkspaceVisibilitySection';
 import ExperimentalFeatureToggle from '../ExperimentalFeatureToggle';
 import SettingsActionButton from './SettingsActionButton';
 import { useExperimentalFeatureSettings, useSettingsFromServer } from '@client/app/hooks/data/settings';
 import { useState } from 'react';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 
 const GeneralSettingsTab = () => {
   const { settings, updatePreferences } = useUserSettings();
@@ -38,6 +41,7 @@ const GeneralSettingsTab = () => {
   const { data: experimentalSettingsWithDefaults } = useExperimentalFeatureSettings();
 
   const { t } = useTranslation();
+  const impersonating = useAccessToken(s => s.impersonating);
 
   // Check if any experimental features are enabled at server level (uses defaults)
   const hasExperimentalFeatures =
@@ -72,6 +76,7 @@ const GeneralSettingsTab = () => {
   const downloadAllFiles = useDownload('/api/files/download', 'knowledges.zip');
   const [openDeleteAllSessionsModal, toggleDeleteAllSessionsModal] = useToggle();
   const [openDeleteAllFilesModal, toggleDeleteAllFilesModal] = useToggle();
+  const [openDeleteAccountModal, toggleDeleteAccountModal] = useToggle();
   const [openImportHistoryModal, toggleImportHistoryModal] = useToggle();
   const [openNotebookExportModal, toggleNotebookExportModal] = useToggle();
   const [openNotebookImportModal, toggleNotebookImportModal] = useToggle();
@@ -447,6 +452,7 @@ const GeneralSettingsTab = () => {
       <WorkspaceVisibilitySection />
 
       <SectionContainer title="Danger zone">
+        {!impersonating && <DownloadAccountDataRow />}
         <Box
           data-testid="settings-danger-zone"
           sx={{
@@ -460,8 +466,9 @@ const GeneralSettingsTab = () => {
           }}
         >
           <Typography level="body-sm">
-            These can&apos;t be undone. To keep a copy, first use Export All on the Notebooks and Knowledge Files cards
-            above.
+            {impersonating
+              ? "These can't be undone. To keep a copy, first use Export All on the Notebooks and Knowledge Files cards above."
+              : "These can't be undone. To keep a full copy of your account, first use Download your data above. Export All on the Notebooks and Knowledge Files cards copies just those."}
           </Typography>
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
             <Button
@@ -482,6 +489,17 @@ const GeneralSettingsTab = () => {
             >
               Delete all knowledge files
             </Button>
+            {!impersonating && (
+              <Button
+                color="danger"
+                variant="solid"
+                startDecorator={<DeleteOutline />}
+                onClick={() => toggleDeleteAccountModal()}
+                data-testid="settings-delete-account-btn"
+              >
+                Delete account
+              </Button>
+            )}
           </Box>
         </Box>
       </SectionContainer>
@@ -500,6 +518,7 @@ const GeneralSettingsTab = () => {
           pending={deleteAllFiles.isPending}
         />
       )}
+      {openDeleteAccountModal && <DeleteAccountConfirm onCancel={() => toggleDeleteAccountModal(false)} />}
       <UploadImportHistoryModal
         open={openImportHistoryModal}
         onClose={() => toggleImportHistoryModal(false)}

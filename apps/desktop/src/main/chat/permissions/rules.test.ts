@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { permissionProtectedRoots } from '../protectedLocations';
 import { scanShell } from '../tools/shellScan';
 import { permissionSubject } from './subject';
 import {
@@ -334,6 +335,124 @@ describe('PermissionRuleSet', () => {
       }
     }
   );
+
+  it('does not allow a shell write into an app folder whose configured spelling runs through a symlink', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await mkdir(join(base, 'proj'));
+      await mkdir(join(base, 'home'));
+      await writeFile(join(base, 'proj', 'payload'), '{}');
+      await symlink(join(base, 'config'), join(base, 'cfg-link'));
+      const script = `cp payload ${join(base, 'config', 'App', 'tool-access.json')}`;
+      const scan = await scanShell(script, join(base, 'proj'), [base]);
+      if (!scan) throw new Error('Expected the command to parse');
+      const subject: PermissionSubject = { tool: 'bash_execute', shell: { script, ...scan } };
+      const roots = permissionProtectedRoots(join(base, 'cfg-link', 'App'), join(base, 'home'), join(base, 'managed'));
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, roots), subject)).toBeNull();
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, [join(base, 'cfg-link', 'App')]), subject)).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  it('does not allow an edit that reaches a protected folder through a symlinked parent', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await symlink(join(base, 'config'), join(base, 'cfg-link'));
+      const rules = set({ allow: [`Edit(/${base}/**)`] }, [join(base, 'config', 'App')]);
+      const linked = join(base, 'cfg-link', 'App');
+      expect(decide(rules, { tool: 'file_write', paths: [join(linked, 'tool-access.json')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_write', paths: [join(linked, 'new', 'file.json')] })).toBeNull();
+      expect(rules.coversFolder(linked)).toBe(false);
+      expect(decide(rules, { tool: 'file_write', paths: [join(base, 'cfg-link', 'Other.json')] })).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  describe.each(['darwin', 'win32'] as const)('on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    beforeEach(() => Object.defineProperty(process, 'platform', { value: platform }));
+    afterEach(() => {
+      if (original) Object.defineProperty(process, 'platform', original);
+    });
+
+    it('treats a case variant of a protected folder as the folder', () => {
+      const rules = set({ allow: [`Edit(/${HOME}/**)`, 'Bash(cp:*)'] }, [`${HOME}/Library/App`]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/library/app/tool-access.json`] })).toBeNull();
+      const script = `cp x ${HOME}/LIBRARY/APP/tool-access.json`;
+      expect(decide(rules, shell(script, [script]))).toBeNull();
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/notes.md`] })).toBe('allow');
+    });
+  });
+
+  describe('on win32, for a protected folder reached through the WSL share', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    beforeEach(() => Object.defineProperty(process, 'platform', { value: 'win32' }));
+    afterEach(() => {
+      if (original) Object.defineProperty(process, 'platform', original);
+    });
+
+    const APP = 'C:\\Users\\me\\AppData\\Roaming\\App';
+    const SHARE = '\\\\wsl.localhost\\Ubuntu\\mnt\\c\\Users\\me\\AppData\\Roaming\\App';
+
+    it('allows an edit elsewhere, so the refusals below come from the protected folder', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: ['D:\\notes'] })).toBe('allow');
+      expect(rules.coversFolder('D:\\notes')).toBe(true);
+    });
+
+    it('does not allow an edit through the share spelling of the app folder', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: [SHARE] })).toBeNull();
+    });
+
+    it('does not cover the share spelling of the app folder as a folder', () => {
+      expect(set({ allow: ['Edit'] }, [APP]).coversFolder(SHARE)).toBe(false);
+    });
+
+    it('does not allow an edit to a child of the app folder through the share spelling', () => {
+      const rules = set({ allow: ['Edit'] }, [APP]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${SHARE}\\tool-access.json`] })).toBeNull();
+    });
+
+    it.each(['cp x C:/Users/me/AppData/Roaming/App/x', 'cp x /mnt/c/Users/me/AppData/Roaming/App/x'])(
+      'does not allow a shell call spelling the app folder as %s',
+      script => {
+        expect(decide(set({ allow: ['Bash(cp:*)'] }, [APP]), shell(script, [script]))).toBeNull();
+      }
+    );
+
+    it('still allows a shell call that names an unrelated folder', () => {
+      const script = 'cp x D:/notes/x';
+      expect(decide(set({ allow: ['Bash(cp:*)'] }, [APP]), shell(script, [script]))).toBe('allow');
+    });
+  });
+
+  it('keeps the case of a protected folder on linux', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      const rules = set({ allow: [`Edit(/${HOME}/**)`] }, [`${HOME}/Library/App`]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/library/app/x.json`] })).toBe('allow');
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/Library/App/x.json`] })).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original);
+    }
+  });
+
+  it('does not allow a shell call naming a case variant of a permission file on macOS', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    try {
+      const script = 'cp x .CLAUDE/settings.json';
+      expect(decide(set({ allow: ['Bash(cp:*)'] }), shell(script, [script]))).toBeNull();
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original);
+    }
+  });
 
   it('never allows an irreversible call, but still denies or asks', () => {
     expect(decide(set({ allow: ['session_delete'] }), { tool: 'session_delete', irreversible: true })).toBeNull();

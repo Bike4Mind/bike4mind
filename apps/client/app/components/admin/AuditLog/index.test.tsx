@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { AuditLogFilters } from '@bike4mind/common';
-import { makeAuditEntry } from './shared/auditTestFixtures';
+import { UndoToastProvider } from '../shared';
+import { makeAuditEntry, makeReviewQueueEntry } from './shared/auditTestFixtures';
 import AuditLogPage from './index';
 
 const SINCE = '2026-09-19T00:00:00.000Z';
@@ -23,14 +24,13 @@ const mocks = vi.hoisted(() => ({
   entryRefetchError: false,
   summaryError: false,
   criticalEntries: [] as unknown[],
+  reviewTotal: 0,
   alertsEnabled: true,
 }));
 
 vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
-  useAuditLog: (filters: AuditLogFilters) => ({
-    data: {
-      pages: [{ entries: filters.severity === 'critical' ? mocks.criticalEntries : mocks.entries, nextCursor: null }],
-    },
+  useAuditLog: () => ({
+    data: { pages: [{ entries: mocks.entries, nextCursor: null }] },
     isLoading: false,
     isError: mocks.listError,
     hasNextPage: false,
@@ -38,6 +38,18 @@ vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
     fetchNextPage: vi.fn(),
     refetch: mocks.refetch,
   }),
+  useAuditReviewQueue: () => ({
+    data: { pages: [{ entries: mocks.criticalEntries, nextCursor: null, total: mocks.reviewTotal }] },
+    isLoading: false,
+    isError: false,
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+    refetch: vi.fn(),
+  }),
+  useAuditReview: () => ({ data: null, isLoading: false }),
+  useMarkAuditReviewed: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useUnmarkAuditReviewed: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
   useAuditEntry: (id: string | null, initial: unknown) => ({
     data: id && (!mocks.entryError || mocks.entryRefetchError) ? initial : undefined,
     isError: id !== null && (mocks.entryError || mocks.entryRefetchError),
@@ -66,6 +78,9 @@ vi.mock('@client/app/hooks/data/adminAuditLog', () => ({
   }),
   downloadAuditLogCsv: mocks.downloadAuditLogCsv,
 }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { id: 'me', isAdmin: true, adminPermissions: [] } }),
+}));
 vi.mock('./useAuditLogSearchParams', () => ({
   useAuditLogSearchParams: () => ({
     filters: mocks.filters as AuditLogFilters,
@@ -85,7 +100,9 @@ vi.mock('@client/app/components/admin/shared/UserSelector', () => ({
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+  <CssVarsProvider theme={appTheme}>
+    <UndoToastProvider>{children}</UndoToastProvider>
+  </CssVarsProvider>
 );
 
 describe('AuditLogPage', () => {
@@ -99,6 +116,7 @@ describe('AuditLogPage', () => {
     mocks.entryRefetchError = false;
     mocks.summaryError = false;
     mocks.criticalEntries = [];
+    mocks.reviewTotal = 0;
     mocks.alertsEnabled = true;
   });
 
@@ -199,9 +217,9 @@ describe('AuditLogPage', () => {
     expect(screen.getByTestId('audit-alerts-off-banner').textContent).toMatch(/alerts are off/i);
   });
 
-  it('keeps Needs review collapsed when nothing is critical, and opens it on demand', () => {
+  it('keeps Needs review collapsed when nothing is waiting, and opens it on demand', () => {
     render(<AuditLogPage />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('Nothing critical in 30 days');
+    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('Nothing to review');
     expect(screen.queryByTestId('audit-needs-review-table')).toBeNull();
 
     fireEvent.click(screen.getByTestId('audit-needs-review-toggle-btn'));
@@ -209,12 +227,41 @@ describe('AuditLogPage', () => {
     expect(screen.getByTestId('audit-needs-review-panel').textContent).toContain('above 50,000 credits');
   });
 
-  it('lists critical entries in Needs review and opens one in the shared drawer', () => {
-    mocks.criticalEntries = [makeAuditEntry({ id: 'c1', severity: 'critical' })];
+  it('lists entries to review and opens one in the shared drawer', () => {
+    mocks.criticalEntries = [makeReviewQueueEntry({ id: 'c1' })];
+    mocks.reviewTotal = 1;
     render(<AuditLogPage />, { wrapper: TestWrapper });
-    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('1 critical in 30 days');
+    expect(screen.getByTestId('audit-needs-review-count').textContent).toBe('1 to review');
 
     fireEvent.click(screen.getByTestId('audit-needs-review-table-row-c1'));
     expect(mocks.openEntry).toHaveBeenCalledWith('c1');
+  });
+
+  it('shows the review section in the drawer for critical entries only', () => {
+    mocks.entryId = 'e1';
+    mocks.entries = [makeAuditEntry({ id: 'e1', severity: 'critical' })];
+    const { unmount } = render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('audit-review-mark-btn')).toBeTruthy();
+    unmount();
+
+    mocks.entries = [makeAuditEntry({ id: 'e1', severity: 'info' })];
+    render(<AuditLogPage />, { wrapper: TestWrapper });
+    expect(screen.queryByTestId('audit-review-mark-btn')).toBeNull();
+  });
+
+  it('resets the review note when the drawer switches to another entry', () => {
+    mocks.entries = [
+      makeAuditEntry({ id: 'e1', severity: 'critical' }),
+      makeAuditEntry({ id: 'e2', severity: 'critical' }),
+    ];
+    mocks.entryId = 'e1';
+    const { rerender } = render(<AuditLogPage />, { wrapper: TestWrapper });
+    fireEvent.change(screen.getByTestId('audit-review-note-input'), { target: { value: 'draft for e1' } });
+    expect((screen.getByTestId('audit-review-note-input') as HTMLTextAreaElement).value).toBe('draft for e1');
+
+    mocks.entryId = 'e2';
+    rerender(<AuditLogPage />);
+
+    expect((screen.getByTestId('audit-review-note-input') as HTMLTextAreaElement).value).toBe('');
   });
 });

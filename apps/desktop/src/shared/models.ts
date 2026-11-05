@@ -106,7 +106,19 @@ export interface LocalModelEntry {
   baseModel?: string;
 }
 
-export type InstalledModelsResult = { ok: true; models: LocalModelEntry[] } | { ok: false; error: ModelHubError };
+/**
+ * A model within this computer's GPU memory that Ollama in WSL loaded partly on the CPU, because it holds an
+ * integrated GPU to the WSL VM's memory. Kept until a model larger than `gpuBytes` loads fully on the GPU.
+ */
+export interface GpuMemoryCap {
+  model: string;
+  sizeBytes: number;
+  /** The part Ollama put on the GPU. */
+  gpuBytes: number;
+}
+
+export type InstalledModelsResult =
+  { ok: true; models: LocalModelEntry[]; gpuMemoryCap?: GpuMemoryCap } | { ok: false; error: ModelHubError };
 
 /**
  * Whether a local chat model is in its Ollama server's memory, read from `/api/ps`. Loaded is only a

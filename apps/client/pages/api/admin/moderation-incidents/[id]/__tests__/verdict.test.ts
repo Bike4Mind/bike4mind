@@ -9,6 +9,7 @@ const mockUpdateReviewStatus = vi.fn();
 const mockResolveConfirmedCsam = vi.fn();
 const mockSetNcmecReportId = vi.fn();
 const mockRecordManualReport = vi.fn();
+const mockMarkNoAction = vi.fn();
 const mockSubmitNcmecReport = vi.fn();
 const mockFinishNcmecReport = vi.fn();
 const mockUserFindById = vi.fn();
@@ -22,6 +23,7 @@ vi.mock('@bike4mind/database', () => ({
     resolveConfirmedCsam: (...args: unknown[]) => mockResolveConfirmedCsam(...args),
     setNcmecReportId: (...args: unknown[]) => mockSetNcmecReportId(...args),
     recordManualReport: (...args: unknown[]) => mockRecordManualReport(...args),
+    markNoAction: (...args: unknown[]) => mockMarkNoAction(...args),
   },
   withTransaction: async (fn: () => Promise<unknown>) => {
     audit.txActive = true;
@@ -305,15 +307,58 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(res.status).toHaveBeenCalledWith(404);
     });
 
-    it('returns 409 when the incident is already reported or being processed', async () => {
-      mockUpdateReviewStatus.mockResolvedValue(null);
-      mockFindById.mockResolvedValue({ reviewStatus: 'confirmed_csam' });
+    it.each(['confirmed_csam', 'reported', 'no_action'])(
+      'returns 409 naming the state when the incident is already %s',
+      async reviewStatus => {
+        mockUpdateReviewStatus.mockResolvedValue(null);
+        mockFindById.mockResolvedValue({ reviewStatus });
+
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'false_positive' }), res);
+
+        expect(res.status).toHaveBeenCalledWith(409);
+        expect(res.json).toHaveBeenCalledWith({ error: `Incident is already ${reviewStatus}` });
+      }
+    );
+  });
+
+  describe('verdict: no_action', () => {
+    it('closes the incident as no_action, attributed to the admin, without calling NCMEC', async () => {
+      mockMarkNoAction.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'no_action' });
 
       const res = makeRes();
-      await runHandler(makeReq({ verdict: 'false_positive' }), res);
+      await runHandler(makeReq({ verdict: 'no_action' }), res);
 
-      expect(res.status).toHaveBeenCalledWith(409);
+      expect(mockMarkNoAction).toHaveBeenCalledWith('inc-1', 'admin-1');
+      expect(mockUpdateReviewStatus).not.toHaveBeenCalled();
+      expect(mockSubmitNcmecReport).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
     });
+
+    it('returns 404 when the incident is not found', async () => {
+      mockMarkNoAction.mockResolvedValue(null);
+      mockFindById.mockResolvedValue(null);
+
+      const res = makeRes();
+      await runHandler(makeReq({ verdict: 'no_action' }), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it.each(['false_positive', 'no_action', 'reported', 'confirmed_csam'])(
+      'returns 409 naming the state when the incident is already %s',
+      async reviewStatus => {
+        mockMarkNoAction.mockResolvedValue(null);
+        mockFindById.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus });
+
+        const res = makeRes();
+        await runHandler(makeReq({ verdict: 'no_action' }), res);
+
+        expect(res.status).toHaveBeenCalledWith(409);
+        expect(res.json).toHaveBeenCalledWith({ error: `Incident is already ${reviewStatus}` });
+        expect(audit.record).not.toHaveBeenCalled();
+      }
+    );
   });
 
   // ------------------------------------------------------------------ mark_reported (recovery)
@@ -496,6 +541,21 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('(overriding false_positive)'));
     });
 
+    it('logs when the manual report overrode a no_action verdict', async () => {
+      mockRecordManualReport.mockResolvedValue({
+        reviewStatus: 'reported',
+        ncmecReportId: '123456',
+        previousReviewStatus: 'no_action',
+      });
+
+      const req = makeReq({ verdict: 'record_manual_report', ncmecReportId: '123456' });
+      const res = makeRes();
+      await runHandler(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(req.logger.info).toHaveBeenCalledWith(expect.stringContaining('(overriding no_action)'));
+    });
+
     it('works when NCMEC API credentials are not configured', async () => {
       const { Resource } = await import('sst');
       const r = Resource as unknown as Record<string, { value: string }>;
@@ -611,6 +671,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
       },
       false_positive: () =>
         mockUpdateReviewStatus.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'false_positive' }),
+      no_action: () => mockMarkNoAction.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'no_action' }),
       mark_reported: () => mockResolveConfirmedCsam.mockResolvedValue(REPORTED),
       requeue: () =>
         mockResolveConfirmedCsam.mockResolvedValue({ ...CLAIMED_INCIDENT, reviewStatus: 'pending_review' }),
@@ -628,6 +689,7 @@ describe('admin/moderation-incidents/[id]/verdict', () => {
     const primaryWrite: Record<string, () => ReturnType<typeof vi.fn>> = {
       confirmed_csam: () => mockUpdateReviewStatus,
       false_positive: () => mockUpdateReviewStatus,
+      no_action: () => mockMarkNoAction,
       mark_reported: () => mockResolveConfirmedCsam,
       requeue: () => mockResolveConfirmedCsam,
       retry_finish: () => mockResolveConfirmedCsam,

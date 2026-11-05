@@ -3,13 +3,31 @@ import { realpathNearest, resolveWithinRoots } from './paths';
 import type { ApprovalPrompt, ToolContext } from './types';
 
 /**
+ * The ways Windows can spell `path`: lower case, `.` segments dropped, `..` removing its parent
+ * segment, and one spelling per colon-separated part of the final segment (a drive prefix, a
+ * `rev:` or `host:` prefix, a `:stream` or `:stream:$DATA` suffix), each without trailing dots and
+ * spaces. Applied on every platform, since a path can name a file on a Windows volume (or WSL
+ * share) from anywhere.
+ */
+function windowsSpellings(path: string): string[] {
+  const segments: string[] = [];
+  for (const segment of path.replace(/\\/g, '/').toLowerCase().split('/')) {
+    if (segment === '..') segments.pop();
+    else if (segment !== '.') segments.push(segment);
+  }
+  const last = segments.pop() ?? '';
+  return last.split(':').map(part => [...segments, part.replace(/[. ]+$/, '')].join('/'));
+}
+
+/**
  * Ported from opencode's default read rules, which mirror the Node.gitignore patterns: any path
- * ending `.env` or holding `.env.`, except a committed `.env.example`.
+ * ending `.env` or holding `.env.`, except a committed `.env.example`. It is judged under every
+ * spelling windowsSpellings gives, with any drive, revision or stream part split off.
  */
 export function isEnvFile(path: string): boolean {
-  const normalised = path.replace(/\\/g, '/');
-  if (normalised.endsWith('.env.example')) return false;
-  return normalised.endsWith('.env') || normalised.includes('.env.');
+  return windowsSpellings(path).some(
+    spelling => !spelling.endsWith('.env.example') && (spelling.endsWith('.env') || spelling.includes('.env.'))
+  );
 }
 
 /** Whether a read of `requested` returns a `.env` file, by the name it was given or the file it resolves to. */

@@ -280,6 +280,11 @@ const nextConfig = {
         source: '/.well-known/jwks.json',
         destination: '/api/oauth/jwks',
       },
+      // Client ID Metadata Document for custom MCP connector sign-in
+      {
+        source: '/.well-known/oauth-client/mcp-client.json',
+        destination: '/api/mcp-connections/oauth/client-metadata',
+      },
       // Published-artifact public viewer. Pretty `/p/*` URLs are served by the
       // gated serve handler (auth-bypass + per-request visibility check + CSP).
       // Routing to /api keeps it out of the SPA and out of proxy.ts's global CSP

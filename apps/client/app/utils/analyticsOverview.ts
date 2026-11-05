@@ -12,8 +12,11 @@ export const ANALYTICS_COMPARE = ['prev', 'off'] as const;
 export type AnalyticsCompare = (typeof ANALYTICS_COMPARE)[number];
 export const ANALYTICS_SIGNUPS = ['legit', 'all'] as const;
 export type AnalyticsSignupsMode = (typeof ANALYTICS_SIGNUPS)[number];
+/** Whose activity the active-user numbers count; "internal" is the admin/system/synthetic/staff set the rollup excludes. */
+export const ANALYTICS_ACCOUNTS = ['external', 'internal', 'all'] as const;
+export type AnalyticsAccounts = (typeof ANALYTICS_ACCOUNTS)[number];
 
-export const ANALYTICS_DEFAULTS = { range: '28d', compare: 'prev', signups: 'legit' } as const;
+export const ANALYTICS_DEFAULTS = { range: '28d', compare: 'prev', signups: 'legit', accounts: 'external' } as const;
 
 /** Longest custom range, in days: one year plus a leap day. */
 export const ANALYTICS_MAX_CUSTOM_DAYS = 366;
@@ -27,6 +30,7 @@ export const analyticsOverviewQuerySchema = z
     to: dayString.optional(),
     compare: z.enum(ANALYTICS_COMPARE).default(ANALYTICS_DEFAULTS.compare),
     signups: z.enum(ANALYTICS_SIGNUPS).default(ANALYTICS_DEFAULTS.signups),
+    accounts: z.enum(ANALYTICS_ACCOUNTS).default(ANALYTICS_DEFAULTS.accounts),
   })
   .refine(query => query.range !== 'custom' || (query.from && query.to), {
     message: 'A custom range needs both a start and an end date.',
@@ -39,9 +43,11 @@ export type AnalyticsBucket = 'day' | 'week' | 'month';
 /** A tile value over the range's complete days, and the same over the previous period when compare is on. */
 export type AnalyticsStat = { value: number | null; previous: number | null };
 
+export type ActiveUserCounts = { dau: number; wau: number; mau: number };
+
 export type ActiveUsersDay = {
   day: string;
-  /** Null when the rollup row for the day is missing: drawn as a gap, never as zero. */
+  /** For the selected accounts. Null when the rollup row for the day is missing: drawn as a gap, never as zero. */
   dau: number | null;
   wau: number | null;
   mau: number | null;
@@ -49,6 +55,9 @@ export type ActiveUsersDay = {
   partial: boolean;
   /** The same position in the previous period, when compare is on. */
   previousMau?: number | null;
+  /** Both sides whatever the selection, for the hover; internal is null on rows rolled up before it was recorded. */
+  external: ActiveUserCounts | null;
+  internal: ActiveUserCounts | null;
 };
 
 export type RequestsBySourceDay = { day: string; partial: boolean; counts: Record<string, number> | null };
@@ -78,12 +87,18 @@ export type AnalyticsOverview = {
     bucket: AnalyticsBucket;
   };
   signupsMode: AnalyticsSignupsMode;
+  accounts: AnalyticsAccounts;
   /** Latest rollup computedAt among the rows read, ISO. */
   lastUpdated: string | null;
   /** lastUpdated is older than ANALYTICS_STALE_AFTER_MS, or there is no rollup at all. */
   stale: boolean;
   /** Complete days in the range with no rollup row. */
   missingDays: string[];
+  /**
+   * Internal or all only: days with rollup or live data but no usable internal counts (rolled up before
+   * they were recorded, or within 28 days of such a row). Includes today; never overlaps missingDays.
+   */
+  internalMissingDays: string[];
   stats: {
     mau: AnalyticsStat;
     avgDau: AnalyticsStat;

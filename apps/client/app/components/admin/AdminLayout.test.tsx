@@ -11,6 +11,7 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { AdminLayoutRoute, isAdminSubscriptionDetailPath, isAdminUserProfilePath } from './AdminLayout';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
@@ -27,6 +28,8 @@ vi.mock('@client/app/contexts/ProviderBundle', () => ({
   ProviderBundle: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock('@client/app/hooks/data/admin', () => ({ useLiveOpsTriageEnv: () => ({ data: { showTab: false } }) }));
+const mockUnreviewedAuditCount = vi.hoisted(() => vi.fn((_opts: { enabled: boolean }) => ({ data: undefined })));
+vi.mock('@client/app/hooks/data/adminAuditLog', () => ({ useUnreviewedAuditCount: mockUnreviewedAuditCount }));
 vi.mock('@client/app/hooks/data/subscribers', () => ({ useGetWaitingSubscribersCount: () => ({ data: undefined }) }));
 vi.mock('./Subscriptions/subscriptionsLastSeen', () => ({ useNewSubscriptionsDot: () => false }));
 vi.mock('@client/app/hooks/useHelpKeyboardShortcut', () => ({ useHelpKeyboardShortcut: () => undefined }));
@@ -83,6 +86,7 @@ describe('AdminLayoutRoute', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    useAccessToken.setState({ impersonating: false });
   });
 
   it.each(['/admin', '/admin/users/0123456789abcdef01234567'])(
@@ -147,6 +151,22 @@ describe('AdminLayoutRoute', () => {
     expect(layout).toHaveAttribute('data-admin-surface');
     expect(within(layout).getByTestId('console-page')).toBeInTheDocument();
     expect(within(desktopSidebar()).getByTestId('admin-dashboard-tab-btn')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('does not enable the audit review badge for a full admin who is impersonating', async () => {
+    useAccessToken.setState({ impersonating: true });
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+    await renderAt('/admin');
+    await screen.findByTestId('admin-layout');
+    expect(mockUnreviewedAuditCount).toHaveBeenCalled();
+    expect(mockUnreviewedAuditCount).not.toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it('enables the audit review badge for a full admin who is not impersonating', async () => {
+    mockUseUser.mockReturnValue({ currentUser: { id: 'u1', isAdmin: true, tags: [] } });
+    await renderAt('/admin');
+    await screen.findByTestId('admin-layout');
+    expect(mockUnreviewedAuditCount).toHaveBeenLastCalledWith({ enabled: true });
   });
 
   it('keeps the sidebar on a user profile, with Users active', async () => {

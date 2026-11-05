@@ -102,13 +102,12 @@ import { registerHistoryIpc } from './historyIpc';
 import { captureHistoryPage } from './captureHistoryPage';
 import { forgetLocalContexts, forgetLocalContextOf, OllamaLocal } from './OllamaLocal';
 import { registerModelServersIpc } from '../modelServers/ipc';
-import { LocalModels } from '../modelServers/LocalModels';
+import { LocalModels, optionCatalogSampling, type CatalogSamplingHook } from '../modelServers/LocalModels';
 import { ModelServerRegistry } from '../modelServers/ModelServerRegistry';
 import { ModelServerStore } from '../modelServers/ModelServerStore';
 import { withEnteredSpecs } from '../models/enteredHardware';
 import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
-import type { CatalogSampling } from '@shared/generation';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import {
   branchCheckouts,
@@ -142,6 +141,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { permissionProtectedRoots, toolProtectedPaths } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
@@ -391,8 +391,8 @@ export function registerChat(
     cancelModelPull?(key: string): Promise<boolean>;
     /** The curated list's projector sizes, so chat sizes a vision model the way the Models screen does. */
     pinnedProjectors?(): ReadonlyMap<string, number>;
-    /** The curated family sampling for an installed Ollama model; see ModelHubService.catalogSampling. */
-    catalogSampling?(ollamaName: string): CatalogSampling | undefined;
+    /** The curated family sampling for an installed local model; see ModelHubService.catalogSampling. */
+    catalogSampling?: CatalogSamplingHook;
   } = {}
 ): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
@@ -457,7 +457,7 @@ export function registerChat(
     claudeCode,
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
-    protectedRoots: [userData, join(home, '.claude'), dirname(MANAGED_SETTINGS_PATH)],
+    protectedRoots: permissionProtectedRoots(userData, home, dirname(MANAGED_SETTINGS_PATH)),
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -526,8 +526,8 @@ export function registerChat(
   const local = new LocalModels(
     new OllamaLocal((url, init) => net.fetch(url, init), localSizing, undefined, loadSettings),
     modelServers,
-    // Matched by name on every server; requestGeneration keeps each server to the fields it takes.
-    option => hooks.catalogSampling?.(option.name)
+    // Matched on every server; requestGeneration keeps each server to the fields it takes.
+    optionCatalogSampling(hooks.catalogSampling)
   );
   const models = new ModelCatalog(
     {
@@ -714,7 +714,7 @@ export function registerChat(
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
-    protectedPaths: [userData],
+    protectedPaths: toolProtectedPaths(userData),
     get deferredTools() {
       return deferredTools.current();
     },
