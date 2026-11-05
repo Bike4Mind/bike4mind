@@ -5,7 +5,7 @@ import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
-import { isAuthTokenValid, swapActiveEnvAuth } from '@bike4mind/client-auth';
+import { isAuthTokenValid, normalizeEnvKey, swapActiveEnvAuth } from '@bike4mind/client-auth';
 import type { AuthTokens, CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
 import { getDefaultApiUrl, LOCAL_DEV_URL, getEnvironmentName } from '../utils/apiUrl';
 import {
@@ -867,6 +867,8 @@ export class ConfigStore {
    * effective config used for reads during the session.
    */
   private globalConfig: CliConfig | null = null;
+  /** Bumped by every save(), so a re-read of the file that straddled one does not overwrite what it saved. */
+  private saveGeneration = 0;
   /** Canonicalized (realpath'd) discovered project root, or null. */
   private projectRealPath: string | null = null;
   /** Whether the discovered project root is in the global `trustedProjects`. */
@@ -1436,6 +1438,7 @@ export class ConfigStore {
    * Save configuration to disk
    */
   async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
+    this.saveGeneration++;
     await this.init();
 
     // Ensure the global snapshot exists (first save on a fresh store).
@@ -1686,21 +1689,58 @@ export class ConfigStore {
    * this store loaded; later reads return it too. The token refresh reads through this before it saves or clears.
    */
   async reloadAuthTokens(): Promise<AuthTokens | null> {
-    const config = await this.load();
-    let auth: AuthTokens | undefined;
+    await this.load();
+    const generation = this.saveGeneration;
+    const myKey = normalizeEnvKey(this.globalConfig!.apiConfig?.customUrl || getDefaultApiUrl());
+    let text: string | null = null;
     try {
-      const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as { auth?: unknown };
-      auth = raw.auth === undefined ? undefined : AuthTokensSchema.parse(raw.auth);
+      text = await fs.readFile(this.configPath, 'utf-8');
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw new Error(
-          `Could not read the saved sign-in from ${this.configPath}: ${error instanceof Error ? error.message : String(error)}`
-        );
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        throw new Error(`Could not read the saved sign-in from ${this.configPath}: ${code ?? 'read failed'}`);
       }
     }
+    const auth = text === null ? undefined : this.authForEnv(text, myKey);
+    if (generation !== this.saveGeneration) return this.globalConfig!.auth ?? null;
     this.globalConfig!.auth = auth;
-    config.auth = auth;
+    if (this.config) this.config.auth = auth;
     return auth ?? null;
+  }
+
+  /** The sign-in `text` (the config file) holds for the environment keyed `envKey`, without echoing its bytes in errors. */
+  private authForEnv(text: string, envKey: string): AuthTokens | undefined {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch (error) {
+      const position = error instanceof Error ? /position (\d+)/.exec(error.message)?.[1] : undefined;
+      throw new Error(
+        `Could not read the saved sign-in from ${this.configPath}: not valid JSON${position ? ` (at position ${position})` : ''}`
+      );
+    }
+    if (typeof raw !== 'object' || raw === null) return undefined;
+    const file = raw as { auth?: unknown; authByEnv?: unknown; apiConfig?: { customUrl?: unknown } };
+    const fileUrl =
+      typeof file.apiConfig?.customUrl === 'string' && file.apiConfig.customUrl
+        ? file.apiConfig.customUrl
+        : getDefaultApiUrl();
+    let candidate: unknown;
+    if (normalizeEnvKey(fileUrl) === envKey) {
+      candidate = file.auth;
+    } else if (
+      typeof file.authByEnv === 'object' &&
+      file.authByEnv !== null &&
+      Object.prototype.hasOwnProperty.call(file.authByEnv, envKey)
+    ) {
+      candidate = (file.authByEnv as Record<string, unknown>)[envKey];
+    }
+    if (candidate === undefined) return undefined;
+    const parsed = AuthTokensSchema.safeParse(candidate);
+    if (!parsed.success) {
+      throw new Error(`Could not read the saved sign-in from ${this.configPath}: it is not in the expected shape`);
+    }
+    return parsed.data;
   }
 
   /**

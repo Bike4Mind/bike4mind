@@ -1,3 +1,4 @@
+import { promises as fsPromises } from 'fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -146,5 +147,69 @@ describe('ConfigStore.reloadAuthTokens', () => {
     await writeFile(configPath, '{ not json');
 
     await expect(store.reloadAuthTokens()).rejects.toThrow(configPath);
+  });
+
+  it('never echoes the file contents when it is not JSON', async () => {
+    const store = await savedStore();
+    await store.getAuthTokens();
+    await writeFile(configPath, '{"auth":{"accessToken":secret-token-123}}');
+
+    const error = await store.reloadAuthTokens().catch((e: Error) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(configPath);
+    expect((error as Error).message).not.toContain('secret');
+  });
+
+  it("never hands this environment another environment's sign-in", async () => {
+    const custom = { ...stale, accessToken: 'access-custom', refreshToken: 'refresh-custom' };
+    const prod = { ...stale, accessToken: 'access-prod', refreshToken: 'refresh-prod' };
+    const setup = new ConfigStore(configPath);
+    await setup.save({ apiConfig: { customUrl: 'https://self-hosted.example.com', endpointChosen: true } });
+    await setup.setAuthTokens(custom);
+    const store = new ConfigStore(configPath);
+    await store.getAuthTokens();
+
+    const other = new ConfigStore(configPath);
+    await other.switchApiEnvironment('prod');
+    await other.setAuthTokens(prod);
+
+    expect(await store.reloadAuthTokens()).toEqual(custom);
+    expect(await store.getAuthTokens()).toEqual(custom);
+
+    const cleared = JSON.parse(await readFile(configPath, 'utf-8'));
+    delete cleared.authByEnv;
+    await writeFile(configPath, JSON.stringify(cleared));
+    expect(await store.reloadAuthTokens()).toBeNull();
+  });
+
+  it('keeps a sign-in saved while the file was being re-read', async () => {
+    const store = await savedStore();
+    await store.getAuthTokens();
+    const before = await readFile(configPath, 'utf-8');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    let held = false;
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      if (!held && String(args[0]) === configPath) {
+        held = true;
+        await gate;
+        return before;
+      }
+      return realRead(...args);
+    }) as typeof fsPromises.readFile);
+    const fresh = { ...stale, accessToken: 'access-fresh', refreshToken: 'refresh-fresh' };
+
+    const reloading = store.reloadAuthTokens();
+    await vi.waitFor(() => expect(held).toBe(true));
+    await store.setAuthTokens(fresh);
+    release();
+    await reloading;
+    vi.mocked(fsPromises.readFile).mockRestore();
+    await store.save({});
+
+    expect(await store.getAuthTokens()).toEqual(fresh);
+    expect(await onDisk()).toEqual(fresh);
   });
 });
