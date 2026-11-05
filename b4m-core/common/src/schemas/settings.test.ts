@@ -1523,6 +1523,8 @@ describe('spend monitor settings', () => {
     spendMonitorAccountSpikeRatio: 10,
     spendMonitorAccountSpikeFloorCredits: 1000,
     spendMonitorAccountCeilingCredits: 5000,
+    spendMonitorTrustedAccountSpikeFloorCredits: 20_000,
+    spendMonitorTrustedAccountCeilingCredits: 40_000,
   } as const;
 
   it.each(Object.entries(expectedDefaults))('%s defaults to %s and belongs to the CREDITS group', (key, expected) => {
@@ -1537,14 +1539,28 @@ describe('spend monitor settings', () => {
     'spendMonitorPlatformCostFloorUsd',
     'spendMonitorAccountSpikeFloorCredits',
     'spendMonitorAccountCeilingCredits',
+    'spendMonitorTrustedAccountSpikeFloorCredits',
+    'spendMonitorTrustedAccountCeilingCredits',
   ] as const)('%s rejects 0 and accepts 1', key => {
     expect(settingsMap[key].schema.safeParse(0).success).toBe(false);
     expect(settingsMap[key].schema.parse(1)).toBe(1);
   });
 
+  it.each(['spendMonitorTrustedEmailDomains', 'spendMonitorTrustedAccountIds'] as const)(
+    '%s defaults to an empty list in the CREDITS group',
+    key => {
+      expect(settingsMap[key].defaultValue).toBe('');
+      expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+    }
+  );
+
   it('keeps the settings admin-only', () => {
     const readable = new Set(userReadableSettingKeys());
-    for (const key of Object.keys(expectedDefaults)) {
+    for (const key of [
+      ...Object.keys(expectedDefaults),
+      'spendMonitorTrustedEmailDomains',
+      'spendMonitorTrustedAccountIds',
+    ]) {
       expect(readable.has(key as never)).toBe(false);
     }
   });

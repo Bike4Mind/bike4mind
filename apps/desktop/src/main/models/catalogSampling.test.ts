@@ -23,6 +23,15 @@ describe('catalogSampling', () => {
   it("maps a family's sampling to generation fields, including the pinned repeat penalty", () => {
     expect(catalogSampling(manifest, 'qwen3.5:4b')).toEqual({
       thinking: { temperature: 1, topP: 0.95, topK: 20, minP: 0, presencePenalty: 1.5, repeatPenalty: 1 },
+      nonThinking: { temperature: 0.7, topP: 0.8, topK: 20, minP: 0, presencePenalty: 1.5, repeatPenalty: 1 },
+    });
+    expect(catalogSampling(manifest, 'qwen3.5:0.8b')).toEqual({
+      thinking: { temperature: 1, topP: 0.95, topK: 20, minP: 0, presencePenalty: 1.5, repeatPenalty: 1 },
+      nonThinking: { temperature: 1, topP: 1, topK: 20, minP: 0, presencePenalty: 2, repeatPenalty: 1 },
+    });
+    expect(catalogSampling(manifest, 'qwen3.8:27b')).toEqual({
+      thinking: { temperature: 1, topP: 0.95, topK: 20, minP: 0, presencePenalty: 0, repeatPenalty: 1 },
+      nonThinking: { temperature: 0.7, topP: 0.8, topK: 20, minP: 0, presencePenalty: 1.5, repeatPenalty: 1 },
     });
     expect(catalogSampling(manifest, 'gemma4:12b-it-qat')).toMatchObject({
       thinking: { temperature: 1, topP: 0.95, topK: 64 },

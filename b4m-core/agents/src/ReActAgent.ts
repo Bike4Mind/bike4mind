@@ -252,6 +252,15 @@ function isAbortError(error: unknown, signal?: AbortSignal): boolean {
 }
 
 /**
+ * True for an error its thrower marks as a routine outcome (`expected: true`), such as the agent
+ * executor's UnaffordableRoundError (apps/workers agentExecutor.roundOutputCap.ts). Logged at warn
+ * like an abort; it still propagates.
+ */
+function isExpectedError(error: unknown): boolean {
+  return error instanceof Error && (error as { expected?: unknown }).expected === true;
+}
+
+/**
  * ReAct (Reasoning and Acting) Agent
  *
  * This agent uses the ReAct pattern to solve problems by:
@@ -1010,6 +1019,8 @@ export class ReActAgent extends EventEmitter {
       if (isAbortError(error, options.signal)) {
         // Keep the error for stack/message context - only the severity is downgraded.
         this.context.logger.warn('[ReActAgent] Execution aborted (user cancel or timeout):', error);
+      } else if (isExpectedError(error)) {
+        this.context.logger.warn('[ReActAgent] Execution stopped:', error);
       } else {
         this.context.logger.error('[ReActAgent] Error during execution:', error);
       }
@@ -1880,6 +1891,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       if (isAbortError(error, options.signal)) {
         // Keep the error for stack/message context - only the severity is downgraded.
         this.context.logger.warn('[ReActAgent] Iteration aborted (user cancel or timeout):', error);
+      } else if (isExpectedError(error)) {
+        this.context.logger.warn('[ReActAgent] Iteration stopped:', error);
       } else {
         this.context.logger.error('[ReActAgent] Error during runIteration:', error);
       }

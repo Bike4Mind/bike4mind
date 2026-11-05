@@ -1,8 +1,15 @@
 import React from 'react';
 import { useAdminSubscriptionCompChange } from '@client/app/hooks/data/adminSubscriptionDetail';
-import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, StatusChip, useUndoToast } from '../../../shared';
+import {
+  ActionDialog,
+  ADMIN_REASON_PRESETS,
+  undoAdminReason,
+  ChangePreview,
+  StatusChip,
+  useUndoToast,
+} from '../../../shared';
 import { subscriptionStatusDisplay } from '../../subscriptionStatusTone';
-import { ownerDisplayName, undoReason, type SubscriptionDialogProps } from '../subscriptionDetailModel';
+import { ownerDisplayName, type SubscriptionDialogProps } from '../subscriptionDetailModel';
 
 /** End comp: cancels the comp now; undo reopens it with its original end date. */
 export const EndCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, onClose, onAudit }) => {
@@ -19,7 +26,7 @@ export const EndCompDialog: React.FC<SubscriptionDialogProps> = ({ detail, onClo
     showUndo({
       message: `Comp ended for ${name}`,
       onUndo: async () => {
-        await change.mutateAsync({ action: 'reopen', reason: undoReason(reason) });
+        await change.mutateAsync({ action: 'reopen', reason: undoAdminReason(reason) });
       },
       onViewAudit: onAudit,
     });

@@ -237,7 +237,7 @@ export { JiraResource } from './resources/JiraResource';
 // ─── Services ────────────────────────────────────────────────────────────────
 export { AppHomeDataService } from './services/AppHomeDataService';
 export type { AppHomeNotebook } from './services/AppHomeDataService';
-export { SlackAuditLogger, getClientIp } from './services/SlackAuditLogger';
+export { SlackAuditLogger } from './services/SlackAuditLogger';
 
 // ─── Thread Intelligence ─────────────────────────────────────────────────────
 export {

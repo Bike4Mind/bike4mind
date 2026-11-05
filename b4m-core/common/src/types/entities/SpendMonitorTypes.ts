@@ -19,6 +19,15 @@ export interface ISpendRollup {
 /** The fields a baseline series needs; windowSeries projects to these. */
 export type SpendSeriesPoint = Pick<ISpendRollup, 'bucketStart' | 'scopeId' | 'credits' | 'costUsd'>;
 
+/** AI usage credits of one scope over a window from one completion source (web, cli, desktop, ...). */
+export type SpendSourceTotal = {
+  scopeType: SpendRollupScopeType;
+  scopeId: string;
+  /** 'unknown' for ledger rows written without a source. */
+  source: string;
+  credits: number;
+};
+
 export const SPEND_RULE_IDS = [
   'platform_spike',
   'platform_cost_spike',
@@ -76,6 +85,15 @@ export interface ISpendRollupRepository extends IBaseRepository<ISpendRollup> {
     from: Date,
     to: Date
   ): Promise<Map<string, SpendSeriesPoint[]>>;
+  /**
+   * Credits per completion source over [from, to), read from the ledger rather than the rollups (which
+   * carry no source). Covers platform, User, Organization, Agent and apiKey scopes; others are ignored.
+   */
+  sourceMix(
+    from: Date,
+    to: Date,
+    scopes: Array<{ scopeType: SpendRollupScopeType; scopeId: string }>
+  ): Promise<SpendSourceTotal[]>;
 }
 /** A persisted alert as the repository returns it. */
 export type SpendAlertRecord = ISpendAlert & { id: string };
