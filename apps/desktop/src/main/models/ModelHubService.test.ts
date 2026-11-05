@@ -3731,6 +3731,24 @@ describe('ModelHubService split builds', () => {
     }
   });
 
+  it('removes the staged parts of a failed import when its retry is refused', async () => {
+    const free = vi.fn(async () => 10_000);
+    const t = await importing({
+      deps: { defaultStoreDir: () => '/default', sameDisk: async () => true, freeSpace: free },
+    });
+    try {
+      t.runtime.uploadBlob.mockRejectedValueOnce(new LocalRuntimeError('ollama could not take the part', 'ollama'));
+      await t.service.pull(splitRequest);
+      expect(await t.left()).toHaveLength(1);
+      free.mockResolvedValue(1);
+      await expect(t.service.pull(splitRequest)).resolves.toMatchObject({ ok: false, error: { kind: 'cannot-pull' } });
+      expect(t.service.pulls()).toEqual([]);
+      await vi.waitFor(async () => expect(await t.left()).toEqual([]));
+    } finally {
+      await t.cleanup();
+    }
+  });
+
   it('needs Ollama 0.35.0 or newer to add a split build', async () => {
     const t = await importing({ version: '0.34.2' });
     try {

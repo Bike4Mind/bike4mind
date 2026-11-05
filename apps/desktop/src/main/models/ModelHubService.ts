@@ -1576,6 +1576,8 @@ export class ModelHubService {
       controller,
       ref: null,
       curated: null,
+      // Owns a failed import's staging until replanned, so a refused retry's #drop still clears it.
+      import: existing?.import,
       view: {
         key,
         serverId: target.id,
@@ -1624,7 +1626,7 @@ export class ModelHubService {
       if (!planned.ok) return planned.listed ? this.#fail(key, entry, planned.error) : refuse(planned.error);
       entry.import = planned.plan;
       entry.importNotice = planned.notice;
-    }
+    } else entry.import = undefined;
 
     const hadTag = curated ? await this.#hadTagBefore(target, ref) : null;
     if (controller.signal.aborted) return refuse(hubError('cancelled', 'Download cancelled.'));
