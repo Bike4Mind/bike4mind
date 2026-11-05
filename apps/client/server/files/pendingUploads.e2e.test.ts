@@ -48,7 +48,7 @@ const row = (fields: Record<string, unknown> = {}) => ({
 const seed = (...rows: Record<string, unknown>[]) => FabFile.collection.insertMany(rows.map(fields => row(fields)));
 
 describe('admitPendingUploads against a real database', () => {
-  it('counts only pending, live client uploads created inside the window', async () => {
+  it('counts only pending client uploads created inside the window', async () => {
     await seed(
       {},
       { fileSize: 20 },
@@ -61,8 +61,6 @@ describe('admitPendingUploads against a real database', () => {
       // Written server-side, not a client upload.
       { clientUpload: false },
       { clientUpload: undefined },
-      // Soft-deleted.
-      { deletedAt: new Date() },
       // Another user's personal upload.
       { userId: OTHER }
     );
@@ -71,6 +69,29 @@ describe('admitPendingUploads against a real database', () => {
 
     expect(pending.count).toBe(3);
     expect(pending.bytesFor(undefined)).toBe(220);
+  });
+
+  it('keeps counting and reserving a pending upload soft-deleted inside the window', async () => {
+    await seed(
+      { fileSize: 7, deletedAt: new Date() },
+      // Rejected on landing: still holds its slot, but its object was deleted, so no bytes.
+      { fileSize: 11, deletedAt: new Date(), uploadRejectedAt: new Date() },
+      { fileSize: 13, createdAt: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS - 60_000), deletedAt: new Date() }
+    );
+
+    const pending = await admitPendingUploads(req, 1, [undefined]);
+
+    expect(pending.count).toBe(2);
+    expect(pending.bytesFor(undefined)).toBe(7);
+  });
+
+  it('reserves an empty-string organizationId row in the personal pool', async () => {
+    await seed({ fileSize: 5, organizationId: '' }, { fileSize: 3, organizationId: null });
+
+    const pending = await admitPendingUploads(req, 1, [undefined]);
+
+    expect(pending.count).toBe(2);
+    expect(pending.bytesFor(undefined)).toBe(8);
   });
 
   it("reserves an org pool's rows from every uploader, and keeps them out of the personal pool", async () => {
@@ -161,26 +182,39 @@ describe('admitPendingUploads against a real database', () => {
     );
     await seed({ organizationId: 'org-1', userId: OTHER });
 
-    const plan = await FabFile.collection
-      .find({
-        organizationId: { $in: ['org-1'], $type: 'string' },
-        clientUpload: true,
-        deletedAt: null,
-        createdAt: { $gte: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS) },
-      })
-      .explain();
+    const scans = await indexScans({ organizationId: { $in: ['org-1'], $type: 'string' } });
 
-    const stages: Array<{ stage?: string; indexName?: string }> = [];
-    const walk = (node: { inputStage?: unknown; inputStages?: unknown[] } | undefined) => {
-      if (!node) return;
-      stages.push(node as { stage?: string; indexName?: string });
-      walk(node.inputStage as typeof node);
-      (node.inputStages ?? []).forEach(child => walk(child as typeof node));
-    };
-    walk(plan.queryPlanner.winningPlan);
+    expect(scans.some(s => s.indexName === 'organizationId_1_createdAt_1_clientUpload')).toBe(true);
+  });
 
-    expect(stages.some(s => s.stage === 'IXSCAN' && s.indexName === 'organizationId_1_createdAt_1_clientUpload')).toBe(
-      true
+  it("serves the caller's branch from an index bounded on both userId and createdAt", async () => {
+    // A long-lived account: an index on userId alone would walk its whole history.
+    await FabFile.collection.insertMany(
+      Array.from({ length: 300 }, () => row({ createdAt: new Date(Date.now() - 2 * PENDING_UPLOAD_WINDOW_MS) }))
     );
+    await seed({});
+
+    const scans = await indexScans({ userId: ME });
+
+    expect(scans.some(s => s.keyPattern && 'userId' in s.keyPattern && 'createdAt' in s.keyPattern)).toBe(true);
   });
 });
+
+type PlanNode = { stage?: string; indexName?: string; keyPattern?: Record<string, number> };
+
+/** The IXSCAN stages of the winning plan for one branch of admitPendingUploads' match. */
+async function indexScans(branch: Record<string, unknown>): Promise<PlanNode[]> {
+  const since = new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS);
+  const plan = await FabFile.collection
+    .find({ ...branch, clientUpload: true, deletedAt: { $not: { $lt: since } }, createdAt: { $gte: since } })
+    .explain();
+  const stages: PlanNode[] = [];
+  const walk = (node: (PlanNode & { inputStage?: unknown; inputStages?: unknown[] }) | undefined) => {
+    if (!node) return;
+    stages.push(node);
+    walk(node.inputStage as typeof node);
+    (node.inputStages ?? []).forEach(child => walk(child as typeof node));
+  };
+  walk(plan.queryPlanner.winningPlan);
+  return stages.filter(stage => stage.stage === 'IXSCAN');
+}

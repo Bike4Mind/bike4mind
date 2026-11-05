@@ -7,7 +7,8 @@ import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubs
 import { resolveUserRateTier, type RateTierUser } from '@server/utils/userRateTier';
 
 // ms. The presigned PUT lives 10 minutes; the rest is slack for a slow PUT or a late S3 event.
-// An older pending row is abandoned and stops counting.
+// An older pending row is abandoned and stops counting. Uncharged bytes stop being reserved here too,
+// even if the charge transaction is still being retried.
 export const PENDING_UPLOAD_WINDOW_MS = 30 * 60 * 1000;
 export const PENDING_UPLOAD_LIMITED = 'pending_upload_limit';
 
@@ -44,10 +45,13 @@ async function resolveLimit(user: RateTierUser, req: ActiveSubscriptionsRequest)
 
 /** One aggregate: the caller's rows (for the count and personal bytes) plus every row in the named org pools. */
 async function loadPendingGroups(userId: string, organizationIds: string[]): Promise<PendingGroup[]> {
+  const since = new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS);
   const recentClientUpload = {
     clientUpload: true,
-    deletedAt: null,
-    createdAt: { $gte: new Date(Date.now() - PENDING_UPLOAD_WINDOW_MS) },
+    // Live, or deleted inside the window: a deleted row's presigned PUT can still land. Phrased on
+    // deletedAt (any in-window deletion is >= since) so the deletedAt-led user indexes still apply.
+    deletedAt: { $not: { $lt: since } },
+    createdAt: { $gte: since },
   };
   return FabFile.aggregate<PendingGroup>([
     {
@@ -64,16 +68,25 @@ async function loadPendingGroups(userId: string, organizationIds: string[]): Pro
     {
       $group: {
         _id: {
-          organizationId: { $ifNull: ['$organizationId', null] },
+          // '' bills to the uploader like null (storageOwnerOf).
+          organizationId: {
+            $cond: [{ $in: [{ $ifNull: ['$organizationId', null] }, [null, '']] }, null, '$organizationId'],
+          },
           mine: { $eq: ['$userId', userId] },
           pending: { $eq: ['$status', 'pending'] },
         },
         count: { $sum: 1 },
         // Completion precedes the charge transaction, so status alone cannot release reserved bytes.
+        // A rejected upload's object is deleted on landing, so it holds no bytes.
         bytes: {
           $sum: {
             $cond: [
-              { $eq: [{ $ifNull: ['$storageChargedAt', null] }, null] },
+              {
+                $and: [
+                  { $eq: [{ $ifNull: ['$storageChargedAt', null] }, null] },
+                  { $eq: [{ $ifNull: ['$uploadRejectedAt', null] }, null] },
+                ],
+              },
               { $max: [{ $ifNull: ['$fileSize', 0] }, 0] },
               0,
             ],
@@ -88,7 +101,7 @@ async function loadPendingGroups(userId: string, organizationIds: string[]): Pro
 /**
  * Refuses `requested` more presigned uploads when the caller would hold more than the pending cap,
  * then returns the in-flight snapshot the quota check reserves against. Pending means FabFile rows with
- * `clientUpload` still `pending`, not deleted, created within the window; recent uncharged bytes are reserved too.
+ * `clientUpload` still `pending` and created within the window, deleted or not; recent uncharged bytes are reserved too.
  * Called by the presign doors (createPresignedUpload, generate-presigned-urls-batch, createFabFile without
  * content), after their admission gates and before consumeFileUploadBudget, so a refusal costs no hourly allowance.
  * `ownerOrganizationIds` are the org pools the new files bill to (undefined for personal files).

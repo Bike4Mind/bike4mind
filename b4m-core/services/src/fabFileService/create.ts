@@ -150,6 +150,11 @@ export interface CreateFabFileAdapters {
    * pending client upload, i.e. a create without `content`.
    */
   pendingUploadBytes?: (organizationId: string | undefined) => number;
+  /**
+   * The caller writes the bytes itself right after a create without `content` (createByUrl, session
+   * summaries), so no presigned PUT is minted and the row is not a client upload (IFabFile.clientUpload).
+   */
+  serverUpload?: boolean;
 }
 
 /**
@@ -193,6 +198,7 @@ export const prepareFabFile = async (
     mimeTypePrecedence,
     objectKey,
     pendingUploadBytes,
+    serverUpload,
   }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
@@ -288,7 +294,7 @@ export const prepareFabFile = async (
       buildData.fileUrl = await storage.generateSignedUrl(filePath, DEFAULT_EXPIRE_IN_SECONDS, 'get');
       buildData.fileUrlExpireAt = signedUrlExpiresAt(buildData.fileUrl, DEFAULT_EXPIRE_IN_SECONDS);
     }
-  } else {
+  } else if (!serverUpload) {
     // Bound to the declared size, the one the size and storage checks above ran on.
     buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put', { ContentLength: params.fileSize });
     buildData.clientUpload = true;

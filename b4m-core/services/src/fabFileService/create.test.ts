@@ -280,6 +280,18 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(fabFilesCreate.mock.calls[0][0]).toMatchObject({ clientUpload: true });
   });
 
+  it('mints no PUT and stamps no client upload when the caller uploads the bytes itself', async () => {
+    const result = await createFabFile(
+      mockUserId,
+      { fileName: 'page.txt', mimeType: 'text/plain', fileSize: 12, type: KnowledgeType.URL },
+      { ...mockAdapters, serverUpload: true }
+    );
+
+    expect(storageGenerateSignedUrl).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty('presignedUrl');
+    expect(fabFilesCreate.mock.calls[0][0]).not.toHaveProperty('clientUpload');
+  });
+
   // Audio (generated TTS / sound effects) is storable-but-not-ingestable: it was
   // previously rejected by the mime gate (audio isn't in SupportedFabFileMimeTypes),
   // and must now be accepted via isStorableFabFileMimeType and stored as AUDIO.

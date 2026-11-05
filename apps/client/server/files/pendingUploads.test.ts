@@ -212,7 +212,7 @@ describe('admitPendingUploads - reserved bytes', () => {
     expect(pipeline[0].$match?.$or[0]).toMatchObject({
       userId: 'u1',
       clientUpload: true,
-      deletedAt: null,
+      deletedAt: { $not: { $lt: expect.any(Date) } },
     });
   });
 
@@ -224,7 +224,7 @@ describe('admitPendingUploads - reserved bytes', () => {
     expect(orgBranch).toMatchObject({
       organizationId: { $in: ['org-1', 'org-2'], $type: 'string' },
       clientUpload: true,
-      deletedAt: null,
+      deletedAt: { $not: { $lt: expect.any(Date) } },
     });
     const since = (orgBranch.createdAt as { $gte: Date }).$gte.getTime();
     expect(Date.now() - since).toBeGreaterThanOrEqual(PENDING_UPLOAD_WINDOW_MS);
