@@ -328,6 +328,10 @@ export class OllamaBackend implements ICompletionBackend {
     return this._requestSettings(model, { ...details.facts, defaultNumCtx: ollamaNumCtx(details.contextWindow) });
   }
 
+  // Callers size history from the listed contextWindow, so requests keep sending it until the next listing.
+  private readonly _listedNumCtx = new Map<string, number>();
+  private readonly _numCtxChangeWarned = new Set<string>();
+
   /** The num_ctx a listing advertises: the model's own setting, or the default when it has none or it cannot be read. */
   private async listedNumCtx(model: string, details: OllamaModelDetails): Promise<number> {
     // Listing does not fail with the settings: the model's turns read them strictly and fail with the reason.
@@ -335,7 +339,22 @@ export class OllamaBackend implements ICompletionBackend {
       this._logger.debug(`[OllamaBackend] Settings for ${model} not read while listing:`, error);
       return undefined;
     });
-    return settings?.numCtx ?? ollamaNumCtx(details.contextWindow);
+    const numCtx = settings?.numCtx ?? ollamaNumCtx(details.contextWindow);
+    this._listedNumCtx.set(model, numCtx);
+    this._numCtxChangeWarned.delete(model);
+    return numCtx;
+  }
+
+  private sentNumCtx(model: string, wanted: number): number {
+    const listed = this._listedNumCtx.get(model);
+    if (listed === undefined) return wanted;
+    if (wanted !== listed && !this._numCtxChangeWarned.has(model)) {
+      this._numCtxChangeWarned.add(model);
+      this._logger.warn(
+        `[OllamaBackend] ${model}: context size changed from ${listed} to ${wanted}; the context change applies after restart.`
+      );
+    }
+    return listed;
   }
 
   private readonly _detailsFailed = new Set<string>();
@@ -360,7 +379,7 @@ export class OllamaBackend implements ICompletionBackend {
   ): Promise<Pick<ChatRequest, 'options' | 'keep_alive' | 'think'>> {
     const details = await this.getModelDetailsCached(model);
     const settings = await this.requestSettings(model, details);
-    const numCtx = settings.numCtx ?? ollamaNumCtx(details.contextWindow);
+    const numCtx = this.sentNumCtx(model, settings.numCtx ?? ollamaNumCtx(details.contextWindow));
     const maxTokens = options.maxTokens ?? settings.maxOutputTokens;
     // A caller's thinking choice wins; the model's own setting stands in only when it leaves thinking unset.
     const think = typeof options.thinking?.enabled === 'boolean' ? options.thinking.enabled : settings.think;

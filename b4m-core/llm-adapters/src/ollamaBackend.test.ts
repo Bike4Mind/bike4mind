@@ -807,6 +807,31 @@ describe('OllamaBackend per-model request settings', () => {
       })
     ).toBe(32768);
   });
+
+  it('keeps sending the listed num_ctx after the setting changes, warning once, while other fields stay live', async () => {
+    const warn = vi.fn();
+    let current = { numCtx: 16384, keepAlive: 600 };
+    const logger = { ...silentLogger, warn };
+    const backend = new OllamaBackend('http://localhost:11434', logger, { requestSettings: async () => current });
+    const chat = vi.fn(async (_request: ChatRequest) => reply);
+    (backend as any)._api = {
+      chat,
+      show: vi.fn(async () => show),
+      list: vi.fn(async () => ({ models: [{ name: 'qwen2.5-coder:3b' }] })),
+    };
+    expect((await backend.getModelInfo())[0].contextWindow).toBe(16384);
+
+    current = { numCtx: 65536, keepAlive: 1800 };
+    await run(backend, {});
+    await run(backend, {});
+
+    expect(chat.mock.calls.map(([request]) => [request.options?.num_ctx, request.keep_alive])).toEqual([
+      [16384, 1800],
+      [16384, 1800],
+    ]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('context change applies after restart');
+  });
 });
 
 // The ollama client takes no per-request AbortSignal, so the backend binds one
