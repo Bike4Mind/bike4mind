@@ -1448,7 +1448,7 @@ export function ChatShell({
                 size="sm"
                 color="warning"
                 variant="soft"
-                sx={{ cursor: 'pointer' }}
+                sx={{ cursor: 'pointer', whiteSpace: 'pre-line' }}
                 onClick={conversation.dismissNotice}
                 data-testid="chat-notice"
               >

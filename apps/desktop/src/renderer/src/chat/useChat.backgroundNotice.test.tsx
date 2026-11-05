@@ -90,6 +90,19 @@ describe('a context notice for a conversation that is not open', () => {
     expect(conversation.notice).toBe('no tools\ncontext grew');
   });
 
+  it('keeps only the newest notice of each kind', async () => {
+    const say = (message: string) => emit({ type: 'context-notice', sessionId: 'away', message });
+    await act(async () => root.render(<Harness id="open" />));
+    await act(async () => say('This conversation now runs with a 16K-token context.'));
+    await act(async () => say('m has no tool support, so this conversation runs without tools.'));
+    await act(async () => say('This conversation now runs with a 32K-token context.'));
+
+    await act(async () => root.render(<Harness id="away" />));
+    expect(conversation.notice).toBe(
+      'This conversation now runs with a 32K-token context.\nm has no tool support, so this conversation runs without tools.'
+    );
+  });
+
   it('is dropped when the conversation is deleted', async () => {
     await act(async () => root.render(<Harness id="open" />));
     await act(async () => emit(noticeFor('gone')));

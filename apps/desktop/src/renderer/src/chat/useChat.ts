@@ -70,12 +70,24 @@ export interface SessionPlacement {
   failed: () => void;
 }
 
-/** Latest context notice per conversation that was not open when it arrived; shown when it opens. */
+/** Newest context notice of each kind per conversation that was not open when it arrived; shown when it opens. */
 const backgroundNotices = new Map<string, string>();
+
+// Kinds mirror the notices OllamaLocal and OpenAICompatibleChat emit: a newer one replaces its kind.
+function noticeKind(message: string): string {
+  if (message.includes('-token context')) return 'context-size';
+  if (message.includes('no tool support')) return 'no-tools';
+  return message;
+}
 
 function joinNotices(current: string | undefined, next: string): string {
   if (!current) return next;
-  return current.split('\n').includes(next) ? current : `${current}\n${next}`;
+  const kind = noticeKind(next);
+  const lines = current.split('\n');
+  const at = lines.findIndex(line => noticeKind(line) === kind);
+  if (at === -1) return `${current}\n${next}`;
+  lines[at] = next;
+  return lines.join('\n');
 }
 
 export function useSessions(): SessionsController {
