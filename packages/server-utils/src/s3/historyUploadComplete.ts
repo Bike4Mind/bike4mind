@@ -1,4 +1,4 @@
-import { IChatHistoryItem, InboxType, ISession } from '@bike4mind/common';
+import { describeImportFailure, IChatHistoryItem, InboxType, ISession } from '@bike4mind/common';
 import { importHistoryService } from '@bike4mind/services';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import {
@@ -67,6 +67,15 @@ const importHistory = async (
       },
     }
   );
+};
+
+// errorMessage on the job stays raw; only the user-facing text goes through the shared mapper.
+const failureInboxMessage = (source: importHistoryService.ImportSource, err: unknown) => {
+  const { reason, retryable } = describeImportFailure(err instanceof Error ? err.message : undefined, source);
+  const advice = retryable
+    ? 'Please try again later and/or contact support.'
+    : 'Export your history again and upload the new file.';
+  return `Your ${source} import failed: ${reason} ${advice}`;
 };
 
 export const dispatch = withContext(async (event, context, logger) => {
@@ -224,7 +233,7 @@ export const dispatch = withContext(async (event, context, logger) => {
       await inboxRepository.createInboxMessage({
         type: InboxType.COMMON,
         title: 'LLM history import Failed',
-        message: `Your ${source} import failed, please try again later and/or contact support`,
+        message: failureInboxMessage(source, err),
         receiverId: userId,
         userId,
       });

@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   createInboxMessage: vi.fn(),
   importHistory: vi.fn(),
   markImportComplete: vi.fn(),
+  markImportFailed: vi.fn(),
 }));
 
 vi.mock('./utils', () => ({ withContext: (fn: unknown) => fn }));
@@ -46,11 +47,14 @@ vi.mock('@bike4mind/services', () => ({
     importHistory: h.importHistory,
   },
 }));
-vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  InboxType: { COMMON: 'common' },
+}));
 vi.mock('../utils/importHistoryProgress', () => ({
   updateImportProgress: vi.fn(),
   markImportComplete: h.markImportComplete,
-  markImportFailed: vi.fn(),
+  markImportFailed: h.markImportFailed,
 }));
 
 import { dispatch } from './historyUploadComplete';
@@ -115,5 +119,52 @@ describe('historyUploadComplete completion counts', () => {
 
     const stats = h.markImportComplete.mock.calls[0][2] as { processedItems: number; totalItems: number };
     expect(stats).toEqual({ processedItems: 1, totalItems: 1, skippedItems: 0 });
+  });
+});
+
+describe('historyUploadComplete failure inbox message', () => {
+  const failWith = async (err: unknown) => {
+    h.jobCreate.mockResolvedValue({ id: 'job-1' });
+    h.findByS3Key.mockResolvedValueOnce(null).mockResolvedValue({ id: 'job-1' });
+    h.importHistory.mockRejectedValue(err);
+    await run();
+    const failed = h.createInboxMessage.mock.calls.find(
+      ([msg]) => (msg as { title: string }).title === 'LLM history import Failed'
+    );
+    return (failed?.[0] as { message: string }).message;
+  };
+
+  it('names the reason and asks for a new export when the file is not a valid export', async () => {
+    const message = await failWith(new Error('conversations.json not found in archive'));
+
+    expect(message).toBe(
+      "Your OpenAI import failed: This file doesn't look like a ChatGPT export (no conversations.json). " +
+        'Export your history again and upload the new file.'
+    );
+    expect(message).not.toContain('try again later');
+  });
+
+  it('keeps the generic retry advice for an unrecognised error without echoing it', async () => {
+    const message = await failWith(new Error('ECONNRESET reading /tmp/import-user-1/history.zip'));
+
+    expect(message).toContain('Something went wrong on our side');
+    expect(message).toContain('Please try again later and/or contact support.');
+    expect(message).not.toContain('/tmp');
+  });
+
+  it('falls back to the generic reason for a non-Error throw', async () => {
+    const message = await failWith('string thrown');
+
+    expect(message).toContain('Please try again later and/or contact support.');
+  });
+
+  it('still stores the raw error message on the job', async () => {
+    await failWith(new Error('conversations.json not found in archive'));
+
+    expect(h.markImportFailed).toHaveBeenCalledWith(
+      'job-1',
+      'user-1',
+      expect.objectContaining({ message: 'conversations.json not found in archive' })
+    );
   });
 });

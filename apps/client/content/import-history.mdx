@@ -133,6 +133,11 @@ If you prefer to do it manually:
 ### "conversations.json not found"
 **Solution**: Your zip file structure may be incorrect. Make sure `conversations.json` is at the root level of the zip, not in a subfolder.
 
+### "Import failed: not a valid export"
+**What it means**: The file you uploaded is not a ChatGPT or Claude export Bike4Mind can read. The import history and your inbox say which problem it hit: no `conversations.json` in the zip, the file is not a valid .zip archive, the archive is damaged, or `conversations.json` is not valid JSON.
+
+**Solution**: Retrying the same file will fail the same way. Request a new export from ChatGPT or Claude and upload the fresh .zip as downloaded, without unpacking or re-zipping it.
+
 ## FAQ
 
 **Q: Will this delete my conversations from OpenAI/Claude?**
