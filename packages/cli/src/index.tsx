@@ -222,6 +222,7 @@ import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCo
 import { runTurn } from './session/turnController.js';
 import { SESSION_RELEASE_TIMEOUT_MS, restartAfterSignIn } from './session/restartAfterSignIn.js';
 import { releaseSession, type SessionResources } from './session/releaseSession.js';
+import { forgetBackgroundCompletions, sessionBackgroundCallbacks } from './session/backgroundCallbacks.js';
 import {
   createFreshSession,
   resumeSession,
@@ -402,7 +403,13 @@ function CliApp() {
     // session is read fresh from the store, so it is intentionally not a dependency of the callers.
     const session = useCliStore.getState().session;
     return {
-      killShellSessions: () => getShellSessionManager().killAll(),
+      abortTurn: reason === 'sign_in' ? () => abortControllerRef.current?.abort() : null,
+      killShellSessions: () => {
+        const shells = getShellSessionManager();
+        const running = shells.runningCount();
+        shells.killAll();
+        return running;
+      },
       killBangCommands: killRunningBangCommands,
       commandHistory: state.commandHistoryStore,
       saveSession: session ? () => state.sessionStore.save(session) : null,
@@ -965,14 +972,7 @@ function CliApp() {
         userQuestionFn,
         startupLog,
         silentLogger,
-        onBackgroundStatusChange: job => {
-          useCliStore.getState().upsertBackgroundAgent(job);
-        },
-        onGroupCompletion: (notification, groupDescription) => {
-          useCliStore.getState().addCompletedGroupNotification(notification, groupDescription);
-          // Always set the trigger - the useEffect will wait for isThinking to be false
-          useCliStore.getState().setPendingBackgroundTrigger(true);
-        },
+        ...sessionBackgroundCallbacks(() => generation === initGenerationRef.current),
         onSubagentUsage: usage => {
           useCliStore.getState().recordSubagentUsage({
             agentName: usage.agentName,
@@ -4180,7 +4180,13 @@ function CliApp() {
           // Holds input on the initializing screen so nothing typed during the restart reaches the old agent.
           setIsInitialized(false);
           restartAfterSignIn({
-            release: () => releaseSession(sessionResources('sign_in'), SESSION_RELEASE_TIMEOUT_MS),
+            release: async () => {
+              // Retires this session's callbacks before its background agents are cancelled.
+              initGenerationRef.current++;
+              const released = await releaseSession(sessionResources('sign_in'), SESSION_RELEASE_TIMEOUT_MS);
+              forgetBackgroundCompletions();
+              return released;
+            },
             restart: init,
             print: line => console.log(`\n${line}\n`),
           }).catch(err => {

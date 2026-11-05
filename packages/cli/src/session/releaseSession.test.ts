@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
+import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { releaseSession, type SessionResources } from './releaseSession.js';
 
 afterEach(() => {
@@ -14,7 +16,8 @@ const jobs = [
 /** The fakes, and the resources built from them with `over` applied. */
 function resources(over: Partial<SessionResources> = {}) {
   const r = {
-    killShellSessions: vi.fn(),
+    abortTurn: vi.fn(),
+    killShellSessions: vi.fn(() => 0),
     killBangCommands: vi.fn(),
     commandHistory: { whenIdle: vi.fn(async () => {}) },
     saveSession: vi.fn(async () => {}),
@@ -39,7 +42,8 @@ describe('releaseSession', () => {
     expect(r.mcpManager.disconnect).toHaveBeenCalledOnce();
     expect(r.featureRegistry.disposeAll).toHaveBeenCalledOnce();
     expect(r.agent.removeAllListeners).toHaveBeenCalledOnce();
-    expect(r.backgroundManager.cancelJob.mock.calls).toEqual([['a'], ['b']]);
+    expect(r.abortTurn).toHaveBeenCalledOnce();
+    expect(r.backgroundManager.cancelJob.mock.calls).toEqual([['b'], ['a']]);
     expect(r.wsManager.disconnect).toHaveBeenCalledOnce();
     expect(r.clearWebSocketToolExecutor).toHaveBeenCalledOnce();
     expect(r.saveSession).toHaveBeenCalledOnce();
@@ -62,6 +66,45 @@ describe('releaseSession', () => {
 
     expect(r.agent.removeAllListeners).toHaveBeenCalledOnce();
     expect(r.backgroundManager.cancelJob).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels queued background agents before running ones, so none starts during release', async () => {
+    const delegateToAgent = vi.fn(
+      ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        new Promise((_resolve, reject) => abortSignal.addEventListener('abort', () => reject(new Error('aborted'))))
+    );
+    const manager = new BackgroundAgentManager({ delegateToAgent } as unknown as SubagentOrchestrator, 1);
+    const spawn = { task: 't', agentName: 'a', parentSessionId: 's', resumeId: 'r' };
+    manager.spawn(spawn);
+    manager.spawn(spawn);
+    const { input } = resources({ backgroundManager: manager });
+
+    await releaseSession(input, 1_000);
+
+    expect(delegateToAgent).toHaveBeenCalledOnce();
+    expect(manager.listJobs().map(job => job.status)).toEqual(['cancelled', 'cancelled']);
+  });
+
+  it('aborts the turn in flight first', async () => {
+    const order: string[] = [];
+    const { input } = resources({
+      abortTurn: () => void order.push('turn'),
+      backgroundManager: { listJobs: () => jobs, cancelJob: id => Boolean(order.push(`job ${id}`)) },
+    });
+
+    await releaseSession(input, 1_000);
+
+    expect(order[0]).toBe('turn');
+  });
+
+  it('reports how many background shells it stopped', async () => {
+    expect(await releaseSession(resources({ killShellSessions: () => 2 }).input, 1_000)).toEqual({ shellsStopped: 2 });
+    const failing = resources({
+      killShellSessions: () => {
+        throw new Error('no such process group');
+      },
+    });
+    expect(await releaseSession(failing.input, 1_000)).toEqual({ shellsStopped: 0 });
   });
 
   it('stops waiting on an MCP server that never closes', async () => {

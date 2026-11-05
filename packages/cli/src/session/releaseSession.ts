@@ -2,7 +2,10 @@ import { logger } from '../utils/Logger';
 
 /** What a running interactive session holds that must be let go of on exit or before a sign-in restart. */
 export interface SessionResources {
-  killShellSessions: () => void;
+  /** Aborts the turn in flight, if any. */
+  abortTurn: (() => void) | null;
+  /** Returns how many running shells it stopped. */
+  killShellSessions: () => number;
   killBangCommands: () => void;
   commandHistory: { whenIdle(): Promise<void> };
   saveSession: (() => Promise<void>) | null;
@@ -19,13 +22,17 @@ export interface SessionResources {
   imageStore: { close(): void } | null;
 }
 
+export interface ReleasedSession {
+  shellsStopped: number;
+}
+
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
  * Stops everything the session started, waiting at most `timeoutMs` for the asynchronous parts (session save,
  * MCP servers, bridge presence). Each step is best-effort, so one failure never skips the rest.
  */
-export async function releaseSession(resources: SessionResources, timeoutMs: number): Promise<void> {
+export async function releaseSession(resources: SessionResources, timeoutMs: number): Promise<ReleasedSession> {
   const step = (name: string, run: () => void) => {
     try {
       run();
@@ -38,7 +45,12 @@ export async function releaseSession(resources: SessionResources, timeoutMs: num
       .then(work)
       .catch(error => logger.debug(`[CLEANUP] ${name} error: ${errorText(error)}`));
 
-  step('Shell session reap', resources.killShellSessions);
+  const { abortTurn } = resources;
+  if (abortTurn) step('Turn abort', abortTurn);
+  let shellsStopped = 0;
+  step('Shell session reap', () => {
+    shellsStopped = resources.killShellSessions();
+  });
   step('Bang command reap', resources.killBangCommands);
   const tasks: Promise<void>[] = [pending('Command history', () => resources.commandHistory.whenIdle())];
   const { saveSession, mcpManager, featureRegistry, wsManager, agent, backgroundManager, imageStore } = resources;
@@ -52,9 +64,10 @@ export async function releaseSession(resources: SessionResources, timeoutMs: num
   tasks.push(pending('Bridge presence stop', resources.stopBridgePresence));
   if (agent) step('Agent listeners', () => agent.removeAllListeners());
   if (backgroundManager) {
-    for (const job of backgroundManager.listJobs()) {
-      if (job.status === 'running' || job.status === 'queued') {
-        step('Background agent cancel', () => backgroundManager.cancelJob(job.id));
+    // Queued first: cancelling a running job frees its slot, which starts the next queued one.
+    for (const status of ['queued', 'running']) {
+      for (const job of backgroundManager.listJobs()) {
+        if (job.status === status) step('Background agent cancel', () => backgroundManager.cancelJob(job.id));
       }
     }
   }
@@ -68,4 +81,5 @@ export async function releaseSession(resources: SessionResources, timeoutMs: num
     }),
   ]);
   clearTimeout(timer);
+  return { shellsStopped };
 }
