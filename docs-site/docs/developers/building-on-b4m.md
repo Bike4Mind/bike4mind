@@ -250,11 +250,35 @@ A successful response is:
 
 The key currently lives 15 minutes; use `expires_in` rather than hard-coding 900. Send it as `Authorization: Bearer b4m_live_...` (the `x-api-key` header is accepted for older callers).
 
+#### With the SDK
+
+`@bike4mind/sdk` wraps the exchange. Run it on your server only, since it sends the client secret. It returns `{ apiKey, expiresAt, scope }` and throws `B4mApiError` on failure, with `errorCode` set to the OAuth `error` and `message` to its `error_description`:
+
+```ts
+import { B4mApiError, exchangeIdToken } from '@bike4mind/sdk';
+
+try {
+  const { apiKey, expiresAt } = await exchangeIdToken({
+    baseUrl: 'https://your-b4m-host',
+    clientId,
+    clientSecret,
+    idToken,
+    signal: AbortSignal.timeout(10_000),
+  });
+} catch (error) {
+  if (error instanceof B4mApiError) {
+    error.status; // 429: pause minting for error.retryAfterSeconds
+    error.errorCode; // e.g. 'invalid_grant': the user must sign in again
+  }
+}
+```
+
 The ID token must still be valid when you exchange it. Once it expires, re-authorize the user (section 3) before you can mint another key. A 403 `access_denied` for missing consent also needs re-authorization, and only helps if the new authorization request includes the API scopes you exchange for.
 
 | Response                      | Meaning                                                                                                                                      |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | 401 `invalid_client`          | unknown `client_id` or wrong secret                                                                                                          |
+| 403 `subscription_required`   | the deployment limits API key access to paid plans and the user has no qualifying subscription                                               |
 | 403 `access_denied`           | the client has no trust config, the user has not consented to these scopes, or the user has not accepted the B4M terms                       |
 | 403 `invalid_scope`           | a requested scope is not `ai:generate` or `me:read`, or is not allowed for this client                                                       |
 | 401 `invalid_grant`           | the ID token is invalid or expired, or its subject is not a B4M user                                                                         |
@@ -277,7 +301,7 @@ Every successful exchange **revokes the previous key** minted for the same user 
 
 - **Expiry skew.** Re-mint shortly before `expires_in` runs out (for example 60 seconds early), not after a request fails.
 - **Default lifetime.** If `expires_in` is ever missing, assume the 900-second default rather than caching forever.
-- **Negative cache.** After a 400, 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request, and log the `error` and `error_description` to tell the cases apart. `invalid_grant`, and an `access_denied` for missing consent, mean the user must sign in again (with the API scopes included). `access_denied` with "Policy acceptance required" means the user must accept the B4M terms in B4M; re-authorizing does not help. `invalid_client`, `invalid_scope` or a missing trust config mean your client is misconfigured. A 400 `invalid_request` is a malformed request or the user's API-key cap. A 429 or 5xx is different. A 429 is client-wide, so pause every mint for its `Retry-After` seconds (or a default when it is absent). A 5xx is a B4M-side failure (a 503 affects only that user) and carries no `Retry-After`; retry that user after a short delay, and do not ask them to re-authorize.
+- **Negative cache.** After a 400, 401 or 403 from the exchange, remember the failure for that ID token briefly instead of retrying on every request, and log the `error` and `error_description` to tell the cases apart. `invalid_grant`, and an `access_denied` for missing consent, mean the user must sign in again (with the API scopes included). `access_denied` with "Policy acceptance required" means the user must accept the B4M terms in B4M; re-authorizing does not help. `invalid_client`, `invalid_scope` or a missing trust config mean your client is misconfigured. A 400 `invalid_request` is a malformed request or the user's API-key cap. `subscription_required` is a user state too: the user needs a qualifying plan, and re-authorizing does not help. A 429 or 5xx is different. A 429 is client-wide, so pause every mint for its `Retry-After` seconds (or a default when it is absent). A 5xx is a B4M-side failure (a 503 affects only that user) and carries no `Retry-After`; retry that user after a short delay, and do not ask them to re-authorize.
 - **Timeout.** Bound the exchange call with a timeout so a slow B4M does not hang your request path.
 - **One re-mint.** If B4M rejects a cached key, mint once and retry once. If that fails too, surface the error. Re-mint only if the rejected key is still the cached one: if another request already replaced it, use the replacement, or your re-mint revokes it.
 
@@ -389,12 +413,13 @@ Errors follow section 5: 400 `invalid_request` for a malformed body, 401 `invali
 
 ## 9. Worked example
 
-A minimal server-side flow in TypeScript, run as an ES module (`"type": "module"`, since it uses top-level `await`), using Node 18+ (`fetch`, `crypto`) and [`jose`](https://github.com/panva/jose) for ID-token verification. Session storage and the HTTP framework are left to you: `session` stands for your server-side session store.
+A minimal server-side flow in TypeScript, run as an ES module (`"type": "module"`, since it uses top-level `await`), using Node 18+ (`fetch`, `crypto`), [`@bike4mind/sdk`](https://www.npmjs.com/package/@bike4mind/sdk) for the key exchange and [`jose`](https://github.com/panva/jose) for ID-token verification. Session storage and the HTTP framework are left to you: `session` stands for your server-side session store.
 
 ### Setup
 
 ```ts
 import crypto from 'node:crypto';
+import { B4mApiError, exchangeIdToken } from '@bike4mind/sdk';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const B4M = 'https://your-b4m-host';
@@ -474,7 +499,6 @@ const failures = new Map<string, { until: number; reason: 'rejected' | 'unavaila
 let clientBackoffUntil = 0; // a 429 from the exchange pauses minting for every user
 
 const SKEW_MS = 60_000;
-const DEFAULT_TTL_S = 900;
 const NEGATIVE_TTL_MS = 60_000;
 const RETRY_5XX_MS = 5_000;
 
@@ -507,25 +531,25 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
   if (failure?.reason === 'rejected') throw new Error(`Exchange recently failed: ${failure.detail}`);
   if (failure) throw new Error('B4M temporarily unavailable; retry later');
 
-  const res = await fetch(`${B4M}/api/oauth/ai-token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      id_token: idToken,
+  try {
+    const { apiKey, expiresAt } = await exchangeIdToken({
+      baseUrl: B4M,
+      clientId: CLIENT_ID,
+      clientSecret: CLIENT_SECRET,
+      idToken,
       scope: 'ai:generate',
-    }),
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!res.ok) {
-    const err: { error?: string; error_description?: string } = await res.json().catch(() => ({}));
+      signal: AbortSignal.timeout(10_000),
+    });
+    keys.set(userId, { key: apiKey, expiresAt: expiresAt.getTime() });
+    return apiKey;
+  } catch (error) {
+    if (!(error instanceof B4mApiError)) throw error;
     // Log this: it tells "re-authorize the user" apart from "fix your client config".
-    const detail = `${res.status} ${err.error ?? ''} ${err.error_description ?? ''}`.trim();
-    if (res.status === 429) {
-      const retryAfterS = Number(res.headers.get('Retry-After')) || NEGATIVE_TTL_MS / 1000;
+    const detail = `${error.status} ${error.errorCode ?? ''} ${error.message}`.trim();
+    if (error.status === 429) {
+      const retryAfterS = error.retryAfterSeconds ?? NEGATIVE_TTL_MS / 1000;
       clientBackoffUntil = Date.now() + retryAfterS * 1000;
-    } else if (res.status >= 500) {
+    } else if (error.status >= 500) {
       // A B4M-side failure (503: this user's consent lookup failed): retry them shortly, without
       // pausing everyone or asking them to re-authorize. 5xx responses carry no Retry-After.
       failures.set(idToken, { until: Date.now() + RETRY_5XX_MS, reason: 'unavailable', detail });
@@ -535,11 +559,6 @@ async function mintKey(userId: string, idToken: string): Promise<string> {
     }
     throw new Error(`ai-token exchange failed: ${detail}`);
   }
-
-  const body = await res.json();
-  const ttlSeconds = body.expires_in ?? DEFAULT_TTL_S;
-  keys.set(userId, { key: body.api_key, expiresAt: Date.now() + ttlSeconds * 1000 });
-  return body.api_key;
 }
 ```
 
