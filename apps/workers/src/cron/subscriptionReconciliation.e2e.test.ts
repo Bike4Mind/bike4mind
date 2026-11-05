@@ -132,7 +132,7 @@ describe('subscription reconciliation findings lifecycle', () => {
       { $set: { status: 'canceled', updatedAt: new Date(T1.getTime() - DAY) } }
     );
     mocks.list.mockReturnValue(listing([]));
-    mocks.retrieve.mockResolvedValue({ ...stripeSub(3), status: 'canceled', canceled_at: 1_800_000_000 });
+    mocks.retrieve.mockResolvedValue({ ...stripeSub(3), status: 'canceled', canceled_at: Math.floor(T1.getTime() / 1000) - 2 * 86_400 });
 
     // A truncated run leaves the finding alone.
     await runSubscriptionReconciliation(undefined, T2, Date.now() - 1);
