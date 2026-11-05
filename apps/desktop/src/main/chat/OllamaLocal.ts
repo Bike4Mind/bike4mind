@@ -1,6 +1,6 @@
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
-import type { FetchLike } from '@bike4mind/local-models';
+import { modelBlobsOf, type FetchLike } from '@bike4mind/local-models';
 import {
   localBackend,
   localModelId,
@@ -644,10 +644,14 @@ export class OllamaLocal {
       contextWindow,
       thinks: canThink,
     });
+    const { modelBlob, adapterBlobs } = modelBlobsOf(inspection?.modelfile);
     return {
       id,
       name,
       backend: localBackend(this.runtimeId),
+      ...(modelBlob ? { modelBlob } : {}),
+      ...(adapterBlobs?.length ? { hasAdapter: true } : {}),
+      ...(inspection?.parameters ? { modelParameters: inspection.parameters } : {}),
       ...(capabilities
         ? { supportsTools: capabilities.includes('tools'), supportsVision: capabilities.includes('vision') }
         : {}),

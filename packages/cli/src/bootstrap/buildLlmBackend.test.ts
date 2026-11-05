@@ -1,13 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
 import {
   attachLocalModels,
   buildLlmBackend,
+  defaultLlmBackendDeps,
   resolveHeadlessModel,
   resolveModelInfo,
   type BuildLlmBackendDeps,
 } from './buildLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
+import { modelSavePatch } from '../utils/performModelSwitch.js';
 
 const model = (id: string) => ({ id }) as ModelInfo;
 
@@ -30,6 +32,7 @@ function makeDeps(over: Partial<BuildLlmBackendDeps> = {}) {
       fakeBackend([...sm, ...routes.flatMap(route => route.models)])
     ),
     loadModelServers: vi.fn(async () => ({ servers: [], problem: null })),
+    detectOllama: vi.fn(async () => null),
     ...over,
   };
   return { deps, fakeWs, serverBackend };
@@ -268,6 +271,270 @@ describe('buildLlmBackend — Ollama multiplexing', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe('buildLlmBackend, detecting a running Ollama', () => {
+  const DETECTED = 'http://127.0.0.1:11434';
+  const detecting = (over: Record<string, unknown> = {}) =>
+    makeInput({ apiClient: fakeApiClient({}), detectOllama: true, ...over });
+
+  beforeEach(() => {
+    vi.stubEnv('B4M_OLLAMA_HOST', '');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ['the flag', { ollamaHost: 'http://flag-box:11434' }, undefined, 'http://flag-box:11434'],
+    ['B4M_OLLAMA_HOST', {}, 'env-box', 'http://env-box:11434'],
+    [
+      'the saved config',
+      { config: createMockConfig({ defaultModel: 'm1', ollamaHost: 'saved-box' }) },
+      undefined,
+      'http://saved-box:11434',
+    ],
+  ])('uses the host from %s and does not probe', async (_source, over, env, expected) => {
+    if (env) vi.stubEnv('B4M_OLLAMA_HOST', env);
+    const { deps } = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
+
+    await buildLlmBackend(detecting(over), deps);
+
+    expect(deps.detectOllama).not.toHaveBeenCalled();
+    expect(deps.createOllamaBackend).toHaveBeenCalledOnce();
+    expect(deps.createOllamaBackend).toHaveBeenCalledWith(expected);
+  });
+
+  it('attaches the Ollama it detects when no host is configured', async () => {
+    const { deps } = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(detecting({ startupLog }), deps);
+
+    expect(deps.createOllamaBackend).toHaveBeenCalledWith(DETECTED);
+    expect(res.models.map(m => m.id)).toEqual(['m1', 'ollama1']);
+    expect(startupLog).toContain('\u{1f999} Self-hosted Ollama: 1 model(s) added to picker');
+  });
+
+  it('adds nothing and warns nothing when no Ollama answers', async () => {
+    const { deps, serverBackend } = makeDeps();
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(detecting({ startupLog }), deps);
+
+    expect(deps.detectOllama).toHaveBeenCalledOnce();
+    expect(deps.createOllamaBackend).not.toHaveBeenCalled();
+    expect(res.llm).toBe(serverBackend);
+    expect(startupLog).toEqual([]);
+  });
+
+  it('gives up on a probe that never settles at its deadline and aborts it', async () => {
+    let probeSignal: AbortSignal | undefined;
+    const detectOllama = vi.fn((signal: AbortSignal) => {
+      probeSignal = signal;
+      return new Promise<never>(() => undefined);
+    });
+    const { deps, serverBackend } = makeDeps({ detectOllama });
+    const startupLog: string[] = [];
+    const started = Date.now();
+
+    const res = await buildLlmBackend(detecting({ startupLog, ollamaDetectTimeoutMs: 30 }), deps);
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(probeSignal?.aborted).toBe(true);
+    expect(deps.createOllamaBackend).not.toHaveBeenCalled();
+    expect(res.llm).toBe(serverBackend);
+    expect(startupLog).toEqual([]);
+  });
+
+  it('starts on the server models when the probe throws', async () => {
+    const { deps, serverBackend } = makeDeps({
+      detectOllama: vi.fn(async () => {
+        throw new TypeError('fetch failed');
+      }),
+    });
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(detecting({ startupLog }), deps);
+
+    expect(res.llm).toBe(serverBackend);
+    expect(startupLog).toEqual([]);
+  });
+
+  it('reports the detected host and its model ids to the caller, and nothing when it was configured', async () => {
+    const detected = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
+    expect((await buildLlmBackend(detecting(), detected.deps)).detectedOllama).toEqual({
+      host: DETECTED,
+      modelIds: new Set(['ollama1']),
+    });
+
+    const flagged = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
+    const res = await buildLlmBackend(detecting({ ollamaHost: 'http://flag-box:11434' }), flagged.deps);
+    expect(res.detectedOllama).toBeNull();
+  });
+
+  it('does not offer a detected model whose id the server lists, so the server model keeps its id', async () => {
+    const { deps } = makeDeps({
+      detectOllama: vi.fn(async () => DETECTED),
+      createOllamaBackend: vi.fn(() => fakeBackend([model('m1'), model('ollama1')])),
+    });
+
+    const res = await buildLlmBackend(detecting(), deps);
+
+    const routes = vi.mocked(deps.createMultiBackend).mock.calls[0][2];
+    expect(routes.flatMap(r => r.models.map(m => m.id))).toEqual(['ollama1']);
+    expect((await res.llm.getModelInfo()).map(m => m.id)).toEqual(['m1', 'ollama1']);
+    expect(res.detectedOllama?.modelIds).toEqual(new Set(['ollama1']));
+    expect(modelSavePatch({ id: 'm1' }, createMockConfig({}), res.detectedOllama)).toEqual({ defaultModel: 'm1' });
+  });
+
+  it('attaches nothing when every detected model is also a server model', async () => {
+    const { deps, serverBackend } = makeDeps({
+      detectOllama: vi.fn(async () => DETECTED),
+      createOllamaBackend: vi.fn(() => fakeBackend([model('m1')])),
+    });
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(detecting({ startupLog }), deps);
+
+    expect(res.llm).toBe(serverBackend);
+    expect(res.detectedOllama).toBeNull();
+    expect(startupLog).toEqual([]);
+  });
+
+  it('keeps a configured host routing a model the server also lists', async () => {
+    const { deps } = makeDeps({
+      createOllamaBackend: vi.fn(() => fakeBackend([model('m1'), model('ollama1')])),
+    });
+
+    await buildLlmBackend(detecting({ ollamaHost: 'http://flag-box:11434' }), deps);
+
+    const routes = vi.mocked(deps.createMultiBackend).mock.calls[0][2];
+    expect(routes.flatMap(r => r.models.map(m => m.id))).toEqual(['m1', 'ollama1']);
+  });
+
+  it('still lists and saves a detected model the server does not list', async () => {
+    const { deps } = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
+
+    const res = await buildLlmBackend(detecting(), deps);
+
+    expect((await res.llm.getModelInfo()).map(m => m.id)).toEqual(['m1', 'ollama1']);
+    expect(modelSavePatch({ id: 'ollama1' }, createMockConfig({}), res.detectedOllama)).toEqual({
+      defaultModel: 'ollama1',
+      ollamaHost: DETECTED,
+      localDefaultModel: 'ollama1',
+    });
+  });
+
+  it('gives a detected host a short listing deadline instead of the saved-host one', async () => {
+    const hang = { currentModel: 'x', getModelInfo: () => new Promise<never>(() => undefined) } as never;
+    const { deps, serverBackend } = makeDeps({
+      detectOllama: vi.fn(async () => DETECTED),
+      createOllamaBackend: vi.fn(() => hang),
+    });
+    const startupLog: string[] = [];
+    const started = Date.now();
+
+    const res = await buildLlmBackend(
+      detecting({ startupLog, ollamaListingTimeoutMs: 60_000, ollamaDetectedListingTimeoutMs: 30 }),
+      deps
+    );
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(res.llm).toBe(serverBackend);
+    expect(res.detectedOllama).toBeNull();
+    expect(startupLog).toEqual([]);
+  });
+
+  it('does not attach or warn about a detected Ollama with no models pulled', async () => {
+    const empty = fakeBackend([]);
+    const { deps, serverBackend } = makeDeps({
+      detectOllama: vi.fn(async () => DETECTED),
+      createOllamaBackend: vi.fn(() => empty),
+    });
+    const startupLog: string[] = [];
+
+    const res = await buildLlmBackend(detecting({ startupLog }), deps);
+
+    expect(res.llm).toBe(serverBackend);
+    expect(res.detectedOllama).toBeNull();
+    expect(startupLog).toEqual([]);
+  });
+
+  it('still warns about a configured Ollama with no models pulled', async () => {
+    const { deps } = makeDeps({ createOllamaBackend: vi.fn(() => fakeBackend([])) });
+    const startupLog: string[] = [];
+
+    await buildLlmBackend(detecting({ startupLog, ollamaHost: 'http://flag-box:11434' }), deps);
+
+    expect(startupLog.join('\n')).toContain('No models found in Ollama at http://flag-box:11434');
+  });
+
+  it('does not probe unless asked to', async () => {
+    const { deps } = makeDeps({ detectOllama: vi.fn(async () => DETECTED) });
+
+    await buildLlmBackend(makeInput({ apiClient: fakeApiClient({}) }), deps);
+
+    expect(deps.detectOllama).not.toHaveBeenCalled();
+    expect(deps.createOllamaBackend).not.toHaveBeenCalled();
+  });
+});
+
+describe('defaultLlmBackendDeps.detectOllama', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const answering = (version: unknown) =>
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return String(input).endsWith('/api/version')
+        ? new Response(JSON.stringify(version), { status: 200, headers: { 'content-type': 'application/json' } })
+        : new Response('not found', { status: 404 });
+    });
+
+  it('returns the default loopback address when Ollama answers there', async () => {
+    const fetchMock = answering({ version: '0.12.0' });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(defaultLlmBackendDeps.detectOllama(new AbortController().signal)).resolves.toBe(
+      'http://127.0.0.1:11434'
+    );
+    expect(fetchMock).toHaveBeenCalled();
+    expect(fetchMock.mock.calls.every(([input]) => String(input).startsWith('http://127.0.0.1:11434/'))).toBe(true);
+  });
+
+  it('cancels requests still in flight when its signal aborts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_input: string | URL | Request, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          })
+      )
+    );
+    const abort = new AbortController();
+    const started = Date.now();
+    const probe = defaultLlmBackendDeps.detectOllama(abort.signal);
+
+    abort.abort();
+
+    // The probe's own timeout is 1.5s; settling sooner means the abort reached fetch.
+    await expect(probe).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('returns null when nothing listens there', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('fetch failed');
+      })
+    );
+
+    await expect(defaultLlmBackendDeps.detectOllama(new AbortController().signal)).resolves.toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { stat, statfs } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -30,12 +30,21 @@ import { invalid, registerModelsIpc, serverArg, text } from './ipc';
 import { loadCuratedManifest } from './loadCuratedManifest';
 import { ModelHubService, type ModelHubServiceDeps } from './ModelHubService';
 import { PullLedger } from './pullLedger';
+import { probeIntegratedGpu, runsInWsl } from './wslGpuCap';
 
 // Room for a daemon busy finishing a pull on a loaded machine, which the library's short default reads as stopped.
 const RUNTIME_HEALTH_TIMEOUT_MS = 10_000;
 const LINUX_SERVICE_STORE = '/usr/share/ollama/.ollama/models';
 
 const warn = (message: string) => console.warn(message);
+
+function procVersion(): string | null {
+  try {
+    return readFileSync('/proc/version', 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 const isMissing = (error: unknown) => error instanceof Error && 'code' in error && error.code === 'ENOENT';
 
@@ -131,6 +140,8 @@ export function registerModels(
       return join(homedir(), '.ollama', 'models');
     },
     pathExists: async path => (await stat(path)).isDirectory(),
+    wslHost: process.platform === 'win32' || (process.platform === 'linux' && runsInWsl(process.env, procVersion())),
+    integratedGpu: () => probeIntegratedGpu(),
     // Once, right away: the picker's reload waits for any recheck the pull or removal started.
     onInstalledChanged: serverId => send(IPC_CHANNELS.modelsInstalledChanged, serverId),
     keepAwake: on => {

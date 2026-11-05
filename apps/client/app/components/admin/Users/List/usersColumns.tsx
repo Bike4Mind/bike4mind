@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import { Box, Skeleton, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   NEW_ACCOUNT_WINDOW_MS,
@@ -18,6 +19,8 @@ import { InitialsAvatar } from '../../shared/InitialsAvatar';
 import { InlineBar } from '../../shared/InlineBar';
 import { StatusChip } from '../../shared/StatusChip';
 import type { DataColumn } from '../../shared/DataTable';
+import type { AiAbuseAdvisoryRow } from '@client/app/hooks/data/aiAdvisory';
+import { AiAdvisoryBadge } from './AiAdvisoryBadge';
 import { formatAccountAge, formatAccountCreatedTitle, formatLastActiveTitle } from '../formatAccountAge';
 
 export const PLAN_LABELS: Record<string, string> = {
@@ -83,6 +86,8 @@ export type UsersVerdictColumn = {
   /** Undefined while loading or after a failed fetch (the tab shows an alert for that). */
   verdicts?: SignupVerdicts['verdicts'];
   loading?: boolean;
+  /** Accounts the AI advisory flags, by user id; they get a badge beside the signup verdict. */
+  aiAdvisories?: ReadonlyMap<string, AiAbuseAdvisoryRow>;
 };
 
 const Dash = () => (
@@ -241,38 +246,51 @@ export function usersColumns({
     {
       id: 'verdict',
       label: 'Verdict',
-      width: '7rem',
+      width: '9rem',
       render: row => {
-        if (verdict.loading) {
-          return (
-            <Skeleton
-              variant="rectangular"
-              width={64}
-              height={22}
-              sx={{ borderRadius: 'md' }}
-              data-testid={`admin-users-verdict-loading-${row.id}`}
-            />
-          );
-        }
-        const shown = signupVerdictDisplay(verdict.verdicts?.[row.id], verdict.range);
-        if (!shown) return <Dash />;
+        const advisory = verdict.aiAdvisories?.get(row.id);
+        const signup = signupVerdictCell(row, verdict);
+        if (!advisory) return signup ?? <Dash />;
         return (
-          <Tooltip title={shown.title} placement="top" enterTouchDelay={0}>
-            {/* Focusable so keyboard and touch users can reach the reasons, not just mouse hover. */}
-            <Box
-              component="span"
-              tabIndex={0}
-              // A generic span may not carry aria-label; img makes it a labelled, non-interactive status.
-              role="img"
-              aria-label={`${shown.label}. ${shown.title}`}
-              onClick={event => event.stopPropagation()}
-              sx={{ display: 'inline-flex', borderRadius: 'md', ...adminFocus }}
-            >
-              <StatusChip tone={shown.tone} label={shown.label} data-testid={`admin-users-verdict-${row.id}`} />
-            </Box>
-          </Tooltip>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <AiAdvisoryBadge advisory={advisory} />
+            {signup}
+          </Stack>
         );
       },
     },
   ];
+}
+
+/** The signup chart's verdict chip for a row; null when the chart has no verdict for it. */
+function signupVerdictCell(row: AdminUsersListRow, verdict: UsersVerdictColumn): ReactElement | null {
+  if (verdict.loading) {
+    return (
+      <Skeleton
+        variant="rectangular"
+        width={64}
+        height={22}
+        sx={{ borderRadius: 'md' }}
+        data-testid={`admin-users-verdict-loading-${row.id}`}
+      />
+    );
+  }
+  const shown = signupVerdictDisplay(verdict.verdicts?.[row.id], verdict.range);
+  if (!shown) return null;
+  return (
+    <Tooltip title={shown.title} placement="top" enterTouchDelay={0}>
+      {/* Focusable so keyboard and touch users can reach the reasons, not just mouse hover. */}
+      <Box
+        component="span"
+        tabIndex={0}
+        // A generic span may not carry aria-label; img makes it a labelled, non-interactive status.
+        role="img"
+        aria-label={`${shown.label}. ${shown.title}`}
+        onClick={event => event.stopPropagation()}
+        sx={{ display: 'inline-flex', borderRadius: 'md', ...adminFocus }}
+      >
+        <StatusChip tone={shown.tone} label={shown.label} data-testid={`admin-users-verdict-${row.id}`} />
+      </Box>
+    </Tooltip>
+  );
 }

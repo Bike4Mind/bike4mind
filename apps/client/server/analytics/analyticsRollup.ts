@@ -6,6 +6,7 @@ import {
   analyticsUserDayRepository,
   UsageEvent,
   User,
+  type IAnalyticsDailyInternal,
   type IAnalyticsDailySignups,
   type IAnalyticsUserDay,
 } from '@bike4mind/database';
@@ -139,22 +140,81 @@ async function resolveSuspected(entries: [string, string | undefined][], options
   return suspected;
 }
 
-/** Recomputes WAU/MAU for rolled-up days after `day`, whose windows include it. */
-async function refreshLaterWindows(day: string) {
-  const later = await AnalyticsDaily.find({ day: { $gt: day, $lte: shiftDay(day, MAU_WINDOW_DAYS - 1) } }, { day: 1 })
-    .maxTimeMS(QUERY_DEADLINE_MS)
-    .lean();
-  for (const { day: laterDay } of later) {
-    const [wau, mau] = await windowCounts(laterDay);
-    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: { wau, mau } }).maxTimeMS(QUERY_DEADLINE_MS);
+type InternalDayIds = { day: string; userIds: readonly string[] };
+type InternalWindow = { week: Set<string>; month: Set<string>; complete: boolean };
+
+/**
+ * Internal ids active in the WAU and MAU windows ending on `day`, from the ids stored on the daily rows.
+ * `current` stands in for its day's row, which the caller has not written yet (or, for today, never writes).
+ * `complete` is false when a row in the window predates internal counts, so the window undercounts.
+ */
+export async function internalWindowIds(
+  day: string,
+  current: InternalDayIds,
+  { maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions = {}
+): Promise<InternalWindow> {
+  const monthStart = shiftDay(day, -(MAU_WINDOW_DAYS - 1));
+  const weekStart = shiftDay(day, -(WAU_WINDOW_DAYS - 1));
+  const rows = await AnalyticsDaily.find({ day: { $gte: monthStart, $lte: day } }, { day: 1, 'internal.userIds': 1 })
+    .maxTimeMS(maxTimeMS)
+    .lean<{ day: string; internal?: Pick<IAnalyticsDailyInternal, 'userIds'> }[]>();
+  const complete = rows.every(row => row.day === current.day || row.internal);
+  const idsByDay = new Map<string, readonly string[]>(rows.map(row => [row.day, row.internal?.userIds ?? []]));
+  if (current.day >= monthStart && current.day <= day) idsByDay.set(current.day, current.userIds);
+  const week = new Set<string>();
+  const month = new Set<string>();
+  for (const [rowDay, ids] of idsByDay) {
+    for (const id of ids) {
+      month.add(id);
+      if (rowDay >= weekStart) week.add(id);
+    }
   }
+  return { week, month, complete };
 }
 
-const windowCounts = (day: string) =>
-  Promise.all([
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day),
-    analyticsUserDayRepository.countDistinctUsers(shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day),
+export const unionSize = (...sets: Iterable<string>[]) => new Set(sets.flatMap(ids => [...ids])).size;
+
+/**
+ * WAU/MAU ending on `day` for both sides, and their exact union. A user whose flags changed inside the
+ * window sits on both sides (each day is classified when it is rolled up), so "all" is the union, not the sum.
+ */
+async function windowCounts(day: string, current: InternalDayIds) {
+  const [weekIds, monthIds, internal] = await Promise.all([
+    analyticsUserDayRepository.distinctUserIds(shiftDay(day, -(WAU_WINDOW_DAYS - 1)), day),
+    analyticsUserDayRepository.distinctUserIds(shiftDay(day, -(MAU_WINDOW_DAYS - 1)), day),
+    internalWindowIds(day, current),
   ]);
+  return {
+    wau: weekIds.length,
+    mau: monthIds.length,
+    internal: {
+      wau: internal.week.size,
+      mau: internal.month.size,
+      allWau: unionSize(weekIds, internal.week),
+      allMau: unionSize(monthIds, internal.month),
+      windowComplete: internal.complete,
+    },
+  };
+}
+
+/** Recomputes WAU/MAU for rolled-up days after `day`, whose windows include it. */
+async function refreshLaterWindows(day: string, current: InternalDayIds) {
+  const later = await AnalyticsDaily.find(
+    { day: { $gt: day, $lte: shiftDay(day, MAU_WINDOW_DAYS - 1) } },
+    { day: 1, 'internal.dau': 1 }
+  )
+    .maxTimeMS(QUERY_DEADLINE_MS)
+    .lean<{ day: string; internal?: Pick<IAnalyticsDailyInternal, 'dau'> }[]>();
+  for (const { day: laterDay, internal: laterInternal } of later) {
+    const { wau, mau, internal } = await windowCounts(laterDay, current);
+    const update: Record<string, number | boolean> = { wau, mau };
+    // Rows from before internal counts were recorded stay without them until they are rolled up again.
+    if (laterInternal) {
+      for (const [key, value] of Object.entries(internal)) update[`internal.${key}`] = value;
+    }
+    await AnalyticsDaily.updateOne({ day: laterDay }, { $set: update }).maxTimeMS(QUERY_DEADLINE_MS);
+  }
+}
 
 type EventGroup = {
   _id: {
@@ -178,8 +238,9 @@ type DayUsageAcc = {
 };
 
 /**
- * Counted users' usage on one UTC day, grouped the way rollupDay stores it. Read-only, so the
- * admin overview reuses it for the live slice of today and its numbers match the rollup.
+ * Counted users' usage on one UTC day, grouped the way rollupDay stores it, plus the ids and surfaces of
+ * the internal users it leaves out. Read-only, so the admin overview reuses it for the live slice of
+ * today and its numbers match the rollup.
  */
 export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_MS }: RollupOptions = {}) {
   const { start, end } = dayBounds(day);
@@ -211,11 +272,17 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
   const byFeature = new Map<string, number>();
   const bySource = new Map<string, number>();
   const byModel = new Map<string, number>();
+  const internalIds = new Set<string>();
+  const internalBySource = new Map<string, number>();
   let creditsConsumed = 0;
 
   for (const group of groups) {
     const { userId, ownerType, ownerId, feature, source, model } = group._id;
-    if (!isCountedUser(users.get(userId), staffRegex)) continue;
+    if (!isCountedUser(users.get(userId), staffRegex)) {
+      internalIds.add(userId);
+      bump(internalBySource, source ?? UNCLASSIFIED_SOURCE, group.requests);
+      continue;
+    }
     const acc: DayUsageAcc = perUser.get(userId) ?? {
       requests: 0,
       credits: 0,
@@ -237,7 +304,15 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
     bump(byModel, model, group.requests);
     creditsConsumed += group.credits;
   }
-  return { users, perUser, byFeature, bySource, byModel, creditsConsumed };
+  return {
+    users,
+    perUser,
+    byFeature,
+    bySource,
+    byModel,
+    creditsConsumed,
+    internal: { userIds: [...internalIds].sort(), bySource: internalBySource },
+  };
 }
 
 /**
@@ -246,7 +321,10 @@ export async function collectDayUsage(day: string, { maxTimeMS = QUERY_DEADLINE_
  */
 export async function rollupDay(day: string, options: RollupOptions = {}) {
   const computedAt = options.now ?? new Date();
-  const { users, perUser, byFeature, bySource, byModel, creditsConsumed } = await collectDayUsage(day, options);
+  const { users, perUser, byFeature, bySource, byModel, creditsConsumed, internal } = await collectDayUsage(
+    day,
+    options
+  );
 
   const suspectedUsers = await resolveSuspected(
     [...perUser.keys()].map(userId => {
@@ -293,9 +371,10 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
   }
 
   const signups = await evaluateSignupDay(day, options);
-  const [wau, mau] = await windowCounts(day);
+  const internalIds = { day, userIds: internal.userIds };
+  const { wau, mau, internal: internalWindows } = await windowCounts(day, internalIds);
   // The daily row is the backfill completion marker; leave it absent until all dependent windows refresh.
-  await refreshLaterWindows(day);
+  await refreshLaterWindows(day, internalIds);
   await analyticsDailyRepository.upsertDay(day, {
     signups,
     dau: perUser.size,
@@ -305,6 +384,12 @@ export async function rollupDay(day: string, options: RollupOptions = {}) {
     requestsBySource: toRecord(bySource),
     requestsByModel: toRecord(byModel, ANALYTICS_BY_MODEL_LIMIT),
     creditsConsumed,
+    internal: {
+      dau: internal.userIds.length,
+      ...internalWindows,
+      userIds: internal.userIds,
+      requestsBySource: toRecord(internal.bySource),
+    },
     computedAt,
   });
   return { day, dau: perUser.size, wau, mau };

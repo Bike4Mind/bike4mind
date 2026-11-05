@@ -7,6 +7,26 @@ import type { OllamaLocal } from '../chat/OllamaLocal';
 import type { CompletionStreamEvent } from '../chat/streamEvents';
 import type { ModelListOptions, ModelServerRegistry } from './ModelServerRegistry';
 
+export interface CatalogSamplingQuery {
+  name: string;
+  modelBlob?: string | undefined;
+  parameters?: string | undefined;
+  hasAdapter?: boolean | undefined;
+}
+
+export type CatalogSamplingHook = (model: CatalogSamplingQuery) => CatalogSampling | undefined;
+
+/** Adapts a hook to a model option's name, weights blob and Modelfile parameters. */
+export function optionCatalogSampling(hook: CatalogSamplingHook | undefined) {
+  return (option: ChatModelOption) =>
+    hook?.({
+      name: option.name,
+      modelBlob: option.modelBlob,
+      parameters: option.modelParameters,
+      hasAdapter: option.hasAdapter,
+    });
+}
+
 /**
  * Every device-side model: this computer's Ollama, then each saved server's. A `local:srv-<id>:...`
  * model goes to that server's client; every other local id to this computer, as before.

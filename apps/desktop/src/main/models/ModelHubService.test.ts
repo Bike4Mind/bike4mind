@@ -197,7 +197,10 @@ function harness(
     setting?: LocalContextSetting;
     checkBackoffMs?: number[];
     token?: string | null;
-    deps?: Pick<ModelHubServiceDeps, 'onPullStarted' | 'freeSpace' | 'defaultStoreDir' | 'pathExists'>;
+    deps?: Pick<
+      ModelHubServiceDeps,
+      'onPullStarted' | 'freeSpace' | 'defaultStoreDir' | 'pathExists' | 'wslHost' | 'integratedGpu' | 'specs'
+    >;
   } = {}
 ) {
   const pulls: Deferred[] = [];
@@ -1004,6 +1007,249 @@ describe('ModelHubService saved servers', () => {
       expect(hub.verifyOllamaRef).not.toHaveBeenCalled();
     }
   );
+});
+
+// Dedicated GPU memory is whatever the probe or Settings reports; these sizes stand for different firmware splits.
+describe.each([24, 64, 72, 96])('ModelHubService WSL GPU memory warning, %i GiB of GPU memory', gpuGib => {
+  const LINUX_STORE = '/usr/share/ollama/.ollama/models';
+  const hardware = {
+    ...machine('discrete', 46, gpuGib),
+    platform: 'win32',
+    arch: 'arm64',
+    gpuVendor: 'nvidia' as const,
+  };
+  const installedModel = (name: string): InstalledModel => ({
+    name,
+    sizeBytes: GIB,
+    quantization: 'Q8_0',
+    family: 'qwen',
+    parameterSize: '27B',
+    modifiedAt: '2026-11-01T00:00:00Z',
+    capabilities: { tools: true, vision: false, thinking: false, embeddings: false, completion: true },
+  });
+  const loadedModel = (name: string, sizeGib: number, gpuGib: number): LoadedModel => ({
+    name,
+    sizeBytes: sizeGib * GIB,
+    vramBytes: gpuGib * GIB,
+    contextLength: 131072,
+    expiresAt: null,
+  });
+  // Under the GPU memory, held to about a third of it: what a smaller WSL VM leaves stock Ollama.
+  const capped = loadedModel('big:q8_0', gpuGib * 0.6, gpuGib * 0.3);
+  const capView = { model: capped.name, sizeBytes: capped.sizeBytes, gpuBytes: capped.vramBytes };
+
+  function wslHarness(
+    options: {
+      wslHost?: boolean;
+      integrated?: boolean | null;
+      storeDir?: string;
+      specs?: ModelServerSpecs;
+      probed?: HardwareProfile;
+      defaultStoreDir?: () => string | null;
+    } = {}
+  ) {
+    const integratedGpu = vi.fn(async () => (options.integrated === undefined ? true : options.integrated));
+    const made = harness({
+      hardware: options.probed ?? hardware,
+      deps: {
+        wslHost: options.wslHost ?? true,
+        integratedGpu,
+        pathExists: async path => !path.startsWith('/'),
+        specs: id => (id === 'local' ? (options.specs ?? null) : null),
+        ...(options.defaultStoreDir && { defaultStoreDir: options.defaultStoreDir }),
+      },
+    });
+    made.runtime.list.mockResolvedValue([installedModel('big:q8_0'), installedModel('small:q4')]);
+    const inspect = made.runtime.inspect.getMockImplementation()!;
+    made.runtime.inspect.mockImplementation(async (name, inspectOptions) => ({
+      ...(await inspect(name, inspectOptions)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir: options.storeDir ?? LINUX_STORE },
+    }));
+    return { ...made, integratedGpu };
+  }
+
+  const capOf = async (service: ModelHubService, serverId?: string) => {
+    const result = await service.installed(serverId);
+    if (!result.ok) throw new Error(result.error.message);
+    return result.gpuMemoryCap ?? null;
+  };
+  // nvidia-smi runs in the background, so the warning can follow the read that saw the load.
+  const flagged = (service: ModelHubService, view: object = capView) =>
+    vi.waitFor(async () => expect(await capOf(service)).toMatchObject(view));
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+  it('warns once Ollama in WSL holds a model that fits the GPU partly on the CPU', async () => {
+    const { service, runtime } = wslHarness();
+    expect(await capOf(service)).toBeNull();
+    runtime.loaded.mockResolvedValue([loadedModel('small:q4', 2, 2), capped]);
+    await flagged(service);
+  });
+
+  it('warns about a model that fits the GPU loaded entirely on the CPU', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: 0 }]);
+    await flagged(service, { ...capView, gpuBytes: 0 });
+  });
+
+  it('notices the load from the composer polling it, before Models is opened', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([capped]);
+    await service.loadedState('local:ollama:big:q8_0');
+    runtime.loaded.mockResolvedValue([]);
+    await flagged(service);
+  });
+
+  it('keeps the warning after the model unloads and while small models load fully', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([capped]);
+    await flagged(service);
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toEqual(capView);
+    runtime.loaded.mockResolvedValue([loadedModel('small:q4', gpuGib * 0.2, gpuGib * 0.2)]);
+    expect(await capOf(service)).toEqual(capView);
+  });
+
+  it('keeps the warning while a small model runs fully on the GPU beside the capped one', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: 0 }, loadedModel('small:q4', 2, 2)]);
+    await flagged(service, { ...capView, gpuBytes: 0 });
+    for (let read = 0; read < 4; read++) expect(await capOf(service)).toMatchObject({ gpuBytes: 0 });
+  });
+
+  it('notifies the renderer when nvidia-smi confirms the limit after the listing returned', async () => {
+    const { service, runtime, installedChanged } = wslHarness();
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await vi.waitFor(() => expect(installedChanged).toHaveBeenCalledWith('local'));
+  });
+
+  it('logs a failed model folder lookup, keeps listing, and flags on a later read', async () => {
+    const defaultStoreDir = vi.fn<() => string | null>(() => {
+      throw new Error('no home directory');
+    });
+    const { service, runtime, warn } = wslHarness({ defaultStoreDir });
+    const inspect = runtime.inspect.getMockImplementation()!;
+    runtime.inspect.mockImplementation(async (name, options) => ({
+      ...(await inspect(name, options)),
+      contents: { template: null, license: null, modelBlob: SHA, storeDir: null },
+    }));
+    runtime.loaded.mockResolvedValue([capped]);
+    expect(await capOf(service)).toBeNull();
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringMatching(/WSL GPU memory limit/)));
+    runtime.inspect.mockImplementation(inspect);
+    await flagged(service);
+  });
+
+  it('does not warn when nvidia-smi fails outright', async () => {
+    const { service, runtime, integratedGpu } = wslHarness();
+    integratedGpu.mockRejectedValue(new Error('boom'));
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await settle();
+    expect(await capOf(service)).toBeNull();
+    expect(integratedGpu).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([1, 0.95])(
+    'clears the warning once a model larger than the capped GPU part loads with %s of it on the GPU',
+    async share => {
+      const { service, runtime } = wslHarness();
+      runtime.loaded.mockResolvedValue([capped]);
+      await flagged(service);
+      runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: capped.sizeBytes * share }]);
+      expect(await capOf(service)).toBeNull();
+    }
+  );
+
+  it('rates the load against hardware entered in Settings in place of the probe', async () => {
+    const enteredGib = gpuGib * 2;
+    const { service, runtime } = wslHarness({
+      specs: { ramGiB: 46, gpuMemoryGiB: enteredGib, bandwidthGBps: null, unified: false },
+    });
+    const pastProbe = loadedModel('bigger:bf16', enteredGib * 0.6, gpuGib * 0.3);
+    runtime.loaded.mockResolvedValue([pastProbe]);
+    await flagged(service, { model: 'bigger:bf16' });
+  });
+
+  it('does not warn about a model larger than the GPU memory', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockResolvedValue([loadedModel('huge:bf16', gpuGib * 1.3, gpuGib * 0.3)]);
+    await capOf(service);
+    await settle();
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it.each([
+    ['the GPU is discrete', { integrated: false }],
+    ['nvidia-smi cannot say whether the GPU is integrated', { integrated: null }],
+    ['Desktop runs on neither Windows nor WSL', { wslHost: false }],
+    ['Ollama runs on Windows itself', { storeDir: 'C:\\Users\\me\\.ollama\\models' }],
+  ])('does not warn when %s', async (_case, options) => {
+    const { service, runtime } = wslHarness(options);
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await settle();
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('asks nvidia-smi once per session, also when it could not say', async () => {
+    const { service, runtime, integratedGpu } = wslHarness({ integrated: null });
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    await settle();
+    await capOf(service);
+    await settle();
+    await service.loadedState('local:ollama:big:q8_0');
+    expect(await capOf(service)).toBeNull();
+    expect(integratedGpu).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists models without waiting on nvidia-smi, and warns once it answers', async () => {
+    const { service, runtime, integratedGpu } = wslHarness();
+    let answer: (value: boolean) => void = () => {};
+    integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
+    runtime.loaded.mockResolvedValue([capped]);
+    const waited = new Promise(resolve => setTimeout(() => resolve('waited'), 1_000));
+    expect(await Promise.race([capOf(service), waited])).toBeNull();
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+    answer(true);
+    await flagged(service);
+  });
+
+  it('drops a load awaiting nvidia-smi once a later read shows a larger model fully on the GPU', async () => {
+    const { service, runtime, integratedGpu } = wslHarness();
+    let answer: (value: boolean) => void = () => {};
+    integratedGpu.mockImplementation(() => new Promise<boolean>(resolve => (answer = resolve)));
+    runtime.loaded.mockResolvedValue([capped]);
+    await capOf(service);
+    runtime.loaded.mockResolvedValue([{ ...capped, vramBytes: capped.sizeBytes }]);
+    await capOf(service);
+    answer(true);
+    await settle();
+    runtime.loaded.mockResolvedValue([]);
+    expect(await capOf(service)).toBeNull();
+  });
+
+  it('does not warn about a failed /api/ps read, and keeps an earlier warning through it', async () => {
+    const { service, runtime } = wslHarness();
+    runtime.loaded.mockRejectedValue(new Error('timeout'));
+    expect(await capOf(service)).toBeNull();
+    runtime.loaded.mockResolvedValue([capped]);
+    await flagged(service);
+    runtime.loaded.mockRejectedValue(new Error('timeout'));
+    expect(await capOf(service)).toEqual(capView);
+  });
+
+  it('does not warn for a saved server, whose GPU is not this computer', async () => {
+    const integratedGpu = vi.fn(async () => true);
+    const { service, runtimes } = servers({ hardware, deps: { wslHost: true, integratedGpu } });
+    runtimes.a.list.mockResolvedValue([installedModel('big:q8_0')]);
+    runtimes.a.loaded.mockResolvedValue([capped]);
+    expect(await capOf(service, 'a')).toBeNull();
+    expect(await capOf(service)).toBeNull();
+    expect(integratedGpu).not.toHaveBeenCalled();
+  });
 });
 
 describe('ModelHubService entered hardware', () => {

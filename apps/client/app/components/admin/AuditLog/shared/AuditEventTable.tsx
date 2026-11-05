@@ -1,26 +1,33 @@
+import type { ReactNode } from 'react';
 import { Box, Button, Chip, IconButton, Link, Stack, Tooltip, Typography } from '@mui/joy';
 import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
 import type { AuditEntry, AuditTarget } from '@bike4mind/common';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
-import { DataTable, EmptyState, ErrorState, type DataColumn } from '../../shared';
+import { DataTable, EmptyState, ErrorState, type AdminSelection, type DataColumn } from '../../shared';
 import { AuditActorLabel } from './AuditActorLabel';
 import { AuditSeverityChip } from './AuditSeverityChip';
 import { auditTargetHref } from './auditTargetHref';
 
-export type AuditEventTableProps = {
-  entries: AuditEntry[];
+export type AuditEventTableProps<T extends AuditEntry = AuditEntry> = {
+  entries: T[];
   isLoading: boolean;
   hasMore: boolean;
   isFetchingMore: boolean;
   onLoadMore(): void;
   onRetry?(): void;
-  onSelectEntry(entry: AuditEntry): void;
+  onSelectEntry(entry: T): void;
   onFilterActor?(actorUserId: string): void;
   onFilterTarget?(target: { kind: AuditTarget['kind']; id: string }): void;
   emptyMessage?: string;
   errorMessage?: string;
   testIdPrefix?: string;
   pageResetKey?: string;
+  /** Row selection; both props are needed to turn it on. */
+  selection?: AdminSelection;
+  onSelectionChange?(selection: AdminSelection): void;
+  rowActions?(entry: T): ReactNode;
+  /** Inserted before the Severity column. */
+  extraColumns?: DataColumn<T>[];
 };
 
 const FilterButton = ({ testId, label, onClick }: { testId: string; label: string; onClick(): void }) => (
@@ -40,7 +47,7 @@ const FilterButton = ({ testId, label, onClick }: { testId: string; label: strin
   </Tooltip>
 );
 
-export const AuditEventTable: React.FC<AuditEventTableProps> = ({
+export const AuditEventTable = <T extends AuditEntry = AuditEntry>({
   entries,
   isLoading,
   hasMore,
@@ -54,9 +61,13 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
   errorMessage,
   testIdPrefix = 'audit-table',
   pageResetKey,
-}) => {
+  selection,
+  onSelectionChange,
+  rowActions,
+  extraColumns = [],
+}: AuditEventTableProps<T>) => {
   const retry = onRetry ?? onLoadMore;
-  const columns: DataColumn<AuditEntry>[] = [
+  const columns: DataColumn<T>[] = [
     {
       id: 'time',
       label: 'Time',
@@ -150,6 +161,7 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
         </Typography>
       ),
     },
+    ...extraColumns,
     { id: 'severity', label: 'Severity', render: entry => <AuditSeverityChip severity={entry.severity} /> },
   ];
 
@@ -173,6 +185,9 @@ export const AuditEventTable: React.FC<AuditEventTableProps> = ({
         onRetry={retry}
         onRowActivate={onSelectEntry}
         pageResetKey={pageResetKey}
+        selection={selection}
+        onSelectionChange={onSelectionChange}
+        rowActions={rowActions}
         empty={
           <Box data-testid={`${testIdPrefix}-empty`}>
             <EmptyState

@@ -1504,6 +1504,16 @@ describe('BedrockNews Headword reward settings', () => {
   ] as const)('%s defaults to %s', (key, expected) => {
     expect(settingsMap[key].defaultValue).toBe(expected);
   });
+
+  it('keeps the partner key sensitive and only the site URL user-readable', () => {
+    expect(settingsMap.BedrockNewsPartnerKey.isSensitive).toBe(true);
+    expect(settingsMap.BedrockNewsPartnerKey.userReadable).toBeFalsy();
+    expect(settingsMap.BedrockNewsApiUrl.userReadable).toBeFalsy();
+    expect(settingsMap.BedrockNewsAppUrl.userReadable).toBe(true);
+    for (const key of ['BedrockNewsApiUrl', 'BedrockNewsAppUrl', 'BedrockNewsPartnerKey'] as const) {
+      expect(settingsMap[key].defaultValue).toBe('');
+    }
+  });
 });
 
 describe('spend monitor settings', () => {

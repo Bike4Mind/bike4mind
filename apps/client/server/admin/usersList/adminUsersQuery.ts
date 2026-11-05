@@ -64,9 +64,11 @@ export type AdminUsersQueryContext = {
   activeUserIds?: string[];
   /** Users created in the window whose furthest funnel step is the filter's; required with `funnelStep`. */
   funnelStepUserIds?: string[];
+  /** Users the AI advisory flags as abuse; required when the filter sets `aiVerdict`. */
+  aiAbuseUserIds?: string[];
 };
 
-type ResolvedIdsKey = 'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds';
+type ResolvedIdsKey = 'verdictUserIds' | 'activeUserIds' | 'funnelStepUserIds' | 'aiAbuseUserIds';
 
 function resolvedIdsCondition(context: AdminUsersQueryContext, key: ResolvedIdsKey, filterKey: string): Condition {
   const ids = context[key];
@@ -129,6 +131,7 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
     conditions.push(resolvedIdsCondition(context, 'activeUserIds', 'activeFrom'));
   }
   if (filter.funnelStep) conditions.push(resolvedIdsCondition(context, 'funnelStepUserIds', 'funnelStep'));
+  if (filter.aiVerdict) conditions.push(resolvedIdsCondition(context, 'aiAbuseUserIds', 'aiVerdict'));
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 

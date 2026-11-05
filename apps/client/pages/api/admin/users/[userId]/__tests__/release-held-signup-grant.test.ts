@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((req: unknown, res: unknown) => Promise<unknown>),
   config: null as unknown,
   release: vi.fn(),
+  findById: vi.fn(),
   audit: vi.fn(),
   denySelf: vi.fn(),
   logger: { error: vi.fn() },
@@ -24,7 +25,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
 }));
 vi.mock('@server/middlewares/csrfProtection', () => ({ csrfProtection: vi.fn() }));
 vi.mock('@server/credits/heldSignupGrantAdapters', () => ({ buildHeldGrantAdapters: () => h.adapters }));
-vi.mock('@bike4mind/database', () => ({ userRepository: { findById: vi.fn() } }));
+vi.mock('@bike4mind/database', () => ({ userRepository: { findById: h.findById } }));
 vi.mock('@bike4mind/services', () => ({ userService: { releaseHeldSignupGrant: h.release } }));
 vi.mock('@server/utils/adminAudit', () => ({
   denySelfAdminAction: h.denySelf,
@@ -49,6 +50,8 @@ const request = (overrides: Record<string, unknown> = {}) => ({
 describe('admin release held signup grant', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.findById.mockReset().mockResolvedValue({ id: 'user-1', email: 'user@example.com' });
+    h.audit.mockReset();
     h.denySelf.mockRejectedValue(new Error('Admins cannot perform this action on their own account.'));
     h.release.mockResolvedValue({ outcome: 'applied', credits: 10 });
   });
@@ -78,6 +81,7 @@ describe('admin release held signup grant', () => {
       expect.anything(),
       expect.objectContaining({
         action: 'user.credits.adjusted',
+        target: { kind: 'user', id: 'user-1', displayName: 'user@example.com' },
         reason: 'Support approved request',
         details: { credits: 10, source: 'held_grant_release' },
       })
@@ -93,6 +97,15 @@ describe('admin release held signup grant', () => {
 
     expect(h.audit).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledExactlyOnceWith({ outcome: 'noop', reason: 'not_held' });
+  });
+
+  it('does not pay or audit when reading the target fails', async () => {
+    h.findById.mockRejectedValueOnce(new Error('lookup unavailable'));
+
+    await expect(h.handler!(request(), { json: vi.fn() })).rejects.toThrow('lookup unavailable');
+
+    expect(h.release).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
   });
 
   it('still answers a paid release when the audit write fails, and logs it', async () => {

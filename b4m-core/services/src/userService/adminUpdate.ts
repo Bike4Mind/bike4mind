@@ -225,15 +225,10 @@ export async function adminUpdateUser(
   // The stamp confers paid standing, which an admin comps with an `admin_grant` subscription, never
   // with a credit adjustment alone. A net grant to an account with a purchase on the ledger re-stamps
   // it: that is the repair for a purchase whose balance $inc (and so its stamp) never ran, which
-  // creditPurchaseReconciliation keeps flagging until the stamp is at least as new as the row.
+  // creditPurchaseReconciliation keeps flagging until the stamp is at least as new as the row. A purchase
+  // that was refunded or lost a dispute does not count, so a grant never re-confers what the reversal revoked.
   const restoresPurchaseStamp =
-    creditDelta > 0 &&
-    (
-      await db.creditTransactions.findByOwnerWithFilters(params.id, CreditHolderType.User, {
-        transactionTypes: ['purchase'],
-        limit: 1,
-      })
-    ).length > 0;
+    creditDelta > 0 && (await db.creditTransactions.findUnreversedPurchase(params.id, CreditHolderType.User)) !== null;
   const builtParams = {
     ...baseParams,
     ...storageParams,

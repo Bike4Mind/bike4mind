@@ -5,6 +5,7 @@ import type { AuditEntry, AuditLogFilters, AuditSummaryWindow } from '@bike4mind
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
 import { useAuditAlertStatus, useAuditEntry, useAuditLog } from '@client/app/hooks/data/adminAuditLog';
 import { AuditEntryDrawer, AuditEventTable } from './shared';
+import { AuditEntryReviewSection } from './AuditEntryReviewSection';
 import { AuditFilterBar } from './AuditFilterBar';
 import { AuditNeedsReviewPanel } from './AuditNeedsReviewPanel';
 import { AuditSavedViewChips } from './AuditSavedViewChips';
@@ -95,6 +96,11 @@ const AuditLogPage: React.FC = () => {
         onClose={() => openEntry(null)}
         relatedEntries={relatedEntries}
         onSelectRelated={entry => openEntry(entry.id)}
+        reviewSection={
+          drawerEntry?.severity === 'critical' ? (
+            <AuditEntryReviewSection key={drawerEntry.id} entry={drawerEntry} />
+          ) : undefined
+        }
       />
     </Stack>
   );
