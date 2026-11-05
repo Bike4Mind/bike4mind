@@ -1,7 +1,8 @@
-import { basename, dirname, sep } from 'node:path';
+import { basename, dirname, isAbsolute, sep } from 'node:path';
 import type { PermissionList } from '@shared/permissions';
 import { MCP_TOOL_PREFIX, serverSlug } from '../mcp/names';
 import { own } from '@shared/ownKeys';
+import { caseFolded, realpathSyncNearest, withDriveSpellings } from '../tools/paths';
 
 type RuleKind = 'shell' | 'path' | 'domain' | 'plain';
 
@@ -389,10 +390,13 @@ export class PermissionRuleSet {
     if (rules.length === 0) return null;
     if (subject.shell) {
       const { script, commands, directories } = subject.shell;
-      if (commands.length === 0 || NAMES_RULE_FILE.test(script)) return null;
+      const folded = caseFolded(script);
+      if (commands.length === 0 || NAMES_RULE_FILE.test(folded)) return null;
       if (subject.shell.ungranted?.length) return null;
-      if (this.protectedRoots.some(root => script.includes(root))) return null;
-      if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(path))) return null;
+      if (this.foldedRoots().some(root => folded.includes(root))) return null;
+      if (subject.shell.paths?.some(path => this.isProtectedPath(path) || NAMES_RULE_FILE.test(caseFolded(path)))) {
+        return null;
+      }
       if (!directories.every(directory => this.coversFolder(directory))) return null;
       let first: CompiledRule | null = null;
       for (const command of commands) {
@@ -437,11 +441,23 @@ export class PermissionRuleSet {
   }
 
   private isProtectedPath(path: string): boolean {
-    return isSettingsFile(path) || this.protectedRoots.some(root => within(root, path));
+    const roots = this.foldedRoots();
+    return spellings(path).some(spelling => isSettingsFile(spelling) || roots.some(root => within(root, spelling)));
   }
 
   /** Inside a protected folder, or above one: `cd ~ && cp x .claude/settings.json` reaches it from home. */
   private isProtectedFolder(directory: string): boolean {
-    return this.protectedRoots.some(root => within(root, directory) || within(directory, root));
+    const roots = this.foldedRoots();
+    return spellings(directory).some(spelling => roots.some(root => within(root, spelling) || within(spelling, root)));
   }
+
+  private foldedRoots(): string[] {
+    return this.protectedRoots.map(root => caseFolded(root));
+  }
+}
+
+/** The lexical and real spellings of `path`, plus any WSL drive spelling, case folded where volumes ignore case. */
+function spellings(path: string): string[] {
+  const real = isAbsolute(path) ? realpathSyncNearest(path) : path;
+  return withDriveSpellings([path, real]).map(spelling => caseFolded(spelling));
 }

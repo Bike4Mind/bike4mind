@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { permissionProtectedRoots } from '../protectedLocations';
 import { scanShell } from '../tools/shellScan';
 import { permissionSubject } from './subject';
@@ -354,6 +354,38 @@ describe('PermissionRuleSet', () => {
     } finally {
       await rm(base, { recursive: true, force: true });
     }
+  });
+
+  it('does not allow an edit that reaches a protected folder through a symlinked parent', async () => {
+    const base = await realpath(await mkdtemp(join(tmpdir(), 'permission-roots-')));
+    try {
+      await mkdir(join(base, 'config', 'App'), { recursive: true });
+      await symlink(join(base, 'config'), join(base, 'cfg-link'));
+      const rules = set({ allow: [`Edit(/${base}/**)`] }, [join(base, 'config', 'App')]);
+      const linked = join(base, 'cfg-link', 'App');
+      expect(decide(rules, { tool: 'file_write', paths: [join(linked, 'tool-access.json')] })).toBeNull();
+      expect(decide(rules, { tool: 'file_write', paths: [join(linked, 'new', 'file.json')] })).toBeNull();
+      expect(rules.coversFolder(linked)).toBe(false);
+      expect(decide(rules, { tool: 'file_write', paths: [join(base, 'cfg-link', 'Other.json')] })).toBe('allow');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  describe.each(['darwin', 'win32'] as const)('on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    beforeEach(() => Object.defineProperty(process, 'platform', { value: platform }));
+    afterEach(() => {
+      if (original) Object.defineProperty(process, 'platform', original);
+    });
+
+    it('treats a case variant of a protected folder as the folder', () => {
+      const rules = set({ allow: [`Edit(/${HOME}/**)`, 'Bash(cp:*)'] }, [`${HOME}/Library/App`]);
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/library/app/tool-access.json`] })).toBeNull();
+      const script = `cp x ${HOME}/LIBRARY/APP/tool-access.json`;
+      expect(decide(rules, shell(script, [script]))).toBeNull();
+      expect(decide(rules, { tool: 'file_write', paths: [`${HOME}/notes.md`] })).toBe('allow');
+    });
   });
 
   it('never allows an irreversible call, but still denies or asks', () => {
