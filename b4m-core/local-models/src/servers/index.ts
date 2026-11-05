@@ -1,5 +1,6 @@
 export {
   credentialHeaders,
+  desktopUserDataDir,
   desktopUserDataDirs,
   hydrate,
   isStored,

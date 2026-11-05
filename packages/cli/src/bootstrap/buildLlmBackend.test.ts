@@ -1,5 +1,9 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { ModelInfo } from '@bike4mind/common';
+import { OllamaBackend } from '@bike4mind/llm-adapters';
 import {
   attachLocalModels,
   buildLlmBackend,
@@ -12,6 +16,7 @@ import { createMockConfig } from '../test-utils/mocks.js';
 import { modelSavePatch } from '../utils/performModelSwitch.js';
 
 const model = (id: string) => ({ id }) as ModelInfo;
+const silentLogger = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
 /** Minimal backend exposing only what buildLlmBackend touches: getModelInfo + currentModel. */
 function fakeBackend(models: ModelInfo[]) {
@@ -179,18 +184,37 @@ describe('buildLlmBackend — Ollama multiplexing', () => {
 
   it.each([
     ['http://localhost:11434', true],
+    ['http://[::1]:11434', true],
     ['http://127.0.0.1:11500', false],
     ['http://gpu-box:11434', false],
   ])("gives %s Desktop's model settings: %s", async (ollamaHost, applies) => {
-    vi.stubEnv('B4M_DESKTOP_MODEL_SETTINGS', '/nowhere/model-settings.json');
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'b4m-wiring-'));
+    const file = path.join(dir, 'model-settings.json');
+    await writeFile(file, JSON.stringify({ models: { 'local:ollama:m1': { keepAlive: 14400 } } }));
+    vi.stubEnv('B4M_DESKTOP_MODEL_SETTINGS', file);
     try {
       const { deps } = makeDeps();
       await buildLlmBackend(makeInput({ apiClient: fakeApiClient({}), ollamaHost }), deps);
       const call = vi.mocked(deps.createOllamaBackend).mock.calls[0];
       expect(call[0]).toBe(ollamaHost);
       expect(typeof call[1]?.requestSettings === 'function').toBe(applies);
+      if (!applies) return;
+
+      const ollama = new OllamaBackend(ollamaHost, silentLogger, { requestSettings: call[1]?.requestSettings });
+      const chat = vi.fn(async (_request: Record<string, unknown>) => ({
+        message: { content: 'ok', tool_calls: [] },
+        prompt_eval_count: 1,
+        eval_count: 1,
+      }));
+      (ollama as unknown as { _api: unknown })._api = {
+        chat,
+        show: vi.fn(async () => ({ capabilities: ['completion'], model_info: { 'llama.context_length': 8192 } })),
+      };
+      await ollama.complete('m1', [{ role: 'user', content: 'hi' }] as never, {}, async () => {});
+      expect(chat.mock.calls[0][0]).toMatchObject({ model: 'm1', keep_alive: 14400 });
     } finally {
       vi.unstubAllEnvs();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 

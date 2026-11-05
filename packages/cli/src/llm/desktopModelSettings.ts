@@ -16,7 +16,7 @@ import {
   type ModelEffort,
   type ModelSettings,
 } from '@bike4mind/local-models/model-settings';
-import { desktopUserDataDirs, type DesktopDirsOptions } from '@bike4mind/local-models/servers';
+import { desktopUserDataDir, type DesktopDirsOptions } from '@bike4mind/local-models/servers';
 import { DEFAULT_OLLAMA_PORT } from '../utils/ollamaHost.js';
 
 /** A path to read Desktop's per-model settings from instead of its userData folder, or `off` to ignore them. */
@@ -24,69 +24,111 @@ export const DESKTOP_MODEL_SETTINGS_ENV = 'B4M_DESKTOP_MODEL_SETTINGS';
 
 const OFF_VALUES: ReadonlySet<string> = new Set(['off', '0', 'false', 'no', 'none']);
 
-/** Desktop's settings file exists but cannot be used; the message names it and how to go on. */
+/** Desktop's settings file cannot be used; the message names it and how to go on. */
 export class DesktopModelSettingsError extends Error {
   constructor(
     readonly filePath: string,
-    problem: string
+    message: string
   ) {
-    super(
-      `Desktop's model settings file ${filePath} ${problem}. Fix it in Desktop or by hand, or set ${DESKTOP_MODEL_SETTINGS_ENV}=off to run without it.`
-    );
+    super(message);
     this.name = 'DesktopModelSettingsError';
   }
 }
 
+function fileProblem(filePath: string, problem: string): DesktopModelSettingsError {
+  return new DesktopModelSettingsError(
+    filePath,
+    `Desktop's model settings file ${filePath} ${problem}. Fix it in Desktop or by hand, or set ${DESKTOP_MODEL_SETTINGS_ENV}=off to run without it.`
+  );
+}
+
+export interface DesktopModelSettingsFile {
+  path: string;
+  /** Named by B4M_DESKTOP_MODEL_SETTINGS, so it must exist. */
+  fromEnv: boolean;
+}
+
+export type DesktopModelSettingsLocator = () => Promise<DesktopModelSettingsFile | null>;
+
 /**
- * The files to try in order, the first that exists being used: the env override, else model-settings.json in each
- * of Desktop's userData folders. Null when the env turns them off.
+ * Finds the file on each read: the env's path, else model-settings.json in the userData folder Desktop's model
+ * servers are read from (null when there is none). Null instead of a locator when the env turns the settings off.
  */
-export function desktopModelSettingsFiles(opts: DesktopDirsOptions = {}): string[] | null {
+export function desktopModelSettingsFile(opts: DesktopDirsOptions = {}): DesktopModelSettingsLocator | null {
   const env = opts.env ?? process.env;
   const value = env[DESKTOP_MODEL_SETTINGS_ENV]?.trim();
   if (value && OFF_VALUES.has(value.toLowerCase())) return null;
-  if (value) return [value];
+  if (value) return async () => ({ path: value, fromEnv: true });
   const flavor = (opts.platform ?? process.platform) === 'win32' ? path.win32 : path.posix;
-  return desktopUserDataDirs(opts).map(dir => flavor.join(dir, MODEL_SETTINGS_FILE_NAME));
+  return async () => {
+    const dir = await desktopUserDataDir(opts);
+    return dir === null ? null : { path: flavor.join(dir, MODEL_SETTINGS_FILE_NAME), fromEnv: false };
+  };
+}
+
+export interface ReadModelSettingsOptions {
+  platform?: NodeJS.Platform;
+  readText?: (filePath: string) => Promise<string>;
+  retryDelayMs?: number;
+}
+
+const RENAME_RACE_CODES: ReadonlySet<string> = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code;
+
+async function readSettingsText(filePath: string, opts: ReadModelSettingsOptions): Promise<string> {
+  const read = opts.readText ?? ((file: string) => readFile(file, 'utf8'));
+  try {
+    return await read(filePath);
+  } catch (error) {
+    // Desktop saves through a temp file and rename, which Windows can refuse a reader for a moment.
+    const code = errorCode(error);
+    if ((opts.platform ?? process.platform) !== 'win32' || code === undefined || !RENAME_RACE_CODES.has(code))
+      throw error;
+    await new Promise(resolve => setTimeout(resolve, opts.retryDelayMs ?? 50));
+    return read(filePath);
+  }
 }
 
 /**
- * One model's settings, read fresh so a hand fix applies on the next turn. A missing file holds none; a file that
- * cannot be read or parsed, or a broken entry for this model, rejects. Values this version does not support are
- * left unset by the parser.
+ * One model's settings, read fresh so a hand fix applies on the next turn. No file in Desktop's folder holds none;
+ * a missing env file, a file that cannot be read or parsed, or a broken entry for this model rejects. Values this
+ * version does not support are left unset by the parser.
  */
-export async function readDesktopModelSettings(files: readonly string[], modelId: string): Promise<ModelSettings> {
-  for (const file of files) {
-    let text: string;
-    try {
-      text = await readFile(file, 'utf8');
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === 'ENOENT' || code === 'ENOTDIR') continue;
-      throw new DesktopModelSettingsError(file, `could not be read (${code ?? String(error)})`);
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(text);
-    } catch {
-      throw new DesktopModelSettingsError(file, 'is not valid JSON');
-    }
-    const stored = parseModelSettingsFile(raw);
-    if (!stored) throw new DesktopModelSettingsError(file, 'does not hold model settings');
-    const field = stored.invalid.get(modelId);
-    if (field === null)
+export async function readDesktopModelSettings(
+  file: DesktopModelSettingsFile | null,
+  modelId: string,
+  opts: ReadModelSettingsOptions = {}
+): Promise<ModelSettings> {
+  if (!file) return {};
+  let text: string;
+  try {
+    text = await readSettingsText(file.path, opts);
+  } catch (error) {
+    const code = errorCode(error);
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      if (!file.fromEnv) return {};
       throw new DesktopModelSettingsError(
-        file,
-        `has an entry for ${quotedForMessage(modelId)} that is not a set of settings`
+        file.path,
+        `${DESKTOP_MODEL_SETTINGS_ENV} names ${file.path}, a file that does not exist. Point it at Desktop's model-settings.json, or set it to off to run without it.`
       );
-    if (field !== undefined)
-      throw new DesktopModelSettingsError(
-        file,
-        `has an invalid ${quotedForMessage(field)} for ${quotedForMessage(modelId)}`
-      );
-    return stored.settings.get(modelId) ?? {};
+    }
+    throw fileProblem(file.path, `could not be read (${code ?? String(error)})`);
   }
-  return {};
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw fileProblem(file.path, 'is not valid JSON');
+  }
+  const stored = parseModelSettingsFile(raw);
+  if (!stored) throw fileProblem(file.path, 'does not hold model settings');
+  const field = stored.invalid.get(modelId);
+  if (field === null)
+    throw fileProblem(file.path, `has an entry for ${quotedForMessage(modelId)} that is not a set of settings`);
+  if (field !== undefined)
+    throw fileProblem(file.path, `has an invalid ${quotedForMessage(field)} for ${quotedForMessage(modelId)}`);
+  return stored.settings.get(modelId) ?? {};
 }
 
 /** Desktop's runtime id for the Ollama at `baseUrl`: only its own daemon's, at this computer's default address. */
@@ -175,8 +217,11 @@ export function desktopRequestSettings(
   runtimeId: string,
   opts: DesktopDirsOptions = {}
 ): OllamaRequestSettingsReader | undefined {
-  const files = desktopModelSettingsFiles(opts);
-  if (!files) return undefined;
+  const locate = desktopModelSettingsFile(opts);
+  if (!locate) return undefined;
   return async (model, facts) =>
-    ollamaRequestSettings(await readDesktopModelSettings(files, localModelId(runtimeId, model)), facts);
+    ollamaRequestSettings(
+      await readDesktopModelSettings(await locate(), localModelId(runtimeId, model), { platform: opts.platform }),
+      facts
+    );
 }

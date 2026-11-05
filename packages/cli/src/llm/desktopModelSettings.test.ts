@@ -6,7 +6,7 @@ import type { IMessage } from '@bike4mind/common';
 import { OllamaBackend, type OllamaModelFacts } from '@bike4mind/llm-adapters';
 import {
   DesktopModelSettingsError,
-  desktopModelSettingsFiles,
+  desktopModelSettingsFile,
   desktopRequestSettings,
   desktopRuntimeIdForHost,
   ollamaRequestSettings,
@@ -38,65 +38,78 @@ afterEach(async () => {
 
 const writeSettings = (models: unknown) => writeFile(file, JSON.stringify({ models }));
 
-describe('desktopModelSettingsFiles', () => {
-  it("reads model-settings.json in each of Desktop's userData folders", () => {
-    expect(desktopModelSettingsFiles({ platform: 'linux', env: {}, home: '/home/u' })).toEqual([
-      '/home/u/.config/@bike4mind/desktop/model-settings.json',
-      '/home/u/.config/Bike4Mind/model-settings.json',
-    ]);
-    expect(desktopModelSettingsFiles({ platform: 'darwin', env: {}, home: '/Users/u' })?.[0]).toBe(
-      '/Users/u/Library/Application Support/@bike4mind/desktop/model-settings.json'
+describe('desktopModelSettingsFile', () => {
+  it("reads model-settings.json in the first of Desktop's userData folders that exists", async () => {
+    const opts = { platform: 'linux' as const, env: {}, home: dir };
+    expect(await desktopModelSettingsFile(opts)?.()).toBeNull();
+    await mkdir(path.join(dir, '.config', 'Bike4Mind'), { recursive: true });
+    expect(await desktopModelSettingsFile(opts)?.()).toEqual({
+      path: path.join(dir, '.config', 'Bike4Mind', 'model-settings.json'),
+      fromEnv: false,
+    });
+    await mkdir(path.join(dir, '.config', '@bike4mind', 'desktop'), { recursive: true });
+    expect((await desktopModelSettingsFile(opts)?.())?.path).toBe(
+      path.join(dir, '.config', '@bike4mind', 'desktop', 'model-settings.json')
     );
+    expect(await desktopModelSettingsFile({ platform: 'linux', env: { B4M_DESKTOP_USER_DATA: '/data' } })?.()).toEqual({
+      path: '/data/model-settings.json',
+      fromEnv: false,
+    });
     expect(
-      desktopModelSettingsFiles({ platform: 'win32', env: { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' } })?.[0]
-    ).toBe('C:\\Users\\u\\AppData\\Roaming\\@bike4mind\\desktop\\model-settings.json');
-    expect(desktopModelSettingsFiles({ platform: 'linux', env: { B4M_DESKTOP_USER_DATA: '/data' } })).toEqual([
-      '/data/model-settings.json',
-    ]);
+      (await desktopModelSettingsFile({ platform: 'win32', env: { B4M_DESKTOP_USER_DATA: 'C:\\D' } })?.())?.path
+    ).toBe('C:\\D\\model-settings.json');
   });
 
-  it('takes a file from B4M_DESKTOP_MODEL_SETTINGS, or none when it is off', () => {
-    expect(desktopModelSettingsFiles({ env: { B4M_DESKTOP_MODEL_SETTINGS: ' /tmp/mine.json ' } })).toEqual([
-      '/tmp/mine.json',
-    ]);
-    for (const off of ['off', 'OFF', '0', 'false', 'none']) {
-      expect(desktopModelSettingsFiles({ env: { B4M_DESKTOP_MODEL_SETTINGS: off } })).toBeNull();
+  it('takes a file from B4M_DESKTOP_MODEL_SETTINGS, or none when it is off', async () => {
+    expect(await desktopModelSettingsFile({ env: { B4M_DESKTOP_MODEL_SETTINGS: ' /tmp/mine.json ' } })?.()).toEqual({
+      path: '/tmp/mine.json',
+      fromEnv: true,
+    });
+    for (const off of ['off', 'OFF', '0', 'false', 'no', 'none']) {
+      expect(desktopModelSettingsFile({ env: { B4M_DESKTOP_MODEL_SETTINGS: off } })).toBeNull();
       expect(desktopRequestSettings('ollama', { env: { B4M_DESKTOP_MODEL_SETTINGS: off } })).toBeUndefined();
     }
   });
 });
 
 describe('readDesktopModelSettings', () => {
-  it('reads no settings when no file exists', async () => {
-    expect(await readDesktopModelSettings([file, path.join(file, 'below')], QWEN)).toEqual({});
+  const at = (filePath: string, fromEnv = false) => ({ path: filePath, fromEnv });
+
+  it("reads no settings when Desktop's folder has no file, or there is no folder", async () => {
+    expect(await readDesktopModelSettings(at(file), QWEN)).toEqual({});
+    expect(await readDesktopModelSettings(at(path.join(file, 'below')), QWEN)).toEqual({});
+    expect(await readDesktopModelSettings(null, QWEN)).toEqual({});
   });
 
-  it('uses the first file that exists', async () => {
-    const second = path.join(dir, 'second.json');
-    await writeFile(second, JSON.stringify({ models: { [QWEN]: { keepAlive: 300 } } }));
-    expect(await readDesktopModelSettings([path.join(dir, 'missing.json'), second], QWEN)).toEqual({ keepAlive: 300 });
+  it('rejects when B4M_DESKTOP_MODEL_SETTINGS names a file that does not exist', async () => {
+    const failure = readDesktopModelSettings(at(file, true), QWEN);
+    await expect(failure).rejects.toBeInstanceOf(DesktopModelSettingsError);
+    await expect(failure).rejects.toThrow(`B4M_DESKTOP_MODEL_SETTINGS names ${file}, a file that does not exist`);
   });
 
   it('reads one model and leaves values this version does not support unset', async () => {
     await writeSettings({
       [QWEN]: { keepAlive: 3600, effort: 'ultra', generation: { temperature: 0.6, topK: 1.5 }, futureField: 1 },
     });
-    expect(await readDesktopModelSettings([file], QWEN)).toEqual({ keepAlive: 3600, generation: { temperature: 0.6 } });
+    expect(await readDesktopModelSettings(at(file), QWEN)).toEqual({
+      keepAlive: 3600,
+      generation: { temperature: 0.6 },
+    });
   });
 
   it('fails only the model whose entry is broken, naming the file, the model and the field', async () => {
     await writeSettings({ [QWEN]: { generation: { temperature: 'hot' } }, 'local:ollama:other': { keepAlive: -1 } });
-    const failure = readDesktopModelSettings([file], QWEN);
+    const failure = readDesktopModelSettings(at(file), QWEN);
     await expect(failure).rejects.toBeInstanceOf(DesktopModelSettingsError);
     await expect(failure).rejects.toThrow(
       `Desktop's model settings file ${file} has an invalid "generation.temperature" for "${QWEN}".`
     );
-    expect(await readDesktopModelSettings([file], 'local:ollama:other')).toEqual({ keepAlive: -1 });
+    expect(await readDesktopModelSettings(at(file), 'local:ollama:other')).toEqual({ keepAlive: -1 });
   });
 
   it('names an entry that is not a set of settings', async () => {
     await writeSettings({ [QWEN]: 7 });
-    await expect(readDesktopModelSettings([file], QWEN)).rejects.toThrow(
+    await expect(readDesktopModelSettings(at(file), QWEN)).rejects.toThrow(
       `has an entry for "${QWEN}" that is not a set of settings`
     );
   });
@@ -107,19 +120,47 @@ describe('readDesktopModelSettings', () => {
     ['{"models": []}', 'does not hold model settings'],
   ])('rejects a file holding %s for every model', async (text, problem) => {
     await writeFile(file, text);
-    await expect(readDesktopModelSettings([file], QWEN)).rejects.toThrow(`${file} ${problem}`);
-    await expect(readDesktopModelSettings([file], 'local:ollama:other')).rejects.toThrow(problem);
+    await expect(readDesktopModelSettings(at(file), QWEN)).rejects.toThrow(`${file} ${problem}`);
+    await expect(readDesktopModelSettings(at(file), 'local:ollama:other')).rejects.toThrow(problem);
   });
 
   it('rejects a path it cannot read rather than reading no settings', async () => {
     await mkdir(file);
-    await expect(readDesktopModelSettings([file], QWEN)).rejects.toThrow(`${file} could not be read (EISDIR)`);
+    await expect(readDesktopModelSettings(at(file), QWEN)).rejects.toThrow(`${file} could not be read (EISDIR)`);
   });
 
   it('never takes a model id from the object prototype', async () => {
     await writeFile(file, '{"models": {"__proto__": {"keepAlive": -1}}}');
-    expect(await readDesktopModelSettings([file], '__proto__')).toEqual({});
-    expect(await readDesktopModelSettings([file], 'toString')).toEqual({});
+    expect(await readDesktopModelSettings(at(file), '__proto__')).toEqual({});
+    expect(await readDesktopModelSettings(at(file), 'toString')).toEqual({});
+  });
+
+  const refusedOnce = (code: string) => {
+    const busy = Object.assign(new Error(code), { code });
+    return vi
+      .fn(async (_file: string) => JSON.stringify({ models: { [QWEN]: { keepAlive: 14400 } } }))
+      .mockRejectedValueOnce(busy);
+  };
+
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('reads again once on Windows after %s from a save in progress', async code => {
+    const readText = refusedOnce(code);
+    expect(await readDesktopModelSettings(at(file), QWEN, { platform: 'win32', readText, retryDelayMs: 1 })).toEqual({
+      keepAlive: 14400,
+    });
+    expect(readText).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not read again off Windows, or a second time', async () => {
+    const readText = refusedOnce('EPERM');
+    await expect(
+      readDesktopModelSettings(at(file), QWEN, { platform: 'linux', readText, retryDelayMs: 1 })
+    ).rejects.toThrow('could not be read (EPERM)');
+    expect(readText).toHaveBeenCalledTimes(1);
+    const twice = refusedOnce('EBUSY').mockRejectedValueOnce(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    await expect(
+      readDesktopModelSettings(at(file), QWEN, { platform: 'win32', readText: twice, retryDelayMs: 1 })
+    ).rejects.toThrow('could not be read (EBUSY)');
+    expect(twice).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -210,9 +251,9 @@ describe('ollamaRequestSettings', () => {
 describe('Desktop settings on a CLI Ollama turn', () => {
   const reply = { message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 1, eval_count: 1 };
 
-  function backend() {
+  function backend(env: Record<string, string> = { B4M_DESKTOP_MODEL_SETTINGS: file }) {
     const ollama = new OllamaBackend('http://127.0.0.1:11434', silent, {
-      requestSettings: desktopRequestSettings('ollama', { env: { B4M_DESKTOP_MODEL_SETTINGS: file } }),
+      requestSettings: desktopRequestSettings('ollama', { env }),
     });
     const chat = vi.fn(async (_request: Record<string, unknown>) => reply);
     (ollama as unknown as { _api: unknown })._api = {
@@ -261,8 +302,8 @@ describe('Desktop settings on a CLI Ollama turn', () => {
     expect(chat.mock.calls[0][0]).not.toHaveProperty('keep_alive');
   });
 
-  it('sends what it always did when there is no settings file', async () => {
-    const { ollama, chat } = backend();
+  it("sends what it always did when Desktop's folder has no settings file", async () => {
+    const { ollama, chat } = backend({ B4M_DESKTOP_USER_DATA: dir });
     await send(ollama, 'qwen3:8b');
     expect(chat.mock.calls[0][0]).toMatchObject({ options: { num_ctx: 32768, temperature: 0.7 } });
     expect(chat.mock.calls[0][0]).not.toHaveProperty('keep_alive');

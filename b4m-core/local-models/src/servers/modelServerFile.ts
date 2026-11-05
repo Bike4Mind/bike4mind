@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseSshDestination } from './ssh';
@@ -247,6 +247,23 @@ export function desktopUserDataDirs(opts: DesktopDirsOptions = {}): string[] {
   return [flavor.join(appData, '@bike4mind', 'desktop'), flavor.join(appData, 'Bike4Mind')];
 }
 
+/**
+ * The one userData folder to read Desktop's files from: `B4M_DESKTOP_USER_DATA` when set, else the first of
+ * desktopUserDataDirs that exists. Null when Desktop has none here.
+ */
+export async function desktopUserDataDir(opts: DesktopDirsOptions = {}): Promise<string | null> {
+  const override = (opts.env ?? process.env).B4M_DESKTOP_USER_DATA?.trim();
+  if (override) return override;
+  for (const dir of desktopUserDataDirs(opts)) {
+    const found = await stat(dir).then(
+      entry => entry.isDirectory(),
+      () => false
+    );
+    if (found) return dir;
+  }
+  return null;
+}
+
 export interface DesktopModelServers {
   servers: SharedServerRecord[];
   /** Servers only Desktop can reach (SSH), so a listing can name them instead of leaving them out. */
@@ -282,7 +299,12 @@ function withoutUserinfo(baseUrl: string): string {
  * Desktop is read as it is. A missing file is not a problem: Desktop may not be installed.
  */
 export async function readDesktopModelServers(opts: ReadDesktopOptions = {}): Promise<DesktopModelServers> {
-  for (const dir of opts.dirs ?? desktopUserDataDirs(opts)) {
+  let dirs = opts.dirs;
+  if (!dirs) {
+    const dir = await desktopUserDataDir(opts);
+    dirs = dir === null ? [] : [dir];
+  }
+  for (const dir of dirs) {
     const file = path.join(dir, FILE_NAME);
     let raw: string;
     try {

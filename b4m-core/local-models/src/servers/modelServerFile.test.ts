@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   credentialHeaders,
+  desktopUserDataDir,
   desktopUserDataDirs,
   hydrate,
   isStored,
@@ -110,6 +111,18 @@ describe('readDesktopModelServers', () => {
     await put('@bike4mind/desktop', JSON.stringify({ servers: [stored({ name: 'first' })] }));
     await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'second' })] }));
     expect((await readDesktopModelServers(opts())).servers.map(s => s.name)).toEqual(['first']);
+  });
+
+  it('reads only the first folder that exists, so both Desktop files come from one install', async () => {
+    await mkdir(path.join(root, '.config', '@bike4mind', 'desktop'), { recursive: true });
+    await put('Bike4Mind', JSON.stringify({ servers: [stored({ name: 'second' })] }));
+    expect(await desktopUserDataDir(opts())).toBe(path.join(root, '.config', '@bike4mind', 'desktop'));
+    expect(await readDesktopModelServers(opts())).toEqual({ servers: [], path: null, problem: null });
+  });
+
+  it('finds no folder when Desktop is not installed, and takes B4M_DESKTOP_USER_DATA as given', async () => {
+    expect(await desktopUserDataDir(opts())).toBeNull();
+    expect(await desktopUserDataDir(opts({ B4M_DESKTOP_USER_DATA: '/not/there' }))).toBe('/not/there');
   });
 
   it('honors B4M_DESKTOP_USER_DATA', async () => {
