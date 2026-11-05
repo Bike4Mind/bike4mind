@@ -131,9 +131,14 @@ def main():
             # What the self-host worker does at boot (runSeedOnce), which is why a restore needs --yes.
             dst.mongosh('db.getSiblingDB("bike4mind").seedmarkers.insertOne({_id: "signupGrantPools", seededAt: new Date()})')
             common = ['--namespace', dst.ns, '--release', dst.name, '--context', args.context]
+            replicas = backup.app_role_deployments(dst.kube.json(['get', 'deploy']), dst.name)
             if backup.main(['restore'] + common + ['--from', dump, '--yes']) != 0:
                 raise SystemExit('FAIL: restore')
 
+            after = backup.app_role_deployments(dst.kube.json(['get', 'deploy']), dst.name)
+            if not replicas or after != replicas:
+                raise SystemExit('FAIL replicas: expected %s, got %s' % (replicas, after))
+            print('PASS replicas %s' % replicas)
             got = dst.mongosh('JSON.stringify(db.getSiblingDB("bike4mind").users.findOne({_id: ObjectId("%s")}))' % user_id)
             record = json.loads(got) if got and got != 'null' else {}
             if record.get('email') != email:

@@ -108,13 +108,15 @@ Not covered: the ElasticMQ PVC (in-flight messages are transient and replaying s
 python3 selfhost/kubernetes/backup.py backup --namespace bike4mind-eval --release b4m --dest ./b4m-backup-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
+Add `--context` to pick a kube context. If the bucket-init Job has been pruned (GitOps) or deleted, pass `--mc-image` with the chart's mc image. The helper pod mounts an `emptyDir` at `/work`, so the node that runs it needs free disk roughly equal to the bucket data.
+
 This writes `mongo.archive.gz` (`mongodump --oplog`, online), `objects.tar` (a `mc mirror` of the seven buckets, run in a short-lived helper pod cloned from the bucket-init Job, so it uses the same `mc` image and credentials) and `manifest.json` (times, image refs, per-bucket object counts, sha256 per file). Mongo is dumped first: an orphaned object is harmless, a row without its bytes is not.
 
 **Recovery point and retention.** The recovery point is the end of the last completed run. Mongo is consistent as of the end of its dump; objects are a later, non-atomic view. Assumed retention (the script does not rotate): run it daily from a scheduler outside the cluster and keep 7 daily and 4 weekly copies, encrypted, off-cluster. A tighter recovery point needs managed MongoDB with point-in-time recovery.
 
 **Restore into a fresh release:**
 
-1. Create the namespace and recreate the Secret from the backed-up env file (same encryption keys). To make that file, export the live Secret before a disaster, for example `kubectl -n bike4mind-eval get secret bike4mind-runtime -o json | python3 -c 'import sys,json,base64; [print(k+"="+base64.b64decode(v).decode()) for k,v in json.load(sys.stdin)["data"].items()]' > runtime.env`, and keep it encrypted; it feeds the `kubectl create secret generic --from-env-file` command in the install steps.
+1. Create the namespace and recreate the Secret from the backed-up env file (same encryption keys). To make that file, export the live Secret before a disaster, for example `(umask 077; kubectl -n bike4mind-eval get secret bike4mind-runtime -o json | python3 -c 'import sys,json,base64; [print(k+"="+base64.b64decode(v).decode()) for k,v in json.load(sys.stdin)["data"].items()]' > runtime.env)` (single-line values only, as the install steps use), and keep it encrypted; it feeds the `kubectl create secret generic --from-env-file` command in the install steps.
 2. `helm install` the chart with the same values and wait for it (`--wait --wait-for-jobs`); the init Job recreates the buckets, webhooks and lifecycle rules. Once running, the worker seeds a few documents into the `bike4mind` database, so a freshly installed release is never empty.
 3. Run the restore with `--yes`. It is expected here: it is the flag for a target that already holds data, including that boot-time seed.
 
@@ -131,7 +133,7 @@ To prove the procedure on a disposable local cluster (kind, k3d, minikube or Doc
 python3 selfhost/kubernetes/verify-backup-restore.py --images images.yaml
 ```
 
-`images.yaml` is a values file with `images.minio` and `images.mc` set to the built images. Any tagged image works for the app roles: the drill cannot wait for them to become ready, so it does not use `--wait`, and it writes the worker's boot-time seed marker itself so the destination looks like a freshly installed release. It then runs the same `restore ... --yes` command as step 3.
+`images.yaml` is a values file with all six `images.*` set (`app`, `chatcompletion`, `ws`, `subscriberFanout`, `minio`, `mc`); `minio` and `mc` must be the built images. Any tagged image works for the app roles: the drill cannot wait for them to become ready, so it does not use `--wait`, and it writes the worker's boot-time seed marker itself so the destination looks like a freshly installed release. It then runs the same `restore ... --yes` command as step 3 and checks that the app Deployments return to their original replica counts.
 
 ## Local package checks
 

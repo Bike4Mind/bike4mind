@@ -26,6 +26,8 @@ BACKING_COMPONENTS = {'mongo', 'minio', 'sqs', 'mail'}
 SYSTEM_DBS = {'admin', 'config', 'local'}
 MONGO_URI = 'mongodb://localhost:27017/?replicaSet=rs0'
 ARTIFACTS = ('mongo.archive.gz', 'objects.tar')
+REMINDER = ('REMINDER: back up the runtime Secret (SECRET_ENCRYPTION_KEY, SECRET_ENCRYPTION_KEY_PREVIOUS, '
+            'MEMORY_KEY_SECRET) separately; without it restored data cannot be decrypted.')
 # Written by the init Job into APP_FILES_BUCKET; not user data.
 MARKER = '.initialized-'
 
@@ -70,13 +72,16 @@ def helper_pod_manifest(job, name, mc_image=None):
     """A sleeping pod with the init Job's mc image, env, pull secrets and no API token."""
     spec = job['spec']['template']['spec']
     source = spec['containers'][0]
-    container = {'name': 'backup', 'command': ['sleep', '3600']}
+    # Long sleep: the pod must outlive any backup or restore; Helper.__exit__ deletes it.
+    container = {'name': 'backup', 'command': ['sleep', '604800'],
+                 'volumeMounts': [{'name': 'work', 'mountPath': '/work'}]}
     for key in ('image', 'imagePullPolicy', 'env', 'envFrom', 'resources'):
         if key in source:
             container[key] = copy.deepcopy(source[key])
     if mc_image:
         container['image'] = mc_image
-    pod_spec = {'automountServiceAccountToken': False, 'restartPolicy': 'Never', 'containers': [container]}
+    pod_spec = {'automountServiceAccountToken': False, 'restartPolicy': 'Never', 'containers': [container],
+                'volumes': [{'name': 'work', 'emptyDir': {}}]}
     if spec.get('imagePullSecrets'):
         pod_spec['imagePullSecrets'] = copy.deepcopy(spec['imagePullSecrets'])
     instance = job['spec']['template']['metadata']['labels']['app.kubernetes.io/instance']
@@ -132,10 +137,11 @@ def mirror_script(buckets, direction, replace=False):
 
 def count_script(buckets):
     # mc ls writes to a file, not into $(...), so set -e sees its failure instead of a count of 0.
+    # ' .initialized-' (name column, fixed string) skips only the top-level marker, like tar_counts.
     head = ('set -eu\nmkdir -p /work\nmc alias set local "$LOCAL_OBJECTSTORE_ENDPOINT" "$MINIO_ROOT_USER" '
             '"$MINIO_ROOT_PASSWORD" >/dev/null\n')
     return head + ''.join(
-        'mc ls --recursive "local/%s" >/work/ls\necho "%s $(grep -vc \'%s\' /work/ls || true)"\n' % (b, b, MARKER)
+        'mc ls --recursive "local/%s" >/work/ls\necho "%s $(grep -vcF \' %s\' /work/ls || true)"\n' % (b, b, MARKER)
         for b in buckets)
 
 
@@ -282,8 +288,16 @@ DRAIN_TIMEOUT = '900s'
 
 
 def scale(kube, roles, to_zero, release):
+    failed = []
     for name, replicas in roles.items():
-        kube.run(['scale', 'deployment', name, '--replicas', '0' if to_zero else str(replicas)])
+        try:
+            kube.run(['scale', 'deployment', name, '--replicas', '0' if to_zero else str(replicas)])
+        except BackupError as error:
+            if to_zero:
+                raise
+            failed.append('%s: %s' % (name, error))
+    if failed:
+        raise BackupError('could not scale back up (fix by hand): ' + '; '.join(failed))
     if to_zero and roles:
         selector = 'app.kubernetes.io/instance=%s,app.kubernetes.io/component notin (%s)' % (release, ','.join(
             sorted(BACKING_COMPONENTS | {'backup-helper', 'initialize'})))
@@ -314,8 +328,7 @@ def backup(args):
     manifest = build_manifest(release, args.namespace, started, now(), images, buckets, counts, dest)
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print('backup complete: %s (%s .. %s)' % (dest, started, manifest['finished_at']))
-    print('REMINDER: back up the runtime Secret (SECRET_ENCRYPTION_KEY, SECRET_ENCRYPTION_KEY_PREVIOUS, MEMORY_KEY_SECRET) separately; '
-          'without it restored data cannot be decrypted.')
+    print(REMINDER)
 
 
 def check_restored_counts(manifest, restored):
@@ -349,7 +362,8 @@ def restore(args):
             print('warning: already at 0 replicas, will be left at 0: %s' % ', '.join(idle), file=sys.stderr)
         try:
             scale(kube, roles, True, release)
-            for name in populated:
+            # Re-read after the drain: a worker that seeded late is gone now, but its data is not.
+            for name in user_databases(kube, release):
                 mongo_exec(kube, release, ['mongosh', '--quiet', MONGO_URI, '--eval',
                                            'db.getSiblingDB(%s).dropDatabase()' % json.dumps(name)])
             with open(src / ARTIFACTS[0], 'rb') as handle:
@@ -357,8 +371,13 @@ def restore(args):
             with open(src / ARTIFACTS[1], 'rb') as handle:
                 helper.sh(mirror_script(buckets, 'restore', replace=args.yes), stdin=handle)
             check_restored_counts(manifest, helper.counts(buckets))
-        finally:
-            scale(kube, roles, False, release)
+        except BaseException as original:
+            try:
+                scale(kube, roles, False, release)
+            except BackupError as error:
+                raise BackupError('%s; and: %s' % (original, error)) from original
+            raise
+        scale(kube, roles, False, release)
     print('restore complete from %s' % src)
 
 

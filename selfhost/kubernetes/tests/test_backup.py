@@ -1,3 +1,4 @@
+import contextlib
 import importlib.util
 import io
 import json
@@ -37,8 +38,8 @@ class FakeKube:
     """Records kubectl calls; answers the few queries restore makes."""
 
     def __init__(self, databases=('admin', 'config', 'local'), counts=0, fail_restore=False, fail_scale_at=None,
-                 replicas=None):
-        self.restored_counts = None
+                 replicas=None, late_databases=None):
+        self.restored_counts, self.late_databases, self.db_reads = None, late_databases, 0
         self.calls, self.databases, self.counts, self.fail_restore = [], list(databases), counts, fail_restore
         self.fail_scale_at, self.replicas, self.scale_calls = fail_scale_at, replicas or {}, 0
 
@@ -47,7 +48,9 @@ class FakeKube:
         joined = ' '.join(args)
         out = ''
         if 'listDatabases' in joined:
-            out = json.dumps(self.databases)
+            self.db_reads += 1
+            late = self.late_databases is not None and self.db_reads > 1
+            out = json.dumps(self.late_databases if late else self.databases)
         elif 'mongorestore' in joined and self.fail_restore:
             raise backup.BackupError('boom')
         elif args[0] == 'scale':
@@ -65,6 +68,8 @@ class FakeKube:
             return {'items': [self.deploy('app', 'app', self.replicas.get('app', 2)),
                               self.deploy('worker', 'worker', self.replicas.get('worker', 1)),
                               self.deploy('minio', 'minio', 1)]}
+        if args[:2] == ['get', 'pod']:
+            return {'spec': {'containers': [{'image': 'img:1'}]}}
         raise AssertionError(args)
 
     @staticmethod
@@ -94,8 +99,9 @@ class HelperPodTests(unittest.TestCase):
     def test_no_token_no_init_script_no_volumes(self):
         spec = self.pod['spec']
         self.assertIs(spec['automountServiceAccountToken'], False)
-        self.assertEqual(spec['containers'][0]['command'], ['sleep', '3600'])
-        self.assertNotIn('volumes', spec)
+        self.assertEqual(spec['containers'][0]['command'], ['sleep', '604800'])
+        self.assertEqual(spec['volumes'], [{'name': 'work', 'emptyDir': {}}])
+        self.assertEqual(spec['containers'][0]['volumeMounts'], [{'name': 'work', 'mountPath': '/work'}])
         self.assertNotIn('buckets.sh', json.dumps(self.pod))
 
     def test_mc_image_override(self):
@@ -136,6 +142,11 @@ class CommandTests(unittest.TestCase):
         self.assertIn('local/a', script)
         self.assertNotIn('--remove', backup.mirror_script(['a'], 'restore'))
 
+    def test_restore_script_creates_missing_buckets(self):
+        script = backup.mirror_script(['a', 'b'], 'restore')
+        for b in ('a', 'b'):
+            self.assertIn('mc mb --ignore-existing "local/%s"' % b, script)
+
     def test_mirror_script_replace_matches_backup_and_keeps_marker(self):
         script = backup.mirror_script(['a'], 'restore', replace=True)
         self.assertIn('mc mirror --quiet --overwrite --remove --exclude \'.initialized-*\' "/work/a" "local/a"', script)
@@ -146,7 +157,27 @@ class CommandTests(unittest.TestCase):
         self.assertTrue(script.startswith('set -eu'))
         self.assertIn('mc ls --recursive "local/a" >/work/ls\n', script)
         self.assertNotIn('$(mc ls', script)
-        self.assertIn('grep -vc', script)
+
+    def test_count_matches_tar_counts_for_marker_lookalike_keys(self):
+        keys = ['.initialized-abc', 'u1/uninitialized-notes.txt', 'reinitialized-x', 'dir/.initialized-y', 'plain.txt']
+        with tempfile.TemporaryDirectory() as d:
+            root = pathlib.Path(d)
+            (root / 'bin').mkdir()
+            listing = ''.join('[2026-01-01 00:00:00 UTC]     0B STANDARD %s\n' % k for k in keys)
+            fake = root / 'bin' / 'mc'
+            (root / 'listing').write_text(listing)
+            fake.write_text('#!/bin/sh\n[ "$1" = ls ] && cat ' + str(root / 'listing') + '\nexit 0\n')
+            fake.chmod(0o755)
+            tar = root / 'o.tar'
+            with tarfile.open(tar, 'w') as archive:
+                for k in keys:
+                    archive.addfile(tarfile.TarInfo('./a/' + k), io.BytesIO(b''))
+            script = backup.count_script(['a']).replace('/work', str(root / 'work'))
+            env = {'PATH': '%s/bin:/usr/bin:/bin' % root, 'LOCAL_OBJECTSTORE_ENDPOINT': 'x',
+                   'MINIO_ROOT_USER': 'u', 'MINIO_ROOT_PASSWORD': 'p'}
+            out = subprocess.run(['sh', '-c', script], env=env, text=True, capture_output=True, check=True).stdout
+            self.assertEqual(int(out.split()[1]), backup.tar_counts(tar, ['a'])['a'])
+            self.assertEqual(int(out.split()[1]), 4)
 
     def test_tar_counts_ignores_marker_and_other_dirs(self):
         with tempfile.TemporaryDirectory() as d:
@@ -171,9 +202,40 @@ class CommandTests(unittest.TestCase):
             with self.assertRaisesRegex(backup.BackupError, 'manifest.json'):
                 backup.read_manifest(d)
 
-    def test_backup_reminder_names_all_keys(self):
-        import inspect
-        self.assertIn('SECRET_ENCRYPTION_KEY_PREVIOUS', inspect.getsource(backup.backup))
+    def test_backup_prints_secret_reminder(self):
+        class FakeHelper:
+            def __init__(self, *a):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *e):
+                pass
+
+            def buckets(self):
+                return ['a']
+
+            def sh(self, script, stdin=None, stdout=None):
+                with tarfile.open(fileobj=stdout, mode='w') as archive:
+                    archive.addfile(tarfile.TarInfo('./a/x'), io.BytesIO(b''))
+
+            def image(self):
+                return 'mc:1'
+
+        with tempfile.TemporaryDirectory() as d:
+            args = type('A', (), {'namespace': 'ns', 'release': 'rel', 'context': None, 'mc_image': None,
+                                  'dest': str(pathlib.Path(d) / 'out')})
+            saved = backup.Kube, backup.Helper
+            backup.Kube, backup.Helper = lambda *a: FakeKube(), FakeHelper
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out):
+                    backup.backup(args)
+            finally:
+                backup.Kube, backup.Helper = saved
+        for name in ('SECRET_ENCRYPTION_KEY', 'SECRET_ENCRYPTION_KEY_PREVIOUS', 'MEMORY_KEY_SECRET'):
+            self.assertIn(name, out.getvalue())
 
     def test_mirror_script_creates_dir_for_empty_bucket(self):
         for direction in ('backup', 'restore'):
@@ -190,8 +252,13 @@ class CommandTests(unittest.TestCase):
     def test_roles_ignore_deployment_level_labels(self):
         items = [FakeKube.deploy('app', 'app', 1), FakeKube.deploy('minio', 'minio', 1)]
         for item in items:
-            item['metadata']['labels'] = {'app.kubernetes.io/instance': 'rel'}
+            item['metadata']['labels'] = {'app.kubernetes.io/instance': 'argo-app'}
         self.assertEqual(backup.app_role_deployments({'items': items}, 'rel'), {'rel-app': 1})
+
+    def test_roles_from_rendered_chart(self):
+        deployments = {'items': [o for o in render() if o['kind'] == 'Deployment']}
+        self.assertEqual(sorted(backup.app_role_deployments(deployments, 'rel')),
+                         ['rel-app', 'rel-chatcompletion', 'rel-subscriber-fanout', 'rel-worker', 'rel-ws'])
 
 
 class ManifestTests(unittest.TestCase):
@@ -333,8 +400,46 @@ class RestoreSafetyTests(unittest.TestCase):
         kube = K()
         with self.assertRaisesRegex(backup.BackupError, 'did not drain'):
             backup.scale(kube, {'rel-app': 1}, True, 'rel')
+        wait = next(c for c in kube.calls if c[0] == 'wait')
+        self.assertEqual(wait, ['wait', '--for=delete', 'pod', '-l',
+                                'app.kubernetes.io/instance=rel,app.kubernetes.io/component notin '
+                                '(backup-helper,initialize,mail,minio,mongo,sqs)', '--timeout=900s'])
+
+    def test_drain_excludes_helper_and_init_job_components(self):
+        job = next(o for o in render() if o['kind'] == 'Job')
+        init = job['spec']['template']['metadata']['labels']['app.kubernetes.io/component']
+        helper = backup.helper_pod_manifest(job, 'x')['metadata']['labels']['app.kubernetes.io/component']
+        kube = FakeKube()
+        backup.scale(kube, {'rel-app': 1}, True, 'rel')
         selector = next(c for c in kube.calls if c[0] == 'wait')[4]
-        self.assertIn('app.kubernetes.io/instance=rel,', selector)
+        self.assertIn(init, selector.split('(')[1])
+        self.assertIn(helper, selector.split('(')[1])
+
+    def test_no_matching_resources_on_drain_is_fine(self):
+        class K(FakeKube):
+            def run(self, args, **kw):
+                if args[0] == 'wait':
+                    return subprocess.CompletedProcess(args, 1, '', 'error: no matching resources found')
+                return super().run(args, **kw)
+        backup.scale(K(), {'rel-app': 1}, True, 'rel')
+
+    def test_scale_up_attempts_every_role_and_reports_both_errors(self):
+        kube = FakeKube(fail_restore=True, fail_scale_at=3)
+        with self.assertRaises(backup.BackupError) as ctx:
+            self.run_restore(kube)
+        self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0', '2', '1'])
+        self.assertIn('boom', str(ctx.exception))
+        self.assertIn('scale boom', str(ctx.exception))
+
+    def test_database_seeded_during_drain_is_dropped(self):
+        kube = FakeKube(databases=['admin'], late_databases=['admin', 'bike4mind'])
+        kube.restored_counts = {'a': 1, 'b': 0}
+        self.run_restore(kube, yes=True)
+        dropped = [c for c in kube.calls if 'dropDatabase' in ' '.join(c)]
+        self.assertEqual(len(dropped), 1)
+        self.assertIn('"bike4mind"', ' '.join(dropped[0]))
+        self.assertLess(kube.calls.index(['scale', 'deployment', 'rel-app', '--replicas', '0']),
+                        kube.calls.index(dropped[0]))
 
     def test_scaled_back_even_when_restore_fails(self):
         kube = FakeKube(fail_restore=True)
