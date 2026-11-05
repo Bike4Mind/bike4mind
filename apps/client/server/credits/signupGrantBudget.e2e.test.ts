@@ -424,26 +424,6 @@ describe('signup grant daily budget', () => {
     });
   const logger = { error: vi.fn() };
   const tagsOf = async (id: string) => (await User.findById(id))?.tags ?? [];
-  const githubUnlock = (id: string) =>
-    userService.grantNoCardUnlock(id, 'github_verified', {
-      db: { users: userRepository, creditTransactions: creditTransactionRepository, creditLots: {}, adminSettings },
-      validators: {
-        github_verified: async () => ({ ok: false, refusal: 'github_not_linked' }),
-        work_email: async () => ({ ok: false, refusal: 'disabled' }),
-      },
-      withTransaction: fn => fn(),
-      settings: {
-        enabled: true,
-        githubCredits: 10,
-        workEmailCredits: 10,
-        maxCredits: 20,
-        githubMinAgeDays: 0,
-        githubMinRepos: 0,
-        workEmailDomainDailyCap: 1,
-        probeInconclusiveAllows: false,
-      },
-    } as unknown as Parameters<typeof userService.grantNoCardUnlock>[2]);
-
   it('clears the hold on an alias tranche the inbox claim refuses once the next day opens', async () => {
     config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '12';
     config.defaultFreeCredits = '12';
@@ -453,7 +433,6 @@ describe('signup grant daily budget', () => {
     expect(await userService.releaseSignupTranche(paid.id, adapters)).toMatchObject({ creditsGranted: 12 });
     expect(await userService.grantFreeCredits(alias, adapters)).toMatchObject({ withheld: true });
     expect((await User.findById(alias.id))?.signupGrantHeldReason).toBe('budget_exhausted');
-    expect(await githubUnlock(alias.id)).toEqual({ granted: false, refusal: 'signup_grant_pending' });
 
     clock = new Date('2030-04-02T00:00:01Z');
     const released = await userService.releasePendingFreeCredits(
@@ -464,7 +443,6 @@ describe('signup grant daily budget', () => {
     expect((await User.findById(alias.id))?.signupGrantHeldReason).toBeNull();
     expect(await creditsOf(alias.id)).toBe(0);
     expect(await spentToday()).toBe(0);
-    expect(await githubUnlock(alias.id)).not.toMatchObject({ refusal: 'signup_grant_pending' });
   });
 
   it('clears the hold when a held tranche is refused by the inbox claim on release', async () => {
@@ -502,7 +480,6 @@ describe('signup grant daily budget', () => {
     );
     expect(released).toMatchObject({ released: true, creditsGranted: 0 });
     expect((await User.findById(alias.id))?.signupGrantHeldReason).toBeNull();
-    expect(await githubUnlock(alias.id)).not.toMatchObject({ refusal: 'signup_grant_pending' });
   });
 
   it('leaves an already-paid account with a stale pending tag untouched on an exhausted day', async () => {
@@ -549,7 +526,6 @@ describe('signup grant daily budget', () => {
     expect(released).toMatchObject({ released: false, creditsGranted: 0 });
     expect((await User.findById(second.id))?.signupGrantHeldReason).toBe('budget_exhausted');
     expect(await tagsOf(second.id)).toContain(PENDING_FREE_CREDITS_TAG);
-    expect(await githubUnlock(second.id)).toEqual({ granted: false, refusal: 'signup_grant_pending' });
   });
 
   it('meters a staging-off referral invitee but not an admin-code grant', async () => {

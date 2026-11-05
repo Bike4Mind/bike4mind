@@ -44,7 +44,7 @@ export interface SignupGrant {
   creditsReleased: number;
   nextCondition: 'email_verification' | 'verification' | null;
   unlockedBy?: SignupGrantUnlockReason;
-  /** Organization whose invite released the remainder; caps org_invite unlocks per org. */
+  /** Organization whose invite released the remainder (historical; no longer enforced). */
   unlockedOrgId?: string;
   /** Credits released by the activity drip so far; absent on grants that predate it. */
   dripCredits?: number;

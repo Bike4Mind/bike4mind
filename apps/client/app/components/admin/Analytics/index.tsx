@@ -2,7 +2,12 @@ import { useState, type ReactNode } from 'react';
 import { Alert, Box, Button, Input, Skeleton, Stack, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
-import type { AnalyticsOverview, AnalyticsOverviewQuery, AnalyticsRange } from '@client/app/utils/analyticsOverview';
+import type {
+  AnalyticsAccounts,
+  AnalyticsOverview,
+  AnalyticsOverviewQuery,
+  AnalyticsRange,
+} from '@client/app/utils/analyticsOverview';
 import {
   AdminPageHeader,
   SegmentedControl,
@@ -14,6 +19,7 @@ import {
 } from '../shared';
 import { adminSearchForTab, type AdminSearch } from '../adminTabParams';
 import { ActiveUsersSection } from './ActiveUsersSection';
+import { CohortsSection } from './CohortsSection';
 import { SignupsSection } from './SignupsSection';
 import { ANALYTICS_SEARCH_KEYS, readAnalyticsFilters, writeAnalyticsFilters } from './analyticsTabSearch';
 import { comparisonLine, formatCount, formatPercent, formatUpdatedAt, sparklineValues } from './analyticsFormat';
@@ -35,6 +41,17 @@ const SIGNUPS_OPTIONS = [
   { value: 'legit', label: 'Legit only' },
   { value: 'all', label: 'All' },
 ] as const;
+const ACCOUNTS_OPTIONS = [
+  { value: 'external', label: 'External only' },
+  { value: 'internal', label: 'Internal only' },
+  { value: 'all', label: 'All' },
+] as const;
+const FOOTERS: Record<AnalyticsAccounts, string> = {
+  external: 'Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.',
+  internal:
+    'Active users count only admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
+  all: 'Active users include admin, system, flagged test and staff-domain accounts; signups always exclude them. Days are UTC.',
+};
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 const shiftUtc = (day: string, days: number) =>
@@ -159,6 +176,8 @@ const AnalyticsTab = () => {
     onShowDefaultRange: showDefaultRange,
   };
   const missing = data?.missingDays ?? [];
+  const internalMissing = data?.internalMissingDays ?? [];
+  const dayCount = (count: number) => `${count} ${count === 1 ? 'day' : 'days'}`;
 
   return (
     <Stack gap={2.5} sx={{ p: { xs: 2, md: 4 }, minWidth: 0 }} data-testid="analytics-page">
@@ -225,6 +244,15 @@ const AnalyticsTab = () => {
             data-testid="analytics-signups-mode"
           />
         </ToolbarGroup>
+        <ToolbarGroup label="Accounts">
+          <SegmentedControl
+            options={ACCOUNTS_OPTIONS}
+            value={query.accounts}
+            onChange={accounts => setQuery({ accounts })}
+            aria-label="Accounts counted"
+            data-testid="analytics-accounts-mode"
+          />
+        </ToolbarGroup>
         {data && (
           <Stack direction="row" alignItems="center" gap={1} sx={{ ml: { md: 'auto' } }}>
             <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-last-updated">
@@ -243,7 +271,7 @@ const AnalyticsTab = () => {
         </Typography>
       )}
 
-      {missing.length > 0 && (
+      {(missing.length > 0 || internalMissing.length > 0) && (
         <Alert
           color="warning"
           variant="soft"
@@ -261,12 +289,19 @@ const AnalyticsTab = () => {
           }
         >
           <Box>
-            <Typography level="body-sm">
-              {`Rollup is missing for ${missing.length} ${missing.length === 1 ? 'day' : 'days'}; those days show as gaps.`}
-            </Typography>
+            {missing.length > 0 && (
+              <Typography level="body-sm" data-testid="analytics-missing-rollup">
+                {`Rollup is missing for ${dayCount(missing.length)}; those days show as gaps.`}
+              </Typography>
+            )}
+            {internalMissing.length > 0 && (
+              <Typography level="body-sm" data-testid="analytics-missing-internal">
+                {`Internal counts are missing or incomplete for ${dayCount(internalMissing.length)}; those days show as gaps until the rollup is re-run for them.`}
+              </Typography>
+            )}
             {showMissing && (
               <Typography level="body-xs" sx={{ mt: 0.5 }} data-testid="analytics-missing-days">
-                {missing.join(', ')}
+                {[...missing, ...internalMissing].sort().join(', ')}
               </Typography>
             )}
           </Box>
@@ -291,8 +326,10 @@ const AnalyticsTab = () => {
         <SignupsSection {...sectionProps} onSelectWindow={openSignupWindow} />
       </Box>
 
+      <CohortsSection signups={query.signups} />
+
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }} data-testid="analytics-footer">
-        Counts exclude admin, system, flagged test and staff-domain accounts. Days are UTC.
+        {FOOTERS[data?.accounts ?? query.accounts]}
       </Typography>
     </Stack>
   );

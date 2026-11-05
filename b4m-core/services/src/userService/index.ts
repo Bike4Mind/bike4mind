@@ -37,7 +37,6 @@ export * from './flagDisputePending';
 export * from './setThrottleTier';
 export * from './requestModerationAppeal';
 export * from './usagePatternSignals';
-export * from './noCardUnlock';
 export * from './signupClusterKeys';
 export * from './signupCohorts';
 export * from './signupBurstDetector';

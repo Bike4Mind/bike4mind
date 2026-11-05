@@ -20,7 +20,6 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { foldTagName, InviteType, ProjectEvents } from '@bike4mind/common';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { Resource } from 'sst';
-import { unlockSignupGrantFromOrgInvite } from '@server/credits/orgInviteUnlock';
 import { payOrgInviteBonus } from '@server/credits/orgInviteBonus';
 
 /**
@@ -97,13 +96,8 @@ const handler = baseApi().post(async (req, res) => {
     )
   );
 
-  // Unlocks are JWT-only; an API-key acceptance can recover later through the eligibility check.
+  // The bonus is JWT-only; an API-key acceptance can recover later through the eligibility check.
   if (invite.type === InviteType.Organization && !req.apiKeyInfo) {
-    try {
-      await unlockSignupGrantFromOrgInvite(req.user.id, invite.id);
-    } catch (error) {
-      req.logger.error('Organization invite signup grant remains pending', error);
-    }
     try {
       await payOrgInviteBonus(req.user.id, invite.id);
     } catch (error) {

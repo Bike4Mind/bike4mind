@@ -105,6 +105,18 @@ describe('logging middleware — request ID correlation', () => {
   });
 });
 
+describe('logging middleware - request path', () => {
+  it.each([
+    ['/api/files?search=&pagination=1', { search: '', pagination: '1' }, '/api/files'],
+    ['/api/sessions/66ab12?view=full', { id: '66ab12', view: 'full' }, '/api/sessions/:id'],
+  ])('logs path for %s', (url, query, expected) => {
+    const { req, res, next } = makeReqRes({}, url);
+    req.query = query;
+    logging(req, res, next);
+    expect(logLine(req.logger).path).toBe(expected);
+  });
+});
+
 describe('logging middleware - per-request log context', () => {
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
