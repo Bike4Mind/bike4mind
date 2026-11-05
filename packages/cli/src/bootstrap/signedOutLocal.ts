@@ -20,6 +20,8 @@ export function signedOutDefaultReplacedMessage(defaultModel: string, localModel
   return `Default model ${clean(defaultModel)} is not a local model; using ${clean(localModel)}. If it is a Bike4Mind cloud model, sign in with /login to use it.`;
 }
 
+export const SIGN_IN_DURING_TURN = 'Finish or stop the current reply (Esc) before running /login.';
+
 export const LOCAL_SESSION_CONTINUES = 'Still signed out; chatting with local models. Run /login to try again.';
 
 /** Slash commands that only talk to Bike4Mind, with what each one is for. */

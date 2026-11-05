@@ -194,6 +194,7 @@ import { buildLlmBackend, type BuildLlmBackendResult } from './bootstrap/buildLl
 import {
   LOCAL_SESSION_CONTINUES,
   NoLocalModelsError,
+  SIGN_IN_DURING_TURN,
   SIGN_IN_EXPIRED,
   SIGNED_OUT_BANNER,
   signedOutCommandMessage,
@@ -451,6 +452,8 @@ function CliApp() {
   useInput((input, key) => {
     // Check for ESC key - abort current operation or clear paste
     if (key.escape) {
+      // The sign-in screens handle their own Esc; this one must not also abort the turn or clear the paste.
+      if (state.showLoginFlow || state.showEnvironmentPicker) return;
       const store = useCliStore.getState();
       if (store.pastedContent) {
         store.clearPaste();
@@ -2701,6 +2704,10 @@ function CliApp() {
       }
 
       case 'login': {
+        if (abortControllerRef.current) {
+          console.log(SIGN_IN_DURING_TURN);
+          break;
+        }
         // Login flow will be handled by rendering LoginFlow component
         const loginConfig = await state.configStore.get();
         const start = signInStart({
