@@ -96,7 +96,10 @@ export interface OllamaCreateRequest {
 /** What a split GGUF import needs from the Ollama it lands on. */
 export interface ModelImportRuntime {
   hasBlob(digest: string, options?: { signal?: AbortSignal }): Promise<boolean>;
-  /** Streams the file at `path`; Ollama refuses it unless its sha256 is `digest`. `onProgress` gets bytes sent. */
+  /**
+   * Streams the file at `path`; Ollama refuses it unless its sha256 is `digest`. `onProgress` gets bytes sent.
+   * `idleTimeoutMs` replaces both the between-chunks idle limit and the wait for Ollama to hash the finished upload.
+   */
   uploadBlob(
     digest: string,
     path: string,
