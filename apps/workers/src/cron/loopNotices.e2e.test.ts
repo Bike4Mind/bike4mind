@@ -259,6 +259,65 @@ describe('loop notices', () => {
     expect(notices[0].message).toContain('Run failed\n');
   });
 
+  describe('service level', () => {
+    // The sweep reads the wall clock, so ages are relative to it.
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
+    const urgent = (loopId: string, overrides: Record<string, unknown> = {}) =>
+      blockedTicket(loopId, {
+        status: 'open',
+        statusReason: undefined,
+        title: 'Fix login',
+        priority: 'p0',
+        prioritySetAt: hoursAgo(5),
+        ...overrides,
+      });
+    const staleKey = (loopId: string, ticketId: string) => `loop:${loopId}:ticket:${ticketId}:stale`;
+    const keys = async () => (await openNotices()).map(notice => notice.sourceKey).sort();
+
+    it('flags a p0 waiting past 4h but not one at 3h, and honours the loop override', async () => {
+      const loop = await createLoop({ status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) });
+      const late = await urgent(loop.id);
+      await urgent(loop.id, { prioritySetAt: hoursAgo(3) });
+      const strict = await createLoop({ serviceLevelHours: { p0: 2 }, sessionId: 's-2' });
+      const strictTicket = await urgent(strict.id, { prioritySetAt: hoursAgo(3) });
+      await tick();
+
+      expect(await keys()).toEqual([staleKey(loop.id, late.id), staleKey(strict.id, strictTicket.id)].sort());
+      const notice = await Inbox.findOne({ sourceKey: staleKey(loop.id, late.id) }).lean();
+      expect(notice).toMatchObject({
+        title: 'Loop "Digest": p0 ticket waiting 5h - Fix login',
+        link: `/loops/${loop.id}`,
+        receiverId: 'owner-1',
+      });
+    });
+
+    it('resolves the notice on a fresh priority, a drop to p2 and a close', async () => {
+      const loop = await createLoop({ status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) });
+      const [a, b, c] = await Promise.all([urgent(loop.id), urgent(loop.id), urgent(loop.id)]);
+      await tick();
+      expect(await keys()).toHaveLength(3);
+
+      await WorkItem.updateOne({ _id: a.id }, { $set: { prioritySetAt: new Date() } });
+      await WorkItem.updateOne({ _id: b.id }, { $set: { priority: 'p2' } });
+      await WorkItem.updateOne({ _id: c.id }, { $set: { status: 'closed', stage: 'done' } });
+      await tick();
+      expect(await keys()).toEqual([]);
+    });
+
+    it('gives an owner-blocked p0 only its blocked notice, and an epic none; a p0 parked on deps still counts', async () => {
+      const loop = await createLoop({ status: 'live', nextRunAt: new Date(NOW.getTime() + 60_000) });
+      const blocked = await urgent(loop.id, { status: 'blocked', statusReason: 'needs a yes' });
+      // An open dependency, so the reopen sweep leaves both parked.
+      const dep = await urgent(loop.id, { priority: 'p2', title: 'Dep' });
+      const waiting = { status: 'blocked', blockedOn: 'dependencies', dependencies: [dep.id] };
+      await urgent(loop.id, { ...waiting, epic: true });
+      const parked = await urgent(loop.id, waiting);
+      await tick();
+
+      expect(await keys()).toEqual([`loop:${loop.id}:ticket:${blocked.id}`, staleKey(loop.id, parked.id)].sort());
+    });
+  });
+
   it('a failed sync is logged and does not fail the tick', async () => {
     await createLoop({ status: 'error', statusReason: 'Run failed' });
     vi.spyOn(inboxRepository, 'listKeyed').mockRejectedValue(new Error('boom'));
