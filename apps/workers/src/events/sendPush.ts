@@ -72,6 +72,7 @@ function configErrorHint(response: { status: number; reason?: string }): string 
 const MAX_COLLAPSE_ID_LENGTH = 64;
 const MAX_TITLE_LENGTH = 80;
 const MAX_BODY_LENGTH = 240;
+const MAX_CONCURRENT_SENDS = 10;
 
 export const REDACTED_PUSH_COPY: Record<PushNotificationCategory, { title: string; body: string }> = {
   agent_completed: { title: 'Agent finished', body: 'An agent run has finished.' },
@@ -146,19 +147,21 @@ export async function deliverPush(
   let failed = 0;
   let retryable = 0;
   const configErrors = new Map<string, { status: number; hint: string }>();
-  await Promise.all(
-    tokens.map(async ({ token, sid, environment }) => {
+  let next = 0;
+  const worker = async () => {
+    while (next < tokens.length) {
+      const { token, sid, environment } = tokens[next++];
       try {
         const response = await deps.transport.send({ environment, deviceToken: token, headers, payload });
         if (response.status === 200) {
           delivered++;
-          return;
+          continue;
         }
         failed++;
         const hint = configErrorHint(response);
         if (hint) {
           configErrors.set(response.reason ?? String(response.status), { status: response.status, hint });
-          return;
+          continue;
         }
         if (isUnregistered(response)) {
           try {
@@ -168,7 +171,7 @@ export async function deliverPush(
               error: pruneError instanceof Error ? pruneError.message : String(pruneError),
             });
           }
-          return;
+          continue;
         }
         if (response.reason === 'BadDeviceToken') {
           logger.error(
@@ -177,7 +180,7 @@ export async function deliverPush(
               environment,
             }
           );
-          return;
+          continue;
         }
         if (response.status === 429 || response.status >= 500) retryable++;
         logger.warn('[Push] APNs rejected the notification', {
@@ -193,8 +196,9 @@ export async function deliverPush(
           error: error instanceof Error ? error.message : String(error),
         });
       }
-    })
-  );
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_SENDS, tokens.length) }, worker));
 
   // One error per invocation, not per device: the cause is the deployment, and every token shares it.
   for (const [reason, { status, hint }] of configErrors) {

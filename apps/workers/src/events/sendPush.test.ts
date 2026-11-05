@@ -333,6 +333,32 @@ describe('deliverPush', () => {
     await expect(deliverPush(EVENT, partial.deps, logger)).resolves.toMatchObject({ delivered: 1, failed: 1 });
   });
 
+  it('keeps at most 10 sends in flight and still delivers to every token', async () => {
+    const tokens = Array.from({ length: 25 }, (_, i) => ({ token: `tok-${i}`, environment: 'production' as const }));
+    const { deps } = makeDeps(tokens);
+    const pending: Array<() => void> = [];
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(deps.transport.send).mockImplementation(async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise<void>(resolve => pending.push(resolve));
+      inFlight--;
+      return { status: 200 };
+    });
+
+    const done = deliverPush(EVENT, deps, logger);
+    for (let settled = 0; settled < 25; ) {
+      await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+      const batch = pending.splice(0);
+      batch.forEach(resolve => resolve());
+      settled += batch.length;
+    }
+
+    await expect(done).resolves.toEqual({ status: 'sent', delivered: 25, pruned: 0, failed: 0 });
+    expect(peak).toBe(10);
+  });
+
   it('counts a failed prune as one failed device without throwing or retrying', async () => {
     const { deps } = makeDeps([{ token: 'dead', environment: 'production' }], {
       respond: () => ({ status: 410, reason: 'Unregistered' }),
