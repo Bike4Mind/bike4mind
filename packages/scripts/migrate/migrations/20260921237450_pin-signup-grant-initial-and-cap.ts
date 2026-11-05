@@ -23,7 +23,7 @@ const READ_KEYS: SignupGrantCreditKey[] = [
  * left alone.
  */
 const migration: MigrationFile = {
-  id: 20260921239980,
+  id: 20260921237450,
   name: 'pin-signup-grant-initial-and-cap',
   up: async () => {
     const raw = async (settingName: string) => (await AdminSettings.findOne({ settingName }))?.settingValue as unknown;

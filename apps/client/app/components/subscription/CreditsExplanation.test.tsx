@@ -13,9 +13,9 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
     selector({ model: 'model-a', organizationId: state.organizationId }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'defaultFreeCredits' ? state.defaultFreeCredits : undefined),
+  useGetSettingsValue: (key: string) => (key === 'signupGrantInitialCredits' ? state.defaultFreeCredits : undefined),
   useSettingsFromServer: () => ({
-    data: [{ settingName: 'defaultFreeCredits', settingValue: state.defaultFreeCredits }],
+    data: [{ settingName: 'signupGrantInitialCredits', settingValue: state.defaultFreeCredits }],
   }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 1000 }));

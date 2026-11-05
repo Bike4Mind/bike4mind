@@ -981,7 +981,7 @@ describe('registerViaOTC', () => {
           findBySettingName: vi.fn().mockImplementation((name: string) => {
             if (name === 'defaultTags') return Promise.resolve({ settingValue: '' });
             if (name === 'allowOpenRegistration') return Promise.resolve({ settingValue: 'true' });
-            if (name === 'defaultFreeCredits') return Promise.resolve({ settingValue: '100' });
+            if (name === 'signupGrantInitialCredits') return Promise.resolve({ settingValue: '100' });
             return Promise.resolve(null);
           }),
         },
@@ -1070,7 +1070,7 @@ describe('registerViaOTC', () => {
   it('grants the default credits for an admitted no-invite signup while open registration is off', async () => {
     mockAdapters.db.adminSettings.findBySettingName.mockImplementation(async (name: string) => {
       if (name === 'allowOpenRegistration') return { settingValue: false };
-      if (name === 'defaultFreeCredits') return { settingValue: '100' };
+      if (name === 'signupGrantInitialCredits') return { settingValue: '100' };
       return null;
     });
 
