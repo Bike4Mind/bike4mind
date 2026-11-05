@@ -1,5 +1,5 @@
 import { lstat, stat } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, posix, sep, win32 } from 'node:path';
 import type { Node } from 'web-tree-sitter';
 import {
@@ -24,7 +24,7 @@ import {
   resolveWithinRootsPhysically,
   type OperandReader,
 } from './paths';
-import { inPlaceWrites } from './shellWrites';
+import { inPlaceWrites, repositoryToplevel } from './shellWrites';
 import { wslLocation, wslUncPath, wslUserEnvironment } from '../../wsl/wslPath';
 
 export interface ShellCommand {
@@ -223,6 +223,12 @@ const BRANCHES = new Set([
 ]);
 
 const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty']);
+
+/** A path through a process's own links (`/proc/self/cwd`, `/dev/fd/3`), which lead wherever that process is. */
+const PROCESS_LINK =
+  /^\/+(proc\/+(self|thread-self|\d+|[^/]*[*?[][^/]*)(\/|$)|dev\/+(fd(\/|$)|(stdin|stdout|stderr)\/))/;
+
+const throughProcess = (path: string): boolean => !HARMLESS_REDIRECT_TARGETS.has(path) && PROCESS_LINK.test(path);
 
 const WRITE_OPERATORS = new Set(['>', '>>', '>|', '&>', '&>>', '>&']);
 
@@ -501,7 +507,42 @@ interface WordScope {
   previous: string;
   /** A directory change may or may not have happened, so `cwd` and `previous` are guesses and a relative word is unread. */
   lost: boolean;
+  /** The script may assign HOME, PWD, OLDPWD or CDPATH, so `~`, `~+`, `~-` and those variables are unread. */
+  rebound: boolean;
+  /** The login name, the one `~name` the scan fills in. */
+  user: string;
+  /** `for` variables bound to the static words they loop over. */
+  bindings: ReadonlyMap<string, readonly string[]>;
+  /** What `$(git rev-parse --show-toplevel)` prints here, or null when the scan cannot tell. */
+  toplevel: string | null;
   homeUsed(): void;
+}
+
+/** The one command substitution the scan fills in, as `cd "$(git rev-parse --show-toplevel)"` is common. */
+const TOPLEVEL = /^\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)$/;
+
+/** A script that names HOME, PWD, OLDPWD or CDPATH other than to expand it may assign it (`=`, read, printf -v, for, export). */
+const REBINDS_HOME = /(^|[^$\w{])(HOME|PWD|OLDPWD|CDPATH)\b/;
+
+function loginName(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return '';
+  }
+}
+
+/** A double-quoted word that is one variable with fixed text around it: `"$f"`, `"src/${f}.bak"`. */
+const BOUND_WORD = /^"([^"$`\\']*)\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))([^"$`\\']*)"$/;
+
+/** The words a bound `for` variable stands for in `raw`, with the fixed text around it; null when `raw` is not one. */
+function boundWords(raw: string, bindings: ReadonlyMap<string, readonly string[]>): string[] | null {
+  if (bindings.size === 0) return null;
+  const match = BOUND_WORD.exec(raw);
+  const values = match ? bindings.get(match[2] ?? match[3] ?? '') : undefined;
+  if (!match || !values) return null;
+  const quoted = (text: string): string => (text ? `'${text}'` : '');
+  return values.map(value => `${quoted(match[1] ?? '')}${value}${quoted(match[4] ?? '')}`);
 }
 
 /** A POSIX, drive or UNC absolute path, which does not depend on the folder a command runs in. */
@@ -532,12 +573,13 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
     }
     if (end === pieces.length || isActive(pieces[end], '/')) {
       from = end;
-      const user = /^[A-Za-z_][\w.-]*$/.test(name);
-      if (name === '' || user) scope.homeUsed();
-      if (name === '') literal(scope.home);
+      // Another user's home comes from the password database, which the scan does not read.
+      const own = name === '' || (name === scope.user && scope.user !== '');
+      if (own) scope.homeUsed();
+      if (scope.rebound) unknown();
+      else if (own) literal(scope.home);
       else if (name === '+' && !scope.lost) literal(scope.cwd);
       else if (name === '-' && !scope.lost) literal(scope.previous);
-      else if (user) literal(expandHome(`~${name}`, scope.home));
       else unknown();
     }
   }
@@ -548,7 +590,7 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
       continue;
     }
     const known = KNOWN_VARIABLE.exec(piece.expansion);
-    const variable = known?.[1] ?? known?.[2];
+    const variable = scope.rebound ? undefined : (known?.[1] ?? known?.[2]);
     if (variable === 'HOME') {
       scope.homeUsed();
       literal(scope.home);
@@ -556,6 +598,8 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
       literal(scope.cwd);
     } else if (variable === 'OLDPWD' && !scope.lost) {
       literal(scope.previous);
+    } else if (scope.toplevel !== null && TOPLEVEL.test(piece.expansion)) {
+      literal(scope.toplevel);
     } else {
       unknown();
     }
@@ -566,6 +610,11 @@ function resolveWord(pieces: readonly WordPiece[], scope: WordScope): OperandWor
 
 /** Every word one shell word becomes after brace expansion; null when there are too many to read. */
 function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
+  const bound = boundWords(raw, scope.bindings);
+  if (bound) {
+    const each = bound.map(word => operandWords(word, { ...scope, bindings: new Map() }));
+    return each.some(words => words === null) ? null : each.flatMap(words => words ?? []);
+  }
   return expandBraces(wordPieces(raw))?.map(pieces => resolveWord(pieces, scope)) ?? null;
 }
 
@@ -843,9 +892,9 @@ function treeOperands(
     case 'find': {
       const end = args.findIndex(arg => /^[-(!]/.test(unquote(arg)));
       const paths = positional.filter(index => end === -1 || index < end);
-      if (!args.some(arg => (RUNS_A_PROGRAM.find as RegExp).test(unquote(arg)))) break;
-      mark(paths, 'write');
-      return { operands, cwd: paths.length === 0 ? 'write' : null, glued };
+      const reach = args.some(arg => (RUNS_A_PROGRAM.find as RegExp).test(unquote(arg))) ? 'write' : 'read';
+      mark(paths, reach);
+      return { operands, cwd: paths.length === 0 ? reach : null, glued };
     }
     case 'grep':
     case 'egrep':
@@ -1122,6 +1171,23 @@ interface Wrapper {
   operands?: number;
   /** Option letters that make it describe the command instead of running it: `command -v`. */
   describes?: string;
+  /** Whole option words whose value is the next word (`arch -arch x86_64`); any other option word takes none. */
+  words?: readonly string[];
+  /** Options whose value is the folder the command runs in: `env -C`, `sudo --chdir`. */
+  chdir?: WrapperOptions;
+  /** Options whose value is a file it writes: `strace -o`. */
+  output?: WrapperOptions;
+  /** Options that hand it a shell string, a new root or a namespace the scan cannot follow. */
+  unread?: WrapperOptions;
+  /** It runs the command against another root or view of the files, whatever its options. */
+  elsewhere?: true;
+  /** Options without which the words after it are not a command: `runuser -u`. */
+  needs?: WrapperOptions;
+}
+
+interface WrapperOptions {
+  letters?: string;
+  long?: readonly string[];
 }
 
 const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
@@ -1166,12 +1232,15 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
         'version',
       ],
       assignments: true,
+      chdir: { letters: 'D', long: ['chdir'] },
+      unread: { letters: 'R', long: ['chroot'] },
     },
   ],
   [
     'env',
     {
       values: 'CPSafu',
+      chdir: { letters: 'C', long: ['chdir'] },
       long: ['argv0', 'chdir', 'file', 'split-string', 'unset'],
       flags: [
         'block-signal',
@@ -1198,6 +1267,7 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
       long: ['format', 'output'],
       flags: ['append', 'help', 'portability', 'quiet', 'verbose', 'version'],
       assignments: true,
+      output: { letters: 'o', long: ['output'] },
     },
   ],
   ['nice', { values: 'n', long: ['adjustment'], flags: ['help', 'version'] }],
@@ -1233,6 +1303,142 @@ const WRAPPERS: ReadonlyMap<string, Wrapper> = new Map([
       ],
     },
   ],
+  ['stdbuf', { values: 'ioe', long: ['input', 'output', 'error'], flags: ['help', 'version'] }],
+  [
+    'ionice',
+    {
+      values: 'cnpPu',
+      long: ['class', 'classdata', 'pid', 'pgid', 'uid'],
+      flags: ['ignore', 'help', 'version'],
+    },
+  ],
+  ['setsid', { values: '', flags: ['ctty', 'fork', 'wait', 'help', 'version'] }],
+  [
+    'flock',
+    {
+      values: 'wEc',
+      long: ['timeout', 'wait', 'conflict-exit-code', 'command'],
+      flags: ['shared', 'exclusive', 'unlock', 'nonblock', 'nb', 'close', 'no-fork', 'verbose', 'help', 'version'],
+      operands: 1,
+      unread: { letters: 'c', long: ['command'] },
+    },
+  ],
+  [
+    'chrt',
+    {
+      values: 'TPD',
+      long: ['sched-runtime', 'sched-period', 'sched-deadline'],
+      flags: ['all-tasks', 'batch', 'deadline', 'fifo', 'idle', 'other', 'rr', 'reset-on-fork', 'max', 'pid'],
+      operands: 1,
+    },
+  ],
+  ['taskset', { values: '', flags: ['all-tasks', 'cpu-list', 'pid', 'help', 'version'], operands: 1 }],
+  [
+    'nsenter',
+    {
+      values: 'tNSGW',
+      glued: 'muinpCUTrw',
+      long: ['target', 'net-socket', 'setuid', 'setgid', 'wdns'],
+      flags: ['all', 'root', 'wd', 'mount', 'uts', 'ipc', 'net', 'pid', 'cgroup', 'user', 'time', 'no-fork'],
+      elsewhere: true,
+    },
+  ],
+  [
+    'unshare',
+    {
+      values: 'RwSGl',
+      glued: 'muinpUCT',
+      long: ['root', 'wd', 'setuid', 'setgid', 'load-interp', 'map-user', 'map-group', 'propagation', 'setgroups'],
+      flags: ['mount', 'uts', 'ipc', 'net', 'pid', 'user', 'cgroup', 'time', 'fork', 'map-root-user', 'mount-proc'],
+      unread: { letters: 'Rw', long: ['root', 'wd'] },
+    },
+  ],
+  [
+    'chroot',
+    {
+      values: '',
+      long: ['userspec', 'groups'],
+      flags: ['skip-chdir', 'help', 'version'],
+      operands: 1,
+      elsewhere: true,
+    },
+  ],
+  ['doas', { values: 'Cu' }],
+  [
+    'runuser',
+    {
+      values: 'cgGsuw',
+      long: ['command', 'group', 'supp-group', 'shell', 'user', 'whitelist-environment', 'session-command'],
+      flags: ['login', 'preserve-environment', 'pty', 'fast', 'help', 'version'],
+      unread: { letters: 'c', long: ['command', 'session-command'] },
+      needs: { letters: 'u', long: ['user'] },
+    },
+  ],
+  ['busybox', { values: '' }],
+  ['toybox', { values: '' }],
+  [
+    'strace',
+    {
+      values: 'abeEIoOpPsSuUX',
+      long: ['output', 'attach', 'trace-path', 'string-limit', 'summary-sort-by', 'user', 'env', 'columns'],
+      output: { letters: 'o', long: ['output'] },
+    },
+  ],
+  [
+    'ltrace',
+    {
+      values: 'aADeFlnopsuwx',
+      long: ['output', 'config', 'library', 'indent', 'align'],
+      output: { letters: 'o', long: ['output'] },
+    },
+  ],
+  // valgrind takes only `--name=value`, so `--log-file` is listed for its value, never the next word.
+  ['valgrind', { values: '', output: { long: ['log-file', 'xml-file'] } }],
+  [
+    'faketime',
+    {
+      values: 'p',
+      long: ['date-prog'],
+      flags: ['exclude-monotonic', 'help', 'version'],
+      operands: 1,
+      unread: { long: ['date-prog'] },
+    },
+  ],
+  [
+    'numactl',
+    {
+      values: 'imNCpPwL',
+      long: [
+        'interleave',
+        'membind',
+        'cpunodebind',
+        'physcpubind',
+        'preferred',
+        'preferred-many',
+        'weighted-interleave',
+        'length',
+        'offset',
+        'shmmode',
+        'shmid',
+        'shm',
+        'file',
+      ],
+      flags: ['all', 'balancing', 'localalloc', 'show', 'hardware', 'strict', 'touch', 'huge', 'dump', 'dump-nodes'],
+    },
+  ],
+  ['eatmydata', { values: '' }],
+  [
+    'fakeroot',
+    {
+      values: 'lisb',
+      long: ['lib', 'faked'],
+      flags: ['unknown-is-real', 'help', 'version'],
+      output: { letters: 's' },
+    },
+  ],
+  ['unbuffer', { values: '' }],
+  ['caffeinate', { values: 'tw' }],
+  ['arch', { values: '', words: ['-arch', '-d', '-e'] }],
   [
     'wsl',
     {
@@ -1278,6 +1484,7 @@ function longTakesValue(wrapper: Wrapper, given: string): boolean {
 
 /** How many words one of a wrapper's options spans: two when its value is the next word. */
 function optionWords(wrapper: Wrapper, word: string): 1 | 2 {
+  if (wrapper.words) return wrapper.words.includes(word) ? 2 : 1;
   if (word.startsWith('--')) return !word.includes('=') && longTakesValue(wrapper, word.slice(2)) ? 2 : 1;
   // A value letter ends the cluster: `-Eu bob` and `-ubob` are both `-E -u bob`.
   for (let at = 1; at < word.length; at++) {
@@ -1453,6 +1660,222 @@ export function splitString(tokens: readonly string[]): SplitString | null {
 /** The command a wrapper runs, with the wrapper's own words dropped. */
 function withoutWrappers(tokens: readonly string[]): string[] {
   return tokens.slice(wrappedStart(tokens));
+}
+
+interface WrapperEffects {
+  /** Folders, as written, the wrappers move the command into, in order. */
+  folders: string[];
+  /** Files a wrapper writes, as written. */
+  outputs: string[];
+  /** A wrapper option or form the scan cannot follow. */
+  unread: boolean;
+}
+
+/** What a run of leading wrappers does besides running the command: folders it moves into, files it writes. */
+function wrapperEffects(tokens: readonly string[]): WrapperEffects {
+  const effects: WrapperEffects = { folders: [], outputs: [], unread: false };
+  let at = 0;
+  while (at < tokens.length && isWrapper(tokens[at])) {
+    const name = programName(unquote(tokens[at]));
+    const wrapper = WRAPPERS.get(name) ?? NO_OPTIONS;
+    if (wrapper.elsewhere) effects.unread = true;
+    let needed = wrapper.needs === undefined;
+    const take = (option: string, short: boolean, value: string | undefined): void => {
+      const is = (set: WrapperOptions | undefined): boolean =>
+        set !== undefined && (short ? (set.letters ?? '').includes(option) : (set.long ?? []).includes(option));
+      if (is(wrapper.needs)) needed = true;
+      if (is(wrapper.unread)) effects.unread = true;
+      if (is(wrapper.chdir)) {
+        if (value === undefined) effects.unread = true;
+        else effects.folders.push(value);
+      }
+      if (is(wrapper.output) && value !== undefined) effects.outputs.push(value);
+    };
+    for (const index of wrapperWords(name, tokens, at + 1).options) {
+      const word = unquote(tokens[index]);
+      if (wrapper.words) {
+        take(word.slice(1), true, wrapper.words.includes(word) ? tokens[index + 1] : undefined);
+      } else if (word.startsWith('--')) {
+        const equals = word.indexOf('=');
+        const given = word.slice(2, equals === -1 ? undefined : equals);
+        const option = longOptionName(wrapper, given) ?? given;
+        const value =
+          equals !== -1 ? word.slice(equals + 1) : longTakesValue(wrapper, given) ? tokens[index + 1] : undefined;
+        take(option, false, value);
+      } else {
+        for (let letter = 1; letter < word.length; letter++) {
+          const option = word[letter] as string;
+          const valued = wrapper.values.includes(option);
+          if (!valued && !wrapper.glued?.includes(option)) {
+            take(option, true, undefined);
+            continue;
+          }
+          take(option, true, word.slice(letter + 1) || (valued ? tokens[index + 1] : undefined));
+          break;
+        }
+      }
+    }
+    if (!needed) effects.unread = true;
+    const end = pastWrapper(tokens, at);
+    if (end <= at) break;
+    at = end;
+  }
+  // An option where the command should start is one the grammar above does not know, as `flock FILE -c`.
+  if (at < tokens.length && unquote(tokens[at]).startsWith('-')) effects.unread = true;
+  return effects;
+}
+
+/** Whether a leading xargs builds its command from input; `file` when `-a`/`--arg-file` names where it reads it. */
+function xargsFeeds(tokens: readonly string[]): { file: boolean } | null {
+  const xargs = WRAPPERS.get('xargs') ?? NO_OPTIONS;
+  for (let at = 0; at < tokens.length && isWrapper(tokens[at]); at = pastWrapper(tokens, at)) {
+    if (programName(unquote(tokens[at])) !== 'xargs') continue;
+    const file = wrapperWords('xargs', tokens, at + 1).options.some(index => {
+      const word = unquote(tokens[index]);
+      if (word.startsWith('--')) return longOptionName(xargs, word.slice(2).split('=')[0] as string) === 'arg-file';
+      return [...word.slice(1)].find(letter => xargs.values.includes(letter)) === 'a';
+    });
+    return { file };
+  }
+  return null;
+}
+
+/** Whether the command before `node` in its pipeline is a lister (`listsNames`), so its output is all xargs reads. */
+function listerFeeds(node: Node): boolean {
+  const pipeline = node.parent;
+  if (pipeline?.type !== 'pipeline') return false;
+  const members = pipeline.namedChildren.filter((child): child is Node => child !== null);
+  const producer = members[members.findIndex(child => child.id === node.id) - 1];
+  return producer?.type === 'command' && listsNames(words(producer));
+}
+
+/**
+ * Whether a builtin can move this shell later, out of the scan's sight: an alias, a trap with an action,
+ * a mapfile callback (`-C`), or lastpipe, which runs a pipeline's last part here.
+ */
+function movesShell(name: string, args: readonly string[]): boolean {
+  if (name === 'alias') return args.some(arg => arg.includes('='));
+  if (name === 'trap') {
+    const [action, ...signals] = args.filter(arg => arg !== '--');
+    return action !== undefined && signals.length > 0 && action !== '' && !action.startsWith('-');
+  }
+  if (name === 'mapfile' || name === 'readarray') return args.some(arg => /^-[A-Za-z]*C/.test(arg));
+  return name === 'shopt' && args.includes('lastpipe');
+}
+
+/** Builtins and forms that can assign a variable by name, which a loop body must not hold for its variable to stay bound. */
+const ASSIGNS_BY_NAME =
+  /\b(eval|source|declare|typeset|local|export|readonly|read|mapfile|readarray|getopts|let|unset|alias|trap|for|select|cd|pushd|popd|chdir)\b|\(\(|(^|[;&|\n(]\s*)\.\s|\bprintf\b[^;&|\n]*\s-v/;
+
+/**
+ * Whether `for NAME in WORDS` keeps NAME to its words through the body: each word is a literal or a glob,
+ * and the body neither assigns NAME nor changes directory.
+ */
+function loopBinds(isFor: boolean, name: string, values: readonly string[], body: string): boolean {
+  if (!isFor || !/^[A-Za-z_]\w*$/.test(name) || values.length === 0) return false;
+  if (values.some(value => /[$`~]/.test(value))) return false;
+  if (ASSIGNS_BY_NAME.test(body)) return false;
+  return !new RegExp(`(^|[^\\w$])${name}(\\[[^\\]]*\\])?\\+?=|\\$\\{${name}:?=`).test(body);
+}
+
+/** Programs whose arguments name no file, so input words handed to them reach nothing. */
+const NAMES_NOTHING = new Set(['echo', 'printf', 'basename', 'dirname', 'true', 'false']);
+
+/** rg options that print more than the paths `-l` lists. */
+const RG_PRINTS_MORE = /^(-c|--count.*|--json|--vimgrep|--stats|--debug|--trace|--passthru)$/;
+
+/**
+ * Whether a command only prints names it found under the folders it was given: `find` printing paths,
+ * `rg -l`, `rg --files`, `git ls-files`. Those folders are scanned as its own operands.
+ */
+function listsNames(raw: readonly string[]): boolean {
+  if (raw.some(isDynamic)) return false;
+  const [program, ...args] = withoutWrappers(raw).map(unquote);
+  if (program === 'find') {
+    return containedCommand(raw) && !args.some(arg => /^-(printf|fprintf|ls|fls|fprint0?)$/.test(arg));
+  }
+  if (program === 'rg') {
+    const lists = args.some(arg => arg === '-l' || arg === '--files-with-matches' || arg === '--files');
+    return lists && containedCommand(raw) && !args.some(arg => RG_PRINTS_MORE.test(arg));
+  }
+  if (program === 'git') return args[0] === 'ls-files' && !args.some(arg => arg.startsWith('--format'));
+  return false;
+}
+
+/** The scan's in-place editors and copiers, which a launcher it does not model may run on their own operands. */
+const MODELED_PROGRAMS = new Set([
+  ...TOUCHES_FILES,
+  ...COPIES,
+  ...UNPACKS,
+  'git',
+  'sed',
+  'gsed',
+  'perl',
+  'ruby',
+  'awk',
+  'gawk',
+  'patch',
+]);
+
+const PACKAGE_MANAGERS = new Set([
+  'npm',
+  'pnpm',
+  'yarn',
+  'bun',
+  'cargo',
+  'go',
+  'pip',
+  'pip3',
+  'pipx',
+  'brew',
+  'apt',
+  'apt-get',
+  'dnf',
+  'yum',
+  'pacman',
+  'gem',
+  'uv',
+  'poetry',
+  'conda',
+  'rustup',
+  'composer',
+]);
+
+/** Package manager subcommands whose operands are package names, as `npm install tar` names a package. */
+const PACKAGE_NAME_SUBCOMMANDS = new Set([
+  'add',
+  'install',
+  'i',
+  'remove',
+  'rm',
+  'uninstall',
+  'un',
+  'update',
+  'up',
+  'upgrade',
+  'info',
+  'view',
+  'why',
+  'ls',
+  'list',
+  'outdated',
+  'search',
+  'show',
+]);
+
+/**
+ * Whether a program the scan does not model is handed the name of one it does (`firejail cp ...`,
+ * `parallel cp`), which it may run on operands the scan never reads as that program's.
+ */
+function launchesModeled(raw: readonly string[]): boolean {
+  const [program, ...args] = withoutWrappers(raw).map(unquote);
+  if (program === undefined) return false;
+  const name = programName(program);
+  if (NAMES_NO_COMMAND.has(name)) return false;
+  if (PACKAGE_MANAGERS.has(name) && PACKAGE_NAME_SUBCOMMANDS.has(args.find(arg => !arg.startsWith('-')) ?? '')) {
+    return false;
+  }
+  return args.some(arg => MODELED_PROGRAMS.has(arg) || (isAbsolutePath(arg) && MODELED_PROGRAMS.has(programName(arg))));
 }
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
@@ -2046,6 +2469,43 @@ const LOCAL_PROGRAMS = new Set([
   'which',
 ]);
 
+/** The file `uniq INPUT OUTPUT` writes: its second operand, past `-f`, `-s` and `-w` values. */
+function uniqOutput(args: readonly string[]): string | undefined {
+  const operands: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = unquote(args[index] as string);
+    if (arg === '--') {
+      operands.push(...args.slice(index + 1));
+      break;
+    }
+    if (/^-[A-Za-z]*[fsw]$/.test(arg) || /^--(skip-fields|skip-chars|check-chars)$/.test(arg)) index++;
+    else if (!arg.startsWith('-') || arg === '-') operands.push(args[index] as string);
+  }
+  return operands[1];
+}
+
+/** Programs whose words are no command they run, so a modeled program's name among them is only a name. */
+const NAMES_NO_COMMAND = new Set([
+  ...LOCAL_PROGRAMS,
+  ...MODELED_PROGRAMS,
+  'gh',
+  'make',
+  'type',
+  'man',
+  'help',
+  'info',
+  'whatis',
+  'whereis',
+  'apropos',
+  'hash',
+  'kill',
+  'pkill',
+  'killall',
+  'pgrep',
+  '[',
+  '[[',
+]);
+
 /** Options that make a listed program run another one. */
 const RUNS_A_PROGRAM: Readonly<Record<string, RegExp>> = {
   find: /^-(exec|execdir|ok|okdir|delete|fprint0?|fprintf|fls)$/,
@@ -2393,6 +2853,7 @@ export function containedCommand(raw: readonly string[]): boolean {
   if (program === 'sed') return readOnlySed(raw.slice(1));
   if (LOCAL_PROGRAMS.has(program)) {
     if (program === 'sort') return !sortRunsOrWrites(args);
+    if (program === 'uniq') return uniqOutput(args) === undefined;
     const runs = own(RUNS_A_PROGRAM, program);
     return !runs || !args.some(arg => runs.test(arg));
   }
@@ -2514,6 +2975,18 @@ export async function scanShell(
     // Directory changes seen so far, so a function body that changes directory loses the folder wherever it runs.
     let directoryChanges = 0;
     let gitProgram: string | null = null;
+    const rebound = REBINDS_HOME.test(command);
+    const user = loginName();
+    const loopBindings = new Map<string, readonly string[]>();
+    // Where `git rev-parse --show-toplevel` lands from each folder; filled in only while git reads no GIT_* setting.
+    const toplevels = new Map<string, string | null>();
+    const readsToplevel =
+      /rev-parse/.test(command) &&
+      !/GIT_/.test(command) &&
+      process.env.GIT_DIR === undefined &&
+      process.env.GIT_WORK_TREE === undefined;
+    // Under lastpipe the last part of a pipeline runs in this shell, so a cd there moves it.
+    const lastpipe = /lastpipe/.test(command);
     const directories = new Set<string>();
     const ungranted = new Set<string>();
     const envFiles = new Set<string>();
@@ -2539,6 +3012,10 @@ export async function scanShell(
         cwd: shellPath(state.cwd),
         previous: shellPath(state.previous),
         lost: state.lost,
+        rebound,
+        user,
+        bindings: loopBindings,
+        toplevel: state.lost ? null : (toplevels.get(state.cwd) ?? null),
         homeUsed: () => {
           if (!homeKnown) homeGuessed = true;
         },
@@ -2608,7 +3085,10 @@ export async function scanShell(
         return null;
       }
       let landed: string | null = null;
-      for (const word of words) landed ??= await checkWord(word, '', cwd, probe, reader, reach);
+      for (const word of words) {
+        if (throughProcess(word.text)) unreadOperands++;
+        landed ??= await checkWord(word, '', cwd, probe, reader, reach);
+      }
       return landed;
     };
 
@@ -2689,14 +3169,61 @@ export async function scanShell(
 
     const run = async (node: Node): Promise<void> => {
       const unreadBefore = unreadOperands;
+      if (readsToplevel && !state.lost && !toplevels.has(state.cwd) && /rev-parse/.test(node.text)) {
+        toplevels.set(state.cwd, await repositoryToplevel(state.cwd));
+      }
       for (const child of node.children) {
         if (child && child.type !== 'command_name') await visit(child);
       }
 
       const tokens = node.children.some(child => child?.type === 'command_name') ? words(node) : [];
       if (tokens.length === 0) return;
+      const effects = wrapperEffects(tokens);
+      if (effects.folders.length === 0) return runCommand(node, tokens, effects, unreadBefore);
+      // `env -C DIR`, `sudo -D DIR`: the command runs from DIR, and this shell stays where it was.
+      const saved = snapshot();
+      try {
+        for (const folder of effects.folders) await enterFolder(folder);
+        await runCommand(node, tokens, effects, unreadBefore);
+      } finally {
+        restore(saved);
+      }
+    };
+
+    /** Moves the scan into a wrapper's working folder; a folder it cannot name leaves it lost. */
+    const enterFolder = async (raw: string): Promise<void> => {
+      const words = operandWords(raw, scope());
+      const before = unreadOperands;
+      const named =
+        words?.length === 1 && readOperand(words[0] as OperandWord, operandRules(state.cwd).dirname).start === null;
+      const next = named ? await check(raw, state.cwd, false, 'shell') : null;
+      if (next === null || unreadOperands > before) {
+        if (unreadOperands === before) unreadOperands++;
+        state.lost = true;
+        return;
+      }
+      state.cwd = next;
+    };
+
+    const runCommand = async (
+      node: Node,
+      tokens: string[],
+      effects: WrapperEffects,
+      unreadBefore: number
+    ): Promise<void> => {
       const [program, ...rest] = tokens;
       const [wrapped, ...wrappedRest] = withoutWrappers(tokens);
+      if (effects.unread || launchesModeled(tokens)) unreadOperands++;
+      for (const output of effects.outputs) {
+        noteWrite(output);
+        await check(output, state.cwd);
+      }
+      const feeds = xargsFeeds(tokens);
+      if (feeds && !NAMES_NOTHING.has(programName(unquote(wrapped ?? 'echo')))) {
+        // xargs runs its command on words it reads, which only a lister over checked folders keeps to them.
+        const consumer = withoutWrappers(tokens);
+        if (!onlyReads(consumer) || feeds.file || !listerFeeds(node)) unreadOperands++;
+      }
       if (wrapped !== undefined) noteWrites(wrapped, wrappedRest);
       const inPlace = await inPlaceWrites(withoutWrappers(tokens.map(unquote)), node, state.cwd);
       // In-place writes come back resolved against a folder that may not be where bash is.
@@ -2727,6 +3254,10 @@ export async function scanShell(
         state.stackLost = true;
       }
       if (inner === 'dirs' || builtin === 'dirs') state.stackLost = true;
+      if (movesShell(builtin || inner, (builtin ? rest.slice(1) : wrappedRest).map(unquote))) {
+        directoryChanges++;
+        Object.assign(state, { lost: true, stackLost: true });
+      }
       if (xargsReplaces(tokens)) unreadOperands++;
       const configured = gitConfigProgram(withoutWrappers(tokens));
       gitProgram ??= configured;
@@ -2814,7 +3345,9 @@ export async function scanShell(
       const trees = treeOperands(name, wrappedRest);
       const wrapperWordCount = rest.length - wrappedRest.length;
       const reachAt = (index: number): Reach | null => trees.operands.get(index - wrapperWordCount) ?? null;
-      if (!TOUCHES_FILES.has(program)) {
+      // A wrapped program is read as it is without its wrappers, whose own words are read as arguments.
+      const touches = TOUCHES_FILES.has(name);
+      if (!touches || wrapperWordCount > 0) {
         const here = wslLocation(state.cwd);
         const windowsProgram = here !== null && WINDOWS_PROGRAM.test(wordValue(wrapped ?? ''));
         const patterns = patternWords(name, wrappedRest);
@@ -2822,6 +3355,7 @@ export async function scanShell(
         // awk, dd, ...). Record static operands for the permission-file floor too, including
         // option values, without treating every ordinary argument as an outside folder grant.
         for (const [index, arg] of rest.entries()) {
+          if (touches && index >= wrapperWordCount) break;
           // A Windows program run through interop opens a Windows path where Windows would, so that place is
           // judged, for the word bash passes and for the part after an `=` in it.
           if (windowsProgram) {
@@ -2849,11 +3383,12 @@ export async function scanShell(
             await checkArgument(word, reach, pathLike);
           }
         }
-      } else {
-        const probe = READ_PROBES.has(program) && containedCommand(tokens);
-        for (const [index, arg] of rest.entries()) {
-          if (arg.startsWith('-') || (program === 'chmod' && arg.startsWith('+'))) continue;
-          await check(arg, state.cwd, probe, 'program', reachAt(index));
+      }
+      if (touches) {
+        const probe = READ_PROBES.has(name) && containedCommand(tokens);
+        for (const [index, arg] of wrappedRest.entries()) {
+          if (arg.startsWith('-') || (name === 'chmod' && arg.startsWith('+'))) continue;
+          await check(arg, state.cwd, probe, 'program', trees.operands.get(index) ?? null);
         }
       }
       if (trees.cwd) {
@@ -2868,6 +3403,12 @@ export async function scanShell(
         }
       }
       if (name === 'ln') await noteLinks(wrappedRest);
+      // An archive, diff or checkout can plant links the scan cannot follow, so what it wrote is read as one.
+      if (inPlace.links) {
+        for (const path of [...inPlace.files, ...inPlace.trees]) {
+          for (const place of operandTargets(state.cwd, expand(path))) createdLinks.add(guardForm(place));
+        }
+      }
       if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original });
     };
 
@@ -2877,6 +3418,7 @@ export async function scanShell(
      */
     const checkArgument = async (word: OperandWord, reach: Reach | null, pathLike: boolean): Promise<void> => {
       if (word.text === '') return;
+      if (throughProcess(word.text)) unreadOperands++;
       const rules = operandRules(state.cwd);
       const operand = readOperand(word, rules.dirname);
       if (operand.unread) {
@@ -2921,7 +3463,9 @@ export async function scanShell(
      */
     const noteLinks = async (args: readonly string[]): Promise<void> => {
       const flags = shortFlags(args);
-      if (!flags.includes('s') && !args.some(arg => unquote(arg) === '--symbolic')) return;
+      // getopt_long takes `--sy` and longer for `--symbolic`; `--s` could be `--suffix` too.
+      const symbolic = args.some(arg => /^--sy/.test(unquote(arg)) && '--symbolic'.startsWith(unquote(arg)));
+      if (!flags.includes('s') && !symbolic) return;
       let directory: string | null = null;
       const operands: string[] = [];
       for (let index = 0; index < args.length; index++) {
@@ -2988,6 +3532,11 @@ export async function scanShell(
         return false;
       }
       const target = rest.find(arg => arg === '-' || !arg.startsWith('-'));
+      if (target === '-' && rebound) {
+        unreadOperands++;
+        state.lost = true;
+        return true;
+      }
       const words = target === undefined || target === '-' ? [] : operandWords(target, scope());
       const unread = unreadOperands;
       const next = target === '-' ? state.previous : await check(target ?? '~', state.cwd, false, 'shell');
@@ -3011,9 +3560,15 @@ export async function scanShell(
 
     // Every reading is kept: a write recorded at a place the command never wrote only asks more often.
     const noteWrite = (raw: string, into = writes): void => {
+      const bound = boundWords(raw, loopBindings);
+      if (bound) {
+        for (const word of bound) noteWrite(wordValue(word), into);
+        return;
+      }
       const text = expand(unquote(raw));
       if (!text || HARMLESS_REDIRECT_TARGETS.has(text)) return;
-      if (isDynamic(text) || (state.lost && !isAbsolutePath(text))) {
+      const homeWord = rebound && /^~|\$\{?HOME\b/.test(unquote(raw));
+      if (isDynamic(text) || (state.lost && !isAbsolutePath(text)) || throughProcess(text) || homeWord) {
         unreadOperands++;
         return;
       }
@@ -3024,6 +3579,8 @@ export async function scanShell(
       const rules = operandRules(state.cwd);
       const operands = rest.filter(arg => !arg.startsWith('-'));
       if (program === 'tee') for (const operand of operands) noteWrite(operand);
+      const uniqWrites = program === 'uniq' ? uniqOutput(rest) : undefined;
+      if (uniqWrites !== undefined) noteWrite(uniqWrites);
       for (const [index, arg] of rest.entries()) {
         const output = DOWNLOAD_OUTPUT.get(program);
         const value = !output
@@ -3093,11 +3650,24 @@ export async function scanShell(
         const body = node.childForFieldName('body');
         const header = body ? node.text.slice(0, body.startIndex - node.startIndex).replace(/[\s;]+$/, '') : node.text;
         commands.push({ text: header, always: header, coverable: false, words: header });
+        const variable = node.childForFieldName('variable')?.text ?? '';
         // A lowercase name with no underscore is no variable a listed program reads (`HOME`,
         // `GIT_DIR` and `http_proxy` all fail it), so the loop stays contained if its body does.
-        if (!/^[a-z][a-z0-9]*$/.test(node.childForFieldName('variable')?.text ?? '')) contained = false;
-        setsEnvironment = true;
-        for (const child of node.children) if (child) await visit(child);
+        if (!/^[a-z][a-z0-9]*$/.test(variable)) {
+          contained = false;
+          setsEnvironment = true;
+        }
+        const values = node.childrenForFieldName('value').map(value => value?.text ?? '');
+        const bind = loopBinds(node.text.startsWith('for'), variable, values, body?.text ?? '') && !state.lost;
+        const outer = loopBindings.get(variable);
+        if (bind) loopBindings.set(variable, values);
+        else loopBindings.delete(variable);
+        try {
+          for (const child of node.children) if (child) await visit(child);
+        } finally {
+          if (outer) loopBindings.set(variable, outer);
+          else loopBindings.delete(variable);
+        }
         return;
       }
       if (node.type === 'redirected_statement') {
@@ -3111,12 +3681,15 @@ export async function scanShell(
       if (SUBSHELLS.has(node.type) || node.type === 'pipeline') {
         const saved = snapshot();
         const isolate = SUBSHELLS.has(node.type);
+        let moved = false;
         for (const child of node.children) {
           if (!child) continue;
           if (!isolate) restore(saved);
           await visit(child);
+          if (!samePlace(saved, state)) moved = true;
         }
         restore(saved);
+        if (lastpipe && moved && node.type === 'pipeline') Object.assign(state, { lost: true, stackLost: true });
         return;
       }
       for (const child of node.children) if (child) await visit(child);

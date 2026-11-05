@@ -559,7 +559,7 @@ export async function shellApproval(
     secret ||
     scan.unread === true ||
     writesWhileUnresolved;
-  const asksInFull = ((touchesProtected || scan.unread === true) && !scan.readOnly) || secret || writesWhileUnresolved;
+  const asksInFull = (touchesProtected && !scan.readOnly) || scan.unread === true || secret || writesWhileUnresolved;
   // An exact "always" for the run lapses when the script is written again.
   const runKey = script ? `${key}\x00${script.generation}` : scriptCheckFailed ? `${key}\x00unchecked` : key;
   if (script && context.sessionId) expectShellRun(runKey, context.sessionId, script.hooks);
@@ -595,7 +595,7 @@ export async function shellApproval(
 export const UNREAD_WSL_COMMAND = 'a WSL distro this command may reach, which the scan could not read';
 
 /**
- * The prompt for a command the scan could not read. It asks in auto mode, and when the command
+ * The prompt for a command the scan could not read. It asks in auto and full mode, and when the command
  * may reach a WSL distro - it names wsl or a share, or runs in or beside a WSL folder - it also
  * carries `ungranted`, so no rule or saved answer covers it: what it reaches was never checked.
  */
@@ -609,7 +609,7 @@ function unreadApproval(
 ): ApprovalPrompt {
   const namesDistro = process.platform === 'win32' && /wsl|\\\\|\/\//i.test(command);
   const mayReachDistro = ungranted.length > 0 || namesDistro || places.some(place => wslLocation(place) !== null);
-  if (!mayReachDistro) return { detail, key, askInAuto: true };
+  if (!mayReachDistro) return { detail, key, askInAuto: true, askInFull: true };
   return {
     detail: [
       detail,
@@ -617,6 +617,7 @@ function unreadApproval(
     ].join('\n\n'),
     key,
     askInAuto: true,
+    askInFull: true,
     always: {
       namespace: tool,
       commands: [{ text: command, pattern: command, coverable: false, words: command }],
