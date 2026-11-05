@@ -48,6 +48,7 @@ import { ReActAgent } from '@bike4mind/agents';
 import { ToolCatalog, type PermissionPromptKind, type PermissionPromptOptions } from './tools/gateway/index.js';
 import { buildSystemPrompt } from './core/prompts';
 import { getPlanModeFilePath } from './utils/planMode.js';
+import { whoamiReport } from './utils/whoami.js';
 import {
   PermissionManager,
   type AgentContext,
@@ -193,6 +194,7 @@ import { buildLlmBackend, type BuildLlmBackendResult } from './bootstrap/buildLl
 import {
   LOCAL_SESSION_CONTINUES,
   NoLocalModelsError,
+  SIGN_IN_EXPIRED,
   SIGNED_OUT_BANNER,
   signedOutCommandMessage,
   signedOutNoMatchMessage,
@@ -634,7 +636,7 @@ function CliApp() {
       // sign-in flow below take over.
       let signedOutBackend: BuildLlmBackendResult | null = null;
       let noLocalModelsReason: string | null = null;
-      const signedOutClient = authTokens ? null : ApiClient.whileSignedOut(state.configStore);
+      const signedOutClient = authTokens && !tokenExpired ? null : ApiClient.whileSignedOut(state.configStore);
       if (signedOutClient) {
         try {
           signedOutBackend = await buildLlmBackend({ ...backendInput, apiClient: signedOutClient });
@@ -692,6 +694,10 @@ function CliApp() {
       } else if (signedOutClient && signedOutBackend) {
         apiClient = signedOutClient;
         backend = signedOutBackend;
+        if (tokenExpired) {
+          await state.configStore.clearAuthTokens();
+          startupLog.unshift(SIGN_IN_EXPIRED);
+        }
         startupLog.unshift(SIGNED_OUT_BANNER);
         if (config.features?.tavern || config.features?.hearth) {
           startupLog.push('Tavern and Hearth are Bike4Mind cloud features; they stay off while signed out.');
@@ -2713,16 +2719,7 @@ function CliApp() {
 
       case 'whoami': {
         const authTokens = await state.configStore.getAuthTokens();
-        if (!authTokens) {
-          console.log('Not authenticated. Run /login to authenticate.');
-          return;
-        }
-        const isExpired = new Date(authTokens.expiresAt) <= new Date();
-        console.log('\n👤 Current User:\n');
-        console.log(`User ID: ${authTokens.userId}`);
-        console.log(`Status: ${isExpired ? '⚠️  Token expired' : '✅ Authenticated'}`);
-        console.log(`Expires: ${new Date(authTokens.expiresAt).toLocaleString()}`);
-        console.log('');
+        console.log(whoamiReport(authTokens, { signedOutLocal: state.signedOutLocal }));
         break;
       }
 

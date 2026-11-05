@@ -336,14 +336,14 @@ export interface LocalModelsAttachment {
   ollamaDetected: boolean;
   /** Saved model servers listed before startup went on: the default model's, if any, or all that answered when `signedOut` waited for them. */
   servers: { name: string; modelCount: number }[];
-  /** Other saved model servers that did not answer, by server id; complete once `later` settles. */
+  /** Other saved model servers that could not be reached or listed, or lack a credential, by server id; complete once `later` settles. */
   serverFailures: ReadonlyMap<string, { name: string; error: string }>;
   warnings: string[];
   /** Settles once every other saved model server has joined `llm` or been skipped. */
   later: Promise<void>;
 }
 
-/** Why the saved local default cannot be used when the saved model server holding it did not answer; else null. */
+/** Why the saved local default cannot be used when the saved model server holding it failed; else null. */
 export function savedLocalDefaultDownMessage(
   config: Pick<CliConfig, 'localDefaultModel'>,
   failures: LocalModelsAttachment['serverFailures']
@@ -493,11 +493,13 @@ async function attachServers(
 ): Promise<{
   owner: (LlmRoute & { name: string }) | null;
   others: { id: string; name: string; settled: Promise<Settled> }[];
+  /** Servers left out for want of a credential, with how to log in. */
+  skipped: { id: string; name: string; error: string }[];
   warnings: string[];
 }> {
   const wanted = defaultOnServer(config.defaultModel);
   const all = (opts.servers ?? 'all') === 'all';
-  if (!all && !wanted) return { owner: null, others: [], warnings: [] };
+  if (!all && !wanted) return { owner: null, others: [], skipped: [], warnings: [] };
   const loaded = await (deps.loadModelServers ?? loadModelServers)();
   const warnings: string[] = [];
   const owner = wanted ? loaded.servers.find(server => server.id === wanted.serverId) : undefined;
@@ -511,14 +513,22 @@ async function attachServers(
   if (loaded.problem) warnings.push(`\u26a0\ufe0f  Desktop's model servers were not read: ${loaded.problem}`);
 
   const othersMs = opts.listingTimeoutMs ?? SAVED_OLLAMA_LISTING_TIMEOUT_MS;
-  const others = (all ? loaded.servers : [])
-    .filter(server => server !== owner && !needsCredential(server, config.modelServerCredentials?.[server.id]?.secret))
+  const candidates = (all ? loaded.servers : []).filter(server => server !== owner);
+  const locked = (server: CliModelServer) =>
+    needsCredential(server, config.modelServerCredentials?.[server.id]?.secret);
+  const skipped = candidates.filter(locked).map(server => ({
+    id: server.id,
+    name: clean(server.name),
+    error: `${clean(server.name)} needs credentials. Run: ${loginHint(server)}`,
+  }));
+  const others = candidates
+    .filter(server => !locked(server))
     .map(server => ({
       id: server.id,
       name: clean(server.name),
       settled: settle(attachServer(server, config, opts, deps, othersMs)),
     }));
-  if (!owner || !wanted) return { owner: null, others, warnings };
+  if (!owner || !wanted) return { owner: null, others, skipped, warnings };
 
   const name = clean(owner.name);
   const result = await settle(
@@ -528,7 +538,7 @@ async function attachServers(
   if (!result.route.models.some(model => model.id === config.defaultModel)) {
     throw defaultUnusable(wanted.model, owner.name, `${name} does not serve it. See: b4m models ls --server ${name}`);
   }
-  return { owner: { ...result.route, name }, others, warnings };
+  return { owner: { ...result.route, name }, others, skipped, warnings };
 }
 
 /** `host` is an Ollama that was configured or found running; `error` is why listing its models failed. */
@@ -617,7 +627,7 @@ export async function attachLocalModels(
   // deadline) are waited for before deciding nothing local can chat.
   let others = servers.others;
   const joined: (LlmRoute & { name: string })[] = [];
-  const serverFailures = new Map<string, { name: string; error: string }>();
+  const serverFailures = new Map(servers.skipped.map(({ id, name, error }) => [id, { name, error }]));
   if (opts.signedOut && ollamaModels.length === 0 && !servers.owner && others.length > 0) {
     for (const { id, name, settled } of others) {
       const result = await settled;
@@ -764,6 +774,8 @@ export async function buildLlmBackend(
   const modelInfo = savedLocalDefault ?? resolveModelInfo(models, config.defaultModel);
 
   if (signedOut && modelInfo.id !== config.defaultModel) {
+    const serverDown = savedLocalDefault ? null : savedLocalDefaultDownMessage(config, attached.serverFailures);
+    if (serverDown) startupLog.push(serverDown);
     startupLog.push(signedOutDefaultReplacedMessage(config.defaultModel, modelInfo.id));
   }
 

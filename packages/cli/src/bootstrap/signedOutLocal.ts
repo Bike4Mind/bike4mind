@@ -34,6 +34,11 @@ export function signedOutCommandMessage(command: string): string | null {
 /** For headless and ACP runs, where /login cannot be typed. */
 export const SIGN_IN_OUTSIDE_HINT = 'To use Bike4Mind cloud models instead, sign in: run b4m, then /login.';
 
+export const SIGN_IN_EXPIRED =
+  'Your Bike4Mind sign-in expired; chatting with local models. Run /login to sign in again.';
+
+export const SIGN_IN_EXPIRED_HEADLESS = `Bike4Mind sign-in expired; running on local models. ${SIGN_IN_OUTSIDE_HINT}`;
+
 /**
  * Headless (`-p`) runs signed out never swap a cloud default for a local model on their own, unless a local
  * default was saved; this is the error when none was.
@@ -43,7 +48,7 @@ export function signedOutHeadlessCloudModelMessage(model: string): string {
 }
 
 export function savedServerDownMessage(model: string, server: string, error: string): string {
-  return `The saved local default ${clean(model)} is on the model server ${clean(server)}, which did not answer: ${clean(error).replace(/\.+$/, '')}. Start it, or pick another model with: b4m models use <name>.`;
+  return `The saved local default ${clean(model)} is on the model server ${clean(server)}, which could not be reached or listed: ${clean(error).replace(/\.+$/, '')}. Fix that and try again, or pick another model with: b4m models use <name>.`;
 }
 
 /** Signed out and nothing local can chat. `reason` says what was found and how to fix it. */

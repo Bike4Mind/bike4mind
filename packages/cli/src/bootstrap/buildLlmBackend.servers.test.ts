@@ -18,8 +18,13 @@ import {
 import { loadModelServers } from '../models/modelServers.js';
 import { MultiLlmBackend } from '../llm/MultiLlmBackend.js';
 import { createMockConfig } from '../test-utils/mocks.js';
-import { attachLocalModels, type AttachLocalModelsOptions, type BuildLlmBackendDeps } from './buildLlmBackend.js';
-import { NoLocalModelsError, SignedOutCloudBackend } from './signedOutLocal.js';
+import {
+  attachLocalModels,
+  buildLlmBackend,
+  type AttachLocalModelsOptions,
+  type BuildLlmBackendDeps,
+} from './buildLlmBackend.js';
+import { NoLocalModelsError, SignedOutCloudBackend, signedOutDefaultReplacedMessage } from './signedOutLocal.js';
 
 const TOKEN = 'tok-5e4d3c2b1a0f9e8d7c6b';
 const silent = { debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -564,5 +569,38 @@ describe('attachLocalModels with saved model servers while signed out', () => {
     await expect(failure).rejects.toBeInstanceOf(NoLocalModelsError);
     await expect(failure).rejects.toThrow('No local model found. Start Ollama');
     expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it('says at startup why the saved local default is not used when its saved server is down', async () => {
+    const plain = await ollama();
+    await writeServers([downRecord('o2', 'gone', await closedPort())]);
+    const startupLog: string[] = [];
+
+    const result = await buildLlmBackend(
+      {
+        config: createMockConfig({ defaultModel: 'claude-opus-4', localDefaultModel: 'local:srv-o2:qwen' }),
+        apiClient: { signedOut: true } as never,
+        tokenGetter: async () => null,
+        startupLog,
+        ollamaHost: plain.baseUrl,
+      },
+      {
+        ...deps,
+        connectWebSocket: vi.fn(),
+        clearWebSocketToolExecutor: vi.fn(),
+        createServerBackend: vi.fn(),
+        detectOllama: vi.fn(async () => null),
+      }
+    );
+
+    expect(result.modelInfo.id).toBe('tiny:1b');
+    expect(startupLog).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          /^The saved local default qwen is on the model server gone, which could not be reached or listed: .+\. Fix that and try again, or pick another model with: b4m models use <name>\.$/
+        ),
+        signedOutDefaultReplacedMessage('claude-opus-4', 'tiny:1b'),
+      ])
+    );
   });
 });

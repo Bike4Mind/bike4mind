@@ -30,7 +30,7 @@ import {
   withSignedOutLocalDefault,
   type CliLlmBackend,
 } from '../bootstrap/buildLlmBackend.js';
-import { SignedOutCloudBackend } from '../bootstrap/signedOutLocal.js';
+import { SIGN_IN_EXPIRED_HEADLESS, SignedOutCloudBackend } from '../bootstrap/signedOutLocal.js';
 import { createHeadlessLlmBackendDeps } from './headlessOllama.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
@@ -201,12 +201,12 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     // Validate authentication. Signed out, the run uses local models only and sends nothing to Bike4Mind.
     const authTokens = await configStore.getAuthTokens();
-    if (authTokens && new Date(authTokens.expiresAt) <= new Date()) {
+    const tokenExpired = authTokens !== null && new Date(authTokens.expiresAt) <= new Date();
+    if (tokenExpired) {
       await configStore.clearAuthTokens();
-      process.stderr.write('Error: Authentication token expired. Run `b4m /login` to re-authenticate.\n');
-      process.exit(1);
+      process.stderr.write(`${SIGN_IN_EXPIRED_HEADLESS}\n`);
     }
-    const signedOut = !authTokens;
+    const signedOut = !authTokens || tokenExpired;
 
     let apiClient: ApiClient;
     if (signedOut) {

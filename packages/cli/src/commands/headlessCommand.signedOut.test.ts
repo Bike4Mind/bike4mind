@@ -101,14 +101,14 @@ afterEach(async () => {
 });
 
 /** Saves one model server, id s1 named box, the way Desktop does. */
-async function saveServer(baseUrl: string): Promise<void> {
+async function saveServer(baseUrl: string, auth: 'none' | 'bearer' = 'none'): Promise<void> {
   const server = {
     id: 's1',
     name: 'box',
     kind: 'openai-compatible',
     transport: { type: 'http', baseUrl },
     access: 'chat',
-    auth: { type: 'none' },
+    auth: { type: auth },
     models: [],
     addedAt: '2026-10-01T00:00:00.000Z',
   };
@@ -156,6 +156,23 @@ describe('b4m -p while signed out', () => {
     expect(exitCodes).toEqual([0]);
     expect(stderr).toContain(`using the saved local model "${LOCAL_MODEL}" instead of "${CLOUD_MODEL}"`);
     expect(fetchMock.mock.calls.some(([request]) => String(request).endsWith('/api/chat'))).toBe(true);
+  }, 30_000);
+
+  it('runs on local models when the saved sign-in has expired, and clears it', async () => {
+    await new ConfigStore().setAuthTokens({
+      accessToken: 'stale',
+      refreshToken: 'stale-refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'u1',
+    });
+
+    const output = await runSignedOut({ defaultModel: LOCAL_MODEL }, [LOCAL_MODEL]);
+
+    expect(output.error).toBeUndefined();
+    expect(output.result).toContain('hello from ollama');
+    expect(exitCodes).toEqual([0]);
+    expect(stderr).toContain('Bike4Mind sign-in expired; running on local models.');
+    expect(await new ConfigStore().getAuthTokens()).toBeNull();
   }, 30_000);
 
   it('says how to sign in when the default is a cloud model', async () => {
@@ -209,13 +226,34 @@ describe('b4m -p while signed out', () => {
       );
 
       expect(output.error).toMatch(
-        /^The saved local default qwen-small is on the model server box, which did not answer: .+\. Start it, or pick another model with: b4m models use <name>\./
+        /^The saved local default qwen-small is on the model server box, which could not be reached or listed: .+\. Fix that and try again, or pick another model with: b4m models use <name>\./
       );
       expect(output.error).not.toContain('Start Ollama');
       expect(exitCodes).toEqual([1]);
     },
     30_000
   );
+
+  it('says how to log in to the saved model server holding the saved local default when it has no credential', async () => {
+    const vllm = await startFakeVllm();
+    try {
+      await saveServer(vllm.baseUrl, 'bearer');
+
+      const output = await runSignedOut(
+        { defaultModel: CLOUD_MODEL, localDefaultModel: 'local:srv-s1:qwen-small' },
+        [LOCAL_MODEL],
+        [vllm.baseUrl]
+      );
+
+      expect(output.error).toMatch(
+        /^The saved local default qwen-small is on the model server box, which could not be reached or listed: box needs credentials\. Run: b4m models servers login box\. /
+      );
+      expect(exitCodes).toEqual([1]);
+      expect(vllm.requests).toEqual([]);
+    } finally {
+      await vllm.close();
+    }
+  }, 30_000);
 
   it('says how to start or install Ollama, or sign in, when no local model answers', async () => {
     const output = await runSignedOut({ defaultModel: LOCAL_MODEL, localDefaultModel: LOCAL_MODEL }, null);

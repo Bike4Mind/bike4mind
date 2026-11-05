@@ -176,6 +176,24 @@ describe('AcpServer agent stack while signed out', () => {
     expect(mergeRemoteSkills).not.toHaveBeenCalled();
   });
 
+  it('builds on local models and clears the saved sign-in when it has expired', async () => {
+    const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
+    vi.mocked(buildLlmBackend).mockClear();
+    const { server } = signedOutServer();
+    const internals = server as unknown as StackInternals;
+    const clearAuthTokens = vi.fn(async () => {});
+    internals.configStore = {
+      ...internals.configStore,
+      getAuthTokens: async () => ({ accessToken: 'stale', expiresAt: new Date(Date.now() - 60_000).toISOString() }),
+      clearAuthTokens,
+    };
+
+    await buildStack(server);
+
+    expect(vi.mocked(buildLlmBackend).mock.calls[0][0].apiClient.signedOut).toBe(true);
+    expect(clearAuthTokens).toHaveBeenCalledOnce();
+  });
+
   it('asks for sign-in with what to fix locally when no local model can chat', async () => {
     const { buildLlmBackend } = await import('../bootstrap/buildLlmBackend.js');
     const { NoLocalModelsError } = await import('../bootstrap/signedOutLocal.js');

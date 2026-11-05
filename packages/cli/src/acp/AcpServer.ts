@@ -542,15 +542,14 @@ export class AcpServer {
     await this.loadCustomCommands();
 
     const authTokens = await this.configStore.getAuthTokens();
-    if (authTokens && new Date(authTokens.expiresAt) <= new Date()) {
-      await this.configStore.clearAuthTokens();
-      throw RequestError.authRequired(undefined, 'Authentication expired. Run `b4m /login` again.');
-    }
+    const tokenExpired = authTokens !== null && new Date(authTokens.expiresAt) <= new Date();
+    if (tokenExpired) await this.configStore.clearAuthTokens();
 
     // Signed out, the stack runs on local models only and sends nothing to Bike4Mind.
-    const apiClient = authTokens
-      ? new ApiClient(requireApiUrl(config.apiConfig), this.configStore)
-      : ApiClient.whileSignedOut(this.configStore);
+    const apiClient =
+      authTokens && !tokenExpired
+        ? new ApiClient(requireApiUrl(config.apiConfig), this.configStore)
+        : ApiClient.whileSignedOut(this.configStore);
     const tokenGetter = async () => (await this.configStore.getAuthTokens())?.accessToken ?? null;
 
     if (!apiClient.signedOut) await this.mergeRemoteSkills(config, apiClient);
