@@ -94,6 +94,19 @@ describe('OverviewTab Payment card', () => {
         data: buildStripeData({
           invoices: [
             {
+              id: 'in_2',
+              number: null,
+              createdAt: '2026-11-01T00:00:00.000Z',
+              amountDue: 2500,
+              amountPaid: 0,
+              currency: 'usd',
+              status: 'draft',
+              paidAt: null,
+              attempts: 0,
+              hostedInvoiceUrl: null,
+              creditsGranted: null,
+            },
+            {
               id: 'in_1',
               number: 'N-1',
               createdAt: '2026-10-01T00:00:00.000Z',
@@ -114,7 +127,9 @@ describe('OverviewTab Payment card', () => {
     expect(screen.getByTestId('subscription-detail-payment-card-number')).toHaveTextContent('Visa ending 4242');
     expect(screen.getByTestId('subscription-detail-payment-expiry')).toHaveTextContent('12/2099');
     expect(screen.queryByTestId('subscription-detail-card-expiring-chip')).not.toBeInTheDocument();
+    // The newest invoice is a draft renewal, so the latest outcome is the paid one before it.
     expect(screen.getByTestId('subscription-detail-latest-invoice')).toHaveTextContent('Paid');
+    expect(screen.getByTestId('subscription-detail-latest-invoice')).not.toHaveTextContent('Draft');
     expect(screen.getByTestId('subscription-detail-next-invoice')).toHaveTextContent('$25.00 on 1 Dec 2026');
   });
 

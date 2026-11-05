@@ -97,7 +97,8 @@ const capitalize = (value: string) => value.charAt(0).toUpperCase() + value.slic
 const PaymentFacts: React.FC<{ data: StripeData }> = ({ data }) => {
   const [now] = useState(Date.now);
   const { paymentMethod, upcoming } = data;
-  const latest = data.invoices[0];
+  // A draft is the renewal Stripe has not finalized yet, not an outcome.
+  const latest = data.invoices.find(invoice => invoice.status !== 'draft');
   const expiry =
     paymentMethod?.expMonth && paymentMethod.expYear
       ? `${String(paymentMethod.expMonth).padStart(2, '0')}/${paymentMethod.expYear}`

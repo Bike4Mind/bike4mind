@@ -46,6 +46,8 @@ describe('AdminSubscriptionStripeParamsSchema', () => {
       fresh: true,
     });
     expect(AdminSubscriptionStripeParamsSchema.parse({ id: 'a'.repeat(24) }).fresh).toBe(false);
+    expect(AdminSubscriptionStripeParamsSchema.parse({ id: 'a'.repeat(24), fresh: '0' }).fresh).toBe(false);
+    expect(AdminSubscriptionStripeParamsSchema.parse({ id: 'a'.repeat(24), fresh: 'false' }).fresh).toBe(false);
   });
 
   it('rejects anything else', () => {

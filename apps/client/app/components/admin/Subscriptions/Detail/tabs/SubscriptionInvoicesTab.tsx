@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, Typography } from '@mui/joy';
 import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { isCompSubscription, type AdminSubscriptionDetail } from '@client/app/utils/adminSubscriptionDetail';
-import type { AdminStripeInvoice } from '@client/app/utils/adminSubscriptionStripe';
+import { MAX_INVOICES, type AdminStripeInvoice } from '@client/app/utils/adminSubscriptionStripe';
 import { DataTable, Dash, EmptyState, StatusChip, formatMoney, type DataColumn } from '../../../shared';
 import { formatCredits } from '../../../Users/Profile/actions/creditAdjustment';
 import { formatDate } from '../subscriptionDetailModel';
@@ -113,7 +113,7 @@ export const SubscriptionInvoicesTab: React.FC<{
               sx={{ mt: 1, color: 'admin.inkMuted' }}
               data-testid="subscription-invoices-truncated"
             >
-              Showing the latest 300 invoices.
+              Showing the latest {MAX_INVOICES} invoices.
             </Typography>
           )}
           <Typography

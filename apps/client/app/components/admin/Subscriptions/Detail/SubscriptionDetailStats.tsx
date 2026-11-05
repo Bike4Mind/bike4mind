@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { AdminSubscriptionStripeState } from '@client/app/hooks/data/adminSubscriptionDetail';
+import { MAX_INVOICES } from '@client/app/utils/adminSubscriptionStripe';
 import {
   isCompSubscription,
   isTerminalSubscriptionStatus,
@@ -33,7 +34,7 @@ const lifetimePaidTile = (detail: AdminSubscriptionDetail, stripe: AdminSubscrip
   const [first, ...others] = data.lifetimePaid;
   const note = [
     others.length > 0 ? `+${others.length} other ${others.length === 1 ? 'currency' : 'currencies'}` : null,
-    data.invoicesTruncated ? 'Latest 300 invoices' : null,
+    data.invoicesTruncated ? `Latest ${MAX_INVOICES} invoices` : null,
     !first ? 'No paid invoices' : null,
   ].filter(Boolean);
   return {
