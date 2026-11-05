@@ -4,6 +4,7 @@ import {
   type ISpendRollup,
   type ISpendRollupRepository,
   type SpendAlertRecord,
+  type SpendSeriesPoint,
 } from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
 import { platformBaseline, scopeBaseline, SPEND_WINDOW_MS, windowSums } from './baselines';
@@ -11,7 +12,7 @@ import { decideIncidents, type IncidentDecision } from './incidents';
 import {
   evaluatePlatform,
   evaluateScope,
-  type ScopeObservation,
+  type PlatformObservation,
   type SpendBreach,
   type SpendThresholds,
 } from './rules';
@@ -54,9 +55,71 @@ const isDuplicateKeyError = (error: unknown): boolean =>
 
 const creditsOf = (rollup: ISpendRollup | undefined): number => rollup?.credits ?? 0;
 
+/** Owner scopes split the ledger between them (each usage row has one owner), so their sums never overlap. */
+const OWNER_SCOPE_TYPES: ReadonlySet<AccountScopeType> = new Set(['User', 'Organization', 'Agent']);
+const PLATFORM_HISTORY_DAYS = SAME_SLOT_DAYS[SAME_SLOT_DAYS.length - 1] + 1;
+
+/** Credits spent by the trusted owner scopes found this window, now and over the platform history range. */
+type TrustedSpend = { current: number; series: SpendSeriesPoint[] };
+
+/**
+ * Only trusted scopes that are candidates this window are counted: a trusted account active in the history
+ * but quiet now stays in the baseline, which the baseline's median absorbs.
+ */
+async function trustedOwnerSpend(
+  perType: ScopeCandidates[],
+  trustedKeys: ReadonlySet<string>,
+  windowEnd: Date,
+  deps: EvaluateDeps
+): Promise<TrustedSpend> {
+  const spend: TrustedSpend = { current: 0, series: [] };
+  for (const { scopeType, totals, candidates } of perType) {
+    if (!OWNER_SCOPE_TYPES.has(scopeType)) continue;
+    const trustedIds = candidates.filter(scopeId => trustedKeys.has(scopeMapKey(scopeType, scopeId)));
+    if (trustedIds.length === 0) continue;
+    for (const scopeId of trustedIds) spend.current += creditsOf(totals.get(scopeId));
+    const history = await deps.rollups.windowSeries(
+      scopeType,
+      trustedIds,
+      new Date(windowEnd.getTime() - PLATFORM_HISTORY_DAYS * DAY_MS),
+      windowEnd
+    );
+    for (const points of history.values()) spend.series.push(...points);
+  }
+  return spend;
+}
+
+/** Fraction of a window's credits that is standard-tier; 1 for an empty window. */
+const standardShare = (totalCredits: number, standardCredits: number): number =>
+  totalCredits > 0 ? standardCredits / totalCredits : 1;
+
+/**
+ * Standard-tier share of each window's spend, newest window first. Owner rollups carry no provider
+ * cost, so trusted cost is estimated at the platform's own cost per credit in that window.
+ */
+function standardWindowSums(
+  platformSeries: SpendSeriesPoint[],
+  trustedSeries: SpendSeriesPoint[],
+  windowEnd: Date
+): { credits: number[]; costUsd: number[] } {
+  const credits = windowSums(platformSeries, windowEnd, PLATFORM_HISTORY_DAYS, 'credits');
+  const costUsd = windowSums(platformSeries, windowEnd, PLATFORM_HISTORY_DAYS, 'costUsd');
+  const trusted = windowSums(trustedSeries, windowEnd, PLATFORM_HISTORY_DAYS, 'credits');
+  const standardCredits = credits.map((total, i) => Math.max(0, total - trusted[i]));
+  return {
+    credits: standardCredits,
+    costUsd: costUsd.map((total, i) => total * standardShare(credits[i], standardCredits[i])),
+  };
+}
+
+/**
+ * The floors and the ratio are judged on standard-tier spend, so heavy trusted use cannot page the
+ * platform on its own; the reported value stays the full platform total.
+ */
 async function platformBreaches(
   windowStart: Date,
   windowEnd: Date,
+  trusted: TrustedSpend,
   deps: EvaluateDeps,
   thresholds: SpendThresholds
 ): Promise<SpendBreach[]> {
@@ -65,23 +128,29 @@ async function platformBreaches(
     deps.rollups.windowSeries(
       'platform',
       [PLATFORM_SCOPE_ID],
-      new Date(windowEnd.getTime() - (SAME_SLOT_DAYS[SAME_SLOT_DAYS.length - 1] + 1) * DAY_MS),
+      new Date(windowEnd.getTime() - PLATFORM_HISTORY_DAYS * DAY_MS),
       windowEnd
     ),
   ]);
-  const series = history.get(PLATFORM_SCOPE_ID) ?? [];
   const total = current.get(PLATFORM_SCOPE_ID);
+  const totalCredits = total?.credits ?? 0;
+  const totalCost = total?.costUsd ?? 0;
+  const standard = standardWindowSums(history.get(PLATFORM_SCOPE_ID) ?? [], trusted.series, windowEnd);
+  const standardCredits = Math.max(0, totalCredits - trusted.current);
 
-  const observe = (field: 'credits' | 'costUsd'): ScopeObservation => {
+  const observe = (field: 'credits' | 'costUsd'): PlatformObservation => {
     // Index 0 is the current window, so the window ending d days ago is d * WINDOWS_PER_DAY windows back.
-    const everyWindow = windowSums(series, windowEnd, SAME_SLOT_DAYS[SAME_SLOT_DAYS.length - 1] + 1, field);
+    const everyWindow = standard[field];
     // An empty slot is indistinguishable from missing history, so only populated slots count as samples.
     const sameSlot = SAME_SLOT_DAYS.map(days => everyWindow[days * WINDOWS_PER_DAY]).filter(sum => sum > 0);
-    const trailing24h = windowSums(series, windowStart, 1, field);
+    const trailing24h = everyWindow.slice(1, 1 + WINDOWS_PER_DAY);
+    const totalValue = field === 'credits' ? totalCredits : totalCost;
+    const value = field === 'credits' ? standardCredits : totalCost * standardShare(totalCredits, standardCredits);
     return {
       scopeType: 'platform',
       scopeId: PLATFORM_SCOPE_ID,
-      value: total?.[field] ?? 0,
+      value,
+      total: totalValue,
       baseline: platformBaseline(sameSlot, trailing24h),
     };
   };
@@ -368,8 +437,7 @@ export async function evaluateSpend(
   const windowStart = new Date(windowEnd.getTime() - SPEND_WINDOW_MS);
   const active = await deps.alerts.findActive();
 
-  // The platform total keeps every account, trusted or not, so a platform-wide anomaly still shows.
-  const breaches = await platformBreaches(windowStart, windowEnd, deps, thresholds);
+  const breaches: SpendBreach[] = [];
   const accountTotals: WindowAccountTotals = new Map();
   const perType: ScopeCandidates[] = [];
   for (const scopeType of ACCOUNT_SCOPE_TYPES) {
@@ -386,6 +454,8 @@ export async function evaluateSpend(
     deps.logger.error('spend-monitor-trust-lookup-failed', { error });
     return new Set<string>();
   });
+  const trustedSpend = await trustedOwnerSpend(perType, trustedKeys, windowEnd, deps);
+  breaches.push(...(await platformBreaches(windowStart, windowEnd, trustedSpend, deps, thresholds)));
   for (const candidates of perType) {
     breaches.push(...(await scopeBreaches(candidates, windowStart, trustedKeys, deps, thresholds)));
   }
