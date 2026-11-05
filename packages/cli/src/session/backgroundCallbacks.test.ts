@@ -2,13 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { useCliStore } from '../store/index.js';
-import { forgetBackgroundCompletions, sessionBackgroundCallbacks } from './backgroundCallbacks.js';
+import {
+  forgetBackgroundCompletions,
+  forgetReleasedAgents,
+  sessionBackgroundCallbacks,
+} from './backgroundCallbacks.js';
 import { releaseSession, type SessionResources } from './releaseSession.js';
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 afterEach(() => {
-  useCliStore.setState({ pendingBackgroundTrigger: false, completedGroupNotifications: [] });
+  useCliStore.setState({
+    pendingBackgroundTrigger: false,
+    completedGroupNotifications: [],
+    backgroundAgents: [],
+    liveSubagentUsage: {},
+  });
 });
 
 /** A session whose one background agent, spawned in a turn, runs until it is aborted. */
@@ -62,6 +71,25 @@ describe('sessionBackgroundCallbacks', () => {
 
     expect(useCliStore.getState().pendingBackgroundTrigger).toBe(false);
     expect(useCliStore.getState().completedGroupNotifications).toEqual([]);
+  });
+});
+
+describe('forgetReleasedAgents', () => {
+  it("shows none of a released session's agents as still running", async () => {
+    let generation = 1;
+    const { manager, resources } = sessionWithBackgroundAgent(() => generation === 1);
+    useCliStore.getState().updateLiveSubagentUsage('run-old', 'explore', 10, 1);
+    useCliStore.getState().updateLiveSubagentUsage('run-other', 'explore', 10, 1);
+    const jobIds = manager.listJobs().map(job => job.id);
+    expect(useCliStore.getState().backgroundAgents.map(job => job.id)).toEqual(jobIds);
+
+    generation = 2;
+    await releaseSession(resources, 1_000);
+    await settle();
+    forgetReleasedAgents(jobIds, ['run-old']);
+
+    expect(useCliStore.getState().backgroundAgents).toEqual([]);
+    expect(Object.keys(useCliStore.getState().liveSubagentUsage)).toEqual(['run-other']);
   });
 });
 

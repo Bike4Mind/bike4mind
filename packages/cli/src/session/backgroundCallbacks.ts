@@ -23,6 +23,21 @@ export function sessionBackgroundCallbacks(isCurrent: () => boolean): {
   };
 }
 
+/**
+ * Removes a released session's background agents and live subagent usage from the store. Its callbacks are
+ * retired before its agents are cancelled, so no later status update would ever mark them finished.
+ */
+export function forgetReleasedAgents(jobIds: readonly string[], runIds: readonly string[]): void {
+  const jobs = new Set(jobIds);
+  const runs = new Set(runIds);
+  useCliStore.setState(state => ({
+    backgroundAgents: state.backgroundAgents.filter(job => !jobs.has(job.id)),
+    liveSubagentUsage: Object.fromEntries(
+      Object.entries(state.liveSubagentUsage).filter(([runId]) => !runs.has(runId))
+    ),
+  }));
+}
+
 /** Drops background results a released session left waiting, so the next session does not act on them. */
 export function forgetBackgroundCompletions(): void {
   const store = useCliStore.getState();

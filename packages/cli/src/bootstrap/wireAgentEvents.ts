@@ -29,6 +29,9 @@ export interface WireAgentEventsInput {
  * step handlers already used) and emits tavern events through the bridge
  * singleton; neither owns React-lifecycle state.
  */
+// Process-wide, so a run of a released session never shares an id with one of the session after a sign-in.
+let nextSubagentRunId = 0;
+
 export function wireAgentEvents(input: WireAgentEventsInput): void {
   const { agent, orchestrator } = input;
 
@@ -166,7 +169,6 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
   // concurrently). Final totals reach session.metadata separately via the
   // orchestrator's onSubagentUsage callback (wired in index.tsx).
   const subagentRunState = new WeakMap<ReActAgent, { runId: string; usageHandler: () => void }>();
-  let nextSubagentRunId = 0;
   orchestrator.setBeforeRunCallback((subagent, subagentType) => {
     subagent.on('thought', stepHandler);
     subagent.on('observation', stepHandler);

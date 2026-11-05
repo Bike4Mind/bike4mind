@@ -222,7 +222,12 @@ import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCo
 import { runTurn } from './session/turnController.js';
 import { SESSION_RELEASE_TIMEOUT_MS, restartAfterSignIn } from './session/restartAfterSignIn.js';
 import { releaseSession, type SessionResources } from './session/releaseSession.js';
-import { forgetBackgroundCompletions, sessionBackgroundCallbacks } from './session/backgroundCallbacks.js';
+import {
+  forgetBackgroundCompletions,
+  forgetReleasedAgents,
+  sessionBackgroundCallbacks,
+} from './session/backgroundCallbacks.js';
+import { settlePendingPrompts } from './session/pendingPrompts.js';
 import {
   createFreshSession,
   resumeSession,
@@ -636,6 +641,7 @@ function CliApp() {
       // A server that answers after a later init (e.g. /login from a signed-out session) must not
       // overwrite that init's model list.
       const generation = ++initGenerationRef.current;
+      const sessionEnded = () => generation !== initGenerationRef.current;
       const backendInput = {
         config,
         tokenGetter,
@@ -853,11 +859,15 @@ function CliApp() {
         options?: PermissionPromptOptions
       ) => {
         return new Promise<{ action: PermissionResponse }>(resolve => {
+          if (sessionEnded()) {
+            resolve({ action: 'deny' });
+            return;
+          }
           // Process-hook (host action_required signal): an interactive permission
           // prompt is now blocking - fire Notification/permission_prompt (writes sentinel).
           void getProcessHooks()?.fireNotificationPermissionPrompt(toolName);
           const canBeTrusted = permissionManager.canBeTrusted(toolName);
-          const id = `perm-${++permissionPromptCounter}`;
+          const id = `perm-${generation}-${++permissionPromptCounter}`;
           const sessionScope = options?.sessionScope;
           const prompt = { id, toolName, args, preview, canBeTrusted, sessionScope, kind, resolve };
           setState(prev => ({
@@ -900,7 +910,11 @@ function CliApp() {
       let userQuestionCounter = 0;
       const userQuestionFn = (payload: UserQuestionPayload) => {
         return new Promise<UserQuestionResponse>(resolve => {
-          const id = `uq-${++userQuestionCounter}`;
+          if (sessionEnded()) {
+            resolve({ answers: [] });
+            return;
+          }
+          const id = `uq-${generation}-${++userQuestionCounter}`;
           enqueueUserQuestionPrompt({ id, payload, resolve });
           // Tavern: user-question payloads are richer than Allow/Deny so the
           // modal can't render an inline resolver yet - but the awaiting_input
@@ -923,6 +937,10 @@ function CliApp() {
         recommendation?: string;
       }) => {
         return new Promise<{ decision: 'approved' | 'rejected'; note?: string }>(resolve => {
+          if (sessionEnded()) {
+            resolve({ decision: 'rejected', note: 'The session that asked for this review has ended.' });
+            return;
+          }
           enqueueReviewGatePrompt({
             id: params.id,
             description: params.description,
@@ -973,7 +991,8 @@ function CliApp() {
         userQuestionFn,
         startupLog,
         silentLogger,
-        ...sessionBackgroundCallbacks(() => generation === initGenerationRef.current),
+        isCancelled: sessionEnded,
+        ...sessionBackgroundCallbacks(() => !sessionEnded()),
         onSubagentUsage: usage => {
           useCliStore.getState().recordSubagentUsage({
             agentName: usage.agentName,
@@ -1054,6 +1073,7 @@ function CliApp() {
         apiClient,
         sandboxOrchestrator: sandboxOrchestrator ?? undefined,
         allowedDirectories: additionalDirectories,
+        isCancelled: sessionEnded,
       };
 
       // Create skill tool for AI-driven skill invocation (unless disabled)
@@ -1739,6 +1759,11 @@ function CliApp() {
       return;
     }
 
+    // A sign-in restart while this turn runs replaces the session; the turn must then leave the new one alone.
+    const startedGeneration = initGenerationRef.current;
+    const stillThisSession = () =>
+      initGenerationRef.current === startedGeneration && useCliStore.getState().session?.id === session.id;
+
     // Set thinking state
     useCliStore.getState().setIsThinking(true);
     const releaseSession = useCliStore.getState().holdSession();
@@ -1747,10 +1772,11 @@ function CliApp() {
     const abortController = new AbortController();
     setState(prev => ({ ...prev, abortController }));
 
+    const pendingId = uuidv4();
     try {
       // Create a pending assistant message (no user message added to conversation)
       const pendingAssistantMessage: Message = {
-        id: uuidv4(),
+        id: pendingId,
         role: 'assistant',
         content: PENDING_ASSISTANT_CONTENT,
         timestamp: new Date().toISOString(),
@@ -1786,7 +1812,7 @@ function CliApp() {
 
       // Get current session state
       const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
+      if (!currentSession || !stillThisSession()) return;
 
       // Create a continuation message (renders without header due to isContinuation flag)
       // This works with Ink's Static component which doesn't re-render existing items
@@ -1828,6 +1854,7 @@ function CliApp() {
       setStoreSession(updatedSession);
       await state.sessionStore.save(updatedSession);
     } catch (error: unknown) {
+      if (!stillThisSession()) return;
       useCliStore.getState().clearPendingMessages();
 
       if (error instanceof Error && error.name === 'AbortError') {
@@ -1835,8 +1862,12 @@ function CliApp() {
       }
       console.error('Error processing background results:', error);
     } finally {
-      setState(prev => ({ ...prev, abortController: null }));
-      useCliStore.getState().setIsThinking(false);
+      if (stillThisSession()) {
+        setState(prev => ({ ...prev, abortController: null }));
+        useCliStore.getState().setIsThinking(false);
+      } else {
+        useCliStore.setState(prev => ({ pendingMessages: prev.pendingMessages.filter(m => m.id !== pendingId) }));
+      }
       releaseSession();
     }
   };
@@ -4184,8 +4215,12 @@ function CliApp() {
             release: async () => {
               // Retires this session's callbacks before its background agents are cancelled.
               initGenerationRef.current++;
+              const jobIds = state.backgroundManager?.listJobs().map(job => job.id) ?? [];
+              const runIds = Object.keys(useCliStore.getState().liveSubagentUsage);
+              settlePendingPrompts();
               const released = await releaseSession(sessionResources('sign_in'), SESSION_RELEASE_TIMEOUT_MS);
               forgetBackgroundCompletions();
+              forgetReleasedAgents(jobIds, runIds);
               return released;
             },
             restart: init,
