@@ -172,7 +172,7 @@ export interface ModelServerRegistryDeps {
   /** Where the servers Desktop runs are listed, so a launch after a crash takes them back; none without it. */
   ownedServers?: StoreFile;
   /** Seals the llama-server key in `ownedServers`, as the store seals credentials. */
-  ownedCipher?: SecretCipher;
+  ownedCipher?: SecretCipher & { getSelectedStorageBackend?(): string };
   /** For taking those back; defaults to this computer's (hostProcessProbe). */
   processes?: ProcessProbe;
 }

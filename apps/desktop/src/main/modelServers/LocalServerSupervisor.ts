@@ -68,6 +68,8 @@ export interface LocalServerSupervisorDeps {
   adoptedTiming?: AdoptedTiming;
 }
 
+const MAX_UNVERIFIED_LAUNCHES = 3;
+
 const NOUN: Record<LaunchRuntime, string> = { ollama: 'Ollama', 'llama-server': 'llama-server' };
 
 /**
@@ -110,11 +112,15 @@ export class LocalServerSupervisor {
       this.deps.logger.warn(`MODEL SERVERS: could not read the servers Desktop ran: ${String(error)}`);
       return;
     }
-    for (const record of found) {
-      if (this.slots.has(record.id) || !accepts(record)) continue;
-      const runs = await this.stillRuns(record);
+    const candidates = found.filter(record => !this.slots.has(record.id) && accepts(record));
+    const verdicts = await Promise.all(candidates.map(record => this.stillRuns(record)));
+    for (const [index, record] of candidates.entries()) {
+      const runs = verdicts[index];
       if (runs === null) {
-        this.unverified.set(record.id, record);
+        const launches = (record.unverifiedLaunches ?? 0) + 1;
+        if (launches <= MAX_UNVERIFIED_LAUNCHES) {
+          this.unverified.set(record.id, { ...record, unverifiedLaunches: launches });
+        }
         continue;
       }
       if (!runs) continue;
@@ -129,7 +135,7 @@ export class LocalServerSupervisor {
       this.records.set(record.id, record);
       this.watch(record.id, slot, handle);
     }
-    if (this.records.size + this.unverified.size !== listedCount) await this.persist();
+    if (this.unverified.size > 0 || this.records.size !== listedCount) await this.persist();
   }
 
   /** Null when the probe cannot tell after a retry; the record is then kept for the next launch. */
@@ -141,6 +147,7 @@ export class LocalServerSupervisor {
         return await this.processes.listening(record.port).catch(() => false);
       } catch {
         if (attempt > 0) return null;
+        await new Promise(done => setTimeout(done, this.deps.adoptedTiming?.probeRetryMs ?? 250));
       }
     }
   }
@@ -254,12 +261,17 @@ export class LocalServerSupervisor {
 
   /** Lists a server this run started, for `adopt`; one whose start time cannot be read is never adopted, so not listed. */
   private async remember(id: string, slot: Slot, handle: ServerHandle): Promise<void> {
-    if (!this.deps.records) return;
-    if (handle.apiKey && !this.sealer()) return;
+    // Any new start for this id supersedes a record an earlier launch could not read.
+    const stale = this.unverified.delete(id);
+    if (!(await this.list(id, slot, handle)) && stale) await this.persist();
+  }
+
+  private async list(id: string, slot: Slot, handle: ServerHandle): Promise<boolean> {
+    if (!this.deps.records) return false;
+    if (handle.apiKey && !this.sealer()) return false;
     const startTime = await this.processes.startTime(handle.pid).catch(() => null);
-    if (!startTime || this.slots.get(id) !== slot || !handle.running) return;
+    if (!startTime || this.slots.get(id) !== slot || !handle.running) return false;
     const { runtime, port, settings } = slot.request;
-    this.unverified.delete(id);
     this.records.set(id, {
       id,
       runtime,
@@ -271,6 +283,7 @@ export class LocalServerSupervisor {
       ...(handle.apiKey ? { apiKey: handle.apiKey } : {}),
     });
     await this.persist();
+    return true;
   }
 
   private forget(id: string): Promise<void> {

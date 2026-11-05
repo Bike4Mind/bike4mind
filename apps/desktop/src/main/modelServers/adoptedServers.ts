@@ -21,6 +21,8 @@ export interface OwnedRecord {
   settings: ModelServerLaunchSettings;
   /** llama-server's per-process key, which every request to it needs; held decrypted, written sealed. */
   apiKey?: string;
+  /** Launches that could not read this process; the record is dropped after a few. */
+  unverifiedLaunches?: number;
 }
 
 export interface ProcessProbe {
@@ -79,6 +81,7 @@ export function readOwnedRecords(text: string | null, open?: (sealed: string) =>
         startedAt: raw.startedAt,
         settings: readLaunchShape(raw.settings),
         ...(apiKey ? { apiKey } : {}),
+        ...(whole(raw.unverifiedLaunches) ? { unverifiedLaunches: whole(raw.unverifiedLaunches) ?? 0 } : {}),
       },
     ];
   });
@@ -212,6 +215,8 @@ export interface AdoptedTiming {
   pollMs?: number;
   /** SIGKILL after this long without exiting on SIGTERM (ms). */
   stopTimeoutMs?: number;
+  /** Pause before a launch asks again about a process it could not read (ms). */
+  probeRetryMs?: number;
 }
 
 /** A server from an earlier run, known only by its pid: its exit is noticed by polling, and it keeps no log. */
@@ -231,6 +236,13 @@ export function adoptedHandle(
       return !sameStartTime(await probe.startTime(record.pid), record.startTime);
     } catch {
       return false;
+    }
+  };
+  const identity = async (): Promise<'same' | 'gone' | 'unknown'> => {
+    try {
+      return sameStartTime(await probe.startTime(record.pid), record.startTime) ? 'same' : 'gone';
+    } catch {
+      return 'unknown';
     }
   };
   const finish = () => {
@@ -253,21 +265,27 @@ export function adoptedHandle(
     async stop() {
       if (!running) return exited;
       stopping = true;
-      if (await gone()) {
-        finish();
-        return exited;
-      }
-      probe.signal(record.pid, 'SIGTERM');
-      const killAt = Date.now() + stopTimeoutMs;
-      let killed = false;
+      // Each signal needs a fresh positive match: the pid may have been reused since the last read.
+      let sureAt = Date.now();
+      let termAt: number | null = null;
+      let killAt: number | null = null;
       while (running) {
-        if (await gone()) break;
-        if (!killed && Date.now() >= killAt) {
-          probe.signal(record.pid, 'SIGKILL');
-          killed = true;
-        } else if (killed && Date.now() >= killAt + stopTimeoutMs) {
-          stopping = false;
-          throw new Error(`Process ${record.pid} did not exit after SIGKILL.`);
+        const who = await identity();
+        if (who === 'gone') break;
+        const now = Date.now();
+        if (who === 'same') {
+          sureAt = now;
+          if (termAt === null) {
+            probe.signal(record.pid, 'SIGTERM');
+            termAt = now;
+          } else if (killAt === null && now >= termAt + stopTimeoutMs) {
+            probe.signal(record.pid, 'SIGKILL');
+            killAt = now;
+          } else if (killAt !== null && now >= killAt + stopTimeoutMs) {
+            throw new Error(`Process ${record.pid} did not exit after SIGKILL.`);
+          }
+        } else if (now >= sureAt + stopTimeoutMs) {
+          throw new Error(`Desktop could not confirm process ${record.pid} is the server it started.`);
         }
         await pause(Math.min(pollMs, 100));
       }

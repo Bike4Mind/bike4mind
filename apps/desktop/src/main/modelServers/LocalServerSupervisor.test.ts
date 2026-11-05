@@ -214,7 +214,7 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
   function adopter(
     file: ReturnType<typeof memoryFile>,
     probe: ProcessProbe,
-    options: { cipher?: SecretCipher | null; handle?: ServerHandle } = {}
+    options: { cipher?: SecretCipher | null; handle?: ServerHandle; probeRetryMs?: number } = {}
   ) {
     const changed = vi.fn();
     const warn = vi.fn();
@@ -226,7 +226,7 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
       records: file,
       ...(options.cipher === null ? {} : { cipher: options.cipher ?? cipher }),
       processes: probe,
-      adoptedTiming: { pollMs: 10, stopTimeoutMs: 50 },
+      adoptedTiming: { pollMs: 10, stopTimeoutMs: 50, probeRetryMs: options.probeRetryMs ?? 1 },
     });
     return { instance, warn };
   }
@@ -404,11 +404,56 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     const stuck = adopter(file, unreadable(Infinity)).instance;
     await stuck.adopt(() => true);
     expect(stuck.owned('a')).toBeNull();
-    expect(listed(file)).toEqual([RECORD]);
+    expect(listed(file)).toEqual([{ ...RECORD, unverifiedLaunches: 1 }]);
 
     const next = adopter(file, unreadable(0)).instance;
     await next.adopt(() => true);
     expect(next.owned('a')).not.toBeNull();
+  });
+
+  it('drops a record whose process stays unreadable for more than three launches', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
+    for (const launches of [1, 2, 3]) {
+      await adopter(file, unreadable(Infinity)).instance.adopt(() => true);
+      expect(listed(file)).toEqual([{ ...RECORD, unverifiedLaunches: launches }]);
+    }
+    await adopter(file, unreadable(Infinity)).instance.adopt(() => true);
+    expect(listed(file)).toEqual([]);
+  });
+
+  it('forgets an unreadable record when its id starts again and stops', async () => {
+    const file = memoryFile(JSON.stringify({ version: 1, servers: [RECORD] }));
+    const { instance } = adopter(file, unreadable(Infinity));
+    await instance.adopt(() => true);
+    expect(listed(file)).toHaveLength(1);
+    await instance.start('a', OLLAMA);
+    await instance.stop('a');
+    expect(listed(file)).toEqual([]);
+  });
+
+  it('asks about every record at once and pauses before it asks again', async () => {
+    const records = [RECORD, { ...RECORD, id: 'b', pid: 5555, port: 11501 }];
+    const file = memoryFile(JSON.stringify({ version: 1, servers: records }));
+    const events: string[] = [];
+    const calls = new Map<number, number[]>();
+    const slow: ProcessProbe = {
+      ...processes({ 4321: RECORD.startTime, 5555: RECORD.startTime }).probe,
+      startTime: async pid => {
+        const times = calls.get(pid) ?? [];
+        calls.set(pid, [...times, Date.now()]);
+        events.push(`start:${pid}`);
+        await new Promise(done => setTimeout(done, 20));
+        events.push(`end:${pid}`);
+        if (times.length === 0) throw new Error('ps timed out');
+        return RECORD.startTime;
+      },
+    };
+    const { instance } = adopter(file, slow, { probeRetryMs: 60 });
+    await instance.adopt(() => true);
+    expect(events.slice(0, 2)).toEqual(['start:4321', 'start:5555']);
+    for (const [first, second] of calls.values()) expect(second - first).toBeGreaterThanOrEqual(75);
+    expect(instance.owned('a')).not.toBeNull();
+    expect(instance.owned('b')).not.toBeNull();
   });
 
   it('retries one failed read at launch before it takes a server back', async () => {
@@ -436,6 +481,43 @@ describe('LocalServerSupervisor after Desktop exits without stopping its servers
     await adopted.stop();
     expect(signals).toEqual([[4321, 'SIGTERM']]);
     expect(adopted.running).toBe(false);
+  });
+
+  it('sends no signal to a process it cannot confirm is its server, and says Stop failed', async () => {
+    const { probe, signals } = processes({ 4321: RECORD.startTime });
+    const blind: ProcessProbe = {
+      ...probe,
+      startTime: async () => {
+        throw new Error('ps timed out');
+      },
+    };
+    const adopted = adoptedHandle({ ...RECORD, runtime: 'ollama', settings: {} }, blind, {
+      pollMs: 5,
+      stopTimeoutMs: 30,
+    });
+    await expect(adopted.stop()).rejects.toThrow(/could not confirm process 4321/);
+    expect(signals).toEqual([]);
+    expect(adopted.running).toBe(true);
+  });
+
+  it('does not report a later exit as a crash after Stop failed', async () => {
+    const { probe, running } = processes({ 4321: RECORD.startTime });
+    let blind = true;
+    const flaky: ProcessProbe = {
+      ...probe,
+      startTime: async pid => {
+        if (blind) throw new Error('ps timed out');
+        return probe.startTime(pid);
+      },
+    };
+    const adopted = adoptedHandle({ ...RECORD, runtime: 'ollama', settings: {} }, flaky, {
+      pollMs: 5,
+      stopTimeoutMs: 20,
+    });
+    await expect(adopted.stop()).rejects.toThrow();
+    blind = false;
+    running.delete(4321);
+    await expect(adopted.exited).resolves.toMatchObject({ stopped: true });
   });
 
   it('keeps the slot and record of a server that outlives SIGKILL, and says Stop failed', async () => {
