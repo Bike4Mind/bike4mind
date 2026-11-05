@@ -132,6 +132,7 @@ function setup(
     readOllamaEnv: options.readOllamaEnv,
     portFree: options.portFree ?? (async port => !up.has(`http://127.0.0.1:${port}`)),
     ownedServers: options.ownedServers,
+    ownedCipher: cipher,
     processes: options.processes,
     ...(options.platform ? { platform: options.platform } : {}),
   });
@@ -507,7 +508,13 @@ describe('ModelServerRegistry launching servers', () => {
     };
     const records = [
       { ...base, id: 'local', runtime: 'ollama', port: 11500 },
-      { ...base, id: 'local', runtime: 'llama-server', port: 11434 },
+      {
+        ...base,
+        id: 'local',
+        runtime: 'llama-server',
+        port: 11434,
+        sealedKey: Buffer.from('enc:key', 'utf8').toString('base64'),
+      },
     ];
     for (const record of records) {
       const ownedServers = memoryFile();
