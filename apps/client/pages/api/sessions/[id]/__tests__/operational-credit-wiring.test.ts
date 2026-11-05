@@ -27,7 +27,13 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-vi.mock('@bike4mind/database/auth', () => ({ Session: { findOne: mockFindOne } }));
+vi.mock('@bike4mind/database/auth', () => ({
+  Session: {
+    findOne: mockFindOne,
+    // The tag route looks sessions up in a batch (queueSessionTags); same lookup, list-shaped.
+    find: async (...a: unknown[]) => [await mockFindOne(...a)].filter(Boolean),
+  },
+}));
 vi.mock('@casl/mongoose', () => ({ accessibleBy: () => ({ ofType: () => ({}) }) }));
 vi.mock('@server/utils/eventBus', () => ({
   SessionEvents: { Tag: { publish: mockPublishTag }, Summarize: { publish: mockPublishSummarize } },
@@ -45,7 +51,7 @@ import summaryHandler from '../summary';
 const OWNER_ID = 'owner-1';
 const REQUESTER_ID = 'requester-2';
 // Must be ObjectId-shaped: both routes narrow on `isValidObjectId(sessionId)` before they query
-// (tag.ts:14, summary.ts:15), so a non-hex id short-circuits the lookup to null and the handler
+// (queueSessionTags, summary.ts), so a non-hex id short-circuits the lookup to null and the handler
 // throws "Cannot update session" without ever reaching the pre-flight these tests assert on.
 const SESSION_ID = '65a1f2c3d4e5f60718293a4b';
 

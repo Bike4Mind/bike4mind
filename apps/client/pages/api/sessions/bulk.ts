@@ -1,4 +1,15 @@
-import { BadRequestError, MAX_BULK_ITEMS, SessionEvents } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  BadRequestError,
+  MAX_BULK_ITEMS,
+  SessionEvents,
+  redactSessionForClient,
+  type ISessionDocument,
+} from '@bike4mind/common';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
+import { buildSessionUpdateAdapters } from '@server/sessions/sessionUpdateAdapters';
+import { queueSessionTags } from '@server/sessions/queueSessionTags';
+import type { Request } from 'express';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
@@ -18,15 +29,101 @@ import {
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 
 const SessionIdsSchema = z.array(z.string().min(1)).max(MAX_BULK_ITEMS);
+const MAX_TAGS_PER_REQUEST = 20;
+const MAX_TAG_LENGTH = 100;
+
+const FavoriteBodySchema = z.object({ action: z.literal('favorite'), add: SessionIdsSchema, remove: SessionIdsSchema });
+const AddTagsBodySchema = z.object({
+  action: z.literal('addTags'),
+  sessionIds: SessionIdsSchema.min(1, 'Provide at least one session id'),
+  tags: z.array(z.string().trim().min(1, 'Tags cannot be empty').max(MAX_TAG_LENGTH)).min(1).max(MAX_TAGS_PER_REQUEST),
+});
+const GenerateTagsBodySchema = z.object({
+  action: z.literal('generateTags'),
+  sessionIds: SessionIdsSchema.min(1, 'Provide at least one session id'),
+});
 
 const BulkWriteBodySchema = z
-  .object({ action: z.literal('favorite'), add: SessionIdsSchema, remove: SessionIdsSchema })
-  .refine(b => b.add.length + b.remove.length > 0, 'Provide at least one session id')
-  .refine(b => new Set([...b.add, ...b.remove]).size <= MAX_BULK_ITEMS, `At most ${MAX_BULK_ITEMS} session ids`)
-  .refine(b => !b.add.some(id => b.remove.includes(id)), 'A session id cannot be both added and removed');
+  .discriminatedUnion('action', [FavoriteBodySchema, AddTagsBodySchema, GenerateTagsBodySchema])
+  .superRefine((b, ctx) => {
+    if (b.action !== 'favorite') return;
+    if (b.add.length + b.remove.length === 0)
+      ctx.addIssue({ code: 'custom', message: 'Provide at least one session id' });
+    if (new Set([...b.add, ...b.remove]).size > MAX_BULK_ITEMS) {
+      ctx.addIssue({ code: 'custom', message: `At most ${MAX_BULK_ITEMS} session ids` });
+    }
+    if (b.add.some(id => b.remove.includes(id))) {
+      ctx.addIssue({ code: 'custom', message: 'A session id cannot be both added and removed' });
+    }
+  });
 
-type BulkItemResult = { id: string; ok: boolean; error?: string };
+type BulkItemResult = { id: string; ok: boolean; error?: string; session?: unknown };
 type BulkWriteResponse = { results: BulkItemResult[]; okCount: number };
+type BulkWriteRequest = Request<{}, BulkWriteResponse, unknown, unknown, Record<string, unknown>>;
+
+// Same scope PUT /api/sessions/[id] requires; checked per action because the route-level gate
+// would also apply to the scope-less bulk DELETE.
+const assertCanWriteNotebooks = (req: BulkWriteRequest) =>
+  assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
+
+async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string[]): Promise<BulkWriteResponse> {
+  assertCanWriteNotebooks(req);
+  const user = req.user!;
+  const ids = [...new Set(sessionIds)];
+  const validIds = ids.filter(id => isValidObjectId(id));
+  const stored = new Map(
+    (await plainSessionRepository.shareable.findAllUpdateAccessByIds(user, validIds)).map(s => [String(s.id), s])
+  );
+  const newTags = [...new Set(tags.map(t => t.trim()))];
+  const adapters = buildSessionUpdateAdapters(req, user, req.logger);
+  const results: BulkItemResult[] = [];
+
+  for (const id of ids) {
+    const session = stored.get(id);
+    if (!session) {
+      results.push({ id, ok: false, error: isValidObjectId(id) ? 'Update failed' : 'Invalid session id' });
+      continue;
+    }
+    // Merged against the stored tags, not the caller's cached copy, so a stale client cannot drop tags.
+    const existing = session.tags ?? [];
+    const merged = [
+      ...existing,
+      ...newTags.filter(name => !existing.some(t => t.name === name)).map(name => ({ name, strength: 1 })),
+    ];
+    try {
+      const updated = await sessionService.updateSession(user, { id, tags: merged }, adapters);
+      await logEvent(
+        {
+          userId: user.id,
+          type: SessionEvents.UPDATE_SESSION,
+          metadata: {
+            sessionId: id,
+            sessionName: updated.name,
+            knowledgeIds: updated.knowledgeIds ?? [],
+            agentIds: updated.agentIds ?? [],
+          },
+        },
+        { ability: req.ability }
+      );
+      results.push({ id, ok: true, session: redactSessionForClient(updated as ISessionDocument) });
+    } catch (error) {
+      req.logger.warn('[sessions/bulk] tag update failed', { sessionId: id, error });
+      results.push({ id, ok: false, error: 'Update failed' });
+    }
+  }
+  return { results, okCount: results.filter(r => r.ok).length };
+}
+
+async function generateTags(req: BulkWriteRequest, sessionIds: string[]): Promise<BulkWriteResponse> {
+  assertCanWriteNotebooks(req);
+  const ids = [...new Set(sessionIds)];
+  const { queued } = await queueSessionTags(req, ids);
+  const queuedIds = new Set(queued.map(q => q.sessionId));
+  const results: BulkItemResult[] = ids.map(id =>
+    queuedIds.has(id) ? { id, ok: true } : { id, ok: false, error: 'Cannot update session' }
+  );
+  return { results, okCount: queued.length };
+}
 
 const handler = baseApi()
   /**
@@ -104,8 +201,9 @@ const handler = baseApi()
         throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
       }
       const body = parsed.data;
+      if (body.action === 'addTags') return res.json(await addTags(req, body.sessionIds, body.tags));
+      if (body.action === 'generateTags') return res.json(await generateTags(req, body.sessionIds));
       const results: BulkItemResult[] = [];
-
       const favoriteAdapters = { db: { sessions: plainSessionRepository, favorites: favoriteRepository } };
       const add = [...new Set(body.add)];
       const remove = [...new Set(body.remove)];

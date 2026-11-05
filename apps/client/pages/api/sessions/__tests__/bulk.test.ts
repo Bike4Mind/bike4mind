@@ -23,6 +23,31 @@ const { mockFindById, mockDeleteSession, mockLogEvent, mockWithTransaction, mock
 );
 
 const mockFav = vi.hoisted(() => ({ add: vi.fn(), remove: vi.fn() }));
+const mockTag = vi.hoisted(() => ({
+  update: vi.fn(),
+  findUpdatable: vi.fn(),
+  findTaggable: vi.fn(),
+  credits: vi.fn(),
+  publish: vi.fn(),
+}));
+
+vi.mock('@server/sessions/sessionUpdateAdapters', () => ({ buildSessionUpdateAdapters: () => ({}) }));
+vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
+  assertSessionOperationalCredits: (...a: unknown[]) => mockTag.credits(...a),
+}));
+vi.mock('@server/utils/eventBus', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  SessionEvents: { Tag: { publish: (...a: unknown[]) => mockTag.publish(...a) } },
+}));
+// Session is a plain stub here, which CASL's ofType cannot read a model name from.
+vi.mock('@casl/mongoose', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  accessibleBy: () => ({ ofType: () => ({}) }),
+}));
+vi.mock('@bike4mind/database/auth', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return { ...actual, Session: { find: (...a: unknown[]) => mockTag.findTaggable(...a) } };
+});
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -59,6 +84,7 @@ vi.mock('@bike4mind/services', async orig => {
       deleteSession: (...a: unknown[]) => mockDeleteSession(...a),
       addFavorite: (...a: unknown[]) => mockFav.add(...a),
       deleteFavorite: (...a: unknown[]) => mockFav.remove(...a),
+      updateSession: (...a: unknown[]) => mockTag.update(...a),
     },
   };
 });
@@ -70,6 +96,10 @@ vi.mock('@bike4mind/database', async orig => {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
     withTransaction: (...a: unknown[]) => mockWithTransaction(...a),
+    sessionRepository: {
+      ...(actual.sessionRepository as object),
+      shareable: { findAllUpdateAccessByIds: (...a: unknown[]) => mockTag.findUpdatable(...a) },
+    },
     User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
   };
 });
@@ -126,7 +156,19 @@ beforeEach(() => {
   mockDeleteSession.mockResolvedValue({ id: 'other-session' });
   mockFav.add.mockResolvedValue({});
   mockFav.remove.mockResolvedValue({});
+  mockTag.credits.mockResolvedValue(undefined);
+  mockTag.publish.mockImplementation(async ({ sessionId }: { sessionId: string }) => `job-${sessionId}`);
 });
+
+function withScopes(scopes: string[]) {
+  mockValidate.mockResolvedValue({
+    isValid: true,
+    keyId: 'k1',
+    userId: 'user-1',
+    scopes,
+    rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+  });
+}
 
 describe('DELETE /api/sessions/bulk', () => {
   it('runs each delete inside its own transaction', async () => {
@@ -254,5 +296,120 @@ describe('POST /api/sessions/bulk - favorite', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(mockFav.add).not.toHaveBeenCalled();
     expect(mockFav.remove).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/sessions/bulk - tags', () => {
+  const id = (n: number) => `65a0000000000000000000${String(n).padStart(2, '0')}`;
+
+  beforeEach(() => withScopes(['notebooks:write']));
+
+  it('merges new tags into the stored ones and skips names already present', async () => {
+    mockTag.findUpdatable.mockResolvedValue([
+      { id: id(1), tags: [{ name: 'keep', strength: 0.4 }] },
+      { id: id(2), tags: [] },
+    ]);
+    mockTag.update.mockImplementation(async (_u: unknown, p: { id: string }) => ({ id: p.id, name: 'n' }));
+
+    const { req, res } = fireWith('POST', { action: 'addTags', sessionIds: [id(1), id(2)], tags: [' keep ', 'new'] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockTag.findUpdatable).toHaveBeenCalledTimes(1);
+    expect(mockTag.update.mock.calls.map(c => c[1])).toEqual([
+      {
+        id: id(1),
+        tags: [
+          { name: 'keep', strength: 0.4 },
+          { name: 'new', strength: 1 },
+        ],
+      },
+      {
+        id: id(2),
+        tags: [
+          { name: 'keep', strength: 1 },
+          { name: 'new', strength: 1 },
+        ],
+      },
+    ]);
+    expect(res._getJSONData().okCount).toBe(2);
+  });
+
+  it('fails an id the caller cannot update without touching it', async () => {
+    mockTag.findUpdatable.mockResolvedValue([{ id: id(1), tags: [] }]);
+    mockTag.update.mockResolvedValue({ id: id(1), name: 'n' });
+
+    const { req, res } = fireWith('POST', { action: 'addTags', sessionIds: [id(1), id(2), 'bad'], tags: ['t'] });
+    await handler(req, res);
+
+    expect(mockTag.update).toHaveBeenCalledTimes(1);
+    const { results, okCount } = res._getJSONData();
+    expect(okCount).toBe(1);
+    expect(results.map((r: { id: string; ok: boolean }) => [r.id, r.ok])).toEqual([
+      [id(1), true],
+      [id(2), false],
+      ['bad', false],
+    ]);
+  });
+
+  it.each([
+    ['a whitespace-only tag', { action: 'addTags', sessionIds: [id(1)], tags: ['  '] }],
+    ['no tags', { action: 'addTags', sessionIds: [id(1)], tags: [] }],
+    ['no sessions', { action: 'addTags', sessionIds: [], tags: ['t'] }],
+    ['a non-array', { action: 'generateTags', sessionIds: id(1) }],
+    ['more ids than the cap', { action: 'generateTags', sessionIds: Array.from({ length: 101 }, (_, i) => `x${i}`) }],
+  ])('rejects %s with 400', async (_, body) => {
+    const { req, res } = fireWith('POST', body);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockTag.update).not.toHaveBeenCalled();
+    expect(mockTag.publish).not.toHaveBeenCalled();
+  });
+
+  it.each(['addTags', 'generateTags'])('refuses %s for an API key without notebooks:write', async action => {
+    withScopes([]);
+    const { req, res } = fireWith('POST', { action, sessionIds: [id(1)], tags: ['t'] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockTag.findUpdatable).not.toHaveBeenCalled();
+    expect(mockTag.findTaggable).not.toHaveBeenCalled();
+  });
+
+  it('keeps the bulk delete open to a key without notebooks:write', async () => {
+    withScopes([]);
+    const { req, res } = fire([id(1)]);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('checks credits once for every accessible session before queueing any', async () => {
+    mockTag.findTaggable.mockResolvedValue([{ id: id(1) }, { id: id(2) }, { id: id(3) }]);
+
+    const { req, res } = fireWith('POST', { action: 'generateTags', sessionIds: [id(1), id(2), id(3), id(4)] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockTag.credits).toHaveBeenCalledTimes(1);
+    expect(mockTag.credits).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', operationCount: 3 }));
+    expect(mockTag.publish).toHaveBeenCalledTimes(3);
+    expect(mockTag.credits.mock.invocationCallOrder[0]).toBeLessThan(mockTag.publish.mock.invocationCallOrder[0]);
+    expect(mockTag.publish).toHaveBeenCalledWith({ sessionId: id(1), requesterId: 'user-1', payerId: 'user-1' });
+    const { results, okCount } = res._getJSONData();
+    expect(okCount).toBe(3);
+    expect(results[3]).toEqual({ id: id(4), ok: false, error: 'Cannot update session' });
+  });
+
+  it('queues nothing when the credit pre-flight refuses', async () => {
+    mockTag.findTaggable.mockResolvedValue([{ id: id(1) }, { id: id(2) }]);
+    mockTag.credits.mockRejectedValue(Object.assign(new Error('Insufficient credits'), { status: 402 }));
+
+    const { req, res } = fireWith('POST', { action: 'generateTags', sessionIds: [id(1), id(2)] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).not.toBe(200);
+    expect(mockTag.publish).not.toHaveBeenCalled();
   });
 });
