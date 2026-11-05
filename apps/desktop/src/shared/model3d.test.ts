@@ -63,6 +63,14 @@ describe('writeParamValue', () => {
     expect(writeParamValue(SOURCE, 'lidRatio', 0.45)).toContain('lidRatio: { value: 0.45');
   });
 
+  it('rewrites a param given as a bare number', () => {
+    const bare = SOURCE.replace('width: { value: 60, min: 20, max: 200, step: 1 }', 'width: 40');
+    const next = writeParamValue(bare, 'width', 55);
+    expect(next).toContain('width: 55,');
+    expect(next).toContain('const width = { value: 1 }');
+    expect(writeParamValue(bare.replace('lidRatio:', 'width:'), 'width', 10)).toBeNull();
+  });
+
   it('returns null when the key is missing', () => {
     expect(writeParamValue(SOURCE, 'height', 10)).toBeNull();
   });
