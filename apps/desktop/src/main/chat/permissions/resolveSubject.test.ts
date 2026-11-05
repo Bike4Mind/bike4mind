@@ -1,9 +1,19 @@
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveSubject } from './resolveSubject';
 import { PermissionRuleSet, compileRule, parseRule } from './rules';
+
+const eisdir = vi.hoisted(() => ({ on: false }));
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    realpath: (...args: Parameters<typeof actual.realpath>) =>
+      eisdir.on ? Promise.reject(Object.assign(new Error('dir'), { code: 'EISDIR' })) : actual.realpath(...args),
+  };
+});
 
 describe('resolveSubject', () => {
   let root: string;
@@ -27,11 +37,31 @@ describe('resolveSubject', () => {
     expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
   });
 
-  it('keeps the failure when ENAMETOOLONG comes from the total length of short components', async () => {
+  it('resolves a missing path over PATH_MAX made of short components', async () => {
     const deep = join(root, ...Array.from({ length: 60 }, () => 'd'.repeat(100)));
-    await expect(resolveSubject({ tool: 'file_read', paths: [deep] })).rejects.toMatchObject({
-      code: 'ENAMETOOLONG',
-    });
+    expect((await resolveSubject({ tool: 'file_read', paths: [deep] })).paths).toEqual([deep]);
+  });
+
+  it('resolves a multi-line command argument longer than PATH_MAX as a missing path', async () => {
+    const lines = Array.from(
+      { length: 70 },
+      (_, i) => `see apps/desktop/src/main/chat/tools/paths.ts line ${i} for details`
+    );
+    const message = join(root, `fix(desktop): x\n\n${lines.join('\n')}`);
+    expect(Buffer.byteLength(message)).toBeGreaterThan(4096);
+    expect((await resolveSubject({ tool: 'bash_execute', paths: [message] })).paths).toEqual([message]);
+  });
+
+  it('retries the JS realpath on win32 when the async realpath throws EISDIR', async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    eisdir.on = true;
+    try {
+      expect((await resolveSubject({ tool: 'file_read', paths: [root] })).paths).toEqual([root]);
+    } finally {
+      eisdir.on = false;
+      Object.defineProperty(process, 'platform', platform!);
+    }
   });
 
   it('resolves a name holding a NUL as a missing file below its existing folder', async () => {
