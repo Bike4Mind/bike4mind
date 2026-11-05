@@ -16,16 +16,18 @@ import {
   dataLakeAccessGrantRepository,
   scopedSettingsRepository,
   organizationRepository,
+  userRepository,
   FabFile,
   User,
   withTransaction,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { getFileExtension } from '@bike4mind/utils';
+import { checkStorageLimitForOwner, getFileExtension } from '@bike4mind/utils';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { consumeFileUploadBudget } from '@server/files/fileUploadBudget';
+import { admitPendingUploads, type PendingUploads } from '@server/files/pendingUploads';
 import { respond } from '@server/utils/respond';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
@@ -142,7 +144,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         db: { dataLakes: dataLakeRepository },
       });
       const ctx = await toAccessContext(req);
-      await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
+      const targetLakes = await dataLakeService.assertCanWriteDataLakeTags(ctx, requestedTagNames, {
         db: {
           dataLakes: dataLakeRepository,
           dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -161,6 +163,23 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
         await dataLakeService.assertBatchOwnership(user.id, params.batchId, {
           db: { batches: dataLakeBatchRepository },
         });
+      }
+
+      // Without content the service presigns a PUT and leaves a pending client upload, so it is admitted
+      // like the presign doors, against the pool the service will bill (same owner rule, same lakes).
+      let pending: PendingUploads | undefined;
+      if (!('content' in params && params.content)) {
+        if (params.fileSize <= 0) throw new BadRequestError('File size must be positive');
+        const ownerOrganizationId = fabFilesService.pickOwnerOrganizationId(targetLakes);
+        pending = await admitPendingUploads(req, 1, [ownerOrganizationId]);
+        const quotaUser = ownerOrganizationId ? user : await userRepository.findById(user.id);
+        if (!quotaUser) throw new BadRequestError('User not found');
+        // Before consumeFileUploadBudget so a quota refusal costs no hourly allowance; the service re-checks at create.
+        await checkStorageLimitForOwner(
+          { user: quotaUser, organizationId: ownerOrganizationId, pendingBytes: pending.bytesFor(ownerOrganizationId) },
+          params.fileSize,
+          id => organizationRepository.findById(id)
+        );
       }
 
       await consumeFileUploadBudget(req, 1);
@@ -208,6 +227,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_OR_RELEASE_NOTES_SCOPES })
           // org rungs need the actor's administered-org set, which the service cannot read off a
           // user document.
           administeredOrgIds: ctx.administeredOrgIds,
+          ...(pending && { pendingUploadBytes: pending.bytesFor }),
           ...(adminModalMedia && isModalVideo(params) && { mimeTypePrecedence: 'claim-first' as const }),
         });
       });

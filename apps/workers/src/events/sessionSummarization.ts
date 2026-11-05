@@ -397,6 +397,7 @@ export const handler = withEventContext(async (event, logger) => {
                 expiresIn: expireInSeconds,
               }),
           },
+          serverUpload: true,
         });
 
         if (!newFabFile.filePath) {

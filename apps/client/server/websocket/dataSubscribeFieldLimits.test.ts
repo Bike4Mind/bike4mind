@@ -128,6 +128,7 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('organizations', opts())).toEqual({
       stripeCustomerId: false,
       signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
       billingContact: false,
     });
   });
@@ -138,6 +139,7 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('organizations', opts({ isPlatformAdmin: true }))).toEqual({
       stripeCustomerId: false,
       signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
     });
   });
 
@@ -145,6 +147,7 @@ describe('resolveFieldLimits', () => {
     expect(resolveFieldLimits('orgs_v2', opts({ organizationCollectionName: 'orgs_v2' }))).toEqual({
       stripeCustomerId: false,
       signupGrantUnlockCount: false,
+      signupInviteBonusCount: false,
       billingContact: false,
     });
   });

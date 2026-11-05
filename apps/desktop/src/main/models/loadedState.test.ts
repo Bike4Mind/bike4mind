@@ -43,6 +43,14 @@ describe('loadedStateOf', () => {
     expect(loadedStateOf([entry('qwen3:8b', 'soon')], 'qwen3:8b')).toEqual({ kind: 'loaded', expiresAt: null });
   });
 
+  it('keeps the context it is loaded with when the server says', () => {
+    expect(loadedStateOf([{ ...entry('qwen3:8b'), contextLength: 65536 }], 'qwen3:8b')).toEqual({
+      kind: 'loaded',
+      expiresAt: null,
+      contextLength: 65536,
+    });
+  });
+
   it('is unloaded when nothing matching is in memory', () => {
     expect(loadedStateOf([], 'qwen3:8b')).toEqual({ kind: 'unloaded' });
   });

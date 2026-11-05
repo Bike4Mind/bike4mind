@@ -167,6 +167,22 @@ describe('POST /api/[type]/[id]/invites', () => {
     tryAddWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
   });
 
+  it('charges organization email invites against the typed-address budget', async () => {
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'organizations', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'], recipients: ['new@example.com'] },
+    });
+    Object.assign(req, { user: { id: 'u1' } });
+    await mockRefs.postHandler!(req, res);
+    expect(tryAddWithinLimitFixedWindow).toHaveBeenCalledWith(
+      'rate-limit:u1:project-invite-typed-address',
+      1,
+      20,
+      3600000
+    );
+  });
+
   // Bulk share links send one request per item and mail nobody, so a request limit here would fail
   // them partway; the mail is bounded per recipient instead.
   it('applies no per-request limit and charges nothing for a share link', async () => {

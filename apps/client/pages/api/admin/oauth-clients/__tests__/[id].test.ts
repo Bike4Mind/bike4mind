@@ -100,9 +100,48 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
         changes: [
           { field: 'redirectUris', before: ['https://app.example.test/cb'], after: uris },
           { field: 'isActive', before: true, after: true },
+          { field: 'allowedScopes', before: ['openid'], after: ['openid'] },
+          { field: 'federatedIdp', before: null, after: null },
         ],
       })
     );
+  });
+
+  it('audits allowedScopes and federatedIdp before/after', async () => {
+    const idp = {
+      issuer: 'https://b4m.example.test',
+      audience: 'b4m_my_app_0011aabb',
+      jwksUri: 'https://b4m.example.test/api/oauth/jwks',
+      subjectSource: 'sub' as const,
+    };
+    db.updateOAuthClient.mockResolvedValue({
+      before: view(),
+      after: view({ allowedScopes: ['openid', 'ai:generate'], federatedIdp: idp }),
+    });
+    const { req, res } = makeReqRes('PATCH', {
+      body: {
+        allowedScopes: ['openid', 'ai:generate'],
+        federatedIdp: { subjectSource: 'sub', issuer: idp.issuer, jwksUri: idp.jwksUri },
+      },
+    });
+    await handlers.update.patch(req, res);
+    expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({
+        action: 'oauth_client.updated',
+        changes: expect.arrayContaining([
+          { field: 'allowedScopes', before: ['openid'], after: ['openid', 'ai:generate'] },
+          { field: 'federatedIdp', before: null, after: idp },
+        ]),
+      })
+    );
+  });
+
+  it('passes federatedIdp null through to remove the trust config', async () => {
+    db.updateOAuthClient.mockResolvedValue({ before: view(), after: view() });
+    const { req, res } = makeReqRes('PATCH', { body: { federatedIdp: null } });
+    await handlers.update.patch(req, res);
+    expect(db.updateOAuthClient).toHaveBeenCalledWith('c1', { federatedIdp: null });
   });
 
   it('audits a deactivation as its own event', async () => {

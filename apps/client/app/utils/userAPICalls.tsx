@@ -28,6 +28,7 @@ export interface IGetUsersParams {
   tags?: string[];
   projectId?: string;
   pendingInviteProjectId?: string;
+  pendingInviteOrganizationId?: string;
   publicView?: boolean;
   recentSignups?: 'hour';
   /** ISO instants bounding the created-at filter; `createdTo` is exclusive. */
@@ -40,7 +41,7 @@ export interface IGetUsersResponse {
   // Derived from the endpoint's projection, so reading a field GET /api/users does not
   // emit is a compile error. publicView requests return only the PUBLIC_USER_LIST_PROJECTION
   // subset of these fields.
-  // pendingInvite is set only when the request carried pendingInviteProjectId.
+  // pendingInvite is set only for an authorized project or organization invite context.
   users: (AdminUserListItem & { pendingInvite?: boolean })[];
   currentPage: number;
   totalPages: number;

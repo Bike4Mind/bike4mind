@@ -154,6 +154,14 @@ vi.mock('@server/files/fileUploadBudget', () => ({
   consumeFileUploadBudget: async () => undefined,
 }));
 
+// Same for the pending-upload cap (pendingUploads.ts), which reads the tier and aggregates FabFile:
+// admits everything with nothing in flight by default; its own suites unmock it.
+vi.mock('@server/files/pendingUploads', () => ({
+  PENDING_UPLOAD_WINDOW_MS: 30 * 60 * 1000,
+  PENDING_UPLOAD_LIMITED: 'pending_upload_limit',
+  admitPendingUploads: async () => ({ count: 0, bytesFor: () => 0 }),
+}));
+
 // The `app` surface of the IP-block gate (checkBlockedIP.ts, mounted on every authenticated write
 // by baseApi) reads the active `all` blocks from Mongo. Suites that drive the real baseApi chain
 // with connectDB stubbed would wait out Mongoose's 10s command buffer on each write, so that

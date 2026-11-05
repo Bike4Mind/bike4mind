@@ -120,6 +120,12 @@ describe('scanShell', () => {
       ['cat .env*', ['.env*']],
       ['cat .en?', ['.en?']],
       ['cat config/*.env', ['config/*.env']],
+      ['cat D:.env:x', ['D:.env:x']],
+      ['cat .env:secret', ['.env:secret']],
+      ['cat .env::data', ['.env::data']],
+      ['cat .ENV', ['.ENV']],
+      ['cat ".env ."', ['.env .']],
+      ['cat .env/x/..', ['.env/x/..']],
     ])('flags %s', async (command, envFiles) => {
       expect((await scan(command)).envFiles).toEqual(envFiles);
     });

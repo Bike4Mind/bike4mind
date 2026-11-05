@@ -1,6 +1,7 @@
 import {
   localModelId,
   parseLocalModelId,
+  QUANTIZED_KV_CACHE_TYPES,
   readSpecs,
   serverManagement,
   serverRuntimeId,
@@ -43,7 +44,7 @@ describe('the local-models copies of the shared server helpers', () => {
     // Desktop's own readSpecs before the move: range-checked, and RAM not required.
     const desktopSpecs = (value: unknown) => {
       const specs = shared.readSpecsShape(value);
-      if (!specs || (specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null)) return null;
+      if (!specs || shared.specsBlank(specs)) return null;
       return shared.specsProblem(specs, true) ? null : specs;
     };
     const base = { ramGiB: 32, gpuMemoryGiB: null, bandwidthGBps: null, unified: true };
@@ -59,10 +60,18 @@ describe('the local-models copies of the shared server helpers', () => {
       { ...base, ramGiB: '32' },
       { ramGiB: null, gpuMemoryGiB: 24, bandwidthGBps: null },
       { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null },
+      { ramGiB: null, gpuMemoryGiB: null, bandwidthGBps: null, kvCacheType: 'q8_0' },
+      { ...base, kvCacheType: 'q4_0' },
+      { ...base, kvCacheType: 'f16' },
+      { ...base, kvCacheType: 'q5_1' },
       null,
       'specs',
     ]) {
       expect(readSpecs(specs)).toEqual(desktopSpecs(specs));
     }
+  });
+
+  it('take the same KV cache types', () => {
+    expect(QUANTIZED_KV_CACHE_TYPES).toEqual(shared.QUANTIZED_KV_CACHE_TYPES);
   });
 });

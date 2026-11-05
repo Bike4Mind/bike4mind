@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { VideoGeneration, VideoModel } from '@bike4mind/common';
@@ -8,6 +8,7 @@ import { publicVideoModel } from '../media/__fixtures__/videoModels';
 import type { MediaApiClient } from '../media/MediaApiClient';
 import { MediaStore } from '../media/MediaStore';
 import { generateVideoTool } from './mediaTools';
+import { withRealPath } from './paths';
 import type { MediaContext, ToolContext } from './types';
 
 const SESSION = 'f1a2b3c4-0000-4000-8000-000000000001';
@@ -202,6 +203,19 @@ describe('generate_video run', () => {
     ).rejects.toThrow(/outside the folders shared/);
     await expect(
       generateVideoTool.approval!({ prompt: 'x', inputImagePath: join(vault, 'frame.png') }, h.context)
+    ).rejects.toThrow(/protected location/);
+    expect(h.client.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('refuses an image under the real path of a protected folder whose own path runs through a symlink', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-video-root-')));
+    await mkdir(join(root, 'config', 'App'), { recursive: true });
+    await writeFile(join(root, 'config', 'App', 'frame.png'), Buffer.from('png'));
+    await symlink(join(root, 'config'), join(root, 'cfg-link'));
+    const h = await harness({ roots: [root], protectedPaths: withRealPath(join(root, 'cfg-link', 'App')) });
+
+    await expect(
+      generateVideoTool.approval!({ prompt: 'x', inputImagePath: join(root, 'config', 'App', 'frame.png') }, h.context)
     ).rejects.toThrow(/protected location/);
     expect(h.client.uploadFile).not.toHaveBeenCalled();
   });

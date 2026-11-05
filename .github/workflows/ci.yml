@@ -222,6 +222,9 @@ jobs:
         env:
           B4M_PREFLIGHT_COMPOSE_TESTS: '1'
 
+      - name: Run self-host chunk pipeline verifier tests
+        run: python3 -m unittest discover -s scripts -p 'test_verify_selfhost_chunk_pipeline.py' -v
+
       - name: Test Playwright install recovery
         run: python3 -m unittest discover -s scripts -p 'test_install_playwright_chromium.py' -v
 

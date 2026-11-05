@@ -34,7 +34,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1045 routes: 73 contracted, 9 aliases of another route, 249 with no static caller in `apps/client/app`.
+1047 routes: 73 contracted, 9 aliases of another route, 250 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -42,7 +42,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 4 | 0 | 4 | 0 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 283 | 0 | 202 | 74 | 0 | 7 | 49 |
+| admin | 285 | 0 | 202 | 76 | 0 | 7 | 50 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -165,7 +165,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | Route | Methods | Auth | Scopes | Contract | Alias of | Callers |
 | --- | --- | --- | --- | --- | --- | --- |
 | `/api/[type]/[id]` | GET | jwt+key | - | no | - | 3: `components/admin/ApiKeyScopePreflightTab.tsx`, `hooks/data/researchTasks.ts`, `utils/regInviteAPICalls.ts` |
-| `/api/[type]/[id]/invites` | GET, POST, DELETE | jwt+key | - | no | - | 2: `hooks/data/invites.ts`, `utils/invitesAPICalls.ts` |
+| `/api/[type]/[id]/invites` | GET, POST, DELETE | jwt+key | - | no | - | 3: `hooks/data/invites.ts`, `hooks/data/organizations.ts`, `utils/invitesAPICalls.ts` |
 | `/api/[type]/[id]/revokeSharing` | any | jwt+key | - | no | - | 1: `utils/sharingApi.ts` |
 | `/api/[type]/[id]/updateSharing` | PUT | jwt+key | - | no | - | 1: `utils/sharingApi.ts` |
 
@@ -360,6 +360,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/sessions/[id]` | GET | jwt+key | `admin:*` | no | - | 0 |
 | `/api/admin/sessions/[id]/quests` | GET | jwt+key | `admin:*` | no | - | 0 |
 | `/api/admin/shadow-detections` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
+| `/api/admin/shadow-detections/ai-advisory` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/aiAdvisory.ts` |
 | `/api/admin/shadow-detections/assessment-replay` | POST | jwt | `admin:*` | no | - | 0 |
 | `/api/admin/shadow-detections/assessments` | GET, POST | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
 | `/api/admin/shadow-detections/verdict` | POST | jwt | `admin:*` | no | - | 1: `hooks/data/shadowDetections.ts` |
@@ -443,6 +444,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/users/[userId]/sessions` | GET, DELETE | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserSessions.ts` |
 | `/api/admin/users/[userId]/sign-ins` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
 | `/api/admin/users/[userId]/signup-cluster` | GET | jwt | `admin:*` | no | - | 1: `hooks/data/adminUserTimeline.ts` |
+| `/api/admin/users/[userId]/signup-grant-pending` | GET | jwt | - | no | - | 0 |
 | `/api/admin/users/[userId]/subscriptions` | GET | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
 | `/api/admin/users/[userId]/subscriptions/[subscriptionId]/credits` | PUT | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
 | `/api/admin/users/[userId]/subscriptions/[subscriptionId]/remove` | DELETE | jwt+key | `admin:*` | no | - | 1: `hooks/data/subscriptions.ts` |
@@ -1772,6 +1774,7 @@ a path built in a way the generator misreads, or a string that is not an API cal
 | Path | Caller |
 | --- | --- |
 | `/api/admin/user-api-keys/:param` | `hooks/data/adminUserCredits.ts` |
+| `/api/admin/users/:param` | `hooks/data/adminSignupGrant.ts` |
 | `/api/admin/users/:param` | `hooks/data/adminUserCredits.ts` |
 | `/api/admin/users/:param/:param` | `components/admin/Users/Profile/actions/accountDialogs.tsx` |
 | `/api/research/tasks/:param` | `hooks/data/researchTasks.ts` |

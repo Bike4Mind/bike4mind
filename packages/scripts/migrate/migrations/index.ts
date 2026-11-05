@@ -292,6 +292,7 @@ import EnsureReferralInviterIndexes from './20260921239500_ensure-referral-invit
 import EnsureHeldCreditRewardUserStatusIndex from './20260921239600_ensure-heldcreditreward-user-status-index';
 import DropRetiredUnlockSettings from './20260921239700_drop-retired-unlock-settings';
 import EnsureBillingMismatchIndexes from './20260921239800_ensure-billing-mismatch-indexes';
+import EnsureFabFilePendingUploadIndex from './20260921239800_ensure-fabfile-pending-upload-index';
 import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwatch-user-day-internal-index';
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -511,6 +512,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureHeldCreditRewardUserStatusIndex,
   DropRetiredUnlockSettings,
   EnsureBillingMismatchIndexes,
+  EnsureFabFilePendingUploadIndex,
   EnsureOverwatchUserDayInternalIndex,
   EnsureUserDeletionScheduledForIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
