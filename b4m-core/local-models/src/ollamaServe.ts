@@ -280,8 +280,12 @@ export async function startOllamaServe(options: StartOllamaServeOptions): Promis
     while (true) {
       options.signal?.throwIfAborted();
       if (exit) throw exitError();
-      if (Date.now() > deadline)
-        throw new OllamaServeError(`ollama serve was not ready within ${timeoutMs}ms`, false, [...lines]);
+      if (Date.now() > deadline) {
+        // Readiness hinges on LISTENING_RE, so a changed Ollama log line shows up here.
+        const hint =
+          !listening && (await answers()) ? `: it answers at ${host} but never logged "Listening on ${host}"` : '';
+        throw new OllamaServeError(`ollama serve was not ready within ${timeoutMs}ms${hint}`, false, [...lines]);
+      }
       if (listening && (await answers()) && !exit) break;
       await Promise.race([new Promise(done => setTimeout(done, POLL_MS).unref()), changed, aborted]);
     }

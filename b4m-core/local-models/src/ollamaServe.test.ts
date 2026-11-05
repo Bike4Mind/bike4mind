@@ -186,7 +186,9 @@ describe('startOllamaServe', () => {
       { FAKE_OLLAMA_MODE: 'silent', FAKE_OLLAMA_PID_FILE: pidFile }
     ).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(OllamaServeError);
-    expect((error as Error).message).toContain('not ready within 800ms');
+    expect((error as Error).message).toMatch(
+      /not ready within 800ms: it answers at 127\.0\.0\.1:\d+ but never logged "Listening on/
+    );
     const pid = Number(await readFile(pidFile, 'utf8'));
     expect(() => process.kill(pid, 0)).toThrow();
   });
