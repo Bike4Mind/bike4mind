@@ -70,7 +70,10 @@ const OLLAMA_SINGLE_SLOT_ARCHS = new Set([
   'nemotron_h_moe',
   'nemotron_h_omni',
 ]);
-/** Ollama's draft count for a DRAFT layer unless the Modelfile or a request sets one; an embedded MTP head is off. */
+/**
+ * Ollama's draft count for a DRAFT layer unless the Modelfile or a request sets one; an embedded MTP head is off.
+ * Per ollama/ollama docs/modelfile.mdx (draft_num_predict) and the unset-option handling in server/routes.go.
+ */
 export const OLLAMA_DRAFT_LAYER_DEFAULT = 4;
 
 const ROLE_MODE: Record<HubRole, FitMode> = { chat: 'chat', code: 'code', vision: 'chat', embeddings: 'embeddings' };
