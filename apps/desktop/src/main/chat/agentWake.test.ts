@@ -94,6 +94,33 @@ describe('AgentWakeLedger', () => {
     expect(ledger.claim('p')).toEqual({ ok: false, reason: 'none' });
   });
 
+  it('drops a deleted agent from its parent batch and leaves the others', () => {
+    const ledger = new AgentWakeLedger();
+    ledger.record('p', agent('a'));
+    ledger.record('p', agent('b'));
+    ledger.forget('a');
+
+    expect(ledger.claim('p')).toEqual({ ok: true, agents: [agent('b')] });
+  });
+
+  it('clears the batch, hold, count and cap announcement of a deleted parent', () => {
+    const ledger = new AgentWakeLedger();
+    for (let wake = 0; wake < MAX_AGENT_WAKES_PER_PARENT; wake++) {
+      ledger.record('p', agent('a'));
+      const claim = ledger.claim('p');
+      ledger.finish('p', true, claim.ok ? claim.agents : []);
+    }
+    ledger.record('p', agent('a'));
+    expect(ledger.claim('p')).toMatchObject({ reason: 'cap', announce: true });
+    ledger.hold('p');
+
+    ledger.forget('p');
+
+    expect(ledger.hasPending('p')).toBe(false);
+    ledger.record('p', agent('b'));
+    expect(ledger.claim('p')).toEqual({ ok: true, agents: [agent('b')] });
+  });
+
   it('gives back the count and the batch when the wake could not start', () => {
     const ledger = new AgentWakeLedger();
     for (let wake = 0; wake < MAX_AGENT_WAKES_PER_PARENT - 1; wake++) {

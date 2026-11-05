@@ -391,6 +391,21 @@ describe('orchestrate mode in the chat shell', () => {
     expect(query('orchestrator-stage')).toBeNull();
   });
 
+  it('says so and leaves the toggle off when changing Orchestrate fails', async () => {
+    window.localStorage.setItem(INTRO_SEEN_KEY, '1');
+    listed = [...SESSIONS, CODE];
+    await openParent(CODE.title, 'code');
+
+    setSessionOrchestrate.mockRejectedValueOnce(new Error('disk full'));
+    await act(async () => el('composer-orchestrate-toggle').click());
+    expect(el('chat-notice').textContent).toContain('Could not change Orchestrate. disk full');
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('false');
+
+    setSessionOrchestrate.mockResolvedValueOnce(null);
+    await act(async () => el('composer-orchestrate-toggle').click());
+    expect(el('composer-orchestrate-toggle').getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('reopens an agentless code session on its empty stage when its surface was left on agents', async () => {
     window.localStorage.setItem(INTRO_SEEN_KEY, '1');
     window.localStorage.setItem(`b4m.orchestrator.surface.${CODE.id}`, 'orchestrate');

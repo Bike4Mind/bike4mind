@@ -916,6 +916,21 @@ describe('unusedBranchName', () => {
 
     expect(await pick(main, 'agent/held')).toBe('agent/held-2');
   });
+
+  it('answers the wanted name with no reservation when the directory is not a repository', async () => {
+    const plain = await realpath(await mkdtemp(join(tmpdir(), 'b4m-plain-')));
+
+    expect(await unusedBranchName(plain, 'agent/plain')).toEqual({ branch: 'agent/plain', reservation: null });
+  });
+
+  it('answers the wanted name with no reservation when every candidate is taken', async () => {
+    const { main } = await bareLayoutRepository();
+    const held = [reserveBranchName(main, 'agent/full')];
+    for (let attempt = 2; attempt <= 20; attempt++) held.push(reserveBranchName(main, `agent/full-${attempt}`));
+
+    expect(await unusedBranchName(main, 'agent/full')).toEqual({ branch: 'agent/full', reservation: null });
+    for (const reservation of held) releaseBranchName(reservation!);
+  });
 });
 
 describe('reserveBranchName', () => {

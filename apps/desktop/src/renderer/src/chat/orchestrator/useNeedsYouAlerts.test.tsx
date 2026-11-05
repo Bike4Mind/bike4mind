@@ -134,6 +134,25 @@ describe('useNeedsYouAlerts', () => {
     expect(notify).not.toHaveBeenCalled();
   });
 
+  it('still announces when the claim itself fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    claim.mockRejectedValueOnce(new Error('ipc down'));
+    await render({});
+    await render({ child: 'needs-action' });
+    expect(chime.playChime).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0]).toMatchObject({ sessionId: 'child' });
+  });
+
+  it('sends the notice with the fallback body when the session cannot be read', async () => {
+    const chat = (window as unknown as { b4m: { chat: { getSession: ReturnType<typeof vi.fn> } } }).b4m.chat;
+    chat.getSession.mockRejectedValueOnce(new Error('gone'));
+    await render({});
+    await render({ child: 'needs-action' });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0]).toMatchObject({ sessionId: 'child', body: 'Waiting for your answer' });
+  });
+
   it('names the session itself when the parent is the one waiting', async () => {
     await render({});
     await render({ root: 'needs-action' });
