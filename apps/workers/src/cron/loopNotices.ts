@@ -1,6 +1,7 @@
 import {
   InboxType,
   loopStatusNeedsOwner,
+  serviceLevelBreach,
   type ILoop,
   type IWorkItem,
   type LoopAlarmKind,
@@ -14,6 +15,8 @@ const KEY_PREFIX = 'loop:';
 export const USER_BUDGET_PAUSE_REASON = 'All-loops daily budget reached; resumes 00:00 UTC';
 const TITLE_CHARS = 120;
 const MESSAGE_CHARS = 1000;
+/** ponytail: p0/p1 loop tickets the service-level check reads per tick across all users; past it some go unflagged. */
+export const MAX_URGENT_TICKETS_READ = 500;
 
 const STATUS_TITLES: Partial<Record<LoopStatus, string>> = {
   needs_you: 'needs you',
@@ -30,6 +33,10 @@ export interface LoopNotice {
 }
 
 type BlockedTicket = Pick<IWorkItem, 'id' | 'loopId' | 'title' | 'statusReason' | 'executionId'>;
+type UrgentTicket = Pick<
+  IWorkItem,
+  'id' | 'loopId' | 'title' | 'priority' | 'status' | 'blockedOn' | 'epic' | 'prioritySetAt' | 'createdAt'
+>;
 
 const NEXT_STEP: Record<NonNullable<ILoop['autoResume']> | 'owner', string> = {
   budget: 'Raise the budget and set it live to run sooner.',
@@ -54,12 +61,15 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
  * (`loopStatusNeedsOwner`, shared with the loop list marker) and one per blocked ticket of a loop
  * that still exists. The status is part of the key, so `paused` -> `error` replaces the notice.
  * Loops paused by their owner's all-loops budget share one notice per user instead. A loop with a
- * liveness alarm (set by the scheduler) gets one more, keyed by the alarm kind.
+ * liveness alarm (set by the scheduler) gets one more, keyed by the alarm kind, and each of `urgent` past its
+ * loop's service level (`serviceLevelBreach`) one keyed `:stale`; a new priority restarts its clock and clears it.
  */
 export function desiredLoopNotices(
   loops: ILoop[],
   tickets: BlockedTicket[],
-  loopsById: Map<string, ILoop>
+  loopsById: Map<string, ILoop>,
+  urgent: UrgentTicket[] = [],
+  now = new Date()
 ): LoopNotice[] {
   const userBudget = (loop: ILoop) => loop.status === 'paused' && loop.statusReason === USER_BUDGET_PAUSE_REASON;
   const budgetUsers = new Set(loops.filter(userBudget).map(loop => loop.userId));
@@ -115,6 +125,23 @@ export function desiredLoopNotices(
       link: ticket.executionId ? `/loops/${loop.id}?run=${ticket.executionId}` : `/loops/${loop.id}`,
     });
   }
+
+  for (const ticket of urgent) {
+    const loop = loopsById.get(ticket.loopId!);
+    const breach = loop && serviceLevelBreach(ticket, loop, now);
+    if (!loop || !breach) continue;
+    const hours = Math.floor(breach.hours);
+    notices.push({
+      sourceKey: `${KEY_PREFIX}${loop.id}:ticket:${ticket.id}:stale`,
+      receiverId: loop.userId,
+      title: clip(`Loop "${loop.name}": ${ticket.priority} ticket waiting ${hours}h - ${ticket.title}`, TITLE_CHARS),
+      message: clip(
+        `This ${ticket.priority} ticket has waited ${hours}h, past the loop's ${breach.threshold}h service level.\nOpen the loop to see what is holding it up.`,
+        MESSAGE_CHARS
+      ),
+      link: `/loops/${loop.id}`,
+    });
+  }
   return notices;
 }
 
@@ -127,13 +154,14 @@ export function desiredLoopNotices(
  *
  * Global, but bounded by what currently needs an owner rather than by all loops: each query reads
  * through an index and returns only loops in needs_you/error/paused ({status, nextRunAt}), blocked loop
- * tickets (the partial {status, loopId} index, entered at status 'blocked'), alarmed loops (the partial
+ * tickets (the partial {status, loopId} index, entered at status 'blocked'), p0/p1 loop tickets not closed (the
+ * partial {priority, status} index, bounded by MAX_URGENT_TICKETS_READ), alarmed loops (the partial
  * {alarm.kind} index) and held `loop:` notices (the partial
  * unique sourceKey index, which `listKeyed` states `$exists` for). Live loops and open or closed tickets
  * are never read.
  */
 export async function syncLoopNotices(logger: Logger): Promise<void> {
-  const [statusLoops, tickets, held, alarmed] = await Promise.all([
+  const [statusLoops, tickets, held, alarmed, urgent] = await Promise.all([
     loopRepository.find({ status: { $in: ['needs_you', 'error', 'paused'] } }),
     workItemRepository.find({
       loopId: { $exists: true },
@@ -143,16 +171,17 @@ export async function syncLoopNotices(logger: Logger): Promise<void> {
     }),
     inboxRepository.listKeyed(KEY_PREFIX),
     loopRepository.listAlarmed(),
+    workItemRepository.listUrgentForLoops(MAX_URGENT_TICKETS_READ),
   ]);
   const candidates = [...new Map([...statusLoops, ...alarmed].map(loop => [loop.id, loop])).values()];
   const loopsById = new Map(candidates.map(loop => [loop.id, loop]));
-  const missing = [...new Set(tickets.map(ticket => ticket.loopId!))].filter(id => !loopsById.has(id));
+  const missing = [...new Set([...tickets, ...urgent].map(ticket => ticket.loopId!))].filter(id => !loopsById.has(id));
   const loopIds = usableObjectIds(missing, 'loopNotices', logger);
   if (loopIds.length > 0) {
     for (const loop of await loopRepository.find({ _id: { $in: loopIds } })) loopsById.set(loop.id, loop);
   }
 
-  const desired = desiredLoopNotices(candidates, tickets, loopsById);
+  const desired = desiredLoopNotices(candidates, tickets, loopsById, urgent);
   const desiredKeys = new Set(desired.map(notice => notice.sourceKey));
   const heldKeys = new Set(held.map(notice => notice.sourceKey));
 

@@ -3,12 +3,15 @@ import { randomUUID } from 'crypto';
 import {
   ACTIVE_AGENT_EXECUTION_STATUSES,
   desktopStagesOf,
+  loopRunModel,
+  nextUtcMidnight,
   stageConfigOf,
   startOfUtcDay,
   type ILoop,
   type ILoopEvent,
   type IWorkItem,
   type WorkItemPatch,
+  type WorkItemPriority,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -36,9 +39,21 @@ import {
   UNSURE_PREFIX,
 } from '@server/utils/loopTickets';
 import { Resource } from 'sst';
-import { canPayAgain, iterationPrice, loopAdmission } from '@server/utils/loopBudget';
+import {
+  canPayAgain,
+  iterationPrice,
+  loopAdmission,
+  p2RunsLeft,
+  PRIORITIES_OVER_P2_CAP,
+} from '@server/utils/loopBudget';
 import { releaseExpiredRunnerLeases } from '@server/utils/loopRunner';
-import { buildLoopQuery, LOOP_PROMPT_ANSWERS, LOOP_PROMPT_DIRECTIVES, parseLoopMemory } from '@server/utils/loopMemory';
+import {
+  buildLoopQuery,
+  buildTriageQuery,
+  LOOP_PROMPT_ANSWERS,
+  LOOP_PROMPT_DIRECTIVES,
+  parseLoopMemory,
+} from '@server/utils/loopMemory';
 import { syncLoopNotices, USER_BUDGET_PAUSE_REASON } from './loopNotices';
 
 /** Claim lease; covers one dispatch, after which `activeExecutionId` keeps the loop from overlapping. */
@@ -69,6 +84,10 @@ const LOOP_LONG_RUN_SAMPLE = 5;
 const LOOP_LONG_RUN_MIN_SAMPLES = 3;
 /** ponytail: loops or tickets each liveness sweep reads per tick, oldest first; the rest wait for later ticks. */
 export const MAX_LIVENESS_SWEEP = 100;
+/** ponytail: untriaged tickets one triage run is shown, oldest first; the rest go to the next triage run. */
+export const LOOP_TRIAGE_BATCH = 20;
+/** ponytail: p2 tickets the cap demotes per loop per tick; the rest wait for later ticks. */
+export const MAX_DEMOTES_PER_LOOP_TICK = 50;
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -300,9 +319,11 @@ async function raiseIdleAlarms(now: Date, logger: Logger): Promise<void> {
   const candidates = new Map([...alarmed, ...pastDue].map(loop => [loop.id, loop]));
   for (const loop of candidates.values()) {
     try {
+      // An untriaged ticket is work too: the loop's next run triages it.
       const ready =
         idleAlarmCandidate(loop, now) &&
-        (await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop)));
+        ((await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop))) ??
+          (await workItemRepository.listUntriagedForLoop(loop.userId, loop.id, 1))[0]);
       if (ready) {
         const minutes = Math.round((now.getTime() - new Date(loop.nextRunAt!).getTime()) / MINUTE_MS);
         await loopRepository.setAlarm(loop.id, {
@@ -397,7 +418,11 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
   if (execution?.status === 'completed') {
     if (ticket) await workItemRepository.foldTicketRun(ticket.id, executionId, advancePatch(loop, ticket));
     const answer = (execution.result as { answer?: unknown } | undefined)?.answer;
-    const memory = parseLoopMemory(typeof answer === 'string' ? answer : '', loop.memory);
+    // A triage run's answer is a summary of priorities set, not the loop's memory.
+    const triage = execution.loopRunKind === 'triage';
+    const memory = triage
+      ? { notes: loop.memory?.notes ?? '', nextAction: loop.memory?.nextAction ?? '' }
+      : parseLoopMemory(typeof answer === 'string' ? answer : '', loop.memory);
     const lastRunAt = execution.completedAt ?? now;
     // Idle: no ticket, memory unchanged, and no ticket of the loop touched from the run's start to this
     // fold (to now, not completedAt, so a ticket change since the run ended is not overwritten below).
@@ -410,7 +435,7 @@ async function reconcileLoop(loop: ILoop, now: Date): Promise<void> {
     const idleStreak = idle ? (loop.idleStreak ?? 0) + 1 : 0;
     await loopRepository.foldRun(loop.id, executionId, {
       $set: {
-        memory: { ...memory, updatedAt: now },
+        ...(!triage && { memory: { ...memory, updatedAt: now } }),
         lastRunAt,
         consecutiveFailures: 0,
         idleStreak,
@@ -634,29 +659,62 @@ async function admit(loop: ILoop, model: string, now: Date, logger: Logger): Pro
 }
 
 /**
- * The model the loop's next run will use: the stage model of the ticket `claimNextTicket` would claim, else
+ * The model the loop's next ticket run will use (`loopRunModel` on the ticket `claimNextTicket` would claim), else
  * the loop's. Read-only, so pricing a run that does not start writes nothing.
  */
-async function nextRunModel(loop: ILoop): Promise<string> {
-  if (!loop.stageConfig?.some(entry => entry.model)) return loop.model;
+async function nextRunModel(loop: ILoop, onlyPriorities?: WorkItemPriority[]): Promise<string> {
+  if (!loop.escalationModel && !loop.stageConfig?.some(entry => entry.model || entry.escalationModel)) {
+    return loop.model;
+  }
   const limit = ticketRunLimit(loop.stages);
-  const ready = await workItemRepository.listReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop));
+  const ready = await workItemRepository.listReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop), {
+    onlyPriorities,
+  });
   const next = ready.find(ticket => (ticket.runCount ?? 0) < limit);
-  return (next && stageConfigOf(loop, next.stage).model) ?? loop.model;
+  return next ? loopRunModel(loop, stageConfigOf(loop, next.stage), (next.runCount ?? 0) + 1, limit).model : loop.model;
 }
 
 /**
- * Claims the loop's next ready ticket for this run, never one in a desktop stage; null means a plain goal
- * run. A ticket that has used up its runs (`ticketRunLimit`) is blocked for its owner instead, and the next
- * one is tried.
+ * The loop's p2 daily cap (`p2RunsPerDay`), applied before a claim: the ready p2s beyond today's remaining p2 runs
+ * are demoted to p3, newest first and never an owner-set one, and once none remain the pick is limited to p0/p1.
+ * `cloudReady` says whether any ticket was ready for a cloud run before that limit.
  */
-async function claimNextTicket(loop: ILoop): Promise<IWorkItem | null> {
+async function applyP2Cap(
+  loop: ILoop,
+  now: Date
+): Promise<{ onlyPriorities?: WorkItemPriority[]; cloudReady: boolean }> {
+  if (loop.p2RunsPerDay === undefined) return { cloudReady: false };
+  const left = await p2RunsLeft(loop, now);
+  // Desktop stages included: a desktop p2 run uses the same daily runs.
+  const ready = await workItemRepository.listReadyForLoop(loop.userId, loop.id, loop.stages);
+  const overflow = ready
+    .filter(ticket => ticket.priority === 'p2')
+    .slice(left)
+    .filter(ticket => ticket.prioritySetBy !== 'owner')
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, MAX_DEMOTES_PER_LOOP_TICK);
+  for (const ticket of overflow) await workItemRepository.demoteIfAgentSet(ticket.id, now);
+  if (left > 0) return { cloudReady: false };
+  const desktopStages = desktopStagesOf(loop);
+  return {
+    onlyPriorities: PRIORITIES_OVER_P2_CAP,
+    cloudReady: ready.some(ticket => !desktopStages.includes(ticket.stage ?? '')),
+  };
+}
+
+/**
+ * Claims the loop's next ready ticket for this run, never one in a desktop stage (and only of `onlyPriorities`
+ * when given); null means a plain goal run. A ticket that has used up its runs (`ticketRunLimit`) is blocked for
+ * its owner instead, and the next one is tried.
+ */
+async function claimNextTicket(loop: ILoop, onlyPriorities?: WorkItemPriority[]): Promise<IWorkItem | null> {
   const limit = ticketRunLimit(loop.stages);
   for (const next of await workItemRepository.listReadyForLoop(
     loop.userId,
     loop.id,
     loop.stages,
-    desktopStagesOf(loop)
+    desktopStagesOf(loop),
+    { onlyPriorities }
   )) {
     const runs = next.runCount ?? 0;
     if (runs >= limit) {
@@ -686,14 +744,27 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boo
   let ticket: IWorkItem | null = null;
   let result: Awaited<ReturnType<typeof startAgentExecution>>;
   try {
+    // Untriaged tickets come first: a triage run sets their priorities and works no ticket.
+    const untriaged = await workItemRepository.listUntriagedForLoop(loop.userId, loop.id, LOOP_TRIAGE_BATCH);
+    if (untriaged.length > 0) return await dispatchTriage(loop, untriaged, now, logger);
+    const cap = await applyP2Cap(loop, now);
     // ponytail: priced on the ticket nextRunModel peeks at; an owner edit landing between the peek and the
     // claim can start a run on a differently priced model. Claim first and release on refusal if that bites.
-    const admission = await admit(loop, await nextRunModel(loop), now, logger);
+    const admission = await admit(loop, await nextRunModel(loop, cap.onlyPriorities), now, logger);
     if (!admission) return false;
-    ticket = await claimNextTicket(loop);
+    ticket = await claimNextTicket(loop, cap.onlyPriorities);
+    if (!ticket && cap.cloudReady) {
+      // Only p2/p3 tickets are ready and today's p2 runs are used up: wait for 00:00 UTC rather than run the goal.
+      // A new p0/p1 ticket makes the loop due early (makeDueIfReady), and the next dispatch clears the hold.
+      await loopRepository.deferUntil(loop.id, nextUtcMidnight(now), now, 'priority_budget');
+      logger.info(`[Loops] Loop ${loop.id} held: its p2 runs for today are used up`);
+      return false;
+    }
     // The stage's settings apply only to a run working a ticket in it; a plain goal run uses the loop's.
     const stage = ticket ? stageConfigOf(loop, ticket.stage) : {};
-    const model = stage.model ?? loop.model;
+    const { model, escalated } = ticket
+      ? loopRunModel(loop, stage, ticket.runCount ?? 0, ticketRunLimit(loop.stages))
+      : { model: loop.model, escalated: false };
     const [directives, overseen, answered] = await Promise.all([
       loopDirectiveRepository.listOpenForLoop(loop.userId, loop.id, LOOP_PROMPT_DIRECTIVES),
       Promise.all((loop.oversees ?? []).map(id => loopRepository.findByIdAndUserId(id, loop.userId))),
@@ -726,6 +797,8 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boo
         enabledTools: stage.tools?.length ? stage.tools : loop.tools,
         loopId: loop.id,
         ...(admission.creditCap !== undefined && { creditCap: admission.creditCap }),
+        ...(ticket && { workItemId: ticket.id, ticketPriority: ticket.priority }),
+        ...(escalated && { escalated: true }),
       },
       logger
     );
@@ -739,7 +812,53 @@ async function dispatchLoop(loop: ILoop, now: Date, logger: Logger): Promise<boo
 
   const executionId = result.ok || result.reason === 'dispatch_failed' ? result.executionId : undefined;
   if (ticket && !executionId) await releaseTicket(ticket, logger);
+  return settleDispatch(loop, ticket, result, now, logger);
+}
 
+/**
+ * A triage run: shown up to LOOP_TRIAGE_BATCH untriaged tickets, it sets their priorities (or splits them) with the
+ * loop ticket tools, which every loop run gets from its `loopId`. It claims no ticket, runs on `triageModel`, and its
+ * fold keeps the loop's memory; one that sets nothing touches no ticket, so it folds as idle and backs off.
+ */
+async function dispatchTriage(loop: ILoop, untriaged: IWorkItem[], now: Date, logger: Logger): Promise<boolean> {
+  const model = loop.triageModel ?? loop.model;
+  let result: Awaited<ReturnType<typeof startAgentExecution>>;
+  try {
+    const admission = await admit(loop, model, now, logger);
+    if (!admission) return false;
+    result = await startAgentExecution(
+      {
+        userId: loop.userId,
+        sessionId: loop.sessionId,
+        questId: loop.sessionId,
+        query: buildTriageQuery(loop, untriaged),
+        model,
+        connectionId: HEADLESS_CONNECTION_ID,
+        apiKeyInfo: undefined,
+        ...(loop.organizationId && { organizationId: loop.organizationId }),
+        ...(loop.agentId && { agentId: loop.agentId }),
+        enabledTools: [],
+        loopId: loop.id,
+        loopRunKind: 'triage',
+        ...(admission.creditCap !== undefined && { creditCap: admission.creditCap }),
+      },
+      logger
+    );
+  } catch (error) {
+    await loopRepository.releaseLease(loop.id);
+    throw error;
+  }
+  return settleDispatch(loop, null, result, now, logger);
+}
+
+/** Records a started run on the loop (and its ticket), or acts on why it did not start. */
+async function settleDispatch(
+  loop: ILoop,
+  ticket: IWorkItem | null,
+  result: Awaited<ReturnType<typeof startAgentExecution>>,
+  now: Date,
+  logger: Logger
+): Promise<boolean> {
   if (result.ok) {
     await loopRepository.markDispatched(
       loop.id,

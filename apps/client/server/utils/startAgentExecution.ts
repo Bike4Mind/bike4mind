@@ -22,6 +22,7 @@ import {
   userRepository,
   Quest,
   type AgentExecutionStatus,
+  type IAgentExecution,
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import { LOOP_DIRECTIVE_TOOL_NAMES, LOOP_OVERSEER_TOOL_NAMES, LOOP_TICKET_TOOL_NAMES } from '@bike4mind/common';
@@ -144,6 +145,11 @@ export type StartAgentExecutionInput = {
   loopId?: string;
   /** Loop scheduler only: the most credits the run may spend. Never taken from a client request. */
   creditCap?: number;
+  /** Loop scheduler only, like `creditCap`: the run's ticket, its priority, escalation and run kind. */
+  workItemId?: string;
+  ticketPriority?: IAgentExecution['ticketPriority'];
+  escalated?: boolean;
+  loopRunKind?: IAgentExecution['loopRunKind'];
   /** Caller's per-request artifact intent. Absent means "no preference" (the admin
    * `EnableArtifacts` setting decides); only an explicit `false` opts out. */
   enableArtifacts?: boolean;
@@ -367,6 +373,10 @@ export async function startAgentExecution(
     enableLattice: input.enableLattice,
     loopId: input.loopId,
     creditCap: input.creditCap,
+    workItemId: input.workItemId,
+    ticketPriority: input.ticketPriority,
+    escalated: input.escalated,
+    loopRunKind: input.loopRunKind,
     enableArtifacts: input.enableArtifacts,
     imageConfig: input.imageConfig,
     audioConfig: input.audioConfig,

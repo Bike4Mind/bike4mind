@@ -259,6 +259,35 @@ describe('LoopRepository', () => {
     expect(p?.hold).toBeUndefined();
   });
 
+  it('deferUntil writes a p2-cap hold the same way, replacing any other hold', async () => {
+    const now = new Date();
+    const midnight = new Date(now.getTime() + 3_600_000);
+    const loop = await create({ status: 'live', nextRunAt: now, hold: { kind: 'capacity', at: now } });
+    await loopRepository.deferUntil(loop.id, midnight, now, 'priority_budget');
+    expect(await loopRepository.findById(loop.id)).toMatchObject({
+      nextRunAt: midnight,
+      hold: { kind: 'priority_budget', until: midnight, at: now },
+    });
+  });
+
+  it('stores the priority settings and validates their ranges', async () => {
+    const loop = await create({
+      serviceLevelHours: { p0: 2 },
+      p2RunsPerDay: 3,
+      triageModel: 'cheap',
+      escalationModel: 'strong',
+      stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+    });
+    expect(await loopRepository.findById(loop.id)).toMatchObject({
+      serviceLevelHours: { p0: 2 },
+      p2RunsPerDay: 3,
+      triageModel: 'cheap',
+      escalationModel: 'strong',
+      stageConfig: [{ stage: 'todo', escalationModel: 'stage-strong' }],
+    });
+    await expect(create({ p2RunsPerDay: 1.5 })).rejects.toThrow();
+  });
+
   describe('holds and alarms', () => {
     const now = new Date('2026-11-04T12:00:00Z');
     const earlier = new Date('2026-11-04T11:00:00Z');

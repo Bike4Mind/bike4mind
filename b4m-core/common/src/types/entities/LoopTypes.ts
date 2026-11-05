@@ -1,4 +1,5 @@
 import { IBaseRepository } from './BaseTypes';
+import type { IWorkItem } from './WorkItemTypes';
 
 /**
  * A Loop is a recurring, unattended agent run owned by a user. Every
@@ -28,6 +29,7 @@ export const LOOP_TICKET_TOOL_NAMES = [
   'loop_ticket_create',
   'loop_ticket_update',
   'loop_ticket_unsure',
+  'loop_ticket_split',
 ] as const;
 
 /**
@@ -47,8 +49,11 @@ export const LOOP_AUTO_RESUME_KINDS = ['budget', 'credits'] as const;
 
 export type LoopAutoResume = (typeof LOOP_AUTO_RESUME_KINDS)[number];
 
-/** Why a live, otherwise due loop is not running: paced to its daily budget, or the server-wide run cap. */
-export const LOOP_HOLD_KINDS = ['pacing', 'capacity'] as const;
+/**
+ * Why a live, otherwise due loop is not running: paced to its daily budget, the server-wide run cap, or its p2
+ * runs per day used up with only p2/p3 tickets ready (`priority_budget`, until 00:00 UTC).
+ */
+export const LOOP_HOLD_KINDS = ['pacing', 'capacity', 'priority_budget'] as const;
 export type LoopHoldKind = (typeof LOOP_HOLD_KINDS)[number];
 
 /** Liveness problems the scheduler flags to the owner: a live loop idle with ready tickets, or a run far longer than usual. */
@@ -57,7 +62,7 @@ export type LoopAlarmKind = (typeof LOOP_ALARM_KINDS)[number];
 
 export interface ILoopHold {
   kind: LoopHoldKind;
-  /** Pacing only: when the deferred run is due. */
+  /** Pacing and priority_budget: when the deferred run is due. */
   until?: Date;
   at: Date;
 }
@@ -74,6 +79,47 @@ export interface ILoopAlarm {
 export const startOfUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
+/** The UTC midnight after `now`: when a loop's daily budgets reset. */
+export const nextUtcMidnight = (now: Date): Date => new Date(startOfUtcDay(now).getTime() + 24 * 60 * 60 * 1000);
+
+/** Hours a p0/p1 ticket may wait (open, running or parked on deps) before it is flagged stale; `ILoop.serviceLevelHours` overrides. */
+export const LOOP_SERVICE_LEVEL_HOURS = { p0: 4, p1: 24 } as const;
+
+/**
+ * Hours a p0/p1 ticket has waited past its loop's service level, counted from when its priority was last set
+ * (`prioritySetAt`, else `createdAt`); null when it is within it or not covered. A ticket its owner blocked
+ * already has a blocked notice, and an epic waits on its children, so neither counts. Shared by the notice sweep
+ * (apps/workers/src/cron/loopNotices.ts) and the tickets route's `stale`.
+ */
+export function serviceLevelBreach(
+  ticket: Pick<IWorkItem, 'priority' | 'status' | 'blockedOn' | 'epic' | 'prioritySetAt' | 'createdAt'>,
+  loop: Pick<ILoop, 'serviceLevelHours'>,
+  now: Date
+): { hours: number; threshold: number } | null {
+  const { priority } = ticket;
+  if (priority !== 'p0' && priority !== 'p1') return null;
+  if (ticket.epic || ticket.status === 'closed' || (ticket.status === 'blocked' && !ticket.blockedOn)) return null;
+  const threshold = loop.serviceLevelHours?.[priority] ?? LOOP_SERVICE_LEVEL_HOURS[priority];
+  const hours = (now.getTime() - new Date(ticket.prioritySetAt ?? ticket.createdAt).getTime()) / (60 * 60 * 1000);
+  return hours > threshold ? { hours, threshold } : null;
+}
+
+/**
+ * The model a ticket run uses. `runsAfterClaim` is the ticket's runCount including this run: the run that reaches
+ * `limit` (the last before the ticket is blocked) uses the escalation model when one is set, the stage's first.
+ * Shared by the cloud dispatch (apps/workers/src/cron/loopScheduler.ts) and the desktop claim (loopRunner.ts).
+ */
+export function loopRunModel(
+  loop: Pick<ILoop, 'model' | 'escalationModel'>,
+  stage: Pick<ILoopStageConfig, 'model' | 'escalationModel'>,
+  runsAfterClaim: number,
+  limit: number
+): { model: string; escalated: boolean } {
+  const escalation = stage.escalationModel ?? loop.escalationModel;
+  if (escalation && runsAfterClaim === limit) return { model: escalation, escalated: true };
+  return { model: stage.model ?? loop.model, escalated: false };
+}
+
 export const DEFAULT_LOOP_STAGES: readonly string[] = ['todo', 'doing', 'done'];
 
 export const LOOP_STAGE_RUNNERS = ['cloud', 'desktop'] as const;
@@ -88,6 +134,8 @@ export interface ILoopStageConfig {
   instructions?: string;
   /** Replaces the loop's `model`. */
   model?: string;
+  /** Replaces the loop's `escalationModel` (`loopRunModel`). */
+  escalationModel?: string;
   /** Replaces the loop's `tools`; empty or absent inherits them. */
   tools?: string[];
   /**
@@ -238,6 +286,14 @@ export interface ILoop {
   hold?: ILoopHold;
   /** A liveness problem for the owner; written only by the scheduler. */
   alarm?: ILoopAlarm;
+  /** Per-priority overrides of LOOP_SERVICE_LEVEL_HOURS. */
+  serviceLevelHours?: { p0?: number; p1?: number };
+  /** Ticket runs (cloud and desktop) of p2 tickets per UTC day; absent means no cap. Over it, p2 and p3 wait. */
+  p2RunsPerDay?: number;
+  /** The model triage runs use; absent means `model`. */
+  triageModel?: string;
+  /** The model of a ticket's last run before its run limit (`loopRunModel`); absent means no escalation. */
+  escalationModel?: string;
 
   createdAt: Date;
   updatedAt: Date;
@@ -309,8 +365,11 @@ export interface ILoopRepository extends IBaseRepository<ILoop> {
    * Never touches `activeExecutionId`, which only cloud runs hold.
    */
   foldRunnerRun(id: string, userId: string, memory: ILoopMemory, lastRunAt: Date): Promise<void>;
-  /** Defers a claimed live loop to `nextRunAt` (a pacing hold) and releases the claim. */
-  deferUntil(id: string, nextRunAt: Date, now: Date): Promise<void>;
+  /**
+   * Defers a claimed live loop to `nextRunAt` under a hold of `kind` (default pacing) and releases the claim. The one
+   * write of the deferring holds; a loop carries one hold, and `markDispatched` clears it.
+   */
+  deferUntil(id: string, nextRunAt: Date, now: Date, kind?: Exclude<LoopHoldKind, 'capacity'>): Promise<void>;
   clearCapacityHolds(): Promise<void>;
   /** Marks every live loop `claimDue` would take now, except `skipIds`, as held by the run cap. */
   setCapacityHolds(now: Date, skipIds: string[]): Promise<void>;

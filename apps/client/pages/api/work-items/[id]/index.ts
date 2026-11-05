@@ -10,6 +10,7 @@ import {
   assertBlockedOnSatisfiable,
   assertLoopTicketAccess,
   makeDueIfReady,
+  priorityPatch,
   ticketMovePatch,
 } from '@server/utils/loopTickets';
 import {
@@ -85,7 +86,8 @@ const handler = baseApi()
           stage: null,
           statusReason: null,
           executionId: null,
-          priority: null,
+          ...priorityPatch(null, 'owner'),
+          epic: null,
           blockedOn: null,
           ...(existing.status === 'in_progress' && status === undefined && { status: 'open' }),
         });
@@ -97,7 +99,7 @@ const handler = baseApi()
     if (loop) {
       // Not a move: a priority change keeps the ticket's run allowance.
       const priority = validateWorkItemPriority(body.priority);
-      if (priority) patch.priority = priority;
+      if (priority) Object.assign(patch, priorityPatch(priority, 'owner'));
       // A ticket moved into another loop starts over in that loop.
       if (movesLoop || body.stage !== undefined || status !== undefined || body.blockedOn != null) {
         // An owner move gives the ticket a fresh run allowance (the scheduler blocks it at ticketRunLimit).

@@ -6,9 +6,10 @@ import {
   IWorkItemGraphEdge,
   IWorkItemReadyResult,
   IWorkItemRepository,
-  DEFAULT_WORK_ITEM_PRIORITY,
   WORK_ITEM_BLOCKERS,
   WORK_ITEM_PRIORITIES,
+  WORK_ITEM_PRIORITY_SETTERS,
+  WorkItemPriority,
   WORK_ITEM_STATUSES,
   WorkItemPatch,
   WorkItemStatus,
@@ -17,6 +18,7 @@ import {
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { softDeletePlugin } from '../../utils/mongo';
+import { Loop } from './LoopModel';
 
 const ModelName = 'WorkItem';
 
@@ -145,9 +147,38 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     userId: string,
     loopId: string,
     stages: string[],
-    skipStages: string[] = []
+    skipStages: string[] = [],
+    opts: { onlyPriorities?: WorkItemPriority[] } = {}
   ): Promise<IWorkItem[]> {
-    return this.listReady(userId, loopId, stages, { $nin: [stages.at(-1) ?? '', ...skipStages] });
+    return this.listReady(userId, loopId, stages, { $nin: [stages.at(-1) ?? '', ...skipStages] }, opts.onlyPriorities);
+  }
+
+  async listUntriagedForLoop(userId: string, loopId: string, limit: number): Promise<IWorkItem[]> {
+    const results = await this.workItemModel
+      .find({ userId, loopId, deletedAt: null, status: 'open', priority: { $exists: false }, epic: { $ne: true } })
+      .sort({ createdAt: 1 })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
+  }
+
+  async demoteIfAgentSet(id: string, now: Date): Promise<boolean> {
+    const result = await this.workItemModel.updateOne(
+      { _id: id, priority: 'p2', prioritySetBy: { $ne: 'owner' }, deletedAt: null },
+      { $set: { priority: 'p3', prioritySetAt: now, prioritySetBy: 'demote' } }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  async listUrgentForLoops(limit: number): Promise<IWorkItem[]> {
+    const results = await this.workItemModel
+      .find({
+        priority: { $in: ['p0', 'p1'] },
+        status: { $in: ['open', 'in_progress', 'blocked'] },
+        loopId: { $exists: true },
+        deletedAt: null,
+      })
+      .limit(limit);
+    return results.map(doc => doc.toJSON());
   }
 
   async listReadyInStages(userId: string, loopId: string, stages: string[], inStages: string[]): Promise<IWorkItem[]> {
@@ -159,16 +190,25 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
     userId: string,
     loopId: string,
     stages: string[],
-    stageFilter: Record<string, string[]>
+    stageFilter: Record<string, string[]>,
+    onlyPriorities?: WorkItemPriority[]
   ): Promise<IWorkItem[]> {
-    // Stages are filtered and priority is ranked in the query, so neither excluded stages nor a backlog of
-    // lower-priority tickets can push a p0 out of the candidate window.
+    // Stages are filtered and priority is sorted in the query, so neither excluded stages nor a backlog of
+    // lower-priority tickets can push a p0 out of the candidate window. An untriaged ticket (no priority) waits
+    // for its triage run.
     const docs = await this.workItemModel.aggregate([
-      { $match: { userId, loopId, deletedAt: null, status: 'open', stage: stageFilter } },
-      { $addFields: { _rank: { $ifNull: ['$priority', DEFAULT_WORK_ITEM_PRIORITY] } } },
-      { $sort: { _rank: 1, createdAt: 1 } },
+      {
+        $match: {
+          userId,
+          loopId,
+          deletedAt: null,
+          status: 'open',
+          stage: stageFilter,
+          priority: onlyPriorities ? { $in: onlyPriorities } : { $exists: true },
+        },
+      },
+      { $sort: { priority: 1, createdAt: 1 } },
       { $limit: LOOP_READY_CANDIDATES },
-      { $project: { _rank: 0 } },
     ]);
     const candidates: IWorkItem[] = docs.map(doc => this.workItemModel.hydrate(doc).toJSON());
     const depIds = [...new Set(candidates.flatMap(item => item.dependencies))];
@@ -309,6 +349,11 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
       // Not user-scoped: deps are always the owner's own (assertDependenciesUsable). A foreign one counts as open.
       const deps = await this.workItemModel.find({ _id: { $in: depIds }, deletedAt: null });
       const depById = new Map(deps.map(doc => [String(doc._id), doc]));
+      const epicLoopIds = [...new Set(parked.filter(item => item.epic).map(item => item.loopId!))].filter(id =>
+        mongoose.isValidObjectId(id)
+      );
+      const loops = epicLoopIds.length > 0 ? await Loop.find({ _id: { $in: epicLoopIds } }, { stages: 1 }) : [];
+      const lastStage = new Map(loops.map(loop => [String(loop._id), loop.stages.at(-1)]));
       for (const item of parked) {
         if (reopened.length >= limit) break;
         const waiting = item.dependencies.some(depId => {
@@ -316,6 +361,9 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
           return dep !== undefined && (dep.userId !== item.userId || dep.status !== 'closed');
         });
         if (waiting) continue;
+        // An epic's work was its children, so it closes in its loop's last stage (as ticketMovePatch closes one).
+        const last = item.epic ? lastStage.get(item.loopId!) : undefined;
+        if (item.epic && !last) continue;
         // Matching the deps read above, so a dependency added meanwhile keeps the ticket parked.
         const result = await this.workItemModel.findOneAndUpdate(
           {
@@ -325,7 +373,10 @@ export class WorkItemRepository extends BaseRepository<IWorkItem> implements IWo
             dependencies: item.dependencies,
             deletedAt: null,
           },
-          { $set: { status: 'open' }, $unset: { statusReason: '', blockedOn: '' } },
+          {
+            $set: last ? { status: 'closed', stage: last, closedAt: new Date() } : { status: 'open' },
+            $unset: { statusReason: '', blockedOn: '' },
+          },
           { new: true }
         );
         if (result) reopened.push(result.toJSON());
@@ -522,6 +573,9 @@ export const WorkItemSchema = new Schema<IWorkItem, IWorkItemModel>(
     statusReason: { type: String },
     runCount: { type: Number, default: 0 },
     priority: { type: String, enum: WORK_ITEM_PRIORITIES },
+    prioritySetAt: { type: Date },
+    prioritySetBy: { type: String, enum: WORK_ITEM_PRIORITY_SETTERS },
+    epic: { type: Boolean },
     blockedOn: { type: String, enum: WORK_ITEM_BLOCKERS },
   },
   {
@@ -545,6 +599,8 @@ WorkItemSchema.index(
 WorkItemSchema.index({ status: 1, loopId: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
 // The scheduler's reopen sweep over tickets parked on a testable condition (reopenSatisfiedBlocks).
 WorkItemSchema.index({ blockedOn: 1, status: 1 }, { partialFilterExpression: { blockedOn: { $exists: true } } });
+// The loop notice sweep's service-level read of p0/p1 loop tickets (listUrgentForLoops).
+WorkItemSchema.index({ priority: 1, status: 1 }, { partialFilterExpression: { loopId: { $exists: true } } });
 WorkItemSchema.index({ executionId: 1 }, { partialFilterExpression: { executionId: { $exists: true } } });
 
 export const WorkItem: IWorkItemModel =

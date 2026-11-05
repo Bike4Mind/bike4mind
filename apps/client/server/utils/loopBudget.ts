@@ -1,4 +1,4 @@
-import { nextIterationCredits, startOfUtcDay, type ILoop } from '@bike4mind/common';
+import { nextIterationCredits, startOfUtcDay, type ILoop, type WorkItemPriority } from '@bike4mind/common';
 import {
   adminSettingsRepository,
   agentExecutionRepository,
@@ -86,6 +86,19 @@ export async function iterationPrice(loop: ILoop, model = loop.model): Promise<n
   const modelInfo = models.find((m: { id: string }) => m.id === modelId);
   return modelInfo ? nextIterationCredits(modelInfo, 0) : 0;
 }
+
+/**
+ * p2 ticket runs (cloud and desktop) the loop may still start today under `p2RunsPerDay`; Infinity with no cap.
+ * Shared by the scheduler's dispatch and the desktop runner's list and claim (loopRunner.ts).
+ */
+export async function p2RunsLeft(loop: Pick<ILoop, 'id' | 'p2RunsPerDay'>, now: Date): Promise<number> {
+  if (loop.p2RunsPerDay === undefined) return Infinity;
+  const used = await agentExecutionRepository.countLoopRunsByPriority(loop.id, 'p2', startOfUtcDay(now));
+  return Math.max(0, loop.p2RunsPerDay - used);
+}
+
+/** What a loop works once its p2 runs for the day are used up: p2 and p3 wait until 00:00 UTC. */
+export const PRIORITIES_OVER_P2_CAP: WorkItemPriority[] = ['p0', 'p1'];
 
 /** Why a loop run was not admitted; `paced` carries when its paced allowances next cover one iteration. */
 export type LoopAdmission =

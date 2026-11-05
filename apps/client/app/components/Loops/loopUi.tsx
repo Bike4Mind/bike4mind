@@ -73,10 +73,11 @@ const HOLD_LABELS: Record<LoopHoldKind, (hold: ILoopHold) => string> = {
   pacing: hold =>
     `Paced: next run at ${new Date(hold.until!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to spread the daily budget`,
   capacity: () => 'Waiting for a free run slot (server-wide limit)',
+  priority_budget: () => 'p2 budget used for today; next p2 at 00:00 UTC',
 };
 
 /**
- * Why a live loop is held back on purpose: the scheduler's pacing or run-cap hold (`ILoop.hold`, set in
+ * Why a live loop is held back on purpose: the scheduler's pacing, run-cap or p2-cap hold (`ILoop.hold`, set in
  * apps/workers/src/cron/loopScheduler.ts), else its idle back-off. Null when nothing holds it.
  */
 export function holdLabel(
@@ -85,8 +86,8 @@ export function holdLabel(
 ): string | null {
   if (loop.status !== 'live' || loop.activeExecutionId) return null;
   const { hold } = loop;
-  // A pacing hold lapses once its deferred run is due.
-  if (hold && (hold.kind !== 'pacing' || (hold.until && new Date(hold.until).getTime() > now))) {
+  // A deferring hold (pacing, priority_budget) lapses once its deferred run is due.
+  if (hold && (!hold.until || new Date(hold.until).getTime() > now)) {
     return HOLD_LABELS[hold.kind](hold);
   }
   return backoffLabel(loop, now);

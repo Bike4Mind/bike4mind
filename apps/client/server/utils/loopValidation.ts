@@ -109,6 +109,8 @@ export function validateLoopStageConfig(value: unknown, stages: readonly string[
     if (instructions) config.instructions = instructions;
     const model = text('model', ID_MAX);
     if (model) config.model = model;
+    const escalationModel = text('escalationModel', ID_MAX);
+    if (escalationModel) config.escalationModel = escalationModel;
     if (entry.tools !== undefined && entry.tools !== null) {
       const tools = validateStringList('tools', entry.tools, TOOLS_MAX, TOOL_NAME_MAX);
       if (tools.length) config.tools = tools;
@@ -210,6 +212,62 @@ export function validateLoopBudget(value: unknown): number {
     throw new BadRequestError('budgetCreditsPerDay must be a positive number');
   }
   return value;
+}
+
+const SERVICE_LEVEL_HOURS_MAX = 720;
+const P2_RUNS_PER_DAY_MAX = 1000;
+
+type LoopPriorityPolicy = Pick<ILoop, 'serviceLevelHours' | 'p2RunsPerDay' | 'triageModel' | 'escalationModel'>;
+
+/**
+ * The priority settings present in `body`, each `null` when sent as null (a PATCH clears it). Kept in sync with
+ * LoopModel's constraints.
+ */
+export function validateLoopPriorityPolicy(body: Record<string, unknown>): {
+  [K in keyof LoopPriorityPolicy]?: LoopPriorityPolicy[K] | null;
+} {
+  const result: { [K in keyof LoopPriorityPolicy]?: LoopPriorityPolicy[K] | null } = {};
+  const { serviceLevelHours, p2RunsPerDay, triageModel, escalationModel } = body;
+  if (serviceLevelHours !== undefined) {
+    if (serviceLevelHours === null) result.serviceLevelHours = null;
+    else {
+      if (typeof serviceLevelHours !== 'object' || Array.isArray(serviceLevelHours)) {
+        throw new BadRequestError('serviceLevelHours must be an object with p0 and/or p1');
+      }
+      const hours: NonNullable<ILoop['serviceLevelHours']> = {};
+      for (const key of ['p0', 'p1'] as const) {
+        const value = (serviceLevelHours as Record<string, unknown>)[key];
+        if (value === undefined || value === null) continue;
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > SERVICE_LEVEL_HOURS_MAX) {
+          throw new BadRequestError(
+            `serviceLevelHours.${key} must be a number above 0 and up to ${SERVICE_LEVEL_HOURS_MAX}`
+          );
+        }
+        hours[key] = value;
+      }
+      result.serviceLevelHours = Object.keys(hours).length > 0 ? hours : null;
+    }
+  }
+  if (p2RunsPerDay !== undefined) {
+    if (
+      p2RunsPerDay !== null &&
+      (typeof p2RunsPerDay !== 'number' ||
+        !Number.isInteger(p2RunsPerDay) ||
+        p2RunsPerDay < 0 ||
+        p2RunsPerDay > P2_RUNS_PER_DAY_MAX)
+    ) {
+      throw new BadRequestError(`p2RunsPerDay must be an integer from 0 to ${P2_RUNS_PER_DAY_MAX}`);
+    }
+    result.p2RunsPerDay = p2RunsPerDay;
+  }
+  if (triageModel !== undefined) {
+    result.triageModel = triageModel === null ? null : validateString('triageModel', triageModel, ID_MAX);
+  }
+  if (escalationModel !== undefined) {
+    result.escalationModel =
+      escalationModel === null ? null : validateString('escalationModel', escalationModel, ID_MAX);
+  }
+  return result;
 }
 
 /** Statuses a client may move a loop to, keyed by the target. The rest are set by the scheduler. */
