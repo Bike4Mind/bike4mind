@@ -144,16 +144,21 @@ const allowedScopesSchema = z
   .refine(scopes => new Set(scopes).size === scopes.length, 'Scopes must be unique')
   .refine(scopes => scopes.includes('openid'), "Scopes must include 'openid'");
 
-/** Update payload: name, type and auth method are fixed at registration. `federatedIdp: null` removes the trust config. */
+/** Update payload: name, type and auth method are fixed at registration. `federatedIdp: null` removes the trust config.
+ * `expectedUpdatedAt` (the updatedAt the admin loaded) makes the write conflict if the client changed since. */
 export const updateOAuthClientSchema = z
   .object({
     redirectUris: redirectUrisList(storedRedirectUriSchema).optional(),
     isActive: z.boolean().optional(),
     allowedScopes: allowedScopesSchema.optional(),
     federatedIdp: oauthFederatedIdpInputSchema.nullable().optional(),
+    expectedUpdatedAt: z.string().datetime().nullable().optional(),
   })
   .strict()
-  .refine(data => Object.values(data).some(v => v !== undefined), 'Nothing to update');
+  .refine(
+    ({ expectedUpdatedAt: _guard, ...fields }) => Object.values(fields).some(v => v !== undefined),
+    'Nothing to update'
+  );
 
 export type CreateOAuthClientInput = z.input<typeof createOAuthClientSchema>;
 export type UpdateOAuthClientInput = z.infer<typeof updateOAuthClientSchema>;

@@ -224,7 +224,10 @@ describe('OAuthClientsTab', () => {
     });
     fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
     await waitFor(() =>
-      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { redirectUris: ['https://app.example.test/new'] })
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        redirectUris: ['https://app.example.test/new'],
+        expectedUpdatedAt: client.updatedAt,
+      })
     );
   });
 
@@ -247,6 +250,7 @@ describe('OAuthClientsTab', () => {
     fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
     expect(await screen.findByTestId('oauth-client-edit-error')).toHaveTextContent(/must not contain whitespace/);
     expect(screen.getByTestId('oauth-client-edit-modal')).toBeInTheDocument();
+    await waitFor(() => expect(api.fetchOAuthClients).toHaveBeenCalledTimes(2));
   });
 
   it('toasts the error and shows no secret modal when rotation fails', async () => {
@@ -442,8 +446,20 @@ describe('edit modal scopes and federated trust', () => {
     fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
     fireEvent.click(await screen.findByTestId('oauth-client-edit-narrow-confirm-btn'));
     await waitFor(() =>
-      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { allowedScopes: ['openid', 'profile'] })
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        allowedScopes: ['openid', 'profile'],
+        expectedUpdatedAt: client.updatedAt,
+      })
     );
+  });
+
+  it('sends the loaded updatedAt with a scope-only save', async () => {
+    api.updateOAuthClient.mockResolvedValue(client);
+    await openEdit();
+    fireEvent.click(scopeBox('federated:admin-status'));
+    fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
+    await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalled());
+    expect(api.updateOAuthClient.mock.calls[0][1]).toMatchObject({ expectedUpdatedAt: client.updatedAt });
   });
 
   it('sends federatedIdp null when federation is turned off', async () => {
@@ -452,7 +468,12 @@ describe('edit modal scopes and federated trust', () => {
     await openEdit();
     fireEvent.click(screen.getByTestId('oauth-client-edit-federated-switch'));
     fireEvent.click(screen.getByTestId('oauth-client-edit-save-btn'));
-    await waitFor(() => expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', { federatedIdp: null }));
+    await waitFor(() =>
+      expect(api.updateOAuthClient).toHaveBeenCalledWith('c1', {
+        federatedIdp: null,
+        expectedUpdatedAt: client.updatedAt,
+      })
+    );
   });
 
   it('closes without a request when nothing changed', async () => {

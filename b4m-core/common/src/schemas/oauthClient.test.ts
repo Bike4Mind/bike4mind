@@ -136,6 +136,18 @@ describe('updateOAuthClientSchema', () => {
     expect(!empty.success && empty.error.issues[0].message).toBe('Nothing to update');
   });
 
+  it('accepts an ISO expectedUpdatedAt or null, rejects other strings', () => {
+    const iso = '2026-01-01T00:00:00.000Z';
+    expect(updateOAuthClientSchema.safeParse({ isActive: false, expectedUpdatedAt: iso }).success).toBe(true);
+    expect(updateOAuthClientSchema.safeParse({ isActive: false, expectedUpdatedAt: null }).success).toBe(true);
+    expect(updateOAuthClientSchema.safeParse({ isActive: false, expectedUpdatedAt: 'yesterday' }).success).toBe(false);
+  });
+
+  it('does not count expectedUpdatedAt as something to update', () => {
+    const r = updateOAuthClientSchema.safeParse({ expectedUpdatedAt: '2026-01-01T00:00:00.000Z' });
+    expect(!r.success && r.error.issues[0].message).toBe('Nothing to update');
+  });
+
   it('OAUTH_CLIENT_SCOPES lists the grantable scopes', () => {
     expect(OAUTH_CLIENT_SCOPES).toEqual(
       expect.arrayContaining(['openid', 'ai:generate', 'me:read', FEDERATED_ADMIN_STATUS_SCOPE])

@@ -284,7 +284,11 @@ describe('updateOAuthClient redirect URI edge cases', () => {
 
     await expect(
       updateOAuthClient(client.id, { redirectUris: ['https://app.example.test/cb2'] })
-    ).rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+    ).rejects.toMatchObject({
+      name: 'ConflictError',
+      statusCode: 409,
+      message: 'Redirect URIs changed while saving; reload and try again',
+    });
     vi.restoreAllMocks();
     const stored = await OAuthClientModel.findById(client.id).lean();
     expect(stored?.redirectUris).toEqual(['com.other.app:/oauth']);
@@ -408,6 +412,65 @@ describe('updateOAuthClient scopes', () => {
       updateOAuthClient(client.id, { allowedScopes: [...client.allowedScopes, FEDERATED_ADMIN_STATUS_SCOPE] })
     ).rejects.toMatchObject({ statusCode: 409 });
     vi.restoreAllMocks();
+  });
+});
+
+describe('updateOAuthClient expectedUpdatedAt', () => {
+  const seedAged = async () => {
+    const { client } = await createOAuthClient(base);
+    const stale = client.updatedAt;
+    await OAuthClientModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(client.id) },
+      { $set: { updatedAt: new Date(Date.now() + 60_000) } }
+    );
+    return { client, stale };
+  };
+
+  it('answers ConflictError for a stale value and leaves the scopes unchanged', async () => {
+    const { client, stale } = await seedAged();
+    await expect(
+      updateOAuthClient(client.id, { allowedScopes: ['openid', 'email'], expectedUpdatedAt: stale })
+    ).rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+    const stored = await OAuthClientModel.findById(client.id).lean();
+    expect(stored?.allowedScopes).toEqual(client.allowedScopes);
+  });
+
+  it('writes when the value matches the current view', async () => {
+    const { client } = await createOAuthClient(base);
+    const { after } = await updateOAuthClient(client.id, {
+      allowedScopes: ['openid', 'email'],
+      expectedUpdatedAt: client.updatedAt,
+    });
+    expect(after.allowedScopes).toEqual(['openid', 'email']);
+  });
+
+  it('conflicts on a stale value for a redirect-only payload too', async () => {
+    const { client, stale } = await seedAged();
+    await expect(
+      updateOAuthClient(client.id, { redirectUris: ['https://app.example.test/cb2'], expectedUpdatedAt: stale })
+    ).rejects.toMatchObject({
+      name: 'ConflictError',
+      statusCode: 409,
+      message: 'OAuth client changed while saving; reload and try again',
+    });
+  });
+
+  it('matches null against a legacy client stored without updatedAt', async () => {
+    const { client } = await createOAuthClient(base);
+    await OAuthClientModel.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(client.id) },
+      { $unset: { updatedAt: '' } }
+    );
+    const { after } = await updateOAuthClient(client.id, { isActive: false, expectedUpdatedAt: null });
+    expect(after.isActive).toBe(false);
+  });
+
+  it('conflicts on null when the client has an updatedAt', async () => {
+    const { client } = await createOAuthClient(base);
+    await expect(updateOAuthClient(client.id, { isActive: false, expectedUpdatedAt: null })).rejects.toMatchObject({
+      name: 'ConflictError',
+      statusCode: 409,
+    });
   });
 });
 

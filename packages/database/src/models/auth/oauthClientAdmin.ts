@@ -207,12 +207,15 @@ export async function updateOAuthClient(
     // Federation must still exist when this write leaves an opt-in scope in place.
     filter.federatedIdp = { $exists: true };
   }
+  if (data.expectedUpdatedAt !== undefined) {
+    filter.updatedAt = data.expectedUpdatedAt === null ? null : new Date(data.expectedUpdatedAt);
+  }
 
   const doc = await OAuthClientModel.findOneAndUpdate(filter, update, { new: true, runValidators: true }).exec();
   if (!doc) {
     if (Object.keys(filter).length > 1 && (await OAuthClientModel.exists({ _id: id }))) {
       throw new ConflictError(
-        scopesOrTrustChanged
+        scopesOrTrustChanged || data.expectedUpdatedAt !== undefined
           ? 'OAuth client changed while saving; reload and try again'
           : 'Redirect URIs changed while saving; reload and try again'
       );

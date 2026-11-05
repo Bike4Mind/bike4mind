@@ -321,7 +321,7 @@ export default function OAuthClientsTab() {
 
   const editMutation = useMutation({
     mutationFn: ({ client, payload }: { client: OAuthClientView; payload: UpdateOAuthClientInput }) =>
-      updateOAuthClient(client.id, payload),
+      updateOAuthClient(client.id, { ...payload, expectedUpdatedAt: client.updatedAt }),
     onSuccess: client => {
       invalidate();
       setNarrowing(null);
@@ -329,6 +329,7 @@ export default function OAuthClientsTab() {
       toast.success(`Updated ${client.name}`);
     },
     onError: (error: unknown) => {
+      invalidate();
       setNarrowing(null);
       setFormError(getErrorMessage(error));
     },
