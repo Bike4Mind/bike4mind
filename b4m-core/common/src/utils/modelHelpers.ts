@@ -282,3 +282,18 @@ export function getMaxReferenceImages(model: string): number {
   if (!isFlux2ImageModel(model)) return 0;
   return model.startsWith('flux-2-klein-') ? 4 : 8;
 }
+
+/**
+ * Whether `/image-edits` can serve the model. Wider than {@link supportsImageEdit}: FLUX.2 edits
+ * on its generation endpoint with no mask, but stays out of EDIT_SUPPORTED_IMAGE_MODELS because
+ * the chat edit-model picker and edit_image tool (which run BFL edits as Fill) read that list.
+ */
+export function supportsImageEditEndpoint(model?: string | null): boolean {
+  return supportsImageEdit(model) || (!!model && isFlux2ImageModel(model));
+}
+
+/** Reference images an edit may carry beyond the source image; FLUX.2's cap counts the source. */
+export function getMaxEditReferenceImages(model: string): number {
+  if (isGPTImageModel(model)) return MAX_REFERENCE_IMAGES;
+  return isFlux2ImageModel(model) ? getMaxReferenceImages(model) - 1 : 0;
+}

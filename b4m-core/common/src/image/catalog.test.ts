@@ -6,7 +6,7 @@ import {
   isGeminiImageModel,
   isKontextModel,
   rejectsTransparentBackground,
-  supportsImageEdit,
+  supportsImageEditEndpoint,
 } from '../utils/modelHelpers';
 import { getImageModelCatalogEntry } from './catalog';
 import { validateImageRequest, type ImageCapabilityRequest } from './validate';
@@ -41,7 +41,14 @@ describe.each(IMAGE_MODELS)('IMAGE_MODEL_CATALOG[%s]', model => {
   });
 
   it('offers edit exactly where an edit dispatcher (the edit path or the Kontext transform) serves it', () => {
-    expect(edit !== undefined).toBe(supportsImageEdit(model) || isKontextModel(model));
+    expect(edit !== undefined).toBe(supportsImageEditEndpoint(model) || isKontextModel(model));
+  });
+
+  it('edits FLUX.2 with no mask and one fewer reference than it generates with', () => {
+    if (!isFlux2ImageModel(model)) return;
+    expect(edit?.inputs.edit_source).toEqual({ max: 1 });
+    expect(edit?.inputs.mask).toBeUndefined();
+    expect(edit?.inputs.reference?.max).toBe((generate?.inputs.reference?.max ?? 0) - 1);
   });
 
   it('takes an edit_source in edit and never in generate', () => {

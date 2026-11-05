@@ -31,6 +31,29 @@ const UNREACHABLE_NETWORK_CODES = new Set([
 /** BFL statuses meaning its moderation refused the prompt (Request) or the rendered image (Content). */
 const MODERATED_STATUSES = new Set(['Request Moderated', 'Content Moderated']);
 
+/** FLUX.2 takes its source and reference images as input_image, input_image_2, ... in order. */
+const flux2InputImageFields = (images: string[]): Record<string, string> =>
+  Object.fromEntries(images.map((image, index) => [index === 0 ? 'input_image' : `input_image_${index + 1}`, image]));
+
+/** FLUX.2 (except flex) inverts upsampling into `disable_pup`; other models that support it take `prompt_upsampling`. */
+const promptUpsamplingBodyFields = (model: BFLImageModel, promptUpsampling: boolean) =>
+  !supportsPromptUpsampling(model)
+    ? {}
+    : isFlux2ImageModel(model) && model !== ImageModels.FLUX_2_FLEX
+      ? { disable_pup: !promptUpsampling }
+      : { prompt_upsampling: promptUpsampling };
+
+/** Log-safe copy of a request body: base64 image payloads (image, mask, input_image*) become a length marker. */
+const redactInputImages = (body: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries(body).map(([key, value]) => [
+      key,
+      typeof value === 'string' && /^(image|mask|input_image(_\d+)?)$/.test(key)
+        ? `[BASE64_DATA_${value.length}_CHARS]`
+        : value,
+    ])
+  );
+
 export class BFLImageService extends AIImageService {
   private baseUrl = 'https://api.bfl.ai/v1';
 
@@ -102,16 +125,8 @@ export class BFLImageService extends AIImageService {
       if (isFlux2ImageModel(model) && referenceImages.length > getMaxReferenceImages(model)) {
         throw new Error(`Model ${model} accepts at most ${getMaxReferenceImages(model)} reference images`);
       }
-      const referenceFields = isFlux2ImageModel(model)
-        ? Object.fromEntries(
-            referenceImages.map((image, index) => [index === 0 ? 'input_image' : `input_image_${index + 1}`, image])
-          )
-        : { image_prompt };
-      const promptUpsamplingFields = !supportsPromptUpsampling(model)
-        ? {}
-        : isFlux2ImageModel(model) && model !== ImageModels.FLUX_2_FLEX
-          ? { disable_pup: !prompt_upsampling }
-          : { prompt_upsampling };
+      const referenceFields = isFlux2ImageModel(model) ? flux2InputImageFields(referenceImages) : { image_prompt };
+      const promptUpsamplingFields = promptUpsamplingBodyFields(model, prompt_upsampling);
       // Generate n images in parallel
       const urls = await Promise.all(
         Array.from({ length: n }).map(async () => {
@@ -226,9 +241,25 @@ export class BFLImageService extends AIImageService {
       guidance = 60,
       output_format = 'jpeg',
       safety_tolerance = BFL_SAFETY_TOLERANCE.DEFAULT,
+      referenceImages = [],
     }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
+      const flux2 = isFlux2ImageModel(model);
+      if (flux2 && 1 + referenceImages.length > getMaxReferenceImages(model)) {
+        throw new Error(`Model ${model} accepts at most ${getMaxReferenceImages(model)} reference images`);
+      }
+      // FLUX.2 edits on its generation endpoint: no mask, steps or guidance, and the source rides as input_image.
+      const flux2Body = flux2
+        ? {
+            prompt,
+            ...flux2InputImageFields([image, ...referenceImages]),
+            ...promptUpsamplingBodyFields(model, prompt_upsampling),
+            seed,
+            safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
+            output_format: toNonWebpOutputFormat(output_format) || 'jpeg',
+          }
+        : undefined;
       // Prepare request body based on model
       const requestBody: {
         prompt: string;
@@ -254,8 +285,8 @@ export class BFLImageService extends AIImageService {
         output_format: toNonWebpOutputFormat(output_format) || 'jpeg',
       };
 
-      const cleanedBody = this.stripNullFields(requestBody);
-      Logger.globalInstance.debug('[DEBUG] BFL Image edit request body:', cleanedBody);
+      const cleanedBody = this.stripNullFields(flux2Body ?? requestBody);
+      Logger.globalInstance.debug('[DEBUG] BFL Image edit request body:', redactInputImages(cleanedBody));
 
       // Submit a new generation request for each image
       const submitResponse = await axios.post(`${this.baseUrl}/${model}`, cleanedBody, {
@@ -273,7 +304,7 @@ export class BFLImageService extends AIImageService {
         pollingUrl,
         responseData: submitResponse.data,
         endpoint: `${this.baseUrl}/${model}`,
-        requestBody,
+        requestBody: redactInputImages(cleanedBody),
       });
 
       // Poll for this specific request's result using the polling_url from BFL

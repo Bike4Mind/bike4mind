@@ -17,7 +17,7 @@ import {
   isGeminiImageModel,
   isKontextModel,
   requiresImageInput,
-  supportsImageEdit,
+  supportsImageEditEndpoint,
   supportsTransparentBackground,
   usesDiscreteImageDimensions,
 } from './modelHelpers';
@@ -131,7 +131,7 @@ export function getImageModelCapabilities(model: ImageModels): ImageModelCapabil
       qualities: resolveQualities(model),
       maxImages: requiresImageInput(model) ? IMAGES_PER_EDIT_REQUEST : MAX_IMAGES_PER_REQUEST,
       maxReferenceImages: getMaxReferenceImages(model),
-      edit: supportsImageEdit(model),
+      edit: supportsImageEditEndpoint(model),
       requiresInputImage: requiresImageInput(model),
     },
   };
