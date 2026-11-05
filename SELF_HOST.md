@@ -787,7 +787,7 @@ The drill derives its broker image, configuration mount, and storage mounts from
 **Requirements:**
 
 - Mongo and object storage must be the bundled `mongo` and `minio` services. The tool refuses an external `MONGODB_URI` or `AWS_ENDPOINT_URL_S3`; back those up with your provider's tooling.
-- The user in `MONGODB_URI` must hold the `root` role (or `backup` and `restore`, with `applyOps`), because it takes a whole-instance `--oplog` dump and replays the oplog on restore. If the URI has credentials and no `authSource`, the database in its path is used as the auth database.
+- The user in `MONGODB_URI` must hold the `root` role (or a role granting `anyAction` on `anyResource`, which `--oplogReplay` requires), because it takes a whole-instance `--oplog` dump and replays the oplog on restore. If the URI has credentials and no `authSource`, the database in its path is used as the auth database.
 - The `mongodump` and `mongorestore` run inside the `mongo` container. The URI is read from a 0600 temp file there, so the password is not in any process argv.
 
 **What is not backed up:**
@@ -825,7 +825,7 @@ Restore starts `mongo` and `minio`, runs `mongorestore --oplogReplay`, runs the 
 
 Then bring up the rest of the stack with the same `-p`.
 
-To restore over the original project, stop every service except `mongo` and `minio` first (the workers and app also write, and the upload webhook re-queues every restored object), for example `docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps --services | grep -vx -e mongo -e minio | xargs docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop`, then pass `--yes`. This drops the collections in the backup and removes objects newer than the backup, so everything written since is lost. It needs the same Mongo credentials the backup was taken with.
+To restore over the original project, stop every service except `mongo` and `minio` first (the workers and app also write, and the upload webhook re-queues every restored object), for example `docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps --services | grep -vx -e mongo -e minio | xargs docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop`, then pass `--yes`. This drops every non-system database (`admin`, `config` and `local` are kept) and removes objects that are not in the backup, so everything written since is lost. It needs the same Mongo credentials the backup was taken with.
 
 ### Recovery point and retention
 

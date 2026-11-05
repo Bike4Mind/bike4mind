@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import sys
@@ -86,16 +87,25 @@ def mongodump_cmd(compose):
     return exec_cmd(compose, with_config('mongodump --oplog --archive --gzip'))
 
 
-def mongorestore_cmd(compose, drop):
-    """--drop only when overwriting existing data: on a fresh auth-enabled target it replaces
-    the admin users mid-restore and the following oplog replay is then unauthenticated."""
-    return exec_cmd(compose, with_config('mongorestore ' + ('--drop ' if drop else '') + '--oplogReplay --archive --gzip'))
+def mongorestore_cmd(compose):
+    """Never --drop: it replaces the admin users mid-restore, and the oplog replay that
+    follows then runs unauthenticated whenever the target's root user is not the dump's.
+    Overwriting existing data drops the user databases first (mongo_drop_dbs_cmd)."""
+    return exec_cmd(compose, with_config('mongorestore --oplogReplay --archive --gzip'))
+
+
+def user_dbs_cmd(compose, action):
+    names = ('m.getDBNames().filter(n => !' + json.dumps(sorted(SYSTEM_DBS)) + '.includes(n))')
+    js = f'const m = new Mongo(process.env.{URI_ENV}); const names = {names}; {action}'
+    return exec_cmd(compose, f'mongosh --nodb --quiet --eval {shlex.quote(js)}')
 
 
 def mongo_user_dbs_cmd(compose):
-    js = (f'new Mongo(process.env.{URI_ENV}).getDBNames().filter(n => !'
-          + json.dumps(sorted(SYSTEM_DBS)) + '.includes(n)).join(",")')
-    return exec_cmd(compose, f'mongosh --nodb --quiet --eval {shlex.quote("print(" + js + ")")}')
+    return user_dbs_cmd(compose, 'print(names.join(","))')
+
+
+def mongo_drop_dbs_cmd(compose):
+    return user_dbs_cmd(compose, 'names.forEach(n => m.getDB(n).dropDatabase())')
 
 
 def mc_cmd(compose, objects_dir, script, read_only):
@@ -162,11 +172,27 @@ def run(cmd, env=None, **kwargs):
     return subprocess.run(cmd, check=True, text=True, env=env, **kwargs)
 
 
-def step(name, cmd, **kwargs):
+URI_PASSWORD = re.compile(r'(mongodb(?:\+srv)?://[^:/@\s]+:)[^@\s]*@')
+
+
+def redact(text):
+    """Database tools echo the full connection URI in some errors."""
+    return URI_PASSWORD.sub(r'\1***@', text or '')
+
+
+def step(name, cmd, redact_stderr=False, **kwargs):
+    """redact_stderr: buffer stderr and print it with URI passwords masked."""
+    if redact_stderr:
+        kwargs['stderr'] = subprocess.PIPE
     try:
-        return run(cmd, **kwargs)
+        result = run(cmd, **kwargs)
     except subprocess.CalledProcessError as error:
+        if redact_stderr:
+            print(redact(error.stderr), end='', file=sys.stderr)
         raise SystemExit(f'{name} failed (exit {error.returncode})') from None
+    if redact_stderr:
+        print(redact(result.stderr), end='', file=sys.stderr)
+    return result
 
 
 def load(args):
@@ -195,7 +221,7 @@ def backup(args):
     started = utcnow()
     try:
         with open(dest / MONGO_ARCHIVE, 'wb') as out:
-            step('mongodump', mongodump_cmd(compose), env=env, stdout=out)
+            step('mongodump', mongodump_cmd(compose), redact_stderr=True, env=env, stdout=out)
         step('object mirror', mc_cmd(compose, dest / 'objects', mirror_script(buckets.values(), restore=False), False), env=env)
     except SystemExit as error:
         raise SystemExit(f'{error}; {dest} is incomplete, remove it before retrying') from None
@@ -211,10 +237,12 @@ def restore(args):
     dest = Path(args.source).resolve()
     check_manifest(dest, buckets)
     step('start mongo and minio', [*compose, 'up', '-d', '--no-deps', '--wait', 'mongo', 'minio'])
-    existing = step('target check', mongo_user_dbs_cmd(compose), env=env, stdout=subprocess.PIPE).stdout.strip()
+    existing = step('target check', mongo_user_dbs_cmd(compose), redact_stderr=True, env=env, stdout=subprocess.PIPE).stdout.strip()
     if existing and not args.yes:
         raise SystemExit(f'Target Mongo already has data ({existing}); restore into a fresh project or pass --yes to overwrite')
-    step('mongorestore', mongorestore_cmd(compose, drop=bool(existing)), env=env, stdin=open(dest / MONGO_ARCHIVE, 'rb'))
+    if existing:
+        step('drop user databases', mongo_drop_dbs_cmd(compose), redact_stderr=True, env=env)
+    step('mongorestore', mongorestore_cmd(compose), redact_stderr=True, env=env, stdin=open(dest / MONGO_ARCHIVE, 'rb'))
     step('createbuckets', [*compose, 'run', '--rm', '--no-deps', 'createbuckets'], env=env)  # buckets, webhooks, lifecycle
     script = mirror_script(buckets.values(), restore=True, remove=bool(existing))
     step('object mirror', mc_cmd(compose, dest / 'objects', script, True), env=env)
@@ -232,7 +260,7 @@ def parser():
     b.add_argument('--dest', required=True)
     r = sub.add_parser('restore', help='Restore a backup directory into the selected project')
     r.add_argument('--from', dest='source', required=True)
-    r.add_argument('--yes', action='store_true', help='Overwrite a target that already has data; also removes objects newer than the backup')
+    r.add_argument('--yes', action='store_true', help='Overwrite a target that already has data: drops every non-system database and removes objects not in the backup')
     return p
 
 

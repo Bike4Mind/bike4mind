@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import subprocess
@@ -54,6 +55,11 @@ def sh(cmd, **kwargs):
 def require(condition, message):
     if not condition:
         raise AssertionError(message)
+
+
+def oplog_entries(stderr, verb):
+    """Entries a mongodump ("dumped") or mongorestore ("applied") reported on stderr."""
+    return sum(int(n) for n in re.findall(verb + r' (\d+) oplog entr', stderr))
 
 
 def main(argv=None):
@@ -128,26 +134,37 @@ def main(argv=None):
                                      cwd=ROOT, stdout=subprocess.DEVNULL)
             time.sleep(2)  # writes land in the oplog slice captured by --oplog
             try:
-                sh([*cli, '-p', projects['src'], 'backup', '--dest', str(backup_dir)])
+                dumped = sh([*cli, '-p', projects['src'], 'backup', '--dest', str(backup_dir)],
+                            stderr=subprocess.PIPE, text=True).stderr
             finally:
                 noise.terminate()
                 noise.wait()
-            owner = (backup_dir / 'objects').stat().st_uid
-            require(owner == os.getuid(), f'objects/ is owned by uid {owner}, not the invoking user')
+            print(dumped, end='', file=sys.stderr)
+            require(oplog_entries(dumped, 'dumped') >= 1, 'The dump captured no oplog entries')
+            objects = backup_dir / 'objects'
+            for path in (objects / bucket, objects / bucket / key):
+                owner = path.stat().st_uid
+                require(owner == os.getuid(), f'{path} is owned by uid {owner}, not the invoking user')
             manifest = json.loads((backup_dir / 'manifest.json').read_text())
             print('Manifest:', json.dumps(manifest))
             require(manifest['buckets'][bucket]['objects'] >= 1, 'Manifest records no objects for the seeded bucket')
 
             sh([*compose(projects['src']), 'down', '--volumes', '--remove-orphans'])
 
-            sh([*cli, '-p', projects['dst'], 'restore', '--from', str(backup_dir)])
+            def check_restored(label, restore_args):
+                restored = sh([*cli, '-p', projects['dst'], 'restore', '--from', str(backup_dir), *restore_args],
+                              stderr=subprocess.PIPE, text=True).stderr
+                print(restored, end='', file=sys.stderr)
+                require(oplog_entries(restored, 'applied') >= 1, f'{label}: no oplog entries were replayed')
+                found = mongosh(projects['dst'],
+                                f'JSON.stringify(db.getSiblingDB("bike4mind").users.find({{email: {json.dumps(email)}}}).toArray().map(u => u._id.toString()))')
+                require(json.loads(found) == [user_id], f'{label}: user not restored with the same _id: {found}')
+                print(f'PASS user ({label}): same _id and email restored', user_id, email)
+                require(file_sha(projects['dst']) == expected, f'{label}: restored file sha256 differs')
+                print(f'PASS file sha256 ({label}):', expected)
 
-            found = mongosh(projects['dst'],
-                            f'JSON.stringify(db.getSiblingDB("bike4mind").users.find({{email: {json.dumps(email)}}}).toArray().map(u => u._id.toString()))')
-            require(json.loads(found) == [user_id], f'User not restored with the same _id: {found}')
-            print('PASS user: same _id and email restored', user_id, email)
-            require(file_sha(projects['dst']) == expected, 'Restored file sha256 differs')
-            print('PASS file sha256:', expected)
+            check_restored('fresh restore', [])
+            check_restored('restore --yes over existing data', ['--yes'])
         finally:
             for project in projects.values():
                 subprocess.run([*compose(project), 'down', '--volumes', '--remove-orphans'], cwd=ROOT, check=False)

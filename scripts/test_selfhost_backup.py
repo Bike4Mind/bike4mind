@@ -54,6 +54,19 @@ class ResolveTargets(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'MONGODB_URI'):
             sb.resolve_targets(cfg)
 
+    def test_lookalike_hosts_refused(self):
+        for uri in ('mongodb://mongo.example.net:27017/db', 'mongodb://mongo-replica:27017/db',
+                    'mongodb://mongo:27017,mongo2:27017/db'):
+            cfg = config()
+            cfg['services']['app']['environment']['MONGODB_URI'] = uri
+            with self.assertRaisesRegex(ValueError, 'MONGODB_URI', msg=uri):
+                sb.resolve_targets(cfg)
+        for endpoint in ('https://minio.example.com', 'http://minio-2:9000', 'http://example.com/minio'):
+            cfg = config()
+            cfg['services']['app']['environment']['AWS_ENDPOINT_URL_S3'] = endpoint
+            with self.assertRaisesRegex(ValueError, 'AWS_ENDPOINT_URL_S3', msg=endpoint):
+                sb.resolve_targets(cfg)
+
     def test_external_object_storage_refused(self):
         cfg = config()
         cfg['services']['app']['environment']['AWS_ENDPOINT_URL_S3'] = 'https://s3.example.net'
@@ -87,19 +100,37 @@ class Commands(unittest.TestCase):
     def test_dump_and_restore_flags(self):
         self.assertIn('--oplog', sb.mongodump_cmd(self.compose)[-1])
         self.assertNotIn('--quiet', sb.mongodump_cmd(self.compose)[-1])
-        self.assertNotIn('--quiet', sb.mongorestore_cmd(self.compose, drop=True)[-1])
+        self.assertNotIn('--quiet', sb.mongorestore_cmd(self.compose)[-1])
 
-    def test_restore_drops_only_when_overwriting(self):
-        fresh = sb.mongorestore_cmd(self.compose, drop=False)[-1]
-        self.assertIn('--oplogReplay', fresh)
-        self.assertNotIn('--drop', fresh)
-        self.assertIn('--drop', sb.mongorestore_cmd(self.compose, drop=True)[-1])
+    def test_mongorestore_never_drops(self):
+        cmd = sb.mongorestore_cmd(self.compose)[-1]
+        self.assertIn('--oplogReplay', cmd)
+        self.assertNotIn('--drop', cmd)
+
+    def test_user_db_commands_skip_exactly_the_system_databases(self):
+        for cmd in (sb.mongo_user_dbs_cmd(self.compose), sb.mongo_drop_dbs_cmd(self.compose)):
+            self.assertIn('!["admin", "config", "local"].includes(n)', cmd[-1])
+        self.assertIn('dropDatabase', sb.mongo_drop_dbs_cmd(self.compose)[-1])
+        self.assertNotIn('dropDatabase', sb.mongo_user_dbs_cmd(self.compose)[-1])
 
     def test_uri_never_in_container_argv(self):
-        for cmd in (sb.mongodump_cmd(self.compose), sb.mongorestore_cmd(self.compose, True), sb.mongo_user_dbs_cmd(self.compose)):
+        for cmd in (sb.mongodump_cmd(self.compose), sb.mongorestore_cmd(self.compose),
+                    sb.mongo_user_dbs_cmd(self.compose), sb.mongo_drop_dbs_cmd(self.compose)):
             self.assertIn(sb.URI_ENV, cmd[cmd.index('-e') + 1])
             self.assertNotIn('--uri', cmd[-1])
-            self.assertNotRegex(cmd[-1], r'(mongodump|mongorestore|mongosh)[^;]*\$' + sb.URI_ENV)
+            self.assertNotRegex(cmd[-1], r'(mongodump|mongorestore|mongosh)[^;]*\$\{?' + sb.URI_ENV)
+
+    def test_with_config_writes_escaped_private_config_and_cleans_up(self):
+        password = 'a\'b$c\\d"e%f'
+        uri = f'mongodb://root:{password}@mongo:27017/'
+        probe = ('probe() { ls -ld "$2" | cut -d" " -f1; cat "$2"; echo "$2"; }; '
+                 + sb.with_config('probe'))
+        out = subprocess.run(['/bin/sh', '-c', probe], env={**os.environ, sb.URI_ENV: uri},
+                             capture_output=True, text=True, check=True).stdout.split('\n')
+        mode, line, path = out[0], out[1], out[2]
+        self.assertTrue(mode.startswith('-rw-------'), mode)
+        self.assertEqual(line, "uri: '" + uri.replace("'", "''") + "'")
+        self.assertFalse(os.path.exists(path), 'config file left behind')
 
     def test_load_passes_uri_by_environment_only(self):
         args = sb.parser().parse_args(['-p', 'x', 'backup', '--dest', '/d'])
@@ -107,7 +138,7 @@ class Commands(unittest.TestCase):
         with mock.patch.object(sb, 'run', return_value=out):
             compose, _, env = sb.load(args)
         self.assertEqual(env[sb.URI_ENV], sb.instance_uri(URI))
-        argv = ' '.join(compose + sb.mongodump_cmd(compose) + sb.mongorestore_cmd(compose, True)
+        argv = ' '.join(compose + sb.mongodump_cmd(compose) + sb.mongorestore_cmd(compose)
                         + sb.mc_cmd(compose, Path('/o'), sb.mirror_script(['b'], False), False))
         self.assertNotIn('s3cret', argv)
 
@@ -198,16 +229,16 @@ def kind(cmd):
 
 
 class Restore(unittest.TestCase):
-    def restore(self, user_dbs='', *flags):
-        dest, buckets = make_backup_dir(self)
+    def restore(self, user_dbs='', *flags, dest=None):
+        backup_dir, buckets = make_backup_dir(self)
         calls, fake_run = recorder(user_dbs)
-        args = sb.parser().parse_args(['restore', '--from', str(dest), *flags])
+        args = sb.parser().parse_args(['restore', '--from', str(dest or backup_dir), *flags])
         with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, {})), \
                 mock.patch.object(sb, 'run', side_effect=fake_run):
             try:
                 sb.restore(args)
-            except SystemExit:
-                pass
+            finally:
+                self.calls = calls
         return calls
 
     def test_fresh_target_call_order_and_no_drop(self):
@@ -217,22 +248,40 @@ class Restore(unittest.TestCase):
         self.assertNotIn('--remove', calls[4][-1])
 
     def test_populated_target_aborts_before_any_write(self):
-        calls = self.restore('bike4mind\n')
-        self.assertEqual([kind(c) for c in calls], ['up', 'mongosh'])
+        with self.assertRaisesRegex(SystemExit, 'already has data'):
+            self.restore('bike4mind\n')
+        self.assertEqual([kind(c) for c in self.calls], ['up', 'mongosh'])
 
-    def test_yes_overwrite_drops_and_removes_newer_objects(self):
+    def test_yes_drops_user_databases_then_restores_without_drop(self):
         calls = self.restore('bike4mind\n', '--yes')
-        self.assertIn('--drop', calls[2][-1])
-        self.assertIn('--remove', calls[4][-1])
+        self.assertEqual([kind(c) for c in calls],
+                         ['up', 'mongosh', 'mongosh', 'mongorestore', 'createbuckets', 'mc mirror'])
+        self.assertIn('dropDatabase', calls[2][-1])
+        self.assertNotIn('--drop', calls[3][-1])
+        self.assertIn('--remove', calls[5][-1])
+
+    def test_tampered_backup_aborts_before_touching_the_target(self):
+        dest, _ = make_backup_dir(self)
+        (dest / sb.MONGO_ARCHIVE).write_bytes(b'tampered')
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            self.restore(dest=dest)
+        self.assertEqual(self.calls, [])
+
+    def test_restore_mounts_objects_read_only_without_user_override(self):
+        mc = self.restore()[-1]
+        self.assertTrue(any(part.endswith('/objects:/backup:ro') for part in mc), mc)
+        self.assertNotIn('--user', mc)
 
 
 class Backup(unittest.TestCase):
     def backup(self, dest, fail_on=None):
         _, buckets = sb.resolve_targets(config())
         calls = []
+        self.cmds = []
 
         def fake_run(cmd, **kwargs):
             calls.append(kind(cmd))
+            self.cmds.append(cmd)
             if fail_on and kind(cmd) == fail_on:
                 raise subprocess.CalledProcessError(3, cmd)
             if kind(cmd) == 'mongodump':
@@ -276,10 +325,42 @@ class Backup(unittest.TestCase):
             self.backup(dest)
         self.assertEqual(self.calls, [])
 
+    def test_backup_mounts_objects_writable_as_invoking_user(self):
+        self.backup(self.tempdir() / 'b')
+        mc = self.cmds[-1]
+        self.assertFalse(any(part.endswith(':ro') for part in mc), mc)
+        self.assertIn('--user', mc)
+
     def test_failure_names_step_and_incomplete_directory(self):
         dest = self.tempdir() / 'b'
         with self.assertRaisesRegex(SystemExit, r'mongodump failed \(exit 3\); .* is incomplete'):
             self.backup(dest, fail_on='mongodump')
+
+
+class Redaction(unittest.TestCase):
+    URI_ERROR = 'Failed: can\'t create session: failed to connect to mongodb://root:p4ss@localhost:27017/?authSource=app: timeout\n'
+
+    def test_redact_masks_password_keeps_the_rest(self):
+        self.assertEqual(sb.redact(self.URI_ERROR),
+                         'Failed: can\'t create session: failed to connect to mongodb://root:***@localhost:27017/?authSource=app: timeout\n')
+        self.assertEqual(sb.redact(None), '')
+
+    def test_failed_step_prints_redacted_stderr(self):
+        error = subprocess.CalledProcessError(1, ['x'], stderr=self.URI_ERROR)
+        with mock.patch.object(sb, 'run', side_effect=error), mock.patch('sys.stderr') as err:
+            with self.assertRaisesRegex(SystemExit, r'mongodump failed \(exit 1\)'):
+                sb.step('mongodump', ['x'], redact_stderr=True)
+        printed = ''.join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn('authSource=app', printed)
+        self.assertNotIn('p4ss', printed)
+
+    def test_successful_step_prints_redacted_stderr(self):
+        done = subprocess.CompletedProcess(['x'], 0, stderr='dumped 1 oplog entry ' + self.URI_ERROR)
+        with mock.patch.object(sb, 'run', return_value=done), mock.patch('sys.stderr') as err:
+            sb.step('mongodump', ['x'], redact_stderr=True)
+        printed = ''.join(c.args[0] for c in err.write.call_args_list)
+        self.assertIn('dumped 1 oplog entry', printed)
+        self.assertNotIn('p4ss', printed)
 
 
 if __name__ == '__main__':
