@@ -6,13 +6,6 @@ import { Logger } from '@bike4mind/observability';
 import type { ActiveSubscriptionsRequest } from '@server/entitlements/activeSubscriptions';
 import { resolveUserRateTier, type RateTierUser } from '@server/utils/userRateTier';
 
-/**
- * Presigned client uploads whose bytes have not landed: FabFile rows with `clientUpload`, still
- * `pending`, not deleted, created within the window. The presign doors (createPresignedUpload,
- * generate-presigned-urls-batch, createFabFile without content) cap how many a user may hold and
- * reserve recent client-upload bytes until storage accounting records their charge.
- */
-
 // ms. The presigned PUT lives 10 minutes; the rest is slack for a slow PUT or a late S3 event.
 // An older pending row is abandoned and stops counting.
 export const PENDING_UPLOAD_WINDOW_MS = 30 * 60 * 1000;
@@ -94,8 +87,10 @@ async function loadPendingGroups(userId: string, organizationIds: string[]): Pro
 
 /**
  * Refuses `requested` more presigned uploads when the caller would hold more than the pending cap,
- * then returns the in-flight snapshot the quota check reserves against. Run it after the door's
- * admission gates and before consumeFileUploadBudget, so a refusal costs no hourly allowance.
+ * then returns the in-flight snapshot the quota check reserves against. Pending means FabFile rows with
+ * `clientUpload` still `pending`, not deleted, created within the window; recent uncharged bytes are reserved too.
+ * Called by the presign doors (createPresignedUpload, generate-presigned-urls-batch, createFabFile without
+ * content), after their admission gates and before consumeFileUploadBudget, so a refusal costs no hourly allowance.
  * `ownerOrganizationIds` are the org pools the new files bill to (undefined for personal files).
  * Count and bytes are snapshots, not atomic reservations; concurrent requests can share a reading.
  */
@@ -131,6 +126,7 @@ export async function admitPendingUploads(
       );
     }
     // Reaching here means count > 0, so `myPending` is non-empty.
+    // A lower bound when requested > 1: more than one slot must free up.
     const oldest = Math.min(...myPending.map(group => group.oldest.getTime()));
     const retryAfter = Math.max(1, Math.ceil((oldest + PENDING_UPLOAD_WINDOW_MS - Date.now()) / 1000));
     throw new TooManyRequestsError(
