@@ -86,6 +86,8 @@ export type ModelBuildReport = {
   error?: string;
   line?: number;
   summary?: ModelSummary;
+  /** Why a good build's sibling `.glb` was not written (a read-only folder, a full disk). */
+  glbError?: string;
 };
 
 export const MODEL_VIEWS = ['front', 'back', 'left', 'right', 'top', 'iso'] as const;
@@ -113,9 +115,9 @@ export function modelKindFor(path: string): ModelKind | null {
   return null;
 }
 
-/** `chest.model.js` -> `chest.glb`, in the same directory. */
-export function siblingGlbPath(modelPath: string): string {
-  return modelPath.replace(/\.model\.js$/i, '.glb');
+/** `chest.model.js` -> `chest.glb`, in the same directory; null for any other file, so an opened asset is never a target. */
+export function siblingGlbPath(modelPath: string): string | null {
+  return /\.model\.js$/i.test(modelPath) ? modelPath.replace(/\.model\.js$/i, '.glb') : null;
 }
 
 function escapeRegExp(text: string): string {
@@ -126,8 +128,9 @@ function escapeRegExp(text: string): string {
  * Rewrite the default `value:` of one param inside `export const params = { ... }`.
  *
  * A scoped pattern match rather than a parser: the params block is found by its export line and
- * brace-matched, and within it exactly one `key: { ... value: <number>` must match. Zero or
- * several matches return null so the caller reports "not saved" instead of guessing.
+ * brace-matched, and within it exactly one `key: { ... value: <number>` must match, the number being
+ * the whole value (not `10 * 2` or `1e+3`). Zero or several matches return null so the caller
+ * reports "not saved" instead of guessing.
  */
 export function writeParamValue(source: string, key: string, value: number): string | null {
   if (!Number.isFinite(value)) return null;
@@ -150,7 +153,7 @@ export function writeParamValue(source: string, key: string, value: number): str
   if (end < 0) return null;
   const block = source.slice(start, end + 1);
   const pattern = new RegExp(
-    `(['"]?\\b${escapeRegExp(key)}\\b['"]?\\s*:\\s*\\{[^{}]*?\\bvalue\\s*:\\s*)(-?\\d+(?:\\.\\d+)?(?:e-?\\d+)?)`,
+    `(['"]?\\b${escapeRegExp(key)}\\b['"]?\\s*:\\s*\\{[^{}]*?\\bvalue\\s*:\\s*)(-?\\d+(?:\\.\\d+)?(?:e-?\\d+)?)(?=\\s*[,}\\r\\n])`,
     'g'
   );
   const matches = [...block.matchAll(pattern)];
@@ -182,7 +185,8 @@ export function formatModelSummary(report: ModelBuildReport, glbPath?: string): 
   const params = Object.entries(summary.params);
   if (params.length) lines.push(`Params: ${params.map(([key, value]) => `${key}=${formatNumber(value)}`).join(', ')}`);
   if (summary.joints?.length) lines.push(`Joints: ${summary.joints.join('; ')}`);
-  if (glbPath) lines.push(`GLB written: ${glbPath}`);
+  if (report.glbError) lines.push(`GLB not written: ${report.glbError}`);
+  else if (glbPath) lines.push(`GLB written: ${glbPath}`);
   return lines.join('\n');
 }
 

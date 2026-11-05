@@ -38,6 +38,11 @@ describe('siblingGlbPath', () => {
   it('swaps the .model.js suffix for .glb in place', () => {
     expect(siblingGlbPath('/proj/assets/chest.model.js')).toBe('/proj/assets/chest.glb');
   });
+
+  it('has no sibling for a file that is not a .model.js', () => {
+    expect(siblingGlbPath('/proj/assets/chest.glb')).toBeNull();
+    expect(siblingGlbPath('/proj/assets/chest.stl')).toBeNull();
+  });
 });
 
 describe('writeParamValue', () => {
@@ -47,6 +52,11 @@ describe('writeParamValue', () => {
     expect(next).toContain('lidRatio: { value: 0.35');
     // The same key outside the params export is left alone.
     expect(next).toContain('const width = { value: 1 }');
+  });
+
+  it('refuses a value that is an expression rather than a plain number', () => {
+    expect(writeParamValue(SOURCE.replace('value: 60,', 'value: 10 * 2,'), 'width', 80)).toBeNull();
+    expect(writeParamValue(SOURCE.replace('value: 60,', 'value: 1e+3,'), 'width', 80)).toBeNull();
   });
 
   it('handles fractional values', () => {
@@ -82,6 +92,20 @@ describe('formatModelSummary', () => {
     expect(text).toContain('Parts: body, lid');
     expect(text).toContain('Params: width=60');
     expect(text).toContain('GLB written: /proj/chest.glb');
+  });
+
+  it('says why the GLB was not written instead of naming a stale one', () => {
+    const text = formatModelSummary(
+      {
+        generation: 1,
+        ok: true,
+        glbError: 'EACCES: permission denied',
+        summary: { parts: ['body'], size: [1, 1, 1], units: 'mm', triangles: 2, params: {} },
+      },
+      '/proj/chest.glb'
+    );
+    expect(text).toContain('GLB not written: EACCES: permission denied');
+    expect(text).not.toContain('GLB written:');
   });
 
   it('describes a failure with its line', () => {

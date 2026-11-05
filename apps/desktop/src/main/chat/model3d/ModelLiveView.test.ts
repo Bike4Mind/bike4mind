@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -94,6 +94,15 @@ describe('ModelLiveView', () => {
     expect(target).toBe(join(dir, 'chest.glb'));
     expect(readFileSync(join(dir, 'chest.glb')).toString()).toBe('glTF');
     expect(view.glbPath()).toBe(target);
+  });
+
+  it('never writes over an opened .glb', async () => {
+    const asset = join(dir, 'asset.glb');
+    writeFileSync(asset, 'original');
+    await view.open(asset);
+    expect(await view.writeGlb(view.current().generation, new Uint8Array([1, 2, 3]))).toBeNull();
+    expect(readFileSync(asset, 'utf8')).toBe('original');
+    expect(readdirSync(dir).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
   it('writes a slider value back, and leaves the file alone when the key is unknown', async () => {

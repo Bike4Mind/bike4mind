@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { type FSWatcher, watch } from 'node:fs';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import {
   EMPTY_MODEL_STATE,
@@ -36,7 +36,9 @@ type PendingCapture = { resolve: (bytes: Uint8Array) => void; reject: (error: Er
  * performs the only writes (the sibling GLB and slider values). The renderer owns the build, which
  * runs in the sandboxed b4m-model: engine, and reports back per generation.
  *
- * Callers are expected to pass a path already contained in the session's roots (modelTools.ts).
+ * Paths come from two places: the agent's tools, confined to the session's roots (modelTools.ts),
+ * and the user's own Open dialog (modelIpc.ts), which may be anywhere. A tool call that names no
+ * path works on whatever is open, including a file the user picked outside the roots.
  */
 export class ModelLiveView {
   private state: ModelViewState = EMPTY_MODEL_STATE;
@@ -130,13 +132,24 @@ export class ModelLiveView {
     });
   }
 
-  /** Writes the sibling `.glb` of the open `.model.js`, and nothing else. Stale generations are dropped. */
+  /**
+   * Writes the sibling `.glb` of the open `.model.js`, and nothing else; an opened asset has no
+   * sibling, so it is never overwritten. Stale generations are dropped, before the write and again
+   * before the rename into place, so an older build that finishes writing last cannot win.
+   */
   async writeGlb(generation: number, bytes: Uint8Array): Promise<string | null> {
     const { path, kind } = this.state;
     if (generation !== this.state.generation || kind !== 'model' || !path || this.state.missing) return null;
     const target = siblingGlbPath(path);
-    await writeFile(target, bytes);
-    if (generation === this.state.generation) this.lastGlb = target;
+    if (!target) return null;
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    await writeFile(temporary, bytes);
+    if (generation !== this.state.generation) {
+      await rm(temporary, { force: true });
+      return null;
+    }
+    await rename(temporary, target);
+    this.lastGlb = target;
     return target;
   }
 

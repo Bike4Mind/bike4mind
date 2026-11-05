@@ -14,6 +14,7 @@ export function parseBuildReport(value: unknown): ModelBuildReport | null {
   if (!isRecord(value) || typeof value.generation !== 'number' || typeof value.ok !== 'boolean') return null;
   const report: ModelBuildReport = { generation: value.generation, ok: value.ok };
   if (typeof value.error === 'string') report.error = value.error.slice(0, 4000);
+  if (typeof value.glbError === 'string') report.glbError = value.glbError.slice(0, 4000);
   if (typeof value.line === 'number') report.line = value.line;
   const summary = value.summary;
   if (

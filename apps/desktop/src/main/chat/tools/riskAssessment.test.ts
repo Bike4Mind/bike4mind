@@ -32,6 +32,8 @@ describe('the untrusted-content and outbound axes', () => {
       'browser_snapshot',
       'screen_capture',
       'simulator_screenshot',
+      'model_view',
+      'model_screenshot',
       'mcp__notion_search',
     ]) {
       expect(readsUntrusted(name), name).toBe(true);

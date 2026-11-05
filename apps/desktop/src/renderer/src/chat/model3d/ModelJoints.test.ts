@@ -18,7 +18,7 @@ describe('swingAngles', () => {
 
 describe('jointReadout', () => {
   it('shows whole degrees for a turn and a distance for a slide', () => {
-    expect(jointReadout(lid, 54.6, 'mm')).toBe('55°');
+    expect(jointReadout(lid, 54.6, 'mm')).toBe('55\u00b0');
     expect(jointReadout({ ...lid, motion: 'slide', range: [0, 40] }, 12.4, 'mm')).toBe('12 mm');
     expect(jointReadout({ ...lid, motion: 'slide', range: [0, 0.04] }, 0.0124, 'm')).toBe('0.012 m');
   });

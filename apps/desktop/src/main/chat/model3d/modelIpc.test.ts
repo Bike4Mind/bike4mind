@@ -21,6 +21,11 @@ describe('parseBuildReport', () => {
     expect(report?.summary).not.toHaveProperty('joints');
   });
 
+  it('keeps why the GLB was not written, and only as text', () => {
+    expect(parseBuildReport({ generation: 3, ok: true, summary, glbError: 'EROFS' })?.glbError).toBe('EROFS');
+    expect(parseBuildReport({ generation: 3, ok: true, summary, glbError: 42 })).not.toHaveProperty('glbError');
+  });
+
   it('drops a report without a generation', () => {
     expect(parseBuildReport({ ok: true })).toBeNull();
   });

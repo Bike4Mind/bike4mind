@@ -27,6 +27,12 @@ const ENGINE_ORIGIN = 'b4m-model://engine';
 
 export type ModelBuildStatus = 'idle' | 'building' | 'ok' | 'error';
 
+/**
+ * `file` builds what is on disk and is the one that writes the GLB and reports to main (which the
+ * model tools wait on); `preview` (a slider drag) and `print` (STL export) only show or export.
+ */
+type BuildPurpose = 'file' | 'preview' | 'print';
+
 export type ModelEngine = {
   state: ModelViewState;
   status: ModelBuildStatus;
@@ -92,6 +98,8 @@ export function useModelEngine(dark: boolean): ModelEngine {
   const engine = useRef<EngineFrame | null>(null);
   const requestId = useRef(0);
   const pending = useRef<((outcome: ModelBuildOutcome | null) => void) | null>(null);
+  const fileBuild = useRef<Promise<ModelBuildOutcome | null> | null>(null);
+  const previewFrame = useRef<number | null>(null);
   const darkRef = useRef(dark);
   darkRef.current = dark;
   const objectRef = useRef<THREE.Group | null>(null);
@@ -111,11 +119,15 @@ export function useModelEngine(dark: boolean): ModelEngine {
       unsubscribe();
       engine.current?.frame.remove();
       engine.current = null;
+      if (previewFrame.current !== null) cancelAnimationFrame(previewFrame.current);
     };
   }, []);
 
-  const build = useCallback(
-    async (source: string, values: Record<string, number>, print = false): Promise<ModelBuildOutcome | null> => {
+  const build = useCallback((source: string, values: Record<string, number>, purpose: BuildPurpose = 'file') => {
+    const run = (async (): Promise<ModelBuildOutcome | null> => {
+      // The engine runs one build at a time, so a preview or print started now would cancel a
+      // file build and lose its GLB and report: those wait for it instead.
+      while (purpose !== 'file' && fileBuild.current) await fileBuild.current;
       engine.current ??= mountEngineFrame();
       const { frame, ready } = engine.current;
       await ready;
@@ -123,7 +135,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
       const id = requestId.current;
       // A newer build supersedes this one: its caller gets null and stops.
       pending.current?.(null);
-      return new Promise(resolve => {
+      return new Promise<ModelBuildOutcome | null>(resolve => {
         const finish = (outcome: ModelBuildOutcome | null) => {
           window.removeEventListener('message', onMessage);
           if (pending.current === finish) pending.current = null;
@@ -135,11 +147,20 @@ export function useModelEngine(dark: boolean): ModelEngine {
         };
         pending.current = finish;
         window.addEventListener('message', onMessage);
-        frame.contentWindow?.postMessage({ type: 'build', id, source, params: values, print }, ENGINE_ORIGIN);
+        frame.contentWindow?.postMessage(
+          { type: 'build', id, source, params: values, print: purpose === 'print' },
+          ENGINE_ORIGIN
+        );
       });
-    },
-    []
-  );
+    })();
+    if (purpose === 'file') {
+      fileBuild.current = run;
+      void run.then(() => {
+        if (fileBuild.current === run) fileBuild.current = null;
+      });
+    }
+    return run;
+  }, []);
 
   const showOutcome = useCallback(async (generation: number, built: ModelBuildOutcome, writeGlb: boolean) => {
     if (stateRef.current.generation !== generation) return;
@@ -163,8 +184,13 @@ export function useModelEngine(dark: boolean): ModelEngine {
     setError(null);
     if (!writeGlb) return;
     // The GLB first, so a tool woken by the report can name the file that is already on disk.
-    await window.b4m.model.writeGlb({ generation, bytes: await exportGlb(next) }).catch(() => null);
-    await window.b4m.model.reportBuild({ generation, ok: true, summary: nextSummary });
+    const glbError = await exportGlb(next)
+      .then(bytes => window.b4m.model.writeGlb({ generation, bytes }))
+      .then(
+        written => (written ? undefined : 'the model changed before it was saved'),
+        (caught: unknown) => (caught instanceof Error ? caught.message : String(caught))
+      );
+    await window.b4m.model.reportBuild({ generation, ok: true, summary: nextSummary, glbError });
   }, []);
 
   useEffect(() => {
@@ -245,12 +271,19 @@ export function useModelEngine(dark: boolean): ModelEngine {
 
   const previewParam = useCallback(
     (key: string, value: number) => {
-      const { source, generation, kind } = stateRef.current;
+      const { source, kind } = stateRef.current;
       if (kind !== 'model' || source === null) return;
       overrides.current = { ...overrides.current, [key]: value };
       setParams(previous => (previous[key] ? { ...previous, [key]: { ...previous[key], value } } : previous));
-      void build(source, overrides.current).then(outcome => {
-        if (outcome) void showOutcome(generation, outcome, false);
+      // One build per frame however fast the slider fires: each build is a fresh worker and WASM instance.
+      if (previewFrame.current !== null) return;
+      previewFrame.current = requestAnimationFrame(() => {
+        previewFrame.current = null;
+        const current = stateRef.current;
+        if (current.kind !== 'model' || current.source === null) return;
+        void build(current.source, overrides.current, 'preview').then(outcome => {
+          if (outcome) void showOutcome(current.generation, outcome, false);
+        });
       });
     },
     [build, showOutcome]
@@ -269,7 +302,7 @@ export function useModelEngine(dark: boolean): ModelEngine {
       const { kind, source } = stateRef.current;
       if (kind !== 'model' || source === null) return null;
       // A fresh build with every part unioned, at the current slider values, so the STL is one printable solid.
-      const outcome = await build(source, overrides.current, true);
+      const outcome = await build(source, overrides.current, 'print');
       if (!outcome) throw new Error('The model changed during the export. Try again.');
       if (!outcome.ok) throw new Error(`The model did not build for export: ${outcome.error}`);
       return window.b4m.model.saveExport({ format, bytes: partsToStl(outcome.parts) });
