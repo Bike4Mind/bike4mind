@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { archFromModelInfo, positiveInt, tensorStatsFromTensors } from './arch';
+import { storageError } from './fileLock';
 import {
   LocalRuntimeError,
   ModelNotFoundError,
@@ -427,7 +428,10 @@ export class OllamaRuntime implements LocalRuntime, ModelImportRuntime {
     };
     let sent = 0;
     let lastReport = 0;
-    const counted = (Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>).pipeThrough(
+    const source = createReadStream(path);
+    let readError: unknown;
+    source.on('error', error => (readError ??= error));
+    const counted = (Readable.toWeb(source) as ReadableStream<Uint8Array>).pipeThrough(
       new TransformStream<Uint8Array, Uint8Array>({
         transform: (chunk, controller) => {
           sent += chunk.byteLength;
@@ -454,6 +458,7 @@ export class OllamaRuntime implements LocalRuntime, ModelImportRuntime {
       });
       await response.body?.cancel().catch(() => undefined);
     } catch (error) {
+      if (readError !== undefined && !options.signal?.aborted) throw storageError(this.id, path, readError, 'read');
       if (idle.signal.aborted && !options.signal?.aborted) throw idleError;
       throw error;
     } finally {

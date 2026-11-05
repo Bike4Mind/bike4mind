@@ -9,6 +9,7 @@ import {
   RuntimeConnectionError,
   RuntimeHttpError,
   RuntimeProtocolError,
+  RuntimeStorageError,
 } from './errors';
 import { OllamaRuntime } from './ollama';
 import type { PullProgress } from './types';
@@ -911,6 +912,26 @@ describe('OllamaRuntime blobs and create', () => {
       await expect(runtimeFor(server).uploadBlob(digest, file, { idleTimeoutMs: 100 })).rejects.toThrow(
         /stopped taking/
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a staged file it cannot read as a storage error, not an unreachable Ollama', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ollama-blob-'));
+    try {
+      server = await startFakeServer({
+        [`POST /api/blobs/${digest}`]: (_request, response) => response.writeHead(201).end(),
+      });
+      const failure = await runtimeFor(server)
+        .uploadBlob(digest, join(dir, 'gone.gguf'))
+        .then(
+          () => null,
+          (error: unknown) => error
+        );
+      expect(failure).toBeInstanceOf(RuntimeStorageError);
+      expect(failure).not.toBeInstanceOf(RuntimeConnectionError);
+      expect(failure).toMatchObject({ operation: 'read', code: 'ENOENT' });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
