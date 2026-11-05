@@ -19,6 +19,7 @@ import type {
 } from '@shared/modelServers';
 import { LOCAL_SERVER_NAME, readLaunchShape, specsBlank, specsProblem } from '@shared/modelServers';
 import type { SecretCipher, StoreFile, StoreLogger } from '../chat/mcp/McpServerStore';
+import { loopbackLaunchPort } from './loopbackPort';
 
 export { credentialHeaders, MAX_HEADER_NAME_CHARS, MAX_SECRET_CHARS };
 export type { ModelServerRecord, StoredAuth };
@@ -161,6 +162,10 @@ export class ModelServerStore {
       if (specs === null) delete stored.specs;
       else if (specs) stored.specs = specs;
       if (patch.kind !== undefined) stored.kind = patch.kind;
+      if (stored.specs?.kvCacheType && !keepsHardwareKvCache(stored)) {
+        const { kvCacheType: _dropped, ...rest } = stored.specs;
+        stored.specs = rest;
+      }
       // Launch settings are per program, and another kind runs another program.
       if (stored.kind !== current.kind) delete stored.launch;
       if (patch.launch) setLaunch(stored, patch.launch);
@@ -382,7 +387,17 @@ export class ModelServerStore {
   }
 }
 
-/** The Hardware form used to hold the KV cache type; it now lives in launch settings, so a saved one moves there. */
+/** A remote or SSH Ollama, whose cache type Desktop cannot set, so Hardware keeps the one it runs with. */
+function keepsHardwareKvCache(server: StoredServer): boolean {
+  if (server.kind !== 'ollama') return false;
+  const { type, baseUrl } = server.transport ?? {};
+  return type !== 'http' || typeof baseUrl !== 'string' || loopbackLaunchPort(baseUrl) === null;
+}
+
+/**
+ * The Hardware form used to hold the KV cache type; for this computer and a server Desktop can start it now lives in
+ * launch settings, so a saved one moves there.
+ */
 function takeHardwareKvCache(
   specs: unknown,
   launch: unknown,
@@ -398,6 +413,7 @@ function takeHardwareKvCache(
 
 function migrateHardwareKvCache(document: StoreDocument): StoreDocument {
   const servers = document.servers.map(server => {
+    if (keepsHardwareKvCache(server)) return server;
     const taken = takeHardwareKvCache(server.specs, server.launch, server.kind === 'ollama');
     if (!taken) return server;
     return { ...server, specs: taken.specs, ...(taken.launch ? { launch: taken.launch } : {}) } as StoredServer;
@@ -453,6 +469,12 @@ function checkedSpecs(specs: ModelServerSpecs | null, local: boolean): ModelServ
   if (!specs || specsBlank(specs)) return null;
   const problem = specsProblem(specs, local);
   if (problem) throw new Error(problem);
-  const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified } = specs;
-  return { ramGiB, gpuMemoryGiB, bandwidthGBps, unified: !local && unified };
+  const { ramGiB, gpuMemoryGiB, bandwidthGBps, unified, kvCacheType } = specs;
+  return {
+    ramGiB,
+    gpuMemoryGiB,
+    bandwidthGBps,
+    unified: !local && unified,
+    ...(!local && kvCacheType ? { kvCacheType } : {}),
+  };
 }

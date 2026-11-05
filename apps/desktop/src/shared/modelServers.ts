@@ -59,7 +59,7 @@ export interface ModelServerView {
   launch: ModelServerLaunchView | null;
 }
 
-/** OLLAMA_KV_CACHE_TYPE values besides f16 that fit.ts can price. */
+/** OLLAMA_KV_CACHE_TYPE values besides f16 that fit.ts can price; must match the copy in local-models servers. */
 export const QUANTIZED_KV_CACHE_TYPES = ['q8_0', 'q4_0'] as const;
 export type QuantizedKvCacheType = (typeof QUANTIZED_KV_CACHE_TYPES)[number];
 
@@ -181,6 +181,11 @@ export interface ModelServerSpecs {
   bandwidthGBps: number | null;
   /** The GPU uses system RAM, as on Apple silicon. Only for a saved server: this computer's probe says so itself. */
   unified: boolean;
+  /**
+   * A remote or SSH Ollama's OLLAMA_KV_CACHE_TYPE, which its API does not report and Desktop cannot set; absent is
+   * f16. A server Desktop can start keeps its cache type in launch settings instead.
+   */
+  kvCacheType?: QuantizedKvCacheType;
 }
 
 export const MAX_SPEC_MEMORY_GIB = 65_536;
@@ -196,17 +201,19 @@ export function readSpecsShape(value: unknown): ModelServerSpecs | null {
   if (typeof value !== 'object' || value === null) return null;
   const raw = value as Record<string, unknown>;
   const figure = (field: unknown) => (typeof field === 'number' ? field : null);
+  const kv = QUANTIZED_KV_CACHE_TYPES.find(type => type === raw.kvCacheType);
   return {
     ramGiB: figure(raw.ramGiB),
     gpuMemoryGiB: figure(raw.gpuMemoryGiB),
     bandwidthGBps: figure(raw.bandwidthGBps),
     unified: raw.unified === true,
+    ...(kv ? { kvCacheType: kv } : {}),
   };
 }
 
-/** No figure, which is stored as no specs. */
+/** No figure and no cache type, which is stored as no specs. */
 export function specsBlank(specs: ModelServerSpecs): boolean {
-  return specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null;
+  return specs.ramGiB === null && specs.gpuMemoryGiB === null && specs.bandwidthGBps === null && !specs.kvCacheType;
 }
 
 /** Why Settings cannot save these specs; null when it can. A saved server needs RAM, having no probe to fall back on. */
@@ -219,7 +226,11 @@ export function specsProblem(specs: ModelServerSpecs, local: boolean): string | 
     return `Enter GPU memory as a number of GB above 0, up to ${MAX_SPEC_MEMORY_GIB}.`;
   if (out(specs.bandwidthGBps, MAX_SPEC_BANDWIDTH_GBPS))
     return `Enter memory bandwidth as a number of GB/s above 0, up to ${MAX_SPEC_BANDWIDTH_GBPS}.`;
-  if (!local && specs.ramGiB === null && (specs.gpuMemoryGiB !== null || specs.bandwidthGBps !== null))
+  if (
+    !local &&
+    specs.ramGiB === null &&
+    (specs.gpuMemoryGiB !== null || specs.bandwidthGBps !== null || specs.kvCacheType !== undefined)
+  )
     return 'Enter the RAM too. Desktop needs it to rate models for this server.';
   return null;
 }

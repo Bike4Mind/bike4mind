@@ -328,12 +328,43 @@ describe('ModelServerStore', () => {
     const specs = { ramGiB: 64, gpuMemoryGiB: null, bandwidthGBps: null, unified: false };
     const server = {
       id: 'a1',
-      name: 'gpu box',
+      name: 'spare',
       kind: 'ollama',
-      transport: { type: 'http', baseUrl: 'http://10.0.0.5:11434' },
+      transport: { type: 'http', baseUrl: 'http://127.0.0.1:11500' },
       access: 'chat',
       auth: { type: 'none' },
     };
+
+    it('stays in Hardware for a remote or SSH Ollama, which Desktop cannot start', async () => {
+      const remote = { ...server, transport: { type: 'http', baseUrl: 'http://10.0.0.5:11434' } };
+      const ssh = { ...server, id: 'b2', transport: { type: 'ssh', destination: 'me@gpu' } };
+      const file = memoryFile(
+        JSON.stringify({
+          version: 1,
+          servers: [
+            { ...remote, specs: { ...specs, kvCacheType: 'q4_0' } },
+            { ...ssh, specs: { ...specs, kvCacheType: 'q8_0' } },
+          ],
+        })
+      );
+      const store = new ModelServerStore(cipher(), file, logger);
+      expect((await store.get('a1'))?.specs).toEqual({ ...specs, kvCacheType: 'q4_0' });
+      expect((await store.get('b2'))?.specs).toEqual({ ...specs, kvCacheType: 'q8_0' });
+      expect(store.launchSettings('a1')).toEqual({});
+      expect(store.launchSettings('b2')).toEqual({});
+
+      await store.update('a1', { specs: { ...specs, kvCacheType: 'q8_0' } });
+      const saved = JSON.parse(file.contents!);
+      expect(saved.servers[0].specs).toEqual({ ...specs, kvCacheType: 'q8_0' });
+      expect(saved.servers[0].launch).toBeUndefined();
+      expect((await store.update('a1', { kind: 'openai-compatible' })).specs).toEqual(specs);
+    });
+
+    it('is not kept in Hardware for a server Desktop can start', async () => {
+      const file = memoryFile(JSON.stringify({ version: 1, servers: [{ ...server, specs }] }));
+      const store = new ModelServerStore(cipher(), file, logger);
+      expect((await store.update('a1', { specs: { ...specs, kvCacheType: 'q8_0' } })).specs).toEqual(specs);
+    });
 
     it('becomes the launch cache type of this computer and of a server with none', async () => {
       const file = memoryFile(
