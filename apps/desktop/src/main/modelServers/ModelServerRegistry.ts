@@ -1001,7 +1001,12 @@ export class ModelServerRegistry {
             ? portHeldMessage(target.port)
             : (this.supervisor.problem(id) ?? settingsProblem),
       ...(missingOllama ? { programMissing: missingOllama } : {}),
-      ...(missingOllama === undefined && target.health.state === 'unreachable' ? { programPending: true } : {}),
+      // At the cap no new look can start, so stop waiting and let the Models screen offer Install.
+      ...(missingOllama === undefined &&
+      target.health.state === 'unreachable' &&
+      (this.launchStates.get(id)?.looksOutstanding ?? 0) < MAX_LOOKS_OUTSTANDING
+        ? { programPending: true }
+        : {}),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
@@ -1077,11 +1082,11 @@ export class ModelServerRegistry {
     if (state.lookingSince !== null && now - state.lookingSince < PROGRAM_TTL_MS) return;
     if (now - state.programAt < PROGRAM_TTL_MS) return;
     state.programAt = now;
+    const lookup = this.supervisor.program('ollama', this.launchSettings(id));
     state.lookingSince = now;
     state.looksOutstanding += 1;
     const look = ++state.programLook;
-    const settled = this.supervisor
-      .program('ollama', this.launchSettings(id))
+    const settled = lookup
       .then(
         found => ('problem' in found ? found.problem : null),
         (error: unknown) => (error instanceof Error ? error.message : String(error))

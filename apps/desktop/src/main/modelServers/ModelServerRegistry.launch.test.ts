@@ -567,6 +567,49 @@ describe('ModelServerRegistry launching servers', () => {
     }
   });
 
+  it('stops reporting a pending look once two looks are stuck, so Install can show', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockReturnValue(new Promise(() => {}));
+      const first = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await first;
+      expect((await local(registry)).launch).toMatchObject({ canStart: false, programPending: true });
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      const second = registry.check('local', { lookAgain: true });
+      await vi.advanceTimersByTimeAsync(2_000);
+      await second;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await registry.check('local', { lookAgain: true });
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      const launch = (await local(registry)).launch;
+      expect(launch).toMatchObject({ canStart: false, problem: null });
+      expect(launch?.programPending).toBeUndefined();
+      expect(launch?.programMissing).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps looking after a lookup that throws before it returns a promise', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      vi.mocked(launchers.program).mockImplementation(() => {
+        throw new Error('no shell');
+      });
+      for (let round = 0; round < 3; round++) {
+        await registry.check('local').catch(() => {});
+        await vi.advanceTimersByTimeAsync(31_000);
+      }
+      expect(launchers.program).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports a look that settles in time with the check, in one push', async () => {
     const { registry, changed } = setup();
     changed.mockClear();

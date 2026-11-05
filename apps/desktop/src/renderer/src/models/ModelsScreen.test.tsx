@@ -1423,6 +1423,18 @@ describe('ModelsScreen installed', () => {
     expect(q('models-install-ollama-btn')).toBeNull();
   });
 
+  it('offers Install once main stops waiting on a look that never settled', async () => {
+    bridge.status = DOWN;
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false, programPending: true }) }];
+    await mount(undefined, 'curated');
+    expect(q('models-install-ollama-btn')).toBeNull();
+
+    bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
+    act(() => pushServers(bridge.servers));
+    expect(q('models-install-ollama-btn')).not.toBeNull();
+    expect(q('ollama-start-btn')).toBeNull();
+  });
+
   it('rechecks whether Desktop can start Ollama on Check again, and offers Start once it can', async () => {
     bridge.status = DOWN;
     bridge.servers = [{ ...THIS_COMPUTER, launch: launchView({ canStart: false }) }];
