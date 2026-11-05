@@ -22,7 +22,7 @@ export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 20;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
-// Organic free-tier use peaks around 2 USD per rolling hour; credit fraud has run at 5-20 USD per hour.
+// Ordinary new-user use peaks around 2 USD per rolling hour; 5 leaves headroom.
 export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 5;
 export const LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT = 3;
 const USAGE_MESSAGE = 'llm-usage-settled';
