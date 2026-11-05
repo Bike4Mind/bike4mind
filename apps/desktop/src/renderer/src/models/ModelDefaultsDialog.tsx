@@ -121,6 +121,7 @@ function draftsOf(generation: GenerationSettings | undefined): Drafts {
 }
 
 const SAME_AS_SETTINGS = 'settings';
+const OFFER_DEBOUNCE_MS = 250;
 
 /** The context Select's value for a stored choice; null is the Settings choice. */
 export function contextValue(context: ModelContextSetting | null): string {
@@ -322,20 +323,28 @@ function ModelDefaultsForm({
     };
   }, [modelId]);
 
-  // Rated again for the draft count typed, since a speculating model needs more memory at each size.
+  // Rated again for the draft count typed, since a speculating model needs more memory at each size;
+  // debounced after the model's first offer, as each one probes the model and rates every size.
+  const offeredFor = useRef<string | null>(null);
   useEffect(() => {
     if (!modelId) return;
     let live = true;
-    window.b4m.chat.getModelLoadOffer(modelId, draftTokens).then(
-      next => {
-        if (live) setOffer(next ?? {});
-      },
-      () => {
-        if (live) setOffer(current => current ?? {});
-      }
-    );
+    const fetchOffer = () =>
+      window.b4m.chat.getModelLoadOffer(modelId, draftTokens).then(
+        next => {
+          if (live) setOffer(next ?? {});
+        },
+        () => {
+          if (live) setOffer(current => current ?? {});
+        }
+      );
+    const typed = offeredFor.current === modelId;
+    offeredFor.current = modelId;
+    const timer = typed ? setTimeout(fetchOffer, OFFER_DEBOUNCE_MS) : undefined;
+    if (!typed) void fetchOffer();
     return () => {
       live = false;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [modelId, draftTokens]);
 

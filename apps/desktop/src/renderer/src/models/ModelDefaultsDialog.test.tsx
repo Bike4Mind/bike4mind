@@ -665,7 +665,13 @@ describe('ModelDefaultsDialog load options', () => {
     offer = OLLAMA_OFFER;
     await render(QWEN);
     expect(getModelLoadOffer).toHaveBeenLastCalledWith(QWEN.id, undefined);
+    const before = getModelLoadOffer.mock.calls.length;
+    await fill('draft', '1');
+    await fill('draft', '12');
     await fill('draft', '3');
+    expect(getModelLoadOffer).toHaveBeenCalledTimes(before);
+    await act(() => new Promise(resolve => setTimeout(resolve, 300)));
+    expect(getModelLoadOffer).toHaveBeenCalledTimes(before + 1);
     expect(getModelLoadOffer).toHaveBeenLastCalledWith(QWEN.id, 3);
   });
 
