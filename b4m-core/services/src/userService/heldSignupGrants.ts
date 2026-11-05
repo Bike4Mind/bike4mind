@@ -1,13 +1,12 @@
 import {
   CreditHolderType,
-  isSignupGrantBlocked,
   PENDING_FREE_CREDITS_TAG,
   type ICreditTransactionRepository,
   type IUserRepository,
 } from '@bike4mind/common';
 import type { FreeCreditAdapters } from './freeCredits';
 import { releasePendingFreeCredits } from './freeCredits';
-import { accountBlockReasons, isAiAccessRevoked } from './accountState';
+import { classifySignupGrantAction } from './signupGrantActionClassifier';
 
 export const MAX_BULK_RELEASE = 100;
 
@@ -46,13 +45,7 @@ async function releaseHeldGrant(
   try {
     const user = await users.findById(userId);
     if (!user || !user.tags?.includes(PENDING_FREE_CREDITS_TAG) || !user.signupGrantHeldReason) return none('not_held');
-    if (
-      !user.emailVerified ||
-      accountBlockReasons(user).length ||
-      isAiAccessRevoked(user) ||
-      isSignupGrantBlocked(user)
-    )
-      return none('withheld');
+    if (!classifySignupGrantAction(user, 'release_held').eligible) return none('withheld');
     const result = await releasePendingFreeCredits(
       { id: userId, tags: [...user.tags], pendingCreditGrant: user.pendingCreditGrant ?? null },
       { ...adapters.grant, bypassBudget }

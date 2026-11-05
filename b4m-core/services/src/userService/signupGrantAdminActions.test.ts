@@ -234,7 +234,8 @@ describe('releaseHeldSignupGrant', () => {
   });
 
   it.each([
-    ['no grant', { signupGrant: undefined }, 'no_grant'],
+    ['no grant', { signupGrant: undefined, signupGrantHeldReason: null }, 'no_grant'],
+    ['a withheld account', { emailVerified: false }, 'withheld'],
     ['a blocked grant', { signupGrant: grant({ stage: 'pending_email', blocked: { at: new Date() } }) }, 'blocked'],
     [
       'a tranche withheld for risk review',
@@ -248,6 +249,15 @@ describe('releaseHeldSignupGrant', () => {
 
     expect(result).toEqual({ outcome: 'noop', reason });
     expect(releaseHeldGrantNow).not.toHaveBeenCalled();
+  });
+
+  it('pays a held tranche on a legacy account with no signup grant', async () => {
+    vi.mocked(releaseHeldGrantNow).mockResolvedValue({ userId: 'u1', outcome: 'released', credits: 10 });
+
+    expect(await releaseHeldSignupGrant('u1', heldAdapters(heldUser({ signupGrant: undefined })))).toEqual({
+      outcome: 'applied',
+      credits: 10,
+    });
   });
 
   it('reports a withheld or already-paid release as not paid rather than a zero', async () => {
