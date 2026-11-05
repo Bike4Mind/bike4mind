@@ -25,6 +25,7 @@ const seedUser = (id: mongoose.Types.ObjectId, createdAt: string, extra: Record<
     _id: id,
     username: String(id),
     email: `${id}@customer.example.com`,
+    emailVerified: true,
     createdAt: new Date(createdAt),
     ...extra,
   });
