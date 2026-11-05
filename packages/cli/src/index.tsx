@@ -1413,6 +1413,9 @@ function CliApp() {
       console.error('❌ CLI failed to initialize. Try restarting b4m.\n');
       return;
     }
+    const generation = initGenerationRef.current;
+    // A sign-in restart replaced the session: nothing this command produces after that belongs in the new one.
+    const replaced = () => initGenerationRef.current !== generation;
 
     // Set thinking state to show loading indicator
     useCliStore.getState().setIsThinking(true);
@@ -1430,7 +1433,7 @@ function CliApp() {
     const stepHandler = (step: any) => {
       currentSteps.push(step);
       const currentSession = useCliStore.getState().session;
-      if (currentSession) {
+      if (currentSession && !replaced()) {
         const messages = [...currentSession.messages];
         const lastMessage = messages[messages.length - 1];
         if (lastMessage && lastMessage.role === 'assistant') {
@@ -1481,6 +1484,7 @@ function CliApp() {
         },
       };
 
+      if (replaced()) return;
       // Add both messages immediately
       const sessionWithMessages: Session = {
         ...session,
@@ -1537,7 +1541,7 @@ function CliApp() {
 
       // Get current session state (may have been updated by stepHandler)
       const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
+      if (!currentSession || replaced()) return;
 
       // Update the pending assistant message with the actual response
       const updatedMessages = [...currentSession.messages];
@@ -1606,7 +1610,7 @@ function CliApp() {
 
         // Update the assistant message with cancellation
         const currentSession = useCliStore.getState().session;
-        if (currentSession) {
+        if (currentSession && !replaced()) {
           const messages = [...currentSession.messages];
           const lastMessage = messages[messages.length - 1];
 
@@ -1637,7 +1641,7 @@ function CliApp() {
       if (error?.message?.includes('Permission denied')) {
         console.log('\n⚠️  Action blocked by permission settings');
         const currentSession = useCliStore.getState().session;
-        if (!currentSession) return;
+        if (!currentSession || replaced()) return;
 
         const sessionWithDenied = { ...currentSession };
         const messages = [...sessionWithDenied.messages];
@@ -1665,7 +1669,7 @@ function CliApp() {
 
       // Update the assistant message with error
       const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
+      if (!currentSession || replaced()) return;
 
       const sessionWithError = { ...currentSession };
       const messages = [...sessionWithError.messages];
@@ -2739,7 +2743,8 @@ function CliApp() {
       }
 
       case 'login': {
-        if (abortControllerRef.current) {
+        const busy = useCliStore.getState();
+        if (abortControllerRef.current || busy.turnInFlight || busy.isThinking || busy.sessionHolds > 0) {
           console.log(SIGN_IN_DURING_TURN);
           break;
         }

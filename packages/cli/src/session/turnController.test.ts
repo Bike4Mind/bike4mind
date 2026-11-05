@@ -505,7 +505,75 @@ describe('runTurn', () => {
     expect(run).toHaveBeenCalledOnce();
     expect(useCliStore.getState().session!.messages.some(m => m.metadata?.cancelled)).toBe(false);
     expect(save).not.toHaveBeenCalled();
-    expect(useCliStore.getState().messageQueue).toHaveLength(1);
+    expect(useCliStore.getState().messageQueue).toEqual([]);
+    expect(useCliStore.getState().inputValue).toBe('typed meanwhile');
+  });
+
+  it('writes no reply into the session that a sign-in restart put in place mid-turn', async () => {
+    seedSession([]);
+    let generation = 1;
+    const run = vi.fn(async () => {
+      generation = 2;
+      useCliStore.getState().setSession({ ...useCliStore.getState().session!, id: 'sess-2', messages: [] });
+      return makeResult({ finalAnswer: 'late reply' });
+    });
+    const save = vi.fn(async () => undefined);
+
+    await runTurn(
+      'do it',
+      makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        sessionStore: { save } as unknown as SessionStore,
+        sessionGeneration: () => generation,
+      })
+    );
+
+    expect(useCliStore.getState().session).toMatchObject({ id: 'sess-2', messages: [] });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('drops an auto-compaction that finishes after a sign-in restart replaced the session', async () => {
+    seedSession(
+      Array.from({ length: 6 }, (_, i) => ({
+        id: `m${i}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'hi',
+        timestamp: ISO,
+      }))
+    );
+    const bigTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `tool_${i}`,
+        description: 'x '.repeat(200),
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    }));
+    let generation = 1;
+    const replacement = { ...useCliStore.getState().session!, id: 'sess-2', messages: [] };
+    const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) => {
+      if (options?.maxIterations === 1) {
+        generation = 2;
+        useCliStore.getState().setSession(replacement);
+        return makeResult({ finalAnswer: 'a summary' });
+      }
+      return makeResult();
+    });
+    const save = vi.fn(async (_session: Session) => undefined);
+
+    await runTurn(
+      'next message',
+      makeCtx({
+        agent: { run, getTools: () => bigTools } as unknown as ReActAgent,
+        sessionStore: { save } as unknown as SessionStore,
+        config: { preferences: { autoCompact: true } } as unknown as CliConfig,
+        availableModels: [{ id: 'claude-sonnet-4-6', contextWindow: 500 } as unknown as ModelInfo],
+        sessionGeneration: () => generation,
+      })
+    );
+
+    expect(run).toHaveBeenCalledOnce();
+    expect(save).not.toHaveBeenCalled();
+    expect(useCliStore.getState().session).toBe(replacement);
   });
 
   it('drains queued messages into a follow-up turn after the current one settles', async () => {

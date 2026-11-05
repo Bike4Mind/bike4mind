@@ -130,8 +130,11 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
       } finally {
         releaseSession();
       }
-      // Queued input stays queued for the session that replaced this one.
-      if (ctx.sessionGeneration?.() !== generation) break;
+      // Queued input was typed for the session a sign-in replaced: hand it back to the input instead of running it.
+      if (ctx.sessionGeneration?.() !== generation) {
+        useCliStore.getState().restoreQueueToInput();
+        break;
+      }
       const queued = useCliStore.getState().dequeueAllMessages();
       next = queued.length > 0 ? queued.join('\n\n') : null;
     }
@@ -163,6 +166,8 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
     setAbortController,
   } = ctx;
   const generation = ctx.sessionGeneration?.();
+  // A sign-in restart replaced the session: nothing this turn produces after that belongs in the new one.
+  const replaced = () => ctx.sessionGeneration?.() !== generation;
 
   // Read session fresh from the Zustand store, never from the caller-captured
   // context. On the message-queue drain this turn is re-entered with the same
@@ -231,6 +236,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
 
         if (compactionPrompt) {
           const result = await agent.run(compactionPrompt, { maxIterations: 1, streamText: false });
+          if (replaced()) return;
 
           // Flush decisions/blockers logged in prior turns but not yet synced
           // onto the session, so the compacted session carries current workflow
@@ -244,7 +250,9 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
             !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
           );
 
+          if (replaced()) return;
           await logger.initialize(newSession.id);
+          if (replaced()) return;
           useCliStore.getState().setSession(newSession);
           useCliStore.getState().clearPendingMessages();
 
@@ -258,6 +266,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       }
     }
   }
+  if (replaced()) return;
 
   // Set thinking state to show loading indicator
   useCliStore.getState().setIsThinking(true);
@@ -299,6 +308,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       },
     };
     pendingAssistantId = pendingAssistantMessage.id;
+    if (replaced()) return;
 
     // Add user message to session.messages (already complete)
     // Use activeSession which may have been updated by auto-compact
@@ -421,6 +431,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
       },
     };
 
+    if (replaced()) return;
     // Move the pending message to session.messages (history)
     useCliStore.getState().completePendingMessage(0, finalAssistantMessage);
 
@@ -463,7 +474,7 @@ async function runHeldTurn(message: string, ctx: TurnContext): Promise<void> {
 
       // Add cancellation message to session
       const currentSession = useCliStore.getState().session;
-      if (currentSession && ctx.sessionGeneration?.() === generation) {
+      if (currentSession && !replaced()) {
         const cancelMessage: Message = {
           id: uuidv4(),
           role: 'assistant',
