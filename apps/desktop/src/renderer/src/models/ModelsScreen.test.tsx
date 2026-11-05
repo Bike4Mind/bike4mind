@@ -685,7 +685,11 @@ describe('ModelsScreen curated', () => {
     await mount(undefined, 'curated');
     const chip = inside('models-curated-all', 'models-curated-license-chip')[0];
     expect(chip?.textContent).toBe('Gemma Terms of Use (restricted)');
+    // A closed describeChild tooltip leaves its text in the chip's title.
     expect(chip?.title).toBe('Gemma Terms of Use (restricted)');
+    expect(chip?.tabIndex).toBe(0);
+    // Only the name truncates, so "(restricted)" stays visible on a long name.
+    expect(chip?.querySelector('[data-testid="models-curated-license-name"]')?.textContent).toBe('Gemma Terms of Use');
     expect(chip?.dataset.kind).toBe('restricted');
     const pick = inside('models-curated-picks', 'models-curated-pick').find(row => row.dataset.entry === 'gemma-4-e4b');
     expect(pick?.querySelector('[data-testid="models-curated-license-chip"]')?.textContent).toBe(

@@ -123,17 +123,33 @@ function LicenseChip({ entry }: { entry: CuratedEntryView }) {
   const restricted = entry.licenseKind === 'restricted';
   const label = restricted ? `${entry.licenseName} (restricted)` : entry.licenseName;
   return (
-    <Chip
-      size="sm"
-      variant="soft"
-      color={restricted ? 'warning' : 'success'}
-      data-testid="models-curated-license-chip"
-      data-kind={entry.licenseKind}
-      title={label}
-      slotProps={{ label: { sx: { maxWidth: 240 } } }}
-    >
-      {label}
-    </Chip>
+    <Tooltip title={label} size="sm" sx={{ maxWidth: 320 }} describeChild>
+      <Chip
+        size="sm"
+        variant="soft"
+        color={restricted ? 'warning' : 'success'}
+        tabIndex={0}
+        data-testid="models-curated-license-chip"
+        data-kind={entry.licenseKind}
+        slotProps={{ label: { sx: { display: 'flex', gap: 0.5 } } }}
+      >
+        <Box
+          component="span"
+          data-testid="models-curated-license-name"
+          sx={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
+          {entry.licenseName}
+        </Box>
+        {restricted && (
+          <>
+            {' '}
+            <Box component="span" sx={{ flexShrink: 0 }}>
+              (restricted)
+            </Box>
+          </>
+        )}
+      </Chip>
+    </Tooltip>
   );
 }
 
