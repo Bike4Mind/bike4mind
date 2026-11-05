@@ -57,11 +57,16 @@ describe('the curated v3 list', () => {
     for (const entry of manifest.entries) expect(recorded, entry.id).toContain(entry.id);
   });
 
-  it('gives every build a measured profile with flash attention available', () => {
+  it('gives every build a measured profile with flash attention, its batch size and its peak GPU memory', () => {
     for (const entry of strict().entries)
       for (const build of entry.builds) {
-        expect(build.profiles.length, `${entry.id} ${build.id}`).toBeGreaterThan(0);
-        for (const profile of build.profiles) expect(profile.settings.flashAttn).not.toBe('off');
+        const at = `${entry.id} ${build.id}`;
+        expect(build.profiles.length, at).toBeGreaterThan(0);
+        for (const profile of build.profiles) {
+          expect(profile.settings.flashAttn, at).not.toBe('off');
+          expect(profile.settings.numBatch, at).toBeGreaterThan(0);
+          expect(profile.metrics.gpuPeakMiB, at).toBeGreaterThan(0);
+        }
       }
   });
 

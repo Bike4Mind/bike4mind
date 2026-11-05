@@ -100,12 +100,43 @@ describe('curated v3 schema', () => {
     [
       'a known label on another license id',
       d => Object.assign(entry(d, 'gemma-4-12b').license, { id: 'custom-terms', label: 'Apache 2.0' }),
-      /Apache 2.0 is the label for apache-2.0/,
+      /Apache 2.0 reads as apache-2.0/,
     ],
     [
       'a known build label on another license id',
       d => Object.assign(entry(d, 'gemma-4-12b').builds[0].license, { id: 'custom-terms', label: 'MIT' }),
-      /MIT is the label for mit/,
+      /MIT reads as mit/,
+    ],
+    ...(
+      [
+        ['apache 2.0', 'apache-2.0'],
+        ['Apache-2.0', 'apache-2.0'],
+        ['Apache License 2.0', 'apache-2.0'],
+        ['MIT License', 'mit'],
+        ['mit', 'mit'],
+        ['BSD-3-Clause', 'bsd-3-clause'],
+        ['Gemma', 'gemma'],
+      ] as const
+    ).map(([label, owner]): [string, (doc: Doc) => void, RegExp] => [
+      `the near-miss label ${label} on llama3.1`,
+      d => Object.assign(entry(d, 'gemma-4-12b').license, { id: 'llama3.1', label }),
+      new RegExp(`${label} reads as ${owner}`),
+    ]),
+    [
+      'a profile with no numBatch',
+      d => delete profile(d, 'gemma-4-12b').settings.numBatch,
+      /expected number, received undefined/i,
+    ],
+    ['a profile with no metrics', d => delete profile(d, 'gemma-4-12b').metrics, /expected record/i],
+    [
+      'a profile with no gpuPeakMiB',
+      d => delete profile(d, 'gemma-4-12b').metrics.gpuPeakMiB,
+      /metrics needs a positive gpuPeakMiB/,
+    ],
+    [
+      'a zero gpuPeakMiB',
+      d => (profile(d, 'gemma-4-12b').metrics.gpuPeakMiB = 0),
+      /metrics needs a positive gpuPeakMiB/,
     ],
     [
       'a quantized KV cache with flash attention off',

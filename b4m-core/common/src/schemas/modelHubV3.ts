@@ -85,7 +85,18 @@ const LICENSE_LABELS = new Map<string, string>([
   ['isc', 'ISC'],
   ['gemma', 'Gemma Terms of Use'],
 ]);
-const LABEL_OWNERS = new Map([...LICENSE_LABELS].map(([id, label]) => [label, id]));
+// Folds spelling variants ("Apache-2.0", "MIT License") together so a near-miss label is caught too.
+const labelKey = (text: string): string =>
+  text
+    .toLowerCase()
+    .replace(/\blicen[cs]e\b/g, '')
+    .replace(/[^a-z0-9]/g, '');
+const LABEL_OWNERS = new Map(
+  [...LICENSE_LABELS].flatMap(([id, label]) => [
+    [labelKey(label), id],
+    [labelKey(id), id],
+  ])
+);
 
 /** A build's own license, with the label clients show beside it. */
 const BuildLicenseSchema = HubLicenseRefSchema.extend({ label: LicenseLabelSchema });
@@ -98,7 +109,7 @@ const TextProfileSettingsSchema = z.object({
   kv: z.enum(KV_CACHE_TYPES),
   flashAttn: z.enum(['on', 'auto', 'off']),
   draftNumPredict: z.number().int().min(0).max(16).optional(),
-  numBatch: z.number().int().min(64).max(8192).optional(),
+  numBatch: z.number().int().min(64).max(8192),
 });
 
 const ProfileSchema = z.object({
@@ -115,11 +126,17 @@ const ProfileSchema = z.object({
     runtime: HubRuntimeSchema,
     runtimeVersion: HubRuntimeVersionSchema,
   }),
-  // Units are in the key (TokS, MiB); z.number() already rejects NaN and Infinity.
+  // Units are in the key (TokS, MiB); z.number() already rejects NaN and Infinity. Fit checks read gpuPeakMiB.
   metrics: z
     .record(z.string().regex(/^[a-z][A-Za-z0-9]{0,39}$/), z.number().min(0).max(1e9))
     .refine(hubMaxKeys(MAX_METRICS), 'too many metrics')
-    .default({}),
+    .refine(
+      metrics => Object.hasOwn(metrics, 'gpuPeakMiB') && Number.isFinite(metrics.gpuPeakMiB) && metrics.gpuPeakMiB > 0,
+      {
+        message: 'metrics needs a positive gpuPeakMiB',
+        path: ['gpuPeakMiB'],
+      }
+    ),
   // Conditions a reader should weigh, such as host load during the run.
   note: z.string().max(160).regex(DISPLAY_TEXT).optional(),
 });
@@ -168,11 +185,12 @@ function profileIssues(entry: TextEntryShape, build: HubBuildV3, b: number): Hub
 }
 
 function labelIssue(license: { id: string; label: string }, path: PropertyKey[]): HubEntryIssue[] {
-  const known = LICENSE_LABELS.get(license.id.toLowerCase());
+  const id = license.id.toLowerCase();
+  const known = LICENSE_LABELS.get(id);
   if (known !== undefined)
     return known === license.label ? [] : [{ path, message: `the label for ${license.id} is ${known}` }];
-  const owner = LABEL_OWNERS.get(license.label);
-  return owner === undefined ? [] : [{ path, message: `${license.label} is the label for ${owner}` }];
+  const owner = LABEL_OWNERS.get(labelKey(license.label));
+  return owner === undefined || owner === id ? [] : [{ path, message: `${license.label} reads as ${owner}` }];
 }
 
 function licenseIssues(entry: TextEntryShape, build: HubBuildV3, b: number): HubEntryIssue[] {
