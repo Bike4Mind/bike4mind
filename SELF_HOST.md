@@ -586,6 +586,10 @@ Self-host can embed and search your uploaded files fully offline, using a local 
 4. **Upload a file**, then watch its chunk/vector counts climb (the file card shows progress). Behind the scenes: MinIO notifies the app on upload -> the file is chunked -> chunks are embedded by the `worker` service.
 5. **Ask a knowledge-base question** in chat, or use file search - retrieval now runs against the local embeddings.
 
+### Verify the knowledge pipeline
+
+With the stack running, `B4M_API_KEY=b4m_... python3 scripts/verify_selfhost_chunk_pipeline.py` uploads a file and checks that it is chunked, embedded and found by search, that a file whose upload webhook was withheld is recovered by the rescue sweep, and that replaying a chunk message leaves the chunk count unchanged. It needs the admin settings **Enable Auto Chunk** and **Enable Data Lakes** on (Data Lakes is off by default; search only reaches data-lake files), and archives a throwaway `verify-*` lake each run. It asserts the default Mongo vector path (not OpenSearch); `--help` lists the prerequisites and the `--only` / `--timeout` flags.
+
 ### Choosing an embedder (quality vs hardware)
 
 `qwen3-embedding` leads retrieval benchmarks; the `0.6b` default fits any GPU or CPU. On a bigger card the `4b`/`8b` variants score higher. `nomic-embed-text` is the smallest, cheapest option. A self-host box often runs a chat model, an image model, and the embedder on ONE GPU, so size matters - see the embedder table in `.env.selfhost.example` for downloads, dimensions, and VRAM.
