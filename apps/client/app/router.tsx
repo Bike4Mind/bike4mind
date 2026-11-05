@@ -1,5 +1,6 @@
 import { FC, lazy, LazyExoticComponent, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
+import { holdDiscoveryForCampaign } from '@client/lib/gears/discovery';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
 import { beaconPage, startPageBeacon } from '@client/app/utils/pageBeacon';
 import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
@@ -1478,8 +1479,9 @@ function createNextCompatibleHistory() {
 
 // Capture campaign UTM params at module load - before the router resolves routes and the auth
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
-// captureUtmParams() for why this cannot live in a React effect.
-captureUtmParams();
+// captureUtmParams() for why this cannot live in a React effect. A campaign landing also holds
+// the gears discovery modal, so it does not open over the visitor's first screen.
+if (captureUtmParams()) holdDiscoveryForCampaign(Date.now());
 
 // Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
 captureGitHubLakeCallbackSearch();
