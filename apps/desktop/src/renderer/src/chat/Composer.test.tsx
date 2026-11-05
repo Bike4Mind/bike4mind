@@ -560,6 +560,7 @@ describe('the attach shortcut', () => {
     const onClick = vi.fn();
     mount({ onSend, blockedReason: 'No local model.', blockedAction: { label: 'Open Models', onClick } });
     expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.textContent).toContain('No local model.');
+    expect(host?.querySelector('[data-testid="composer-blocked-reason"]')?.getAttribute('role')).toBe('alert');
     act(() => (host?.querySelector('[data-testid="composer-blocked-action-btn"]') as HTMLElement).click());
     expect(onClick).toHaveBeenCalledOnce();
     expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
@@ -574,6 +575,7 @@ describe('the attach shortcut', () => {
     const banner = host?.querySelector('[data-testid="composer-blocked-reason"]');
     expect(banner?.querySelector('[data-testid="composer-test-notice"]')).not.toBeNull();
     expect(banner?.textContent).not.toContain('Ollama is not running.');
+    expect(banner?.getAttribute('role')).toBe('group');
     expect((host?.querySelector('[data-testid="chat-send-btn"]') as HTMLButtonElement).disabled).toBe(true);
   });
 

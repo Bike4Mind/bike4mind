@@ -110,20 +110,23 @@ describe('OllamaNotRunning', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps Start mounted and loading while starting, and starts once however often it is clicked', async () => {
+  it('keeps Start mounted, focused and aria-disabled while starting, and starts once however often it is clicked', async () => {
     const pending = deferred<ModelServerMutationResult>();
     launch.mockReturnValue(pending.promise);
     const onStarted = render(launchView());
     const button = q('ollama-start-btn');
     act(() => {
-      button?.click();
+      button?.focus();
       button?.click();
     });
+    act(() => button?.click());
     expect(launch).toHaveBeenCalledTimes(1);
     expect(launch).toHaveBeenCalledWith('local', 'start');
     expect(q('ollama-start-btn')).toBe(button);
-    expect(button?.hasAttribute('disabled')).toBe(true);
-    expect(document.querySelector('[aria-label="Starting Ollama"]')).not.toBeNull();
+    expect(document.activeElement).toBe(button);
+    expect(button?.getAttribute('aria-disabled')).toBe('true');
+    expect(button?.hasAttribute('disabled')).toBe(false);
+    expect(button?.querySelector('[aria-label="Starting Ollama"]')).not.toBeNull();
     expect(q('ollama-start-progress')?.closest('[role="status"]')?.getAttribute('aria-live')).toBe('polite');
     expect(onStarted).not.toHaveBeenCalled();
 
@@ -136,7 +139,9 @@ describe('OllamaNotRunning', () => {
   it('shows a start running from elsewhere as progress', () => {
     render(launchView({ busy: 'starting', canStart: false }));
     expect(q('ollama-start-progress')).not.toBeNull();
-    expect(q('ollama-start-btn')?.hasAttribute('disabled')).toBe(true);
+    expect(q('ollama-start-btn')?.getAttribute('aria-disabled')).toBe('true');
+    act(() => q('ollama-start-btn')?.click());
+    expect(launch).not.toHaveBeenCalled();
   });
 
   it('shows the error of a failed start, never success, and offers Start again', async () => {
@@ -149,7 +154,7 @@ describe('OllamaNotRunning', () => {
     expect(failed?.closest('[role="status"]')).not.toBeNull();
     expect(q('ollama-start-done')).toBeNull();
     expect(onStarted).not.toHaveBeenCalled();
-    expect(q('ollama-start-btn')?.hasAttribute('disabled')).toBe(false);
+    expect(q('ollama-start-btn')?.getAttribute('aria-disabled')).toBe('false');
   });
 
   it('fails a start that rejects', async () => {
@@ -174,6 +179,9 @@ describe('OllamaNotRunning', () => {
       `Ollama did not start: no answer within ${START_WAIT_MS / 1000} seconds.`
     );
     expect(onStarted).not.toHaveBeenCalled();
+    expect(q('ollama-start-btn')?.getAttribute('aria-disabled')).toBe('true');
+    act(() => q('ollama-start-btn')?.click());
+    expect(launch).toHaveBeenCalledTimes(1);
 
     pending.resolve({ ok: true, servers: [] });
     await act(async () => {
@@ -249,7 +257,7 @@ describe('OllamaNotRunning', () => {
     await flush();
     expect(q('ollama-start-error', first)).not.toBeNull();
     expect(q('ollama-start-error', second)).toBeNull();
-    expect(q('ollama-start-btn', second)?.hasAttribute('disabled')).toBe(false);
+    expect(q('ollama-start-btn', second)?.getAttribute('aria-disabled')).toBe('false');
   });
 
   it('drops a start that settles after the banner is gone', async () => {

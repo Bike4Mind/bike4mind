@@ -622,6 +622,8 @@ export function Composer({
             size="sm"
             color="warning"
             variant="soft"
+            // A notice carries its own live region; inside role="alert" its status would be announced twice.
+            role={blockedNotice ? 'group' : 'alert'}
             data-testid="composer-blocked-reason"
             endDecorator={
               blockedAction && (

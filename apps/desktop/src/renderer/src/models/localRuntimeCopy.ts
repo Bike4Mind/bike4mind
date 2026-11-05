@@ -1,5 +1,4 @@
-/** The one wording for "no Ollama answers on this computer", shared by the Models screen and chat. */
-export const OLLAMA_NOT_RUNNING = 'Ollama is not running on this computer';
+export { OLLAMA_NOT_RUNNING } from '@shared/modelServers';
 
 /** How to start it by hand, for when Desktop cannot start it itself. */
 export const OLLAMA_START_HINT =

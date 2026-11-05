@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { InstalledModelsResult, ModelPull, ModelRuntimeStatus } from '@shared/models';
-import type { ModelServerView } from '@shared/modelServers';
+import { OLLAMA_NOT_RUNNING, type ModelServerView } from '@shared/modelServers';
 import { installedCache, type LastInstalled } from './installedCache';
 
 export interface ModelHubState {
@@ -59,7 +59,7 @@ export function useModelHub(serverId: string, identity: string | null = null): M
       ? await window.b4m.models.listInstalled(serverId)
       : {
           ok: false,
-          error: { kind: 'runtime-unavailable', message: nextStatus.error ?? 'Ollama is not running.' },
+          error: { kind: 'runtime-unavailable', message: nextStatus.error ?? OLLAMA_NOT_RUNNING },
         };
     if (mineInstalled !== installedSeq.current) return;
     keep(nextInstalled, startedWith, cutsAt);

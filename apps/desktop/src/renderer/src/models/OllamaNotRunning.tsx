@@ -21,6 +21,8 @@ export function useStartLocalOllama(launch: ModelServerLaunchView | null | undef
   const [phase, setPhase] = useState<StartPhase>('idle');
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
+  // Mirrors inFlight for rendering: true from the click until main settles, past the wait if need be.
+  const [launching, setLaunching] = useState(false);
   const live = useRef(true);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onStartedRef = useRef(onStarted);
@@ -60,6 +62,7 @@ export function useStartLocalOllama(launch: ModelServerLaunchView | null | undef
   const start = async () => {
     if (inFlight.current) return;
     inFlight.current = true;
+    setLaunching(true);
     setPhase('starting');
     setError(null);
     const launched: Promise<ModelServerMutationResult> = window.b4m.modelServers
@@ -70,17 +73,22 @@ export function useStartLocalOllama(launch: ModelServerLaunchView | null | undef
     });
     const first = await Promise.race([launched, waited]);
     clearTimeout(timer.current);
-    inFlight.current = false;
     if (first === 'timeout') {
-      if (!live.current) return;
-      setPhase('failed');
-      setError(`no answer within ${START_WAIT_MS / 1000} seconds.`);
-      // Main may still finish the start; a late success counts.
+      if (live.current) {
+        setPhase('failed');
+        setError(`no answer within ${START_WAIT_MS / 1000} seconds.`);
+      }
+      // Main may still finish the start, so no second start until it settles; a late success counts.
       const late = await launched;
-      if (late.ok && live.current) succeeded();
+      inFlight.current = false;
+      if (!live.current) return;
+      setLaunching(false);
+      if (late.ok) succeeded();
       return;
     }
+    inFlight.current = false;
     if (!live.current) return;
+    setLaunching(false);
     if (first.ok) succeeded();
     else {
       setPhase('failed');
@@ -89,7 +97,7 @@ export function useStartLocalOllama(launch: ModelServerLaunchView | null | undef
   };
 
   const shown: StartPhase = phase === 'starting' || launch?.busy === 'starting' ? 'starting' : phase;
-  return { phase: shown, error, canStart: launch?.canStart === true, start, recheck };
+  return { phase: shown, error, canStart: launch?.canStart === true, launching, start, recheck };
 }
 
 /**
@@ -120,8 +128,9 @@ export function OllamaNotRunning({
   /** Detail lines under the status. */
   children?: ReactNode;
 }) {
-  const { phase, error, canStart, start, recheck } = useStartLocalOllama(launch, onStarted);
+  const { phase, error, canStart, launching, start, recheck } = useStartLocalOllama(launch, onStarted);
   const starting = phase === 'starting';
+  const blocked = starting || launching;
   const textLevel = compact ? 'body-xs' : 'body-sm';
 
   const status = (
@@ -151,15 +160,21 @@ export function OllamaNotRunning({
     </Box>
   );
 
+  // aria-disabled rather than disabled, which Joy's `loading` also sets: a disabled button drops keyboard focus.
   const startButton = (starting || (canStart && phase !== 'started')) && (
     <Button
       size="sm"
       color={compact ? 'warning' : 'primary'}
       variant={compact ? 'soft' : 'solid'}
-      loading={starting}
-      loadingPosition="start"
-      loadingIndicator={<CircularProgress size="sm" aria-label="Starting Ollama" />}
-      onClick={() => void start()}
+      aria-disabled={blocked}
+      startDecorator={
+        starting ? (
+          <CircularProgress size="sm" aria-label="Starting Ollama" sx={{ '--CircularProgress-size': '16px' }} />
+        ) : undefined
+      }
+      onClick={() => {
+        if (!blocked) void start();
+      }}
       data-testid="ollama-start-btn"
     >
       Start Ollama
