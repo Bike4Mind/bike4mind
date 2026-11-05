@@ -107,7 +107,7 @@ const { default: handler } = await import('@pages/api/ai/tavern-conversation');
 
 const CAST = [{ id: 'grimbold', name: 'Grimbold', sprite: 'host', personality: 'gruff' }];
 
-async function call(body: Record<string, unknown>) {
+async function callWithReq(body: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', body });
   Object.assign(req, {
     user: { id: 'u1', tags: [], groups: [] },
@@ -115,7 +115,11 @@ async function call(body: Record<string, unknown>) {
   });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the stubbed router's param type is loose
   await (handler as any)(req, res);
-  return res;
+  return { req: req as typeof req & { logger: { warn: ReturnType<typeof vi.fn> } }, res };
+}
+
+async function call(body: Record<string, unknown>) {
+  return (await callWithReq(body)).res;
 }
 
 beforeEach(() => {
@@ -152,6 +156,20 @@ describe('POST /api/ai/tavern-conversation metering', () => {
     await vi.waitFor(() => expect(m.settleHold).toHaveBeenCalledTimes(2));
     expect(m.hold).toHaveBeenCalledTimes(2);
     expect(m.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('logs a credit refusal on the memory extraction and stops before the next agent', async () => {
+    const cast = [...CAST, { id: 'mira', name: 'Mira', sprite: 'bard', personality: 'wry' }];
+    const refusal = insufficientCreditsError('You do not have enough credits.');
+    m.hold.mockResolvedValueOnce({ ownerId: 'u1', ownerType: 'user', reservedCredits: 1 }).mockRejectedValue(refusal);
+
+    const { req } = await callWithReq({ characters: cast, history: [], agentIds: { grimbold: 'a1', mira: 'a2' } });
+
+    await vi.waitFor(() =>
+      expect(req.logger.warn).toHaveBeenCalledWith('Memory extraction failed (non-fatal):', refusal)
+    );
+    expect(m.hold).toHaveBeenCalledTimes(2);
+    expect(m.complete).toHaveBeenCalledTimes(1);
   });
 
   it.each([

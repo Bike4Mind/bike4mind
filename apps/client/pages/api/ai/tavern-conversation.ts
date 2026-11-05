@@ -269,8 +269,10 @@ const handler = baseApi({ auth: 'jwtOnly' })
               for (const mem of newMemories) {
                 await agentRepository.appendMemory(agentId as string, mem);
               }
-            } catch {
-              // Memory extraction is non-fatal
+            } catch (err) {
+              // Non-fatal, but a credit refusal would repeat for every remaining agent
+              req.logger?.warn?.('Memory extraction failed (non-fatal):', err);
+              if (err instanceof HTTPError) break;
             }
           }
         })().catch(err => req.logger?.warn?.('Memory extraction failed (non-fatal):', err));
