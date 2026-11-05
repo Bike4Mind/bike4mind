@@ -16,6 +16,7 @@ import {
   Organization,
   AdminSettings,
 } from '@bike4mind/database';
+import { withTransaction } from '@bike4mind/db-core';
 import { grantCreditPurchase } from '../billing/grantCreditPurchase';
 import {
   createMongoReplSet,
@@ -196,6 +197,40 @@ describe('signup grant daily budget', () => {
       })
     ).rejects.toThrow('outer rollback');
     expect(await spentToday()).toBe(0);
+  });
+
+  it("refunds an aborted attempt's draw when a retried transaction pays under another id", async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
+    // Each attempt pays a different account, the way a retried registration creates a new user id.
+    const users = [await createUser(true, 0), await createUser(true, 1)];
+    let attempt = 0;
+    await userService.refundBudgetOnFailure(() =>
+      withTransaction(async () => {
+        await userService.releaseSignupTranche(users[attempt].id, adapters);
+        if (attempt++ === 0)
+          throw Object.assign(new Error('write conflict'), { errorLabels: ['TransientTransactionError'] });
+      })
+    );
+    expect(attempt).toBe(2);
+    expect(await creditsOf(users[0].id)).toBe(0);
+    expect(await creditsOf(users[1].id)).toBe(12);
+    expect(await spentToday()).toBe(12);
+  });
+
+  it('keeps the draw a retried transaction reuses under the same id once the retry commits', async () => {
+    config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = '30';
+    const user = await createUser(true, 0);
+    let attempt = 0;
+    await userService.refundBudgetOnFailure(() =>
+      withTransaction(async () => {
+        await userService.releaseSignupTranche(user.id, adapters);
+        if (attempt++ === 0)
+          throw Object.assign(new Error('write conflict'), { errorLabels: ['TransientTransactionError'] });
+      })
+    );
+    expect(attempt).toBe(2);
+    expect(await creditsOf(user.id)).toBe(12);
+    expect(await spentToday()).toBe(12);
   });
 
   it('refuses activity and org invite unlocks while the tranche is unpaid', async () => {

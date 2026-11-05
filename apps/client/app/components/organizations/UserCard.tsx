@@ -50,6 +50,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
   const { mutateAsync: cancelInvite } = useCancelInvite({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', organizationId, 'pending'] });
+      queryClient.invalidateQueries({ queryKey: ['organizations', organizationId, 'invites'] });
       toast.success('Invite cancelled successfully');
     },
     onError: err => {

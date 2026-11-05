@@ -9,10 +9,11 @@ import {
 import { toast } from 'sonner';
 import { AxiosResponse } from 'axios';
 import { updateAllQueryData } from '@client/app/utils/react-query';
-import { useGetOrganizationUsers, useGetPendingOrganizationUsers } from './user';
+import { useGetOrganizationUsers } from './user';
 import { useMemo } from 'react';
 import { getErrorMessage } from '@client/app/utils/error';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
+import type { ISharerInviteView } from '@client/app/utils/invitesAPICalls';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 /**
@@ -433,13 +434,27 @@ interface OrganizationSeatsInfo {
   availableSeats: number;
 }
 
+export function useOrganizationInvites(organizationId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['organizations', organizationId, 'invites'],
+    queryFn: async () => {
+      const response = await api.get<ISharerInviteView[]>(`/api/organizations/${organizationId}/invites`);
+      return response.data;
+    },
+    select: invites =>
+      invites.filter(invite => invite.remaining > 0 && (!invite.expiresAt || new Date(invite.expiresAt) > new Date())),
+    enabled: !!organizationId,
+  });
+}
+
 export const useOrganizationSeats = (organizationId?: string): OrganizationSeatsInfo => {
   const { data: organization } = useGetOrganization(organizationId);
   const { data: users } = useGetOrganizationUsers(organizationId);
-  const { data: pendingUsers } = useGetPendingOrganizationUsers(organizationId);
+  const { data: pendingInvites } = useOrganizationInvites(organizationId);
 
   const maxSeats = organization?.seats ?? 0;
-  const pendingSeats = pendingUsers?.length ?? 0;
+  const pendingSeats =
+    pendingInvites?.reduce((count, invite) => count + (invite.recipients?.pending?.length ?? 0), 0) ?? 0;
   const currentSeats = (users?.length ?? 0) + pendingSeats;
   const availableSeats = Math.max(0, maxSeats - currentSeats);
 
