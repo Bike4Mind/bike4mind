@@ -13,7 +13,6 @@ import {
   type ShadowDetectionPayment,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
-  type ShadowDetector,
 } from '@bike4mind/common';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import {
@@ -45,14 +44,8 @@ import {
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import { DETECTOR_LABELS } from './shadowDetectorLabels';
 import { getErrorMessage } from '@client/app/utils/error';
-
-export const DETECTOR_LABELS: Record<ShadowDetector, string> = {
-  signupNetworkBurst: 'Signup network burst',
-  accountCampaign: 'Account campaign',
-  youngAccountSpend: 'Young-account spend',
-  paymentRisk: 'Payment risk',
-};
 
 const RELATIONSHIP_LABELS: Record<AccountCampaignRelationship, string> = {
   networkPrefix: 'Network',

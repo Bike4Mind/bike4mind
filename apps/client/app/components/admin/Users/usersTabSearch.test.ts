@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ADMIN_TAB_PARAM, ADMIN_USERS_TAB_SLUG } from '@bike4mind/common';
 import {
   CLEARED_FILTER_PARAMS,
   DEFAULT_USERS_PARAMS,
@@ -7,6 +8,7 @@ import {
   isSameUsersView,
   migrateStoredUsersParams,
   usersViewFromSearch,
+  usersTabLinkSearch,
   usersViewToSearch,
 } from './usersTabSearch';
 
@@ -202,6 +204,24 @@ describe('created-at window params', () => {
     expect(usersViewToSearch({ ...DEFAULT_USERS_PARAMS, ...view })).toMatchObject({
       createdFrom: '2026-01-01T00:00:00.000Z',
       createdTo: '2026-01-01T01:00:00.000Z',
+    });
+  });
+});
+
+describe('AI advisory link', () => {
+  it('accepts only the abuse verdict', () => {
+    expect(USERS_SEARCH_PARSERS.aiVerdict('abuse')).toBe('abuse');
+    expect(USERS_SEARCH_PARSERS.aiVerdict('legitimate_automation')).toBeUndefined();
+  });
+
+  it('links to the Users tab with only the given filter over the default view', () => {
+    const search = usersTabLinkSearch({ aiVerdict: 'abuse' });
+    expect(search).toMatchObject({ [ADMIN_TAB_PARAM]: ADMIN_USERS_TAB_SLUG, page: 1, aiVerdict: 'abuse' });
+    expect(usersViewFromSearch(search)).toMatchObject({
+      page: DEFAULT_USERS_PARAMS.page,
+      limit: DEFAULT_USERS_PARAMS.limit,
+      aiVerdict: 'abuse',
+      status: undefined,
     });
   });
 });
