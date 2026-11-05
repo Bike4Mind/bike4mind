@@ -319,7 +319,7 @@ export class OllamaLocal {
     for (const row of rows) {
       const inspection = await this.chatInspection(row.name);
       if (!inspection) continue;
-      const load = await this.load(localModelId(this.runtimeId, row.name));
+      const load = await this.listedLoad(localModelId(this.runtimeId, row.name));
       if (load.context) continue;
       const footprint = await this.footprint(row.name, inspection, load);
       const { limit } = contextBounds(inspection);
@@ -484,22 +484,29 @@ export class OllamaLocal {
    * Sized on a model's first request, then kept for the app run so a late answer never reloads it;
    * a footprint missing the weights or the machine (a slow daemon or probe) is sized again next time.
    */
-  private async resolveContext(modelId: string, inspection: Inspection, snapshot?: ModelLoadSettings): Promise<number> {
+  private async resolveContext(
+    modelId: string,
+    inspection: Inspection,
+    snapshot?: { load: ModelLoadSettings; generation: string },
+    attempt = 1
+  ): Promise<number> {
     const known = contextByModel.get(modelId);
     if (known !== undefined) return known;
-    const generation = sizingGeneration;
-    const load = snapshot ?? (await this.load(modelId));
+    const generation = snapshot?.generation ?? sizingGenerationOf(modelId);
+    const load = snapshot?.load ?? (await this.load(modelId));
     const setting = load.context ?? (await this.setting());
     const measured = setting.mode === 'auto' && !!this.sizing;
     const footprint = measured
       ? await this.footprint(ollamaModelName(modelId, this.runtimeId), inspection, load)
       : UNMEASURED;
-    if (generation !== sizingGeneration) return this.resolveContext(modelId, inspection);
+    const stale = generation !== sizingGenerationOf(modelId);
+    // Retried with a fresh read, not the snapshot; requestSettings re-checks the generation so its load matches.
+    if (stale && attempt < SIZING_ATTEMPTS) return this.resolveContext(modelId, inspection, undefined, attempt + 1);
     const raced = contextByModel.get(modelId);
     if (raced !== undefined) return raced;
     const { limit, configured } = contextBounds(inspection);
     const tokens = chatContextTokens({ setting, footprint, modelLimit: limit, configured });
-    if (!measured || (footprint.weightsBytes !== null && footprint.hardware !== null))
+    if (!stale && (!measured || (footprint.weightsBytes !== null && footprint.hardware !== null)))
       contextByModel.set(modelId, tokens);
     return tokens;
   }
@@ -508,13 +515,13 @@ export class OllamaLocal {
     modelId: string,
     inspection: Inspection
   ): Promise<{ numCtx: number; load: ModelLoadSettings }> {
-    const generation = sizingGeneration;
-    const load = await this.load(modelId);
-    if (generation !== sizingGeneration) return this.requestSettings(modelId, inspection);
-    const numCtx = await this.resolveContext(modelId, inspection, load);
-    // A save during either read invalidates the whole request's load settings together.
-    if (generation !== sizingGeneration) return this.requestSettings(modelId, inspection);
-    return { numCtx, load };
+    for (let attempt = 1; ; attempt++) {
+      const generation = sizingGenerationOf(modelId);
+      const load = await this.load(modelId);
+      const numCtx = await this.resolveContext(modelId, inspection, { load, generation });
+      // A save during either read invalidates the whole request's load settings together.
+      if (generation === sizingGenerationOf(modelId) || attempt === SIZING_ATTEMPTS) return { numCtx, load };
+    }
   }
 
   private async setting(): Promise<LocalContextSetting> {
@@ -523,6 +530,11 @@ export class OllamaLocal {
 
   private load(modelId: string): Promise<ModelLoadSettings> {
     return this.loadSettings(modelId);
+  }
+
+  /** For listing and fit, which need not fail with the settings file: requests read it strictly. */
+  private listedLoad(modelId: string): Promise<ModelLoadSettings> {
+    return this.load(modelId).catch(() => ({}));
   }
 
   private async contextSetting(modelId: string): Promise<ModelContextSetting> {
@@ -536,21 +548,25 @@ export class OllamaLocal {
     return { ...footprint, draftMax: draftTokensOf(load, draftFactsOf(inspection)) };
   }
 
-  private async sized(modelId: string, inspection: Inspection, footprint: LocalModelFootprint): Promise<number> {
+  private async sized(
+    inspection: Inspection,
+    footprint: LocalModelFootprint,
+    load: ModelLoadSettings
+  ): Promise<number> {
     const { limit, configured } = contextBounds(inspection);
-    const setting = await this.contextSetting(modelId);
+    const setting = load.context ?? (await this.setting());
     return chatContextTokens({ setting, footprint, modelLimit: limit, configured });
   }
 
   /** Auto, after a load failed: the last size that loaded, else the 16K floor, once per app run; undefined when there is nothing lower to try. */
   private async fallBack(modelId: string, inspection: Inspection, current: number): Promise<number | undefined> {
-    const generation = sizingGeneration;
+    const generation = sizingGenerationOf(modelId);
     const setting = await this.contextSetting(modelId);
     const { limit } = contextBounds(inspection);
     const floor = Math.min(LOCAL_CONTEXT_TARGET_TOKENS, limit ?? LOCAL_CONTEXT_TARGET_TOKENS);
     const loaded = loadedByModel.get(modelId) ?? 0;
     const target = loaded < current ? Math.max(floor, loaded) : floor;
-    if (setting.mode === 'fixed' || current <= target || generation !== sizingGeneration) return undefined;
+    if (setting.mode === 'fixed' || current <= target || generation !== sizingGenerationOf(modelId)) return undefined;
     failedLoads.add(modelId);
     contextByModel.set(modelId, target);
     return target;
@@ -616,7 +632,7 @@ export class OllamaLocal {
     maxTokens: number | undefined,
     current: number
   ): Promise<{ tokens?: number; slower?: boolean; hint: string }> {
-    const generation = sizingGeneration;
+    const generation = sizingGenerationOf(modelId);
     const load = await this.load(modelId);
     const setting = load.context ?? (await this.setting());
     const { limit } = contextBounds(inspection);
@@ -627,7 +643,7 @@ export class OllamaLocal {
     }
     const footprint = await this.footprint(ollamaModelName(modelId, this.runtimeId), inspection, load);
     // Settings changed while this was measured: the new choice decides the size.
-    if (generation !== sizingGeneration) {
+    if (generation !== sizingGenerationOf(modelId)) {
       const fresh = await this.resolveContext(modelId, inspection);
       return fresh > current ? { tokens: fresh, hint: '' } : { hint: '' };
     }
@@ -712,11 +728,12 @@ export class OllamaLocal {
     const capabilities = inspection?.capabilities;
     const id = localModelId(this.runtimeId, name);
     // Advertised from what is known now; the context is settled on the model's first request.
-    const draftMax = draftTokensOf(await this.load(id), draftFactsOf(known));
+    const load = await this.listedLoad(id);
+    const draftMax = draftTokensOf(load, draftFactsOf(known));
     const footprint = this.sizing
       ? { ...this.sizing.cachedFootprint(await this.facts(name, known)), draftMax }
       : UNMEASURED;
-    const contextWindow = contextByModel.get(id) ?? (await this.sized(id, known, footprint));
+    const contextWindow = contextByModel.get(id) ?? (await this.sized(known, footprint, load));
     const canThink = capabilities?.includes('thinking') === true;
     const controls = ollamaControls({
       inspected: inspection !== undefined,
@@ -973,6 +990,10 @@ function ollamaModelName(modelId: string, runtimeId: string): string {
 const contextByModel = new Map<string, number>();
 /** Bumped by a Settings change, so sizing that started before it does not write its stale result. */
 let sizingGeneration = 0;
+/** Bumped for one model when its own load settings are saved, leaving other models' sizing alone. */
+const modelGenerations = new Map<string, number>();
+/** Saves arriving back to back during one request: past this many reads it goes out with the latest. */
+const SIZING_ATTEMPTS = 5;
 /** Models that failed to load above the floor this app run; Auto no longer grows them. */
 const failedLoads = new Set<string>();
 /** The num_ctx each model last answered at, which a failed larger load falls back to. */
@@ -1009,8 +1030,12 @@ function forgetLocalContext(modelId: string): void {
 
 /** After a model's own load settings change: it is sized again on its next request. */
 export function forgetLocalContextOf(modelId: string): void {
-  sizingGeneration++;
+  modelGenerations.set(modelId, (modelGenerations.get(modelId) ?? 0) + 1);
   forgetLocalContext(modelId);
+}
+
+function sizingGenerationOf(modelId: string): string {
+  return `${sizingGeneration}:${modelGenerations.get(modelId) ?? 0}`;
 }
 
 /** After the Settings choice changes: every model is sized again on its next request. */

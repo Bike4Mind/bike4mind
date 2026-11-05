@@ -50,12 +50,15 @@ export class ModelSettingsStore {
     return loading;
   }
 
-  /** For chat turns: a file that cannot be read or parsed holds no defaults. */
+  /** For a turn's sampling and effort defaults: a file that cannot be read or parsed holds no defaults. */
   async get(modelId: string): Promise<ModelSettings> {
     return (await this.read().catch(() => new Map<string, ModelSettings>())).get(modelId) ?? {};
   }
 
-  /** For the Models screen: rejects on an unreadable file so it can say so instead of showing blanks. */
+  /**
+   * For the Models screen and a request's load settings: rejects on an unreadable file, so the screen
+   * can say so and a request does not reload the model at the wrong size.
+   */
   async getStrict(modelId: string): Promise<ModelSettings> {
     return (await this.read()).get(modelId) ?? {};
   }

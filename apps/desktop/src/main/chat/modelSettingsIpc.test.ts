@@ -112,9 +112,21 @@ describe('registerModelSettingsIpc load options', () => {
   it('tells main a model changed after a save, and not after a rejected one', async () => {
     const { set, changed } = await withHooks();
     expect(await set(QWEN, { draftTokens: 2, keepAlive: 3600 })).toEqual({ draftTokens: 2, keepAlive: 3600 });
-    expect(changed).toHaveBeenCalledExactlyOnceWith(QWEN);
+    expect(changed).toHaveBeenCalledExactlyOnceWith(QWEN, true);
     expect(await set(QWEN, { draftTokens: 40 })).toBeNull();
     expect(changed).toHaveBeenCalledOnce();
+  });
+
+  it('marks a save resized only when the context or draft tokens change', async () => {
+    const { set, changed } = await withHooks();
+    await set(QWEN, { context: { mode: 'auto' }, draftTokens: 2 });
+    expect(changed).toHaveBeenLastCalledWith(QWEN, true);
+    await set(QWEN, { context: { mode: 'auto' }, draftTokens: 2, keepAlive: 3600, generation: { temperature: 0.2 } });
+    expect(changed).toHaveBeenLastCalledWith(QWEN, false);
+    await set(QWEN, { context: { mode: 'auto', maxTokens: 32768 }, draftTokens: 2, keepAlive: 3600 });
+    expect(changed).toHaveBeenLastCalledWith(QWEN, true);
+    await set(QWEN, { context: { mode: 'auto', maxTokens: 32768 }, keepAlive: 3600 });
+    expect(changed).toHaveBeenLastCalledWith(QWEN, true);
   });
 
   it('passes a valid draft count to the offer and drops an invalid one', async () => {
@@ -129,13 +141,17 @@ describe('registerModelSettingsIpc load options', () => {
 });
 
 describe('modelSettingsChanged', () => {
-  it('forgets the sized context, refreshes the model list and tells the renderer', () => {
+  it('forgets the sized context only when resized, and always refreshes the model list and tells the renderer', () => {
     const calls: string[] = [];
-    modelSettingsChanged({
+    const changed = modelSettingsChanged({
       forgetContext: modelId => calls.push(`forget ${modelId}`),
       refreshModels: () => calls.push('refresh'),
       announce: () => calls.push('announce'),
-    })(QWEN);
+    });
+    changed(QWEN, true);
     expect(calls).toEqual([`forget ${QWEN}`, 'refresh', 'announce']);
+    calls.length = 0;
+    changed(QWEN, false);
+    expect(calls).toEqual(['refresh', 'announce']);
   });
 });

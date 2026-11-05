@@ -278,7 +278,8 @@ export class OpenAICompatibleChat implements LocalChat {
     this.listedNames.clear();
     for (const model of chat) for (const alias of model.aliases ?? []) this.listedNames.set(alias, model.name);
     for (const model of chat) this.listedNames.set(model.name, model.name);
-    const budgets = await Promise.all(chat.map(model => this.budget(model.name)));
+    // An unreadable settings file fails requests, not the list.
+    const budgets = await Promise.all(chat.map(model => this.budget(model.name).catch(() => undefined)));
     return chat.map((model, index) => {
       const thinks = this.thinkers.has(model.name);
       const served = this.contexts.get(model.name);
