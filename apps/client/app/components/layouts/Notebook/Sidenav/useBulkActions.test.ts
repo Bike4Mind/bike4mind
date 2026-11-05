@@ -178,7 +178,8 @@ describe('useBulkActions - handleFavoriteSelected', () => {
         data: { okCount: body.add.length, results: body.add.map(id => ({ id, ok: true })) },
       }))
       .mockRejectedValueOnce(new Error('network'));
-    await favorite(makeSessions(150));
+    const result = await favorite(makeSessions(150));
+    expect(result.current.selectedItems.size).toBe(0);
 
     expect(mockToast.warning).toHaveBeenCalledWith('Updated favorites for 100 of 150 items');
     expect(mockToast.error).toHaveBeenCalledWith('Failed to update the remaining favorites');

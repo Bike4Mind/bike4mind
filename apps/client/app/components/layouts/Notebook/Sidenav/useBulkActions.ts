@@ -165,7 +165,7 @@ export function useBulkActions({
     const favoriteIds = new Set(filteredFavoriteSession.map(fav => fav.id));
     let okCount = 0;
     let failureMessage: string | undefined;
-    const completedIds = new Set<string>();
+    const settledIds = new Set<string>();
     try {
       for (let i = 0; i < sessions.length; i += MAX_BULK_ITEMS) {
         const chunk = sessions.slice(i, i + MAX_BULK_ITEMS);
@@ -180,10 +180,12 @@ export function useBulkActions({
           );
           okCount += data.okCount;
           for (const result of data.results) {
-            if (result.ok) completedIds.add(result.id);
+            if (result.ok) settledIds.add(result.id);
             else failureMessage ??= result.error;
           }
         } catch (error) {
+          // This chunk may have committed despite a lost response. Do not offer to toggle it again.
+          for (const session of chunk) settledIds.add(session.id);
           // Earlier chunks are committed server-side, so report them as a partial result.
           if (okCount === 0) throw error;
           failureMessage = getServerErrorField(error) ?? 'Failed to update the remaining favorites';
@@ -198,10 +200,10 @@ export function useBulkActions({
         toast.warning(`Updated favorites for ${okCount} of ${total} items`);
         if (failureMessage) toast.error(failureMessage);
       }
-      setSelectedItems(previous => new Set([...previous].filter(id => !completedIds.has(id))));
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
+      setSelectedItems(previous => new Set([...previous].filter(id => !settledIds.has(id))));
       queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
     }
   };
