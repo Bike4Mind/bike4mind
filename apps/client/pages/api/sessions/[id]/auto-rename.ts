@@ -60,8 +60,8 @@ const handler = baseApi().post<Request<unknown, unknown, unknown, { id: string }
     } catch (error) {
       // Revoked or deleted during the LLM call: the gated write refused it.
       if (error instanceof NotFoundError) throw error;
-      // Credit and admission refusals keep their status (422).
-      if (error instanceof HTTPError) throw error;
+      // Credit and admission refusals keep their status (422); the empty-title 500 is logged below.
+      if (error instanceof HTTPError && !(error instanceof InternalServerError)) throw error;
       req.logger.error('Error in auto-rename:', error);
       throw new InternalServerError('Failed to auto-rename session');
     }

@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   enhance: vi.fn(),
   describeAgent: vi.fn(),
   systemPrompt: vi.fn(),
+  avatar: vi.fn(),
   meter: vi.fn(),
   requestMeter: vi.fn(),
 }));
@@ -37,6 +38,11 @@ vi.mock('@server/agents/assertAgentAccess', () => ({ assertAgentAccess: vi.fn() 
 vi.mock('@server/agents/authoring/enhanceAgentField', () => ({ enhanceAgentField: h.enhance }));
 vi.mock('@server/agents/authoring/generateAgentDescription', () => ({ generateAgentDescription: h.describeAgent }));
 vi.mock('@server/agents/authoring/generateAgentSystemPrompt', () => ({ generateAgentSystemPrompt: h.systemPrompt }));
+vi.mock('@server/agents/authoring/generateAgentAvatar', () => ({ generateAgentAvatar: h.avatar }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  checkStorageLimit: async () => undefined,
+}));
 vi.mock('@server/agents/systemPromptRateLimit', () => ({ logSystemPromptGenerationFailure: vi.fn() }));
 vi.mock('@server/billing/meterPlatformCompletion', () => ({
   createRequestCompletionMeter: (...args: unknown[]) => (h.requestMeter(...args), h.meter),
@@ -48,11 +54,14 @@ h.current = 'generate-description';
 await import('../generate-description');
 h.current = 'generate-system-prompt';
 await import('../generate-system-prompt');
+h.current = 'generate-avatar';
+await import('../generate-avatar');
 
 const ROUTES = [
   ['enhance-field', h.enhance, { fieldName: 'personalMission', currentValue: 'x' }],
   ['generate-description', h.describeAgent, {}],
   ['generate-system-prompt', h.systemPrompt, {}],
+  ['generate-avatar', h.avatar, {}],
 ] as const;
 
 function call(route: string, body: Record<string, unknown>) {

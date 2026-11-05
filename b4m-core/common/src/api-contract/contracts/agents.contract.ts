@@ -14,7 +14,7 @@ import {
   UpdateAgentRequestSchema,
 } from '../../schemas/agentPublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the agent API. Each route is a `/api/v1` twin of an SPA route
@@ -193,6 +193,10 @@ const AUTHORING_QUOTA_429 =
 
 const AUTHORING_429 = `Per-user rate limit exceeded, or ${AUTHORING_QUOTA_429}`;
 
+const AUTHORING_CREDITS_422 =
+  'The caller cannot afford the model call, tagged `errorCode: "insufficient_credits"` (the balance is short, ' +
+  'or the org member credit cap is exhausted). Nothing is written.';
+
 const AUTHORING_502 = 'The model or image provider failed to produce a result. Nothing is written; retry later.';
 
 export const generateAgentAvatarContract = defineEndpoint({
@@ -222,7 +226,7 @@ export const generateAgentAvatarContract = defineEndpoint({
     },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
-    422: { description: BODY_422, schema: ApiErrorSchema },
+    422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
     429: {
       description: AUTHORING_429,
       schema: ApiErrorSchema,
@@ -256,6 +260,7 @@ export const generateAgentDescriptionContract = defineEndpoint({
     200: { description: 'The generated description.', schema: GenerateAgentDescriptionResponseSchema },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
     429: {
       description: AUTHORING_429,
       schema: ApiErrorSchema,
@@ -285,6 +290,7 @@ export const generateAgentSystemPromptContract = defineEndpoint({
     400: { description: AUTHORING_400, schema: ApiErrorSchema },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
+    422: { description: AUTHORING_CREDITS_422, schema: InsufficientCreditsErrorSchema },
     429: {
       description:
         'Per-user rate limit exceeded, this agent system prompt was generated more recently than the ' +
@@ -325,7 +331,7 @@ export const enhanceAgentFieldContract = defineEndpoint({
     },
     403: { description: AUTHORING_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: { description: OWNER_ONLY_404, schema: ApiErrorSchema },
-    422: { description: BODY_422, schema: ApiErrorSchema },
+    422: { description: `${BODY_422} ${AUTHORING_CREDITS_422}`, schema: InsufficientCreditsErrorSchema },
     429: {
       description: AUTHORING_429,
       schema: ApiErrorSchema,

@@ -13,8 +13,6 @@ import { createModal, updateModal, deleteModal, listModals } from './modalOperat
 import { parseNaturalLanguageQueryDirect } from '@client/pages/api/admin/modal-tool';
 import { Logger } from '@bike4mind/observability';
 import { createCompletionMeter } from '@server/billing/meterPlatformCompletion';
-
-const modalToolLogger = new Logger({ metadata: { service: 'admin-modal-tool' } });
 import {
   showHelp,
   buildModalFromParams,
@@ -24,6 +22,8 @@ import {
   suggestTags,
   findModalByPartialId,
 } from '@client/app/services/adminTools/modalToolHelpers';
+
+const modalToolLogger = new Logger({ metadata: { service: 'admin-modal-tool' } });
 
 /**
  * Server-side implementation of ModalManagementTool

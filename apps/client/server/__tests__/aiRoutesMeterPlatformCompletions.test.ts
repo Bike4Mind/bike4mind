@@ -10,6 +10,9 @@ import path from 'path';
  * and settle credits: through `meterCompletionBackend` / `createRequestCompletionMeter`, or the
  * lower-level `reserveCompletionCredits` / `reserveRequestCredits`. Routes are found by call site, so
  * a new one is held to this without anyone listing it. EXEMPT is the only way out.
+ *
+ * The check is per file and looks for a meter call, not a mention: a route that delegates its completion
+ * to a helper outside the scanned directories is not seen, and an unused import does not count.
  */
 
 // Scanned from outside pages/: an fs-walking test under pages/ is traced as a route and
@@ -19,7 +22,7 @@ const AUTHORING_DIR = path.join(__dirname, '..', 'agents', 'authoring');
 
 const COMPLETION = /\bgetOperationsModel\b|\bgetLlmByModel\b|\.complete\(/;
 const METER =
-  /\b(?:meterCompletionBackend|createRequestCompletionMeter|createCompletionMeter|reserveCompletionCredits|reserveRequestCredits)\b/;
+  /\b(?:meterCompletionBackend|createRequestCompletionMeter|createCompletionMeter|reserveCompletionCredits|reserveRequestCredits)\s*\(/;
 
 const EXEMPT = new Set([
   'admin/operations-model.ts', // resolves the configured model for display; never completes
@@ -41,13 +44,18 @@ const stripComments = (src: string) =>
     .replace(/^\s*\/\/[^\n]*/gm, '')
     .replace(/\s\/\/[^\n]*/g, '');
 
+const isMetered = (src: string) => METER.test(stripImports(stripComments(src)));
+
+// An import line names a meter without calling it.
+const stripImports = (src: string) => src.replace(/^\s*import\b[\s\S]*?;\s*$/gm, '');
+
 const scan = (dir: string) =>
   sourceFiles(dir).map(f => {
     const src = stripComments(readFileSync(f, 'utf8'));
     return {
       file: path.relative(dir, f).split(path.sep).join('/'),
       completes: COMPLETION.test(src),
-      metered: METER.test(src),
+      metered: isMetered(src),
     };
   });
 
@@ -57,7 +65,7 @@ const helpers = scan(AUTHORING_DIR).filter(r =>
 );
 
 describe('a platform-key completion is metered', () => {
-  it('finds the routes and helpers this ticket metered', () => {
+  it('finds the metered completion routes and authoring helpers', () => {
     expect(routes.map(r => r.file)).toEqual(
       expect.arrayContaining([
         'ai/barkeep-chat.ts',
@@ -81,6 +89,15 @@ describe('a platform-key completion is metered', () => {
 
   it('meters every authoring helper', () => {
     expect(helpers.filter(h => !h.metered).map(h => h.file)).toEqual([]);
+  });
+
+  it('does not count an import of a meter as metering', () => {
+    const importOnly = `import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+const { llm } = await OperationsModelService.getOperationsModel();
+await llm.complete(model, messages);`;
+    const called = `${importOnly}\nconst meter = createRequestCompletionMeter(req, 'x');`;
+    expect(isMetered(importOnly)).toBe(false);
+    expect(isMetered(called)).toBe(true);
   });
 
   it('keeps EXEMPT entries real', () => {
