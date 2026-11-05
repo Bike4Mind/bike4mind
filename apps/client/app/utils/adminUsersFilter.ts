@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AdminUserListItem } from './adminUserProjection';
 import type { EmailDomainGroup } from './signupAnomaly';
+import { USER_AI_VERDICT_FILTERS } from './aiAdvisory';
 
 /**
  * The admin users list's filter contract, shared by the list page, GET /api/admin/users and the
@@ -96,6 +97,8 @@ export const AdminUsersFilterFieldsSchema = z.object({
   // Classified live over the created window, which both need.
   verdict: z.enum(USER_VERDICT_FILTERS).optional(),
   funnelStep: z.enum(USER_FUNNEL_STEP_FILTERS).optional(),
+  // Accounts the AI advisory currently flags (see listAiAbuseAdvisories); needs no window of its own.
+  aiVerdict: z.enum(USER_AI_VERDICT_FILTERS).optional(),
   // UTC days with AI activity, both ends inclusive; set together.
   activeFrom: utcDay.optional(),
   activeTo: utcDay.optional(),

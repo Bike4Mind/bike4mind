@@ -77,6 +77,8 @@ const VERDICT_OPTIONS: FilterChipOption[] = USER_VERDICT_FILTERS.map(value => ({
   label: value === 'legit' ? 'Real' : capitalize(value),
 }));
 
+const AI_VERDICT_OPTIONS: FilterChipOption[] = [{ value: 'abuse', label: 'Likely abuse' }];
+
 const FUNNEL_STEP_LABELS: Record<UserFunnelStep, string> = {
   signedUp: 'Signed up, no AI use',
   firstAction: 'First AI use, did not return',
@@ -244,6 +246,15 @@ export function UsersToolbar({
             options={FUNNEL_STEP_OPTIONS}
             value={params.funnelStep}
             onChange={value => update({ funnelStep: USERS_SEARCH_PARSERS.funnelStep(value) })}
+          />
+        )}
+        {params.aiVerdict && (
+          <FilterChip
+            id="aiVerdict"
+            label="AI advisory"
+            options={AI_VERDICT_OPTIONS}
+            value={params.aiVerdict}
+            onChange={value => update({ aiVerdict: USERS_SEARCH_PARSERS.aiVerdict(value) })}
           />
         )}
         {hidden.length > 0 && (

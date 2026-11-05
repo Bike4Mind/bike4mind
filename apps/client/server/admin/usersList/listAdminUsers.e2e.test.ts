@@ -2,7 +2,16 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
-import { AnalyticsUserDay, CreditTransaction, Organization, UsageEvent, User, UserApiKey } from '@bike4mind/database';
+import {
+  AbuseAssessmentModel,
+  AnalyticsUserDay,
+  CreditTransaction,
+  Organization,
+  ShadowDetectionModel,
+  UsageEvent,
+  User,
+  UserApiKey,
+} from '@bike4mind/database';
 import { Subscription } from '@bike4mind/server-utils/models/Subscription';
 import { FUNNEL_COHORT_MAX } from '@server/analytics/activationFunnel';
 import {
@@ -447,5 +456,54 @@ describe('adminUsersSummary', () => {
       activeThisWeek: 1,
       views: { newThisWeek: 1, highRisk: 1, suspended: 1 },
     });
+  });
+
+  it('filters to open accounts whose latest settled AI judgment is abuse', async () => {
+    const flaggedUser = await seedUser('flagged');
+    const outage = await seedUser('outage');
+    const overturned = await seedUser('overturned');
+    const banned = await seedUser('banned', { isBanned: true });
+    await seedUser('untouched');
+    const at = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+    const seedDetection = async (user: { id: string }) =>
+      String(
+        (
+          await ShadowDetectionModel.collection.insertOne({
+            detector: 'signupNetworkBurst',
+            policyVersion: 1,
+            wouldAction: 'contain',
+            summary: 'test',
+            userIds: [user.id],
+            signals: [],
+            verdict: null,
+            verdicts: [],
+            revision: 0,
+            detectedAt: at(30),
+          })
+        ).insertedId
+      );
+    const seedAssessment = (detectionId: string, result: string, assessedAt: Date) =>
+      AbuseAssessmentModel.collection.insertOne({
+        cacheKey: `${detectionId}-${result}-${assessedAt.getTime()}`,
+        detectionId,
+        result,
+        probabilities: result === 'unknown' ? [] : [{ value: result, probability: 0.9 }],
+        assessedAt,
+      });
+
+    const flaggedDetection = await seedDetection(flaggedUser);
+    await seedAssessment(flaggedDetection, 'abuse', at(20));
+    const outageDetection = await seedDetection(outage);
+    await seedAssessment(outageDetection, 'abuse', at(20));
+    await seedAssessment(outageDetection, 'unknown', at(10));
+    const overturnedDetection = await seedDetection(overturned);
+    await seedAssessment(overturnedDetection, 'abuse', at(20));
+    await seedAssessment(overturnedDetection, 'legitimate_automation', at(10));
+    await seedAssessment(await seedDetection(banned), 'abuse', at(20));
+
+    const listed = await listAdminUsers({ ...params, aiVerdict: 'abuse' }, viewer, { logError }, NOW);
+
+    expect(listed.users.map(user => user.username).sort()).toEqual(['flagged', 'outage']);
+    expect(listed.totalUsers).toBe(2);
   });
 });
