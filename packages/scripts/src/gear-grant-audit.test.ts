@@ -58,9 +58,7 @@ describe('gear-grant-audit entry point', () => {
       autoIndex: false,
       autoCreate: false,
     });
-    expect(mocks.runGearGrantAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ days: 7, withinMinutes: 60, top: 10 })
-    );
+    expect(mocks.runGearGrantAudit).toHaveBeenCalledWith(expect.objectContaining({ days: 7, withinDays: 8, top: 10 }));
     expect(log).toHaveBeenCalledWith('## report');
   });
 
