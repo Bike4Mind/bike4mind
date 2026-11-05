@@ -34,7 +34,7 @@ import {
   type ActiveSubscriptionsRequest,
 } from '@server/entitlements/activeSubscriptions';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import { holdsPaidStanding } from '@server/entitlements/paidStanding';
+import { entitlementsForPaidSubscription, holdsPaidStanding } from '@server/entitlements/paidStanding';
 import { PAID_PLAN_ENTITLEMENT_KEY, type IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -112,6 +112,9 @@ export async function getUserEntitlements(
     })
   );
   for (const key of partnerKeys) {
+    keys.add(key);
+  }
+  for (const key of entitlementsForPaidSubscription(activeSubscriptions)) {
     keys.add(key);
   }
   // Baseline access: every authenticated user holds the reserved `base` key, so
