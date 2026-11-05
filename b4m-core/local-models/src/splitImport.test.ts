@@ -444,7 +444,7 @@ describe('runSplitImport', () => {
       })
     ).rejects.toThrow('aborted');
     expect(runtime.create).not.toHaveBeenCalled();
-    expect(Math.max(...reported)).toBeLessThan(300);
+    expect(Math.max(...reported)).toBeLessThan(plan().parts[0].file.sizeBytes);
   });
 
   it('removes its own staged copy when Ollama holds the part by the time the download returns', async () => {
@@ -477,7 +477,7 @@ describe('runSplitImport', () => {
     });
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, `${hex('f')}.gguf`), 'other run');
-    await runSplitImport(plan(), { hub, runtime, dir, keep: () => new Set([`sha256:${hex('f')}`]) });
+    await runSplitImport(plan(), { hub, runtime, dir });
     expect(stagedAtCreate).toEqual([`${hex('f')}.gguf`]);
   });
 
