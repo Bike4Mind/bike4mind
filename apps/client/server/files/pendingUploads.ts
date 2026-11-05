@@ -139,7 +139,7 @@ export async function admitPendingUploads(
       );
     }
     // Reaching here means count > 0, so `myPending` is non-empty.
-    // A lower bound when requested > 1: more than one slot must free up.
+    // Time until the oldest slot is abandoned; slots usually free sooner, as uploads land.
     const oldest = Math.min(...myPending.map(group => group.oldest.getTime()));
     const retryAfter = Math.max(1, Math.ceil((oldest + PENDING_UPLOAD_WINDOW_MS - Date.now()) / 1000));
     throw new TooManyRequestsError(

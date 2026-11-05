@@ -723,39 +723,52 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete');
   });
 
+  // The server's Retry-After is when its oldest slot is abandoned (~1800s), so the client backs off
+  // 5/10/20s capped by the header, and does not retry a refusal that carries none.
   it.each([
-    ['0', 2, 0],
-    ['61', 1, 1],
-    ['soon', 1, 1],
-    [undefined, 1, 1],
-  ])('presign refused with Retry-After %s is attempted %i time(s)', async (retryAfter, attempts, failed) => {
-    const route = apiPost.getMockImplementation()!;
-    let refused = false;
-    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
-      if (url === '/api/files/generate-presigned-urls-batch' && (!refused || attempts === 1)) {
-        refused = true;
-        return Promise.reject({
-          isAxiosError: true,
-          response: {
-            status: 429,
-            data: { code: 'pending_upload_limit', error: 'busy' },
-            headers: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
-          },
+    ['0', 1, 2, 0],
+    ['1800', 2, 3, 0],
+    ['1800', Infinity, 4, 1],
+    ['soon', Infinity, 1, 1],
+    [undefined, Infinity, 1, 1],
+  ])(
+    'presign refused with Retry-After %s (%s refusals) is attempted %i time(s)',
+    async (retryAfter, refusals, attempts, failed) => {
+      const route = apiPost.getMockImplementation()!;
+      let refused = 0;
+      apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+        if (url === '/api/files/generate-presigned-urls-batch' && refused < refusals) {
+          refused++;
+          return Promise.reject({
+            isAxiosError: true,
+            response: {
+              status: 429,
+              data: { code: 'pending_upload_limit', error: 'busy' },
+              headers: retryAfter === undefined ? {} : { 'retry-after': retryAfter },
+            },
+          });
+        }
+        return route(url, body);
+      });
+      seedWizard({ names: ['a.txt', 'b.txt'] });
+
+      const { result } = mountBatchUpload();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        await act(async () => {
+          const upload = result.current.mutateAsync().catch(() => undefined);
+          await vi.advanceTimersByTimeAsync(60_000);
+          await upload;
         });
+      } finally {
+        vi.useRealTimers();
       }
-      return route(url, body);
-    });
-    seedWizard({ names: ['a.txt', 'b.txt'] });
 
-    const { result } = mountBatchUpload();
-    await act(async () => {
-      await result.current.mutateAsync().catch(() => undefined);
-    });
-
-    const presigns = apiPost.mock.calls.filter(([url]) => url === '/api/files/generate-presigned-urls-batch');
-    expect(presigns).toHaveLength(attempts);
-    expect(uploadFileToUrlMock).toHaveBeenCalledTimes(2 - failed * 2);
-  });
+      const presigns = apiPost.mock.calls.filter(([url]) => url === '/api/files/generate-presigned-urls-batch');
+      expect(presigns).toHaveLength(attempts);
+      expect(uploadFileToUrlMock).toHaveBeenCalledTimes(2 - failed * 2);
+    }
+  );
 
   it('keeps the HTTP refusal when an earlier chunk failed without a response', async () => {
     const names = Array.from({ length: 201 }, (_, index) => `f${index}.txt`);

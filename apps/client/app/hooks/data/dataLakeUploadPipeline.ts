@@ -45,17 +45,23 @@ export function foldersTagsForBatch(
 
 const UPLOAD_CONCURRENCY = 5;
 const BATCH_CHUNK_SIZE = 100; // Max files per presigned URL request
-const MAX_PENDING_RETRY_WAIT_S = 60;
+// Seconds between presign retries after a pending-upload refusal; one entry per retry.
+const PENDING_RETRY_BACKOFF_S = [5, 10, 20];
 const PENDING_UPLOAD_LIMIT_CODE = 'pending_upload_limit';
 
-/** Seconds to wait before retrying a pending-upload refusal, or undefined when waiting is not worthwhile. */
-function pendingUploadRetryDelay(err: unknown): number | undefined {
+/**
+ * Seconds to wait before retry `attempt` (0-based) of a pending-upload refusal, or undefined when
+ * waiting is not worthwhile. The server's Retry-After is when its oldest slot is abandoned (up to
+ * 30 minutes), but slots free as earlier uploads land, usually within seconds, so the header only
+ * caps the backoff. A refusal without the header can never fit (limit 0, or more files than the limit).
+ */
+function pendingUploadRetryDelay(err: unknown, attempt: number): number | undefined {
+  if (attempt >= PENDING_RETRY_BACKOFF_S.length) return undefined;
   if (!axios.isAxiosError(err) || err.response?.status !== 429) return undefined;
   if ((err.response.data as { code?: unknown } | undefined)?.code !== PENDING_UPLOAD_LIMIT_CODE) return undefined;
   const header: unknown = err.response.headers?.['retry-after'];
   if (typeof header !== 'string' || !/^\d+$/.test(header.trim())) return undefined;
-  const seconds = Number(header);
-  return seconds <= MAX_PENDING_RETRY_WAIT_S ? seconds : undefined;
+  return Math.min(Number(header), PENDING_RETRY_BACKOFF_S[attempt]);
 }
 
 /**
@@ -629,17 +635,19 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
             // batch can complete. Also populates the batch manifest server-side.
             batchId,
           });
-        let urlsRes: Awaited<ReturnType<typeof presignChunk>>;
-        try {
-          urlsRes = await presignChunk();
-        } catch (err) {
-          // The cap frees as earlier uploads land, so one bounded wait is worth a retry before failing the chunk.
-          const delay = pendingUploadRetryDelay(err);
-          if (delay === undefined) throw err;
-          await new Promise(resolve => setTimeout(resolve, delay * 1000));
-          urlsRes = await presignChunk();
-        }
-        urlMap = urlsRes.data.files;
+        // The cap frees as earlier uploads land, so a few short waits are worth it before failing the chunk.
+        const presignWithRetry = async () => {
+          for (let attempt = 0; ; attempt++) {
+            try {
+              return await presignChunk();
+            } catch (err) {
+              const delay = pendingUploadRetryDelay(err, attempt);
+              if (delay === undefined) throw err;
+              await new Promise(resolve => setTimeout(resolve, delay * 1000));
+            }
+          }
+        };
+        urlMap = (await presignWithRetry()).data.files;
       } catch (err) {
         const recordedStatus = axios.isAxiosError(presignError) ? presignError.response?.status : undefined;
         const status = axios.isAxiosError(err) ? err.response?.status : undefined;
