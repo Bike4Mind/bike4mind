@@ -33,7 +33,7 @@ async function build(source: string, print: boolean): Promise<Reply> {
     (globalThis as { self?: unknown }).self = { postMessage: (data: Reply) => resolve(data) };
   });
   await import(/* @vite-ignore */ pathToFileURL(file).href);
-  const worker = (globalThis as { self: { onmessage: (event: { data: unknown }) => Promise<void> } }).self;
+  const worker = (globalThis as unknown as { self: { onmessage: (event: { data: unknown }) => Promise<void> } }).self;
   await worker.onmessage({ data: { source, params: {}, print } });
   return reply;
 }
