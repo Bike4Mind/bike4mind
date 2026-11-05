@@ -3,6 +3,7 @@ import type { SecretCipher } from '../chat/mcp/McpServerStore';
 import { adoptedHandle, hostProcessProbe, readOwnedRecords, sameStartTime, type ProcessProbe } from './adoptedServers';
 import { hostLaunchers, LocalServerSupervisor, type Launchers, type ServerHandle } from './LocalServerSupervisor';
 import { observedFlashAttention, observedKvCacheType, observedLaunchVars, observedPrefill } from './observedOllama';
+import { inertLaunchers } from './testLaunchers';
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stopped: boolean };
 
@@ -647,6 +648,7 @@ describe('hostProcessProbe', () => {
 
     const rebooted = { ...files, [BOOT]: 'bbbb-2222\n' };
     const afterReboot = new LocalServerSupervisor({
+      launchers: inertLaunchers(),
       logger: { warn: vi.fn() },
       changed: vi.fn(),
       records: { read: async () => JSON.stringify(record), write: async () => undefined },
@@ -657,6 +659,7 @@ describe('hostProcessProbe', () => {
 
     const steppedClock = async (path: string) => (path === '/proc/stat' ? 'btime 1800000000\n' : proc(files)(path));
     const sameBoot = new LocalServerSupervisor({
+      launchers: inertLaunchers(),
       logger: { warn: vi.fn() },
       changed: vi.fn(),
       records: { read: async () => JSON.stringify(record), write: async () => undefined },

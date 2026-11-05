@@ -167,8 +167,8 @@ export interface ModelServerRegistryDeps {
   platform?: NodeJS.Platform;
   /** Each model's load settings from the Models screen, which every request for it carries. */
   loadSettings?: LoadSettingsReader;
-  /** How Desktop finds and starts the servers it runs; defaults to this computer's own (hostLaunchers). */
-  launchers?: Launchers;
+  /** How Desktop finds and starts the servers it runs: hostLaunchers in the app; tests pass inertLaunchers. */
+  launchers: Launchers;
   /** The launch variables of the Ollama at `url` on this computer; null when they cannot be read, as without this. */
   readOllamaEnv?(url: string): Promise<OllamaEnvironment | null>;
   /** Whether a loopback port is free; defaults to binding for an address probe and connecting for observation. */
@@ -206,6 +206,8 @@ interface LaunchState {
   /** Why Desktop has no Ollama program to start: null when it found one, undefined until it has looked. */
   missingOllama: string | null | undefined;
   programAt: number;
+  /** Counts looks, so one that settles after a newer one started is dropped. */
+  programLook: number;
 }
 
 const UNKNOWN_HEALTH: ModelServerHealth = {
@@ -969,8 +971,8 @@ export class ModelServerRegistry {
     const busy = this.supervisor.busy(id);
     const settingsProblem = launchSettingsProblem(settings, target.runtime);
     const lastObserved = target.runtime === 'ollama' ? (this.launchStates.get(id)?.lastObserved ?? null) : null;
-    const missingOllama =
-      target.runtime === 'ollama' && owner === 'none' ? this.launchStates.get(id)?.missingOllama : null;
+    // Only "This computer": a saved loopback address may be a tunnel to another machine's Ollama.
+    const missingOllama = id === LOCAL_SERVER_ID && owner === 'none' ? this.launchStates.get(id)?.missingOllama : null;
     return {
       runtime: target.runtime,
       owner,
@@ -983,7 +985,8 @@ export class ModelServerRegistry {
           ? null
           : owner === 'other' && target.port !== null && this.launchStates.get(id)?.portHeld
             ? portHeldMessage(target.port)
-            : (this.supervisor.problem(id) ?? settingsProblem ?? missingOllama ?? null),
+            : (this.supervisor.problem(id) ?? settingsProblem),
+      ...(missingOllama ? { programMissing: missingOllama } : {}),
       observed: owner === 'other' ? (this.launchStates.get(id)?.observed ?? null) : null,
       sizingKvCacheType: this.kvCacheType(id) ?? 'f16',
       sizingFlashAttention: this.flashAttention(id) ?? 'auto',
@@ -1042,26 +1045,31 @@ export class ModelServerRegistry {
       state.observedAt = Date.now();
       state.observedVersion = target.health.version;
     }
-    if (target.runtime === 'ollama' && owner === 'none') await this.findOllama(id, state);
+    if (id === LOCAL_SERVER_ID && owner === 'none') await this.findOllama(id, state);
     this.sizingChanged(id);
   }
 
-  /** Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS; a slow look settles in the background. */
-  private findOllama(id: string, state: LaunchState): Promise<void> {
-    if (Date.now() - state.programAt < PROGRAM_TTL_MS) return Promise.resolve();
+  /**
+   * Looks for the Ollama program Start would run, at most every PROGRAM_TTL_MS. The check emits what a look finds in
+   * time; a slower look emits once when it settles, unless a newer look has started since.
+   */
+  private async findOllama(id: string, state: LaunchState): Promise<void> {
+    if (Date.now() - state.programAt < PROGRAM_TTL_MS) return;
     state.programAt = Date.now();
-    const look = this.supervisor
+    const look = ++state.programLook;
+    const settled = this.supervisor
       .program('ollama', this.launchSettings(id))
       .then(
         found => ('problem' in found ? found.problem : null),
         (error: unknown) => (error instanceof Error ? error.message : String(error))
       )
       .then(missing => {
-        if (state.missingOllama === missing) return;
+        if (look !== state.programLook || state.missingOllama === missing) return false;
         state.missingOllama = missing;
-        this.emit();
+        return true;
       });
-    return within(look, PROGRAM_WAIT_MS, undefined);
+    if ((await within(settled, PROGRAM_WAIT_MS, 'late' as const)) !== 'late') return;
+    void settled.then(changed => changed && this.emit());
   }
 
   private launchState(id: string): LaunchState {
@@ -1076,6 +1084,7 @@ export class ModelServerRegistry {
         sizedWith: sizingKey(undefined, undefined),
         missingOllama: undefined,
         programAt: 0,
+        programLook: 0,
       };
       this.launchStates.set(id, state);
     }

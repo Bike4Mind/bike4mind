@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { findOllamaBinary } from '@bike4mind/local-models';
 import { describe, expect, it } from 'vitest';
 import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import { hostLaunchers } from './LocalServerSupervisor';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
 import { readHostOllamaEnv } from './observedOllama';
@@ -55,6 +56,7 @@ describe.runIf(ON)('live servers Desktop starts', () => {
     store: new ModelServerStore(cipher, memoryFile(), quiet),
     logger: quiet,
     readOllamaEnv: url => readHostOllamaEnv(url),
+    launchers: hostLaunchers(),
   });
   const ollamaUrl = `http://127.0.0.1:${OLLAMA_PORT}`;
 

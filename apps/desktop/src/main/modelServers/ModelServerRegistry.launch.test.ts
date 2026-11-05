@@ -479,10 +479,12 @@ describe('ModelServerRegistry launching servers', () => {
         problem: 'Desktop could not find Ollama on this computer.',
       });
       await registry.check('local');
-      expect((await local(registry)).launch).toMatchObject({
+      const missing = (await local(registry)).launch;
+      expect(missing).toMatchObject({
         owner: 'none',
         canStart: false,
-        problem: 'Desktop could not find Ollama on this computer.',
+        problem: null,
+        programMissing: 'Desktop could not find Ollama on this computer.',
       });
       await registry.check('local');
       expect(launchers.program).toHaveBeenCalledTimes(1);
@@ -490,13 +492,24 @@ describe('ModelServerRegistry launching servers', () => {
       vi.advanceTimersByTime(30_000);
       await registry.check('local');
       expect(launchers.program).toHaveBeenCalledTimes(2);
-      expect((await local(registry)).launch).toMatchObject({ canStart: true, problem: null });
+      const found = (await local(registry)).launch;
+      expect(found).toMatchObject({ canStart: true, problem: null });
+      expect(found?.programMissing).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('does not offer Start until it has looked for Ollama, and settles a slow look in the background', async () => {
+  it('reports a look that settles in time with the check, in one push', async () => {
+    const { registry, changed } = setup();
+    changed.mockClear();
+    await registry.check('local');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(changed.mock.calls[0][0][0].launch).toMatchObject({ canStart: true });
+  });
+
+  it('does not offer Start until it has looked for Ollama, and pushes a slow look once when it settles', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const { registry, launchers, changed } = setup();
@@ -507,13 +520,60 @@ describe('ModelServerRegistry launching servers', () => {
       await checked;
       expect((await local(registry)).launch).toMatchObject({ canStart: false, problem: null });
 
+      await vi.advanceTimersByTimeAsync(0);
       changed.mockClear();
       found({ path: '/opt/fake/bin' });
-      await vi.waitFor(async () => expect((await local(registry)).launch).toMatchObject({ canStart: true }));
-      expect(changed).toHaveBeenCalled();
+      await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(changed.mock.calls[0][0][0].launch).toMatchObject({ canStart: true });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('drops a look that settles after a newer one', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { registry, launchers } = setup();
+      let stale: (value: { problem: string }) => void = () => {};
+      vi.mocked(launchers.program).mockReturnValueOnce(new Promise(resolve => (stale = resolve)));
+      const first = registry.check('local');
+      await vi.advanceTimersByTimeAsync(2_000);
+      await first;
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await registry.check('local');
+      expect(launchers.program).toHaveBeenCalledTimes(2);
+      expect((await local(registry)).launch).toMatchObject({ canStart: true });
+
+      stale({ problem: 'Desktop could not find Ollama on this computer.' });
+      await vi.advanceTimersByTimeAsync(0);
+      const launch = (await local(registry)).launch;
+      expect(launch).toMatchObject({ canStart: true });
+      expect(launch?.programMissing).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never looks for Ollama for a saved loopback address, which may be a tunnel to another machine', async () => {
+    const { registry, launchers } = setup();
+    const [, added] = await registry.add({
+      address: 'http://127.0.0.1:11500',
+      credential: none,
+      name: 'tunnel',
+      kind: 'ollama',
+      access: 'chat',
+      launch: true,
+    });
+    vi.mocked(launchers.program).mockClear();
+    vi.mocked(launchers.program).mockResolvedValue({ problem: 'Desktop could not find Ollama on this computer.' });
+    const views = await registry.check(added.id);
+    expect(launchers.program).not.toHaveBeenCalled();
+    const view = views.find(server => server.id === added.id)?.launch;
+    expect(view).toMatchObject({ canStart: true });
+    expect(view?.programMissing).toBeUndefined();
   });
 
   it('stops what it started when a server is removed, and everything on quit', async () => {

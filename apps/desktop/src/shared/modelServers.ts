@@ -99,6 +99,8 @@ export interface ModelServerLaunchView {
   canStart: boolean;
   /** Why Desktop cannot start it, or why its last start or run ended. */
   problem: string | null;
+  /** "This computer" only: Desktop found no Ollama program to start. Information, not a fault, for hosted-only users. */
+  programMissing?: string;
   /** Launch variables read from a server Desktop did not start, by name; null when Desktop cannot read them. */
   observed: Record<string, string> | null;
   /** The KV cache type fit sizes this server's models with. */
