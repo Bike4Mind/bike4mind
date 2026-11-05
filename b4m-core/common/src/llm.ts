@@ -188,13 +188,13 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   /**
-   * Extra gpt-image "style anchor" images, as fabFile ids. On this endpoint `fabFileIds` is
-   * the inpainting mask, not an image input, so references need their own field: they are
+   * Extra gpt-image or FLUX.2 reference images, as fabFile ids. On this endpoint `fabFileIds` is
+   * the inpainting mask (FLUX.2 takes none), not an image input, so references need their own field: they are
    * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
    * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
    * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
-   * apply. gpt-image only: the public endpoint rejects them for BFL and Gemini
-   * (assertReferenceImagesSupported). Repeated ids collapse to one anchor, and each unique one
+   * apply. gpt-image and FLUX.2 only: the public endpoint rejects them for Fill and Gemini
+   * (assertReferenceImagesSupported); FLUX.2 allows 7 (3 on Klein), the source taking one slot. Repeated ids collapse to one anchor, and each unique one
    * is billed as an input image (see MAX_REFERENCE_IMAGES).
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),

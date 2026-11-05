@@ -29,9 +29,11 @@ export const editImageContract = defineEndpoint({
     'Queues an edit of an existing image and returns the quest that will carry the result, before the ' +
     'render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` ' +
     'schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the ' +
-    'first is the inpainting mask. `referenceImageFabFileIds` adds up to 15 style anchors after the ' +
-    'source image, so the mask always applies to the source; only gpt-image models accept them, and sending ' +
-    'any with another model is rejected with a 400 rather than ignored. Both id fields take ids ' +
+    'first is the inpainting mask, except on FLUX.2 models, which edit from the prompt with no mask and ' +
+    'reject `fabFileIds` with a 400. `referenceImageFabFileIds` adds reference images after the ' +
+    'source image, so the mask always applies to the source: up to 15 on gpt-image models, 7 on FLUX.2 ' +
+    'pro, max and flex, and 3 on FLUX.2 klein (the source takes one of FLUX.2\'s slots). Sending any ' +
+    'with another model, or more than the limit, is rejected with a 400 rather than ignored. Both id fields take ids ' +
     'from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` ' +
     'is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. ' +
     '`image` takes a URL rather than an id, so a source uploaded the same way is passed as its ' +
@@ -66,7 +68,8 @@ export const editImageContract = defineEndpoint({
     },
     400: {
       description:
-        `\`fabFileIds\` is empty, \`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ` +
+        `\`fabFileIds\` is empty for a mask model or set for FLUX.2, \`referenceImageFabFileIds\` is set for a model that ` +
+        `does not accept them or exceeds its limit, or the ` +
         `${GENERATION_CALLBACK_REJECTED_DESCRIPTION} ${BILLING_ORGANIZATION_STALE_KEY_DESCRIPTION}`,
       schema: ApiErrorSchema,
     },

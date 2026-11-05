@@ -350,6 +350,43 @@ describe('ImageEditService.process model dispatch', () => {
     expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
   });
 
+  it('rejects a mask on a FLUX.2 edit and queues nothing', async () => {
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue);
+
+    await expect(
+      service.invoke({
+        userId: 'user1',
+        body: {
+          sessionId: 'session1',
+          prompt: 'make it blue',
+          model: ImageModels.FLUX_2_PRO,
+          image: 'https://example.invalid/source.png',
+          fabFileIds: ['mask1'],
+        },
+      })
+    ).rejects.toThrow('FLUX.2 edits take no mask');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('queues a FLUX.2 edit that sends no fabFileIds', async () => {
+    const enqueue = vi.fn();
+    const { service } = makeService({}, enqueue);
+
+    await service.invoke({
+      userId: 'user1',
+      body: {
+        sessionId: 'session1',
+        prompt: 'make it blue',
+        model: ImageModels.FLUX_2_PRO,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: [],
+      },
+    });
+
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
   it('carries the authenticating API key from invoke() onto the queued job body', async () => {
     const enqueued: unknown[] = [];
     const { service } = makeService({}, async body => {
@@ -798,6 +835,28 @@ describe('ImageEditService.process reference images (#2744)', () => {
 
     expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('gemini');
     expect(editSpy.mock.calls[0][2]).not.toHaveProperty('referenceImages');
+  });
+
+  it('edits with FLUX.2 from the prompt alone, sending each reference inline as base64 and no mask', async () => {
+    await run({ referenceImageFabFileIds: ['b', 'a'] }, { model: ImageModels.FLUX_2_PRO });
+
+    expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('bfl');
+    const options = editSpy.mock.calls[0][2];
+    const inline = Buffer.from('image-bytes').toString('base64');
+    expect(options.referenceImages).toEqual([inline, inline]);
+    expect(options).not.toHaveProperty('mask');
+  });
+
+  it('refuses more unique references than Klein accepts, naming the limit', async () => {
+    const accessible = Object.fromEntries(['a', 'b', 'c', 'd'].map(id => [id, cleanImage(id)]));
+    const { quest } = await run(
+      { referenceImageFabFileIds: ['a', 'b', 'c', 'd'] },
+      { model: ImageModels.FLUX_2_KLEIN_4B, accessible }
+    );
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('At most 3');
   });
 
   it('sends an empty anchor list when none are requested', async () => {
