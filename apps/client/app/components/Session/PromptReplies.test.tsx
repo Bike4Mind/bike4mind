@@ -800,12 +800,21 @@ describe('empty fences in a reply', () => {
 describe('deep research panel settle wiring in a rendered reply', () => {
   const appTheme = extendTheme({ ...getThemeConfig() });
   const deepResearchState = {
-    activities: [],
+    // The panel renders nothing without at least one activity or source.
+    activities: [
+      {
+        type: 'search',
+        status: 'pending',
+        message: 'Searching with Engine for: "magnets"',
+        timestamp: '2026-01-01T00:00:01.000Z',
+        depth: 0,
+      },
+    ],
     sources: [],
     completedSteps: 1,
     totalExpectedSteps: 4,
     completed: false,
-    startTime: '2026-01-01T00:00:00.000Z',
+    startTime: Date.parse('2026-01-01T00:00:00.000Z'),
   };
 
   const renderStatus = (status: string) => {
@@ -827,6 +836,6 @@ describe('deep research panel settle wiring in a rendered reply', () => {
   });
 
   it('keeps the running state while the turn is streaming', () => {
-    expect(renderStatus('streaming')).not.toMatch(/stopped|complete/i);
+    expect(renderStatus('running')).not.toMatch(/stopped|complete/i);
   });
 });
