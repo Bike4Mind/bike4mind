@@ -18,7 +18,9 @@ import { adminAuditService } from '@bike4mind/services';
 import { getClientIp } from './ip';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 
-type ActorIdentity = { id: string; username: string; name: string; email?: string | null; isAdmin: boolean };
+// A hand-written slice of the client's augmented Express.User (apps/client/global.d.ts). Keep in sync:
+// apps/client/server/utils/adminAuditActor.typecheck.ts fails client typecheck when the user stops fitting it.
+export type ActorIdentity = { id: string; username: string; name: string; email?: string | null; isAdmin: boolean };
 
 // Typed routes pass Request<unknown, ...>; this accepts those as well as the express default. The
 // extra fields are a structural slice of the Express augmentation in apps/client/global.d.ts,
