@@ -532,6 +532,11 @@ export function ChatShell({
           if (!current()) return;
           setStoredDefaults(stored => new Map(stored).set(defaultsModelId, settings ?? null));
           clearDefaultsReadFailure(defaultsSessionId);
+          setDefaultsReadFailures(failures => {
+            const next = new Map(failures);
+            for (const [id, failure] of failures) if (failure.modelId === defaultsModelId) next.delete(id);
+            return next.size === failures.size ? failures : next;
+          });
         },
         error => {
           if (!current()) return;
