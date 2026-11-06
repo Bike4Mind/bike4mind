@@ -133,3 +133,56 @@ describe('recentDistinctSignups', () => {
     }
   });
 });
+
+describe('findRecentSignupsOnIp', () => {
+  let server: Awaited<ReturnType<typeof createMongoServer>>;
+  const until = new Date();
+  const since = new Date(until.getTime() - 60 * 60 * 1000);
+  const at = (minutes: number) => new Date(since.getTime() + minutes * 60 * 1000);
+  const row = (userId: string, extra: Record<string, unknown> = {}) => ({
+    userId,
+    type: 'signup',
+    method: 'synthetic',
+    ip: '192.0.2.1',
+    createdAt: at(30),
+    ...extra,
+  });
+  const input = { ip: '192.0.2.1', excludeUserId: 'current', since, until, limit: 10 };
+
+  beforeAll(async () => {
+    server = await createMongoServer();
+    await mongoose.connect(server.getUri());
+    await AuthEventModel.init();
+  });
+  beforeEach(async () => {
+    await AuthEventModel.deleteMany({});
+  });
+  afterAll(async () => {
+    await mongoose.disconnect();
+    await server?.stop();
+  });
+
+  it('returns other signups on the IP newest first, half-open, with the JA4 or null', async () => {
+    await AuthEventModel.collection.insertMany([
+      row('older', { createdAt: at(10), ja4: 'ja4-a' }),
+      row('newer', { createdAt: at(40) }),
+      row('current'),
+      row('login', { type: 'login' }),
+      row('elsewhere', { ip: '192.0.2.2' }),
+      row('start', { createdAt: since }),
+      row('end', { createdAt: until }),
+      row('before', { createdAt: new Date(since.getTime() - 1) }),
+    ]);
+    expect(await authEventRepository.findRecentSignupsOnIp(input)).toEqual([
+      { userId: 'newer', ja4: null, createdAt: at(40) },
+      { userId: 'older', ja4: 'ja4-a', createdAt: at(10) },
+      { userId: 'start', ja4: null, createdAt: since },
+    ]);
+  });
+
+  it('caps the rows at limit, keeping the newest', async () => {
+    await AuthEventModel.collection.insertMany([row('a', { createdAt: at(1) }), row('b', { createdAt: at(2) })]);
+    const rows = await authEventRepository.findRecentSignupsOnIp({ ...input, limit: 1 });
+    expect(rows.map(r => r.userId)).toEqual(['b']);
+  });
+});

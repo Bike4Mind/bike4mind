@@ -319,23 +319,25 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
   async spendProfileByUsers(userIds: string[], since: Date, maxModels = 5): Promise<Record<string, IUserSpendProfile>> {
     if (userIds.length === 0) return {};
     const credits = { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] };
-    const rows = await this.model.aggregate<{
-      _id: { userId: string; model: string | null };
-      credits: number;
-      events: number;
-      firstAt: Date;
-    }>([
-      { $match: { userId: { $in: userIds }, createdAt: { $gte: since } } },
-      { $match: { $expr: { $gt: [credits, 0] } } },
-      {
-        $group: {
-          _id: { userId: '$userId', model: '$model' },
-          credits: { $sum: credits },
-          events: { $sum: 1 },
-          firstAt: { $min: '$createdAt' },
+    const rows = await this.model
+      .aggregate<{
+        _id: { userId: string; model: string | null };
+        credits: number;
+        events: number;
+        firstAt: Date;
+      }>([
+        { $match: { userId: { $in: userIds }, createdAt: { $gte: since } } },
+        { $match: { $expr: { $gt: [credits, 0] } } },
+        {
+          $group: {
+            _id: { userId: '$userId', model: '$model' },
+            credits: { $sum: credits },
+            events: { $sum: 1 },
+            firstAt: { $min: '$createdAt' },
+          },
         },
-      },
-    ]);
+      ])
+      .option({ maxTimeMS: 2000 });
     const profiles: Record<string, IUserSpendProfile> = {};
     for (const row of rows) {
       const id = String(row._id.userId);
