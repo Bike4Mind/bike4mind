@@ -45,6 +45,7 @@ const HANDLERS: Record<string, EventHandler> = {
   'notebook.curation.start': notebookCurationHandler,
   // No-ops unless all four APNS_* values are set (see readApnsCredentials in server-utils pushDelivery).
   'notification.push': sendPushHandler,
+  'notification.liveActivity': sendPushHandler,
 };
 
 export async function dispatchSelfHostEvent(

@@ -9,6 +9,7 @@ import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
   PERSISTED_SESSION_SUMMARY_TRIGGERS,
+  LiveActivityPushEventSchema,
   PushNotificationEventSchema,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
@@ -140,6 +141,8 @@ export const EmailEvents = {
  */
 export const NotificationEvents = {
   Push: event('notification.push', PushNotificationEventSchema),
+  /** Live activity progress for a quest; publish through publishLiveActivityUpdate (./liveActivityPush.ts). */
+  LiveActivity: event('notification.liveActivity', LiveActivityPushEventSchema),
 };
 
 export const StripeEvents = {

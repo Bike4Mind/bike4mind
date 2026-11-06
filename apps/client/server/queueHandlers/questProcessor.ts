@@ -52,7 +52,8 @@ import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { publishPushNotification, sessionDeepLink } from '@server/utils/pushNotifications';
-import { publishChatCompletedPush } from './questProcessor.push';
+import { publishLiveActivityUpdate } from '@server/utils/liveActivityPush';
+import { createChatLiveActivity, publishChatCompletedPush } from './questProcessor.push';
 import { recordFirstChatValue } from '@server/analytics/funnel';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
@@ -305,6 +306,15 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     throw new NotFoundError('Session not found');
   }
 
+  const liveActivity = createChatLiveActivity(
+    { userId: params.userId, questId: params.questId, apiKeyId: params.apiKeyId },
+    {
+      findQuest: questId => questRepository.findById(questId),
+      publishLiveActivity: event => publishLiveActivityUpdate(event, logger),
+    },
+    logger
+  );
+
   // Every quest-creating surface (web app, public chat API, Slack, voice proxy) lands here, so this
   // is the cap's backstop. A capped turn is the user's limit, not a processing failure: settle the
   // quest with the reason instead of throwing into the route's generic-failure reply and metric.
@@ -324,6 +334,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
       reply: error.message,
       replies: [error.message],
     });
+    await liveActivity.end('failed');
     return;
   }
 
@@ -362,6 +373,7 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     tokenizer: getSharedTokenizer(logger),
     sessionId: params.sessionId,
     user,
+    onStatusUpdate: liveActivity.onStatusUpdate,
     createCompletionMeter: ({ organizationId, featureLabel }) =>
       createCompletionMeter(user, logger, featureLabel, {
         sessionId: params.sessionId,
@@ -407,13 +419,19 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
   // an existing external tool.
   externalTools = { ...adminAssistantToolDefinitions(user), ...externalTools };
 
-  await chatCompletion.process({
-    body: requestBody,
-    logger,
-    externalTools,
-    videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
-    musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
-  });
+  try {
+    await chatCompletion.process({
+      body: requestBody,
+      logger,
+      externalTools,
+      videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
+      musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
+    });
+  } catch (error) {
+    await liveActivity.end('failed');
+    throw error;
+  }
+  await liveActivity.end();
 
   await recordFirstChatValue({
     user,

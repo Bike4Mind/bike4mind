@@ -150,7 +150,8 @@ export const notificationPushSubscription = eventBus.subscribe(
   },
   {
     pattern: {
-      detailType: ['notification.push'],
+      // One Lambda handles both and routes on the detail-type; a live activity frame shares the push DLQ.
+      detailType: ['notification.push', 'notification.liveActivity'],
     },
     transform: pushEventsDeadLetter.ruleTarget,
   }
