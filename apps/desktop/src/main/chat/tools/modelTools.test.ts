@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -64,6 +64,15 @@ describe('model_view', () => {
     expect(view.open).toHaveBeenCalledWith(join(root, 'chest.model.js'));
     expect(text).toContain('Size: 60 x 40 x 30 mm');
     expect(text).toContain(`GLB written: ${join(root, 'chest.glb')}`);
+  });
+
+  it('refuses a model whose GLB would land in a protected folder', async () => {
+    const { root, view, context } = setup();
+    mkdirSync(join(root, 'vault'));
+    writeFileSync(join(root, 'vault', 'safe.model.js'), 'export default () => null');
+    const guarded = { ...context, protectedPaths: [join(root, 'vault')] };
+    await expect(modelView.run({ path: 'vault/safe.model.js' }, guarded)).rejects.toThrow();
+    expect(view.open).not.toHaveBeenCalled();
   });
 
   it('refuses a path outside the roots', async () => {

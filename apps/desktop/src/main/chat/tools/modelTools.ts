@@ -7,9 +7,11 @@ import {
   type ModelView,
   formatModelSummary,
   modelKindFor,
+  siblingGlbPath,
 } from '@shared/model3d';
 import { resolveWithinRoots } from './paths';
 import { showImage } from './toolImages';
+import { resolveWritablePath } from './writeTools';
 import { requireString, type ModelContext, type ToolContext, type ToolDefinition } from './types';
 
 /**
@@ -108,6 +110,9 @@ async function openAndBuild(
   let path: string;
   if (requested) {
     path = await resolveModelPath(requested, context);
+    // Opening a model builds its sibling GLB, so that location must be writable.
+    const sibling = modelKindFor(path) === 'model' ? siblingGlbPath(path) : null;
+    if (sibling && model.view.current().path !== path) await resolveWritablePath(sibling, context);
     if (model.view.current().path !== path) await model.view.open(path);
   } else {
     const open = model.view.current().path;
