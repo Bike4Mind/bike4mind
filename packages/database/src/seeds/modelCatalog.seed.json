@@ -1026,7 +1026,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "FLUX 3 Image - Flagship FLUX 3 model with web-grounded prompts, for high-fidelity generation and editing with up to ten reference images.",
+        "description": "FLUX 3 Image - Flagship FLUX 3 model with web-grounded prompts, for high-fidelity generation and reference-guided transforms with up to ten reference images.",
         "rank": 13
       }
     },
@@ -1052,7 +1052,7 @@
         "lifecycle": {
           "status": "active"
         },
-        "description": "FLUX 3 Image Klein - Fast, low-cost FLUX 3 model for generation and editing with up to ten reference images.",
+        "description": "FLUX 3 Image Klein - Fast, low-cost FLUX 3 model for generation and reference-guided transforms with up to ten reference images.",
         "rank": 14
       }
     },

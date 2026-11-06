@@ -165,7 +165,8 @@ Check your credit balance in Profile > Credit Analytics.
 ### Too Many FLUX.2 or FLUX 3 Inputs
 
 Count the primary image and additional references together: FLUX.2 Max, Pro, and Flex accept eight
-inputs; FLUX.2 Klein accepts four; FLUX 3 Image and FLUX 3 Image Klein accept ten. A continued conversation may carry forward its previous image as the primary.
+inputs; FLUX.2 Klein accepts four; FLUX 3 Image and FLUX 3 Image Klein accept ten. A continued
+conversation may carry forward its previous image as the primary.
 Remove references or start a fresh request if the generation reports that the total is too high.
 
 ### Poor Quality Results

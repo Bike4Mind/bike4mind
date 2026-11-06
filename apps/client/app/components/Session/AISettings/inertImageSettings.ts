@@ -38,6 +38,7 @@ export const ignoresOutputFormat = (model?: string | null): boolean =>
   isBflImageModel(model) && !supportsBflOutputFormat(model);
 
 export const OUTPUT_FORMAT_INERT_NOTE = FIELD_TOOLTIPS.unsupportedByFlux3Image;
+export const OUTPUT_FORMAT_TOOLTIP = FIELD_TOOLTIPS.imageOutputFormat;
 
 /**
  * A model sized by discrete width/height builds its request from those alone - `BFLImageService.generate`

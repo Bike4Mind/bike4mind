@@ -262,7 +262,7 @@ export class BFLBackend implements ICompletionBackend {
           1: { input: 1000, output: 1000 }, // $0.100 per image (2k tier)
         },
         description:
-          'FLUX 3 Image - Flagship FLUX 3 model with web-grounded prompts, for high-fidelity generation and editing with up to ten reference images.',
+          'FLUX 3 Image - Flagship FLUX 3 model with web-grounded prompts, for high-fidelity generation and reference-guided transforms with up to ten reference images.',
         supportsSafetyTolerance: true,
         rank: 13,
       },
@@ -278,7 +278,7 @@ export class BFLBackend implements ICompletionBackend {
           1: { input: 140, output: 140 }, // $0.014 per image (2k tier)
         },
         description:
-          'FLUX 3 Image Klein - Fast, low-cost FLUX 3 model for generation and editing with up to ten reference images.',
+          'FLUX 3 Image Klein - Fast, low-cost FLUX 3 model for generation and reference-guided transforms with up to ten reference images.',
         supportsSafetyTolerance: true,
         rank: 14,
       },

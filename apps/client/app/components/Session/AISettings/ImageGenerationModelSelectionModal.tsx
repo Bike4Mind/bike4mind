@@ -54,11 +54,10 @@ import {
 import MetadataChip from './MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { ContextHelpButton } from '@client/app/components/help';
-// From the module, not the barrel: component tests mock the barrel.
-import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import {
   ASPECT_RATIO_INERT_NOTE,
   OUTPUT_FORMAT_INERT_NOTE,
+  OUTPUT_FORMAT_TOOLTIP,
   ignoresAspectRatio,
   ignoresOutputFormat,
   ignoresSeed,
@@ -432,11 +431,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: (_output_format ?? 'png') as 'jpeg' | 'png',
       onChange: (value: 'jpeg' | 'png' | null) => value && setLLM({ output_format: value }),
-      tooltip: withInertNote(
-        FIELD_TOOLTIPS.imageOutputFormat,
-        ignoresOutputFormat(contextImageModel),
-        OUTPUT_FORMAT_INERT_NOTE
-      ),
+      tooltip: withInertNote(OUTPUT_FORMAT_TOOLTIP, ignoresOutputFormat(contextImageModel), OUTPUT_FORMAT_INERT_NOTE),
       disabled: ignoresOutputFormat(contextImageModel),
       options: [
         { value: 'jpeg', label: 'JPEG' },

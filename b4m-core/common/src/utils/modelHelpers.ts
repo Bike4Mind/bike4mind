@@ -318,9 +318,12 @@ export const IMAGES_PER_EDIT_REQUEST = 1;
 export const MAX_REFERENCE_IMAGES = 15;
 
 /** FLUX.2's and FLUX 3's limits include the primary input; GPT reserves a separate primary slot. */
+/** Max input images (primary plus references) per FLUX 3 Image request. */
+export const FLUX_3_MAX_INPUT_IMAGES = 10;
+
 export function getMaxReferenceImages(model: string): number {
   if (isGPTImageModel(model)) return MAX_REFERENCE_IMAGES;
-  if (isFlux3ImageModel(model)) return 10;
+  if (isFlux3ImageModel(model)) return FLUX_3_MAX_INPUT_IMAGES;
   if (!isFlux2ImageModel(model)) return 0;
   return model.startsWith('flux-2-klein-') ? 4 : 8;
 }
