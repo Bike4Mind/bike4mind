@@ -1,5 +1,4 @@
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
-const isStagingStage = $app.stage === 'dev';
 
 /**
  * Whether this stage creates its scheduled crons at all. Only production and dev do; every other
@@ -85,8 +84,8 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // Curated domain->display-name map for internal-org analytics grouping (#350). Runtime-read by
   // inferOrganizationFromEmail in the report cron. No brand fallback; empty == title-cased domain.
   NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES: process.env.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES || '',
-  // Enable E2E test endpoints (/api/test/*) on preview and staging deployments
-  E2E_ENDPOINTS_ENABLED: isPreviewStage || isStagingStage ? 'true' : '',
+  // Enable E2E test endpoints (/api/test/*) on preview deployments only
+  E2E_ENDPOINTS_ENABLED: isPreviewStage ? 'true' : '',
   // Suppress punycode deprecation warning (DEP0040) from SST's transitive aws-sdk v2 dependency
   NODE_OPTIONS: '--disable-warning=DEP0040',
 };
