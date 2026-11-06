@@ -21,7 +21,7 @@ export const adminSurface = {
 };
 
 /**
- * The page frame every admin page sits in (DESIGN_GUIDE section 3, "Page skeletons"): a 32 px gutter
+ * The page frame every admin page sits in (DESIGN_GUIDE section 3, "Page frame"): a 32 px gutter
  * (16 on phones), 24 px above the page header and 32 px below the last region. The shell applies it
  * to each tab panel, and detail routes spread it on their root, so a page never pads itself.
  */
