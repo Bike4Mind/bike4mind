@@ -19,17 +19,27 @@ const slideIn = keyframes({
  * out beside the button. The tray opens in place rather than as a popover because each knob
  * already owns a menu or panel, and a popover holding popovers closes under its own clicks.
  */
-export function TuneTray({ disabled, children }: { disabled?: boolean; children: (compact: boolean) => ReactNode }) {
+export function TuneTray({
+  disabled,
+  trailing,
+  children,
+}: {
+  disabled?: boolean;
+  /** Kept on one line with the sliders button (the model picker), so the two never wrap apart. */
+  trailing?: ReactNode;
+  children: (compact: boolean) => ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const trayId = useId();
   const label = open ? 'Hide model settings' : 'Model settings';
 
   return (
-    <Stack direction="row" alignItems="center" justifyContent="flex-end" flexWrap="wrap" sx={{ minWidth: 0, gap: 0.5 }}>
+    <>
       <Stack
         id={trayId}
         direction="row"
         alignItems="center"
+        justifyContent="flex-end"
         flexWrap="wrap"
         data-testid="composer-tune-tray"
         data-open={open}
@@ -58,22 +68,25 @@ export function TuneTray({ disabled, children }: { disabled?: boolean; children:
       >
         {children(!open)}
       </Stack>
-      <Tooltip title={label} size="sm" variant="soft" placement="top">
-        <IconButton
-          size="sm"
-          variant={open ? 'soft' : 'plain'}
-          color={open ? 'primary' : 'neutral'}
-          disabled={disabled}
-          onClick={() => setOpen(value => !value)}
-          aria-label={label}
-          aria-expanded={open}
-          aria-controls={trayId}
-          data-testid="composer-tune-btn"
-          sx={{ flexShrink: 0, borderRadius: 'xl', color: open ? undefined : 'text.tertiary' }}
-        >
-          <SlidersIcon />
-        </IconButton>
-      </Tooltip>
-    </Stack>
+      <Stack direction="row" alignItems="center" sx={{ flexShrink: 0, gap: 0.5 }}>
+        <Tooltip title={label} size="sm" variant="soft" placement="top">
+          <IconButton
+            size="sm"
+            variant={open ? 'soft' : 'plain'}
+            color={open ? 'primary' : 'neutral'}
+            disabled={disabled}
+            onClick={() => setOpen(value => !value)}
+            aria-label={label}
+            aria-expanded={open}
+            aria-controls={trayId}
+            data-testid="composer-tune-btn"
+            sx={{ flexShrink: 0, borderRadius: 'xl', color: open ? undefined : 'text.tertiary' }}
+          >
+            <SlidersIcon />
+          </IconButton>
+        </Tooltip>
+        {trailing}
+      </Stack>
+    </>
   );
 }
