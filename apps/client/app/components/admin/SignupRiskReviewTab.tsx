@@ -69,21 +69,27 @@ const SignupTime: React.FC<{ iso: string; now: number }> = ({ iso, now }) => {
 // Only an abuse verdict is colored: a model's "legitimate" must not read as a reason to approve.
 const ADVISORY_DISPLAY: Record<AbuseAssessmentJudgment, { label: string; tone: AdminStatusTone }> = {
   abuse: { label: 'Model: abuse', tone: 'bad' },
-  legitimate_automation: { label: 'Model: automation', tone: 'neutral' },
+  legitimate_automation: { label: 'Model: legit automation', tone: 'neutral' },
   insufficient_evidence: { label: 'Model: unsure', tone: 'neutral' },
 };
+
+export function advisoryTooltip(advisory: NonNullable<SignupRiskReviewRow['advisory']>, now: number): string {
+  const confidence = advisory.confidence === null ? '' : `, ${Math.round(advisory.confidence * 100)}% confident`;
+  const others =
+    advisory.otherVerdicts > 0
+      ? ` An abuse verdict is shown over newer ones; ${plural(advisory.otherVerdicts, 'other verdict')} on this account.`
+      : '';
+  return `Advisory model verdict on a detection (${DETECTOR_LABELS[advisory.detector]})${confidence}, ${relativeTime(
+    new Date(advisory.assessedAt),
+    now
+  )}.${others} It never approves or blocks an account.`;
+}
 
 const Advisory: React.FC<{ row: SignupRiskReviewRow; now: number }> = ({ row, now }) => {
   const advisory = row.advisory;
   if (!advisory) return null;
-  const confidence = advisory.confidence === null ? '' : `, ${Math.round(advisory.confidence * 100)}% confident`;
   return (
-    <Tooltip
-      title={`Advisory verdict on a ${DETECTOR_LABELS[advisory.detector]} detection${confidence}, ${relativeTime(
-        new Date(advisory.assessedAt),
-        now
-      )}. It never approves or blocks an account.`}
-    >
+    <Tooltip title={advisoryTooltip(advisory, now)}>
       <span tabIndex={0} data-testid={`signup-risk-advisory-${row.userId}`}>
         <StatusChip tone={ADVISORY_DISPLAY[advisory.result].tone} label={ADVISORY_DISPLAY[advisory.result].label} />
       </span>

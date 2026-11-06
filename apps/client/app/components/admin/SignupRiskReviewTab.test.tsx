@@ -41,7 +41,7 @@ vi.mock('./Users/BulkAbuseResponseModal', () => ({
   },
 }));
 
-import SignupRiskReviewTab from './SignupRiskReviewTab';
+import SignupRiskReviewTab, { advisoryTooltip } from './SignupRiskReviewTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
@@ -399,10 +399,33 @@ describe('SignupRiskReviewTab', () => {
       within(screen.getByTestId(`signup-risk-advisory-${userId}`)).getByTestId('admin-status-chip');
     expect(chip('u1').textContent).toBe('Model: abuse');
     expect(chip('u1').getAttribute('data-tone')).toBe('bad');
-    expect(chip('u2').textContent).toBe('Model: automation');
+    expect(chip('u2').textContent).toBe('Model: legit automation');
     expect(chip('u2').getAttribute('data-tone')).toBe('neutral');
     expect(chip('u3').textContent).toBe('Model: unsure');
     expect(chip('u3').getAttribute('data-tone')).toBe('neutral');
+  });
+
+  it('words the advisory tooltip with the detector, confidence, age and other verdicts', () => {
+    const now = new Date('2026-11-02T10:00:00.000Z').getTime();
+    const advisory = {
+      detectionId: 'd1',
+      detector: 'signupNetworkBurst' as const,
+      result: 'abuse' as const,
+      confidence: 0.82,
+      assessedAt: '2026-11-02T10:00:00.000Z',
+      otherVerdicts: 0,
+    };
+
+    const single = advisoryTooltip(advisory, now);
+    expect(single).toContain('(Signup network burst)');
+    expect(single).toContain('82% confident');
+    expect(single).not.toContain('other verdict');
+    expect(single).toContain('It never approves or blocks an account.');
+    expect(advisoryTooltip({ ...advisory, confidence: null }, now)).not.toContain('confident');
+
+    const several = advisoryTooltip({ ...advisory, otherVerdicts: 2 }, now);
+    expect(several).toContain('An abuse verdict is shown over newer ones; 2 other verdicts on this account.');
+    expect(advisoryTooltip({ ...advisory, otherVerdicts: 1 }, now)).toContain('1 other verdict on this account.');
   });
 
   it('shows no advisory chip on a row with no verdict', () => {
