@@ -60,7 +60,8 @@ export function clientUsageMiddleware() {
         $min: { [`${path}.firstSeenAt`]: now },
         $max: { [`${path}.lastSeenAt`]: now },
         ...(signal.version ? { $set: { [`${path}.version`]: signal.version } } : {}),
-      }
+      },
+      { timestamps: false }
     ).catch((error: unknown) => {
       req.logger?.warn('[clientUsage] failed to record client usage', { surface: signal.surface, error });
     });

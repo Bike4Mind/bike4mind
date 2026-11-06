@@ -1709,6 +1709,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     isOnline: { type: Boolean, default: false },
 
     // Written by apps/client/server/middlewares/clientUsage.ts; keys must match CLIENT_SURFACES.
+    // A hydrated doc reads an unset surface as {} (truthy): test `lastSeenAt`, not the surface object.
     clientUsage: {
       web: { firstSeenAt: Date, lastSeenAt: Date, version: String },
       desktop: { firstSeenAt: Date, lastSeenAt: Date, version: String },

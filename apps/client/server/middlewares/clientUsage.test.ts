@@ -42,7 +42,8 @@ describe('clientUsageMiddleware', () => {
         $min: { 'clientUsage.desktop.firstSeenAt': NOW },
         $max: { 'clientUsage.desktop.lastSeenAt': NOW },
         $set: { 'clientUsage.desktop.version': '1.4.2' },
-      }
+      },
+      { timestamps: false }
     );
   });
 
@@ -51,7 +52,8 @@ describe('clientUsageMiddleware', () => {
 
     expect(mocks.updateOne).toHaveBeenCalledWith(
       { _id: 'u1' },
-      { $min: { 'clientUsage.web.firstSeenAt': NOW }, $max: { 'clientUsage.web.lastSeenAt': NOW } }
+      { $min: { 'clientUsage.web.firstSeenAt': NOW }, $max: { 'clientUsage.web.lastSeenAt': NOW } },
+      { timestamps: false }
     );
   });
 
