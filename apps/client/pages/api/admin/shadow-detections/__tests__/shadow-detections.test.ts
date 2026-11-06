@@ -102,7 +102,7 @@ beforeEach(async () => {
   h.summarize.mockReset().mockResolvedValue([]);
   h.addVerdict.mockReset();
   h.addVerdicts.mockReset();
-  h.listContext.mockReset().mockResolvedValue({ accounts: [], burstPeers: [] });
+  h.listContext.mockReset().mockResolvedValue({ accounts: [], burstPeers: [], reviewers: [] });
   h.record.mockReset().mockResolvedValue(null);
   h.userWrite.mockReset();
   if (!h.handlers.list) await loadRoutes();
@@ -147,17 +147,18 @@ describe('GET /api/admin/shadow-detections', () => {
     expect(body).toMatchObject({ truncated: true, summary, data: [{ id: DETECTION_ID, revision: 0 }] });
   });
 
-  it('returns the accounts and burst peers of the listed detections', async () => {
+  it('returns the accounts, burst peers and reviewers of the listed detections', async () => {
     const accounts = [{ userId: 'u1', status: 'suspended', signupMethod: 'google', currentCredits: 0 }];
     const burstPeers = [{ detectionId: DETECTION_ID, userIds: ['u2'], truncated: false }];
+    const reviewers = [{ userId: 'u3', name: 'Test Admin' }];
     h.list.mockResolvedValue({ data: [item()], truncated: false });
-    h.listContext.mockResolvedValue({ accounts, burstPeers });
+    h.listContext.mockResolvedValue({ accounts, burstPeers, reviewers });
     const { req, res } = request('GET');
 
     await h.handlers.list.get(req, res);
 
     expect(h.listContext).toHaveBeenCalledWith([expect.objectContaining({ id: DETECTION_ID })]);
-    expect(res._getJSONData()).toMatchObject({ accounts, burstPeers });
+    expect(res._getJSONData()).toMatchObject({ accounts, burstPeers, reviewers });
   });
 
   it('rejects an unknown filter', async () => {

@@ -33,9 +33,9 @@ const handler = adminApi({
         shadowDetectionRepository.list({ ...parsed.data, limit: SHADOW_DETECTION_LIST_LIMIT }),
         shadowDetectionRepository.summarize(),
       ]);
-      const { accounts, burstPeers } = await shadowDetectionRepository.listContext(data);
+      const { accounts, burstPeers, reviewers } = await shadowDetectionRepository.listContext(data);
       res.setHeader('Cache-Control', 'private, no-store');
-      respond(res, shadowDetectionListSchema, { data, truncated, summary, accounts, burstPeers });
+      respond(res, shadowDetectionListSchema, { data, truncated, summary, accounts, burstPeers, reviewers });
     })
   );
 
