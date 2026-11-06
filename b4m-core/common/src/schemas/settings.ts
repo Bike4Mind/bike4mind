@@ -306,6 +306,7 @@ export const SettingKeySchema = z.enum([
   'EnableDeferredToolLoading',
   'DeferredToolStartSetMaxTokens',
   'EnableQuestMaster',
+  'QuestMasterLegacyShutdownDate',
   'EnableQuestMasterDefault',
   'EnableHearth',
   'EnableHearthDefault',
@@ -1144,6 +1145,13 @@ function isEscalationScheduleOrBlank(value: string): boolean {
 
 function withSchema<T extends object, S extends z.ZodTypeAny>(setting: T, schema: S) {
   return { ...setting, schema };
+}
+
+/** A real YYYY-MM-DD calendar date (rejects 2027-02-30). */
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
 function makeStringSetting(
@@ -2302,6 +2310,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
       { key: 'EnableQuestMaster', order: 92 },
       { key: 'EnableQuestMasterDefault', order: 93 },
+      { key: 'QuestMasterLegacyShutdownDate', order: 93.5 },
       { key: 'EnableHearth', order: 94 },
       { key: 'EnableHearthDefault', order: 95 },
       { key: 'EnableRapidReply', order: 100 },
@@ -3101,6 +3110,23 @@ export const settingsMap = {
     order: 91,
     dependsOn: 'EnableQuestMaster',
   }),
+  QuestMasterLegacyShutdownDate: {
+    ...makeStringSetting({
+      key: 'QuestMasterLegacyShutdownDate',
+      name: 'Quest Master: legacy v4/v5 shutdown date',
+      defaultValue: '',
+      description:
+        'The date (YYYY-MM-DD) the legacy v4 and v5 Quest Master views are turned off, shown in their retirement banner. Leave empty until it is decided: the banner then says the views are being retired without a date.',
+      category: 'Experimental',
+      group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+      order: 92,
+      // Read by the retirement banner on the legacy quest views (LegacyQuestmasterBanner.tsx).
+      userReadable: true,
+    }),
+    schema: z.string().refine(value => value === '' || isCalendarDate(value), {
+      message: 'Use a date like 2027-01-31, or leave it empty.',
+    }),
+  },
   EnableHearth: makeBooleanSetting({
     key: 'EnableHearth',
     name: 'Enable Hearth',
