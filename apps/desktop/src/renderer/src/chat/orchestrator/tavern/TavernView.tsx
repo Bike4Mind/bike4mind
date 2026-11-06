@@ -435,7 +435,8 @@ function Innkeeper({
         p: 0,
         border: 0,
         bgcolor: 'transparent',
-        cursor: onSelect ? 'pointer' : 'default',
+        // Only the art takes the pointer: its clip-path keeps the part hidden behind the counter from being hit.
+        pointerEvents: 'none',
         transition: `left ${WALK}, top ${WALK}`,
         [NO_MOTION]: { transition: 'none' },
         '&:focus-visible': { outline: '2px solid #f5c542', outlineOffset: 2, borderRadius: '4px' },
@@ -458,6 +459,8 @@ function Innkeeper({
           width: '100%',
           height: '100%',
           imageRendering: 'pixelated',
+          pointerEvents: 'auto',
+          cursor: onSelect ? 'pointer' : 'default',
         }}
       />
       {bubble && (

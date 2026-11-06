@@ -313,6 +313,17 @@ describe('TavernView', () => {
       expect(getComputedStyle(shadow!).opacity).toBe('0');
     });
 
+    it('takes the pointer on its visible art only, so the counter hiding his legs is not clickable', async () => {
+      const onInnkeeperSelect = vi.fn();
+      await renderTavern([], false, null, { parent: { status: 'done' }, onInnkeeperSelect });
+      expect(getComputedStyle(innkeeper()).pointerEvents).toBe('none');
+      const art = el('orchestrator-tavern-innkeeper-art');
+      expect(getComputedStyle(art).pointerEvents).toBe('auto');
+      expect(getComputedStyle(art).cursor).toBe('pointer');
+      act(() => art.click());
+      expect(onInnkeeperSelect).toHaveBeenCalledTimes(1);
+    });
+
     it('gives every agent a contact shadow under its feet', async () => {
       await renderTavern([agentFixture('a', 'working'), agentFixture('b', 'done')]);
       for (const sprite of sprites()) expect(sprite.querySelector('[data-contact-shadow]')).not.toBeNull();
