@@ -35,16 +35,13 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantActivityEnabled: 'true',
-  signupGrantCredits: '1000',
-  verifiedUnlockCredits: '9000',
+  signupGrantInitialCredits: '1000',
+  signupGrantDailyCredits: '1000',
+  signupGrantDripCap: '9000',
   signupGrantSignupPoolDaily: UNCAPPED,
   signupGrantTricklePoolDaily: UNCAPPED,
   // Payment unlocks pay on the payment here; paymentUnlockHold.e2e.test.ts covers the hold.
   signupUnlockPaymentHoldHours: '0',
-  signupGrantActivityDailyCredits: '1000',
-  signupGrantActivityMaxCredits: '9000',
 };
 const adminSettings = {
   findBySettingName: async (key: string) => (key in config ? { settingValue: config[key] } : null),
@@ -97,13 +94,11 @@ beforeEach(async () => {
   await AdminSettings.collection.deleteMany({});
   await SignupGrantBudgetDayModel.deleteMany({});
   config.signupGrantSignupPoolDaily = config.signupGrantTricklePoolDaily = UNCAPPED;
-  config.signupGrantActivityDailyCredits = '1000';
-  config.signupGrantActivityMaxCredits = '9000';
-  config.signupGrantCredits = '1000';
-  config.verifiedUnlockCredits = '9000';
+  config.signupGrantInitialCredits = '1000';
+  config.signupGrantDailyCredits = '1000';
+  config.signupGrantDripCap = '9000';
   delete config.signupGrantRiskPolicy;
-  delete config.signupGrantDailyCredits;
-  delete config.signupGrantDripCap;
+  delete config.verifiedUnlockCredits;
   notify.mockClear();
   notifyConfig.mockClear();
   userService.resetUnsetDripCapAlert();
@@ -138,7 +133,7 @@ const dripRows = (userId: string) =>
 
 describe('signup activity drip', () => {
   it.each([0, 1500])('never drips the risk-withheld tranche with an unlock pool of %i', async unlockCredits => {
-    config.verifiedUnlockCredits = String(unlockCredits);
+    config.signupGrantDripCap = String(unlockCredits);
     config.signupGrantRiskPolicy = JSON.stringify({
       enabled: true,
       version: 'reduced-tranche',
@@ -204,7 +199,7 @@ describe('signup activity drip', () => {
   });
 
   it('never pays past the configured cap', async () => {
-    config.signupGrantActivityMaxCredits = '2500';
+    config.signupGrantDripCap = '2500';
     const user = await createSignupStageUser();
     const granted: number[] = [];
     for (let n = 0; n < 5; n++) granted.push((await drip(user.id, n)).creditsGranted);
@@ -213,8 +208,6 @@ describe('signup activity drip', () => {
   });
 
   it.each([
-    ['daily rate', 'signupGrantActivityDailyCredits'],
-    ['cap', 'signupGrantActivityMaxCredits'],
     ['schedule daily rate', 'signupGrantDailyCredits'],
     ['schedule cap', 'signupGrantDripCap'],
   ])('is off when the %s is 0', async (_label, key) => {
@@ -240,7 +233,7 @@ describe('signup activity drip', () => {
   });
 
   it('grows the enrolled unlock pool when the cap is raised above its snapshot', async () => {
-    config.verifiedUnlockCredits = '2000';
+    config.signupGrantDripCap = '2000';
     const user = await createSignupStageUser();
     expect((await User.findById(user.id))?.signupGrant?.unlockCredits).toBe(2000);
     config.signupGrantDripCap = '3500';
@@ -302,7 +295,8 @@ describe('signup activity drip', () => {
   });
 
   it('alerts once a day when the cap falls back to the activity max registry default', async () => {
-    delete config.signupGrantActivityMaxCredits;
+    delete config.signupGrantDripCap;
+    config.verifiedUnlockCredits = '9000';
     const user = await createSignupStageUser();
     await drip(user.id, 0);
     await drip(user.id, 1);
@@ -311,7 +305,8 @@ describe('signup activity drip', () => {
   });
 
   it('does not alert on the default cap while the daily amount is 0', async () => {
-    delete config.signupGrantActivityMaxCredits;
+    delete config.signupGrantDripCap;
+    config.verifiedUnlockCredits = '9000';
     config.signupGrantDailyCredits = '0';
     const user = await createSignupStageUser();
     await drip(user.id, 0);
@@ -319,7 +314,8 @@ describe('signup activity drip', () => {
   });
 
   it('retries the unset-cap alert on the next drip after an undelivered post', async () => {
-    delete config.signupGrantActivityMaxCredits;
+    delete config.signupGrantDripCap;
+    config.verifiedUnlockCredits = '9000';
     notifyConfig.mockRejectedValueOnce(new Error('not delivered'));
     const user = await createSignupStageUser();
     await drip(user.id, 0);
@@ -405,7 +401,7 @@ describe('signup activity drip', () => {
   });
 
   it('pays a credit pack buyer the rest of the schedule under the default cap, even with the pools at 0', async () => {
-    config.signupGrantCredits = '0';
+    config.signupGrantInitialCredits = '0';
     config.signupGrantDailyCredits = '500';
     const user = await createSignupStageUser();
     for (let n = 0; n < 5; n++) expect((await drip(user.id, n)).creditsGranted).toBe(500);

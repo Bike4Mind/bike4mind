@@ -27,9 +27,8 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 const UNCAPPED = '1000000000';
 const config: Record<string, string> = {
-  stagedSignupGrantEnabled: 'true',
-  signupGrantCredits: '12',
-  verifiedUnlockCredits: '28',
+  signupGrantInitialCredits: '12',
+  signupGrantDripCap: '28',
   signupGrantSignupPoolDaily: UNCAPPED,
   signupGrantTricklePoolDaily: UNCAPPED,
 };

@@ -61,15 +61,12 @@ beforeEach(async () => {
   vi.restoreAllMocks();
   for (const key of Object.keys(config)) delete config[key];
   Object.assign(config, {
-    stagedSignupGrantEnabled: 'true',
-    signupGrantCredits: '1000',
-    verifiedUnlockCredits: '9000',
+    signupGrantInitialCredits: '1000',
+    signupGrantDripCap: '9000',
     signupGrantSignupPoolDaily: UNCAPPED,
     signupGrantTricklePoolDaily: UNCAPPED,
-    signupGrantActivityEnabled: 'true',
     signupGrantActivityMinActiveSeconds: '600',
-    signupGrantActivityDailyCredits: '1000',
-    signupGrantActivityMaxCredits: '9000',
+    signupGrantDailyCredits: '1000',
   });
   vi.spyOn(adminSettingsRepository, 'findBySettingName').mockImplementation(
     async name => (config[name] === undefined ? null : { settingValue: config[name] }) as never
@@ -335,7 +332,7 @@ describe('active session heartbeat', () => {
     expect(plainResult).not.toHaveProperty('requiredSeconds');
     expect((await User.findById(plain.id))?.signupGrant).toBeUndefined();
     const user = await createSignupStageUser(1);
-    config.signupGrantActivityDailyCredits = '0';
+    config.signupGrantDailyCredits = '0';
     await ping(user.id, 0);
     await ping(user.id, 60);
     expect(await activityOf(user.id)).toBeUndefined();
@@ -372,11 +369,11 @@ describe('active session heartbeat', () => {
 
   it('accrues nothing at the lifetime cap and resumes once the cap rises', async () => {
     const user = await createSignupStageUser();
-    config.signupGrantActivityMaxCredits = '1000';
+    config.signupGrantDripCap = '1000';
     await User.updateOne({ _id: user.id }, { 'signupGrant.dripCredits': 1000 });
     expect(await pingEvery60s(user.id, 0, 600)).toMatchObject({ creditsGranted: 0, activeSeconds: 0 });
     expect(await activityOf(user.id)).toBeUndefined();
-    config.signupGrantActivityMaxCredits = '9000';
+    config.signupGrantDripCap = '9000';
     expect(await pingEvery60s(user.id, 660, 1260)).toMatchObject({ creditsGranted: 1000, paidToday: true });
   });
 
