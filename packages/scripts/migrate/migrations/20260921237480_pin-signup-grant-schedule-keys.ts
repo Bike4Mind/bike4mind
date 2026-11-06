@@ -21,8 +21,8 @@ const READ_KEYS: LegacySignupGrantCreditKey[] = [
   'verifiedUnlockCredits',
 ];
 
-// The registry default signupGrantDripCap falls back to once the legacy keys stop being read.
-const DRIP_CAP_DEFAULT = 9000;
+// An unset signupGrantDripCap resolves to 0 without paying flat, as the legacy fallback did with no unlock stored.
+const DRIP_CAP_DEFAULT = 0;
 
 interface PinMarker {
   kind: 'pins';
@@ -40,9 +40,12 @@ const migration: MigrationFile = {
   id: 20260921237480,
   name: 'pin-signup-grant-schedule-keys',
   up: async () => {
-    const rows = await AdminSettings.find({
-      settingName: { $in: [...READ_KEYS, 'signupGrantActivityEnabled'] },
-    }).lean();
+    // Raw read so a soft-deleted row is seen: it reads as unset, but a pin must revive it, not upsert past it.
+    const all = await AdminSettings.collection
+      .find({ settingName: { $in: [...READ_KEYS, 'signupGrantActivityEnabled'] } })
+      .toArray();
+    const rows = all.filter(row => row.deletedAt == null);
+    const tombstoned = new Set(all.filter(row => row.deletedAt != null).map(row => String(row.settingName)));
     const raw = new Map<string, unknown>(rows.map(row => [row.settingName, row.settingValue]));
     const stored = (key: LegacySignupGrantCreditKey) => storedGrantCredits(key, raw.get(key));
     // Matches the current runtime read: staging always on, defaultFreeCredits ignored.
@@ -70,11 +73,16 @@ const migration: MigrationFile = {
       // A blank or invalid row is overwritten only if it still holds what was read.
       const result = raw.has(settingName)
         ? await AdminSettings.updateOne({ settingName, settingValue: raw.get(settingName) }, { $set: { settingValue } })
-        : await AdminSettings.updateOne(
-            { settingName },
-            { $setOnInsert: { settingName, settingValue } },
-            { upsert: true }
-          );
+        : tombstoned.has(settingName)
+          ? await AdminSettings.collection.updateOne(
+              { settingName, deletedAt: { $ne: null } },
+              { $set: { settingValue, deletedAt: null } }
+            )
+          : await AdminSettings.updateOne(
+              { settingName },
+              { $setOnInsert: { settingName, settingValue } },
+              { upsert: true }
+            );
       if (result.modifiedCount > 0 || result.upsertedCount > 0) pins.push({ settingName, settingValue });
     }
     if (pins.length > 0) {

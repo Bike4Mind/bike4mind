@@ -100,7 +100,6 @@ beforeEach(async () => {
   delete config.signupGrantRiskPolicy;
   notify.mockClear();
   notifyConfig.mockClear();
-  userService.resetUnsetDripCapAlert();
   clock = new Date();
 });
 
@@ -293,39 +292,11 @@ describe('signup activity drip', () => {
     expect((await drip(user.id, 2)).creditsGranted).toBe(0);
   });
 
-  it('alerts once a day when the unset cap falls back to its registry default', async () => {
+  it('drips nothing while the cap is unset', async () => {
     delete config.signupGrantDripCap;
     const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    await drip(user.id, 1);
-    expect(notifyConfig).toHaveBeenCalledTimes(1);
-    expect(notifyConfig).toHaveBeenCalledWith({ setting: 'signupGrantDripCap', fallback: 9000 });
-  });
-
-  it('does not alert on the default cap while the daily amount is 0', async () => {
-    delete config.signupGrantDripCap;
-    config.signupGrantDailyCredits = '0';
-    const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    expect(notifyConfig).not.toHaveBeenCalled();
-  });
-
-  it('retries the unset-cap alert on the next drip after an undelivered post', async () => {
-    delete config.signupGrantDripCap;
-    notifyConfig.mockRejectedValueOnce(new Error('not delivered'));
-    const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    await new Promise(resolve => setImmediate(resolve));
-    await drip(user.id, 1);
-    await new Promise(resolve => setImmediate(resolve));
-    await drip(user.id, 2);
-    expect(notifyConfig).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not alert when a cap is configured', async () => {
-    const user = await createSignupStageUser();
-    await drip(user.id, 0);
-    expect(notifyConfig).not.toHaveBeenCalled();
+    expect((await drip(user.id, 0)).creditsGranted).toBe(0);
+    expect((await User.findById(user.id))?.signupGrant).toMatchObject({ unlockCredits: 0 });
   });
 
   it('draws the daily budget, and an exhausted budget pays nothing and retries on a later day', async () => {
@@ -396,13 +367,14 @@ describe('signup activity drip', () => {
     expect(await drip(dripper.id, 1)).toMatchObject({ creditsGranted: 1000 });
   });
 
-  it('pays a credit pack buyer the rest of the schedule under the default cap, even with the pools at 0', async () => {
+  it('pays a credit pack buyer the rest of the schedule under the stored cap, even with the pools at 0', async () => {
     config.signupGrantInitialCredits = '0';
     config.signupGrantDailyCredits = '500';
     const user = await createSignupStageUser();
     for (let n = 0; n < 5; n++) expect((await drip(user.id, n)).creditsGranted).toBe(500);
-    // The release reads the real settings collection: no drip cap set, so the 9000 default applies.
+    // The release reads the real settings collection, not the mocked config.
     await AdminSettings.create([
+      { settingName: 'signupGrantDripCap', settingValue: '9000' },
       { settingName: 'signupUnlockPaymentHoldHours', settingValue: '0' },
       { settingName: 'signupGrantSignupPoolDaily', settingValue: '0' },
       { settingName: 'signupGrantTricklePoolDaily', settingValue: '0' },
@@ -550,7 +522,7 @@ describe('signup activity drip', () => {
     expect(await CreditTransaction.countDocuments({})).toBe(0);
   });
 
-  it('gives a drip cap of 0 the flat grant, no drip and no unset-cap alert', async () => {
+  it('gives a drip cap of 0 the flat grant and no drip', async () => {
     const seeded = {
       signupGrantInitialCredits: '1000',
       signupGrantDailyCredits: '0',

@@ -140,7 +140,7 @@ export interface SignupGrantSchedule {
   dripCap: number;
   /** Locked at enrollment and released by a verification unlock. */
   unlockCredits: number;
-  /** Nothing is locked, so a referral invite pays whole as the pre-staging flat grant did. */
+  /** A stored cap of 0: nothing is locked, so a referral invite pays whole as the pre-staging flat grant did. */
   paysFlat: boolean;
   inviteBonusCredits: number;
   dripCapSource: SignupGrantDripCapSource;
@@ -166,7 +166,8 @@ export function runtimeSignupGrantSchedule(
     dailyCredits: read('signupGrantDailyCredits') ?? 0,
     dripCap,
     unlockCredits: dripCap,
-    paysFlat: dripCap === 0,
+    // An unset cap drips nothing but still locks an invite's remainder, as the empty pre-schedule config did.
+    paysFlat: cap === 0,
     inviteBonusCredits: read('signupGrantInviteBonusCredits') ?? 0,
     dripCapSource: cap === undefined ? 'default' : 'setting',
   };

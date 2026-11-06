@@ -16,7 +16,8 @@ interface HeartbeatResult {
   activeSeconds: number;
   requiredSeconds?: number;
   nextEligibleAt?: number;
-  // Nothing left to earn on the current grant, so the client stops pinging until its user data changes.
+  // No grant, a closed drip or a reached cap, so the client stops pinging. A zero daily amount is not spent:
+  // raising it resumes the drip.
   spent?: boolean;
 }
 

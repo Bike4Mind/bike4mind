@@ -71,7 +71,7 @@ export function useSignupGrantHeartbeat() {
       let delay = HEARTBEAT_INTERVAL_MS;
       try {
         const res = await api.post<HeartbeatResponse>('/api/users/active-session');
-        // Re-arms through the effect deps once the refreshed user (or a raised cap) makes the grant eligible again.
+        // Re-arms only when eligibility flips back on or the drip cap changes (both effect deps).
         if (res.data.spent === true) {
           stopped = true;
           queryClient.invalidateQueries({ queryKey: ['identify'] });
@@ -101,5 +101,5 @@ export function useSignupGrantHeartbeat() {
       if (timer) clearTimeout(timer);
       INPUT_EVENTS.forEach(name => window.removeEventListener(name, onInput));
     };
-  }, [eligible, userId, queryClient]);
+  }, [eligible, userId, queryClient, dripCap]);
 }

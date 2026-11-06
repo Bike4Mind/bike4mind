@@ -76,6 +76,17 @@ describe('drop-retired-grant-settings migration', () => {
     expect(await backups()).toHaveLength(4);
   });
 
+  it('keeps the original backup when a rerun finds the key recreated', async () => {
+    await seed();
+    await migration.up();
+    await AdminSettings.collection.insertOne({ settingName: 'verifiedUnlockCredits', settingValue: '7' });
+    await migration.up();
+
+    const backup = (await backups()).find(b => b.settingName === 'verifiedUnlockCredits');
+    expect(backup?.row.settingValue).toBe('3000');
+    expect(await rows()).not.toHaveProperty('verifiedUnlockCredits');
+  });
+
   it('does nothing on an empty database', async () => {
     await migration.up();
     expect(await rows()).toEqual({});

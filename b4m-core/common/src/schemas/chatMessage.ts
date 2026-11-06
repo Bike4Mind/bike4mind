@@ -9,8 +9,9 @@ import { passthroughShape } from './responseShape';
  * - `callback`: the caller's webhook URL and API key id (already `select: false` on QuestModel).
  * - `embedding`: the message's search vector, internal to retrieval and heavy on list reads.
  * - `slackNotification`: the Slack thread the reply is posted back to.
+ * - `signupActivity`: retired turn provenance a quest may still hold until its drop migration runs.
  */
-export const CHAT_MESSAGE_WITHHELD_FIELDS = ['callback', 'embedding', 'slackNotification'] as const;
+export const CHAT_MESSAGE_WITHHELD_FIELDS = ['callback', 'embedding', 'slackNotification', 'signupActivity'] as const;
 
 type ChatMessageResponseField = Exclude<keyof IChatHistoryItemDocument, (typeof CHAT_MESSAGE_WITHHELD_FIELDS)[number]>;
 

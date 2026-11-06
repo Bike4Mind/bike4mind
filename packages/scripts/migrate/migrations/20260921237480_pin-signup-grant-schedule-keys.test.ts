@@ -48,13 +48,14 @@ const marker = () => mongoose.connection.collection(PIN_MARKER_COLLECTION).findO
 // The resolver once the legacy keys are no longer read: only the schedule keys, with registry defaults.
 async function simplifiedSchedule() {
   const read = async (key: (typeof SCHEDULE_KEYS)[number]) => storedGrantCredits(key, await value(key));
-  const dripCap = (await read('signupGrantDripCap')) ?? 9000;
+  const cap = await read('signupGrantDripCap');
+  const dripCap = cap ?? 0;
   return {
     initialCredits: (await read('signupGrantInitialCredits')) ?? 0,
     dailyCredits: (await read('signupGrantDailyCredits')) ?? 0,
     dripCap,
     unlockCredits: dripCap,
-    paysFlat: dripCap === 0,
+    paysFlat: cap === 0,
     inviteBonusCredits: (await read('signupGrantInviteBonusCredits')) ?? 0,
   };
 }
@@ -105,23 +106,14 @@ const SHAPES: [string, Record<string, string>][] = [
 describe('pin signup grant schedule keys migration', () => {
   it.each(SHAPES)('keeps the schedule unchanged once only schedule keys are read: %s', async (_name, rows) => {
     await seed(rows);
-    const { dripCapSource, ...before } = await legacyRuntimeSchedule();
+    const before = await legacyRuntimeSchedule();
     await migration.up();
-    const after = await simplifiedSchedule();
-
-    // A missing cap of 0 locked nothing yet was not flat; one stored cap cannot say both, and nothing is
-    // locked either way, so only an invite's up-front share differs.
-    const capWasUnset = dripCapSource !== 'setting';
-    if (capWasUnset && before.dripCap === 0) {
-      expect({ ...after, paysFlat: false }).toEqual(before);
-    } else {
-      expect(after).toEqual(before);
-    }
+    expect(await simplifiedSchedule()).toEqual({ ...before, dripCapSource: undefined });
   });
 
-  it('pins all four keys on an empty database', async () => {
+  it('pins all but the cap on an empty database', async () => {
     await migration.up();
-    expect(await scheduleValues()).toEqual(['0', '0', '0', '0']);
+    expect(await scheduleValues()).toEqual(['0', '0', undefined, '0']);
   });
 
   it('pins the activity daily amount and an unset-max cap', async () => {
@@ -141,10 +133,27 @@ describe('pin signup grant schedule keys migration', () => {
     expect(await value('signupGrantDailyCredits')).toBe('0');
   });
 
-  it('leaves the cap unset where the fallback already equals the default', async () => {
-    await seed({ verifiedUnlockCredits: '9000' });
+  it('leaves the cap unset where the fallback was 0 and pins a 9000 fallback', async () => {
+    await seed({ verifiedUnlockCredits: '0' });
     await migration.up();
     expect(await AdminSettings.findOne({ settingName: 'signupGrantDripCap' })).toBeNull();
+
+    await AdminSettings.updateOne({ settingName: 'verifiedUnlockCredits' }, { $set: { settingValue: '9000' } });
+    await migration.up();
+    expect(await value('signupGrantDripCap')).toBe('9000');
+  });
+
+  it('revives a soft-deleted schedule row with the pinned value', async () => {
+    await seed({ signupGrantCredits: '250', verifiedUnlockCredits: '4000' });
+    await AdminSettings.collection.insertOne({
+      settingName: 'signupGrantInitialCredits',
+      settingValue: '999',
+      deletedAt: new Date(),
+    });
+    expect((await legacyRuntimeSchedule()).initialCredits).toBe(250);
+    await migration.up();
+    expect(await value('signupGrantInitialCredits')).toBe('250');
+    expect((await marker())?.pins).toContainEqual({ settingName: 'signupGrantInitialCredits', settingValue: '250' });
   });
 
   it('writes nothing where every schedule key is stored', async () => {

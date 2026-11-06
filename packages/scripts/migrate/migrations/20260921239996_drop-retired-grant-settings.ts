@@ -43,9 +43,10 @@ const migration: MigrationFile = {
     const backups = mongoose.connection.collection<RowBackup>(BACKUP_COLLECTION);
     for (const row of rows) {
       const settingName = String(row.settingName);
+      // Insert-only, so a rerun after an operator recreated the key keeps the original backup.
       await backups.updateOne(
         { kind: 'row', settingName },
-        { $set: { kind: 'row', settingName, row } },
+        { $setOnInsert: { kind: 'row', settingName, row } },
         { upsert: true }
       );
     }

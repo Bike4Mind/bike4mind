@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   invalidate: vi.fn(),
   grant: undefined as Record<string, unknown> | undefined,
   daily: 1000 as number | undefined,
+  cap: '9000',
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: h.post } }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: h.invalidate }) }));
@@ -17,7 +18,7 @@ vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({
     data: [
       { settingName: 'signupGrantDailyCredits', settingValue: h.daily },
-      { settingName: 'signupGrantDripCap', settingValue: '9000' },
+      { settingName: 'signupGrantDripCap', settingValue: h.cap },
     ],
   }),
 }));
@@ -43,6 +44,7 @@ describe('useSignupGrantHeartbeat', () => {
     h.post.mockReset().mockResolvedValue(response());
     h.invalidate.mockReset();
     h.daily = 1000;
+    h.cap = '9000';
     h.grant = { stage: 'signup', signupCredits: 1000, unlockCredits: 9000, creditsReleased: 1000 };
     setHidden(false);
   });
@@ -117,6 +119,19 @@ describe('useSignupGrantHeartbeat', () => {
     }
     expect(h.post).toHaveBeenCalledTimes(1);
     expect(h.invalidate).toHaveBeenCalledWith({ queryKey: ['identify'] });
+  });
+
+  it('re-arms after spent when the drip cap changes while the grant stays eligible', async () => {
+    h.post.mockResolvedValueOnce(response({ spent: true }));
+    const { rerender } = renderHook(() => useSignupGrantHeartbeat());
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(1);
+    h.cap = '12000';
+    rerender();
+    touch();
+    await advance(HEARTBEAT_INTERVAL_MS);
+    expect(h.post).toHaveBeenCalledTimes(2);
   });
 
   it('backs off to 5 minutes while the budget withholds, then keeps trying', async () => {

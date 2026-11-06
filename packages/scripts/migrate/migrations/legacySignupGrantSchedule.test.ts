@@ -116,6 +116,16 @@ describe('legacy storedGrantCredits', () => {
   ])('reads %j as %j', (value, expected) => {
     expect(storedGrantCredits('signupGrantDripCap', value)).toBe(expected);
   });
+
+  it.each([
+    ['signupGrantActivityDailyCredits', '10000', 10000],
+    ['signupGrantActivityDailyCredits', '10001', undefined],
+    ['signupGrantActivityMaxCredits', 1000000, 1000000],
+    ['signupGrantActivityMaxCredits', '1000001', undefined],
+    ['verifiedUnlockCredits', '2000000', 2000000],
+  ] as const)('reads %s %j against its registry max as %j', (key, value, expected) => {
+    expect(storedGrantCredits(key, value)).toBe(expected);
+  });
 });
 
 describe('legacy isStoredToggleOn', () => {

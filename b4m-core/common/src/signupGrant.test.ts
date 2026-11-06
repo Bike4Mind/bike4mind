@@ -47,8 +47,8 @@ describe('signup grant schedule', () => {
   const emptySchedule = {
     initialCredits: 0,
     dailyCredits: 0,
-    dripCap: 9000,
-    unlockCredits: 9000,
+    dripCap: 0,
+    unlockCredits: 0,
     paysFlat: false,
     inviteBonusCredits: 0,
     dripCapSource: 'default',
@@ -74,10 +74,10 @@ describe('signup grant schedule', () => {
     });
   });
 
-  it('falls back to 0 and the registry drip cap default when nothing is stored', async () => {
+  it('falls back to 0 without paying flat when nothing is stored', async () => {
     expect(await resolveSignupGrantSchedule(settings({}))).toEqual(emptySchedule);
     const config = await resolveSignupGrantSettings(settings({}));
-    expect([config.signupCredits, config.unlockCredits]).toEqual([0, 9000]);
+    expect([config.signupCredits, config.unlockCredits]).toEqual([0, 0]);
   });
 
   it('never reads the retired keys', async () => {

@@ -4950,12 +4950,12 @@ export const settingsMap = {
   signupGrantDripCap: makeNumberSetting({
     key: 'signupGrantDripCap',
     name: 'Signup Grant Drip Cap',
-    defaultValue: 9000,
+    defaultValue: 0,
     min: 0,
     int: true,
     userReadable: true,
     description:
-      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip. While unset, the default of 9000 applies.',
+      'Total credits the daily drip may pay per account. Changes apply to enrolled accounts on their next drip, including accounts the drip already completed, but not accounts a verification unlock completed. Zero disables the drip and pays an invite in full at signup. While unset, nothing drips and an invite pays its initial share at signup, the rest on unlock.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

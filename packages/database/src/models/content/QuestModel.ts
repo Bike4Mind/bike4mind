@@ -1718,6 +1718,8 @@ function initializeQuestModel() {
     // Keyset order of findPageAfterBySessionId (GET /api/v1/sessions/{id}/quests). Built in
     // production by migration 20260921237700_ensure-quest-session-keyset-index; keep in sync.
     ChatHistoryItemSchema.index({ sessionId: 1, timestamp: 1, _id: 1 }, { name: 'sessionId_timestamp_id' });
+    // Retired, untyped field kept unselected while stored quests may still carry it (self-host never clears it).
+    ChatHistoryItemSchema.path('signupActivity', { type: Schema.Types.Mixed, select: false });
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });

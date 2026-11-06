@@ -36,14 +36,19 @@ const VERIFIED_UNLOCK_DEFAULT = 0;
 const ACTIVITY_MAX_DEFAULT = 9000;
 
 const creditAmountSchema = z.coerce.number().int().min(0);
+// Registry max bounds at retirement; a value above one was read as unset.
+const MAX_CREDITS: Partial<Record<LegacySignupGrantCreditKey, number>> = {
+  signupGrantActivityDailyCredits: 10000,
+  signupGrantActivityMaxCredits: 1000000,
+};
 
 export const isStoredToggleOn = (value: unknown) => value === true || value === 'true';
 
 /** A stored credit amount, or undefined when absent, blank or invalid so the caller falls back; '0' is a value. */
-export function storedGrantCredits(_key: LegacySignupGrantCreditKey, value: unknown): number | undefined {
+export function storedGrantCredits(key: LegacySignupGrantCreditKey, value: unknown): number | undefined {
   if (value == null || (typeof value === 'string' && !value.trim())) return undefined;
   if (typeof value !== 'string' && typeof value !== 'number') return undefined;
-  if (!creditAmountSchema.safeParse(value).success) return undefined;
+  if (!creditAmountSchema.max(MAX_CREDITS[key] ?? Infinity).safeParse(value).success) return undefined;
   const amount = Number(value);
   return Number.isSafeInteger(amount) && amount >= 0 ? amount : undefined;
 }

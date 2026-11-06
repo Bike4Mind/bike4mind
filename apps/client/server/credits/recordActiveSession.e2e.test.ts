@@ -313,7 +313,7 @@ describe('active session heartbeat', () => {
   it('pays nothing when the daily amount is 0', async () => {
     const user = await createSignupStageUser(0);
     config.signupGrantDailyCredits = '0';
-    await ping(user.id, 0);
+    expect(await ping(user.id, 0)).not.toHaveProperty('spent');
     await ping(user.id, 60);
     expect(await activityOf(user.id)).toBeUndefined();
     expect(await dripRows(user.id)).toHaveLength(0);
