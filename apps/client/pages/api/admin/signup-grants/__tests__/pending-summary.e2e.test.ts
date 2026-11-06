@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import {
@@ -9,7 +9,12 @@ import {
   signupGrantRemaining,
   type SignupGrant,
 } from '@bike4mind/common';
-import { adminSettingsRepository, signupGrantPendingRepository, User } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  signupGrantBudgetRepository,
+  signupGrantPendingRepository,
+  User,
+} from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -76,9 +81,9 @@ const seed = [
 ];
 const unpaid = new Set([String(oid(6)), String(oid(7))]);
 
-const call = async () => {
+const call = async (warn = vi.fn()) => {
   const { req, res } = createMocks({ method: 'GET' });
-  Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger: { warn: vi.fn(), error: vi.fn() } });
+  Object.assign(req, { user: { id: 'admin-1', isAdmin: true }, logger: { warn, error: vi.fn() } });
   await handler(req as never, res as never);
   return res._getJSONData();
 };
@@ -86,6 +91,10 @@ const call = async () => {
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -120,12 +129,34 @@ describe('GET /api/admin/signup-grants/pending-summary', () => {
     expect(summary.queue).toEqual({ held: 3, oldestHeldAt: at.toISOString() });
   });
 
-  it('nulls only the tile whose read failed', async () => {
-    const spy = vi.spyOn(signupGrantPendingRepository, 'heldQueue').mockRejectedValueOnce(new Error('read failed'));
-    const summary = await call();
-    expect(summary.queue).toBeNull();
-    expect(summary.exposure).not.toBeNull();
-    expect(summary.trickle).not.toBeNull();
-    spy.mockRestore();
+  it.each([
+    { read: 'schedule', tile: 'exposure' },
+    { read: 'exposure', tile: 'exposure' },
+    { read: 'budget', tile: 'trickle' },
+    { read: 'spend', tile: 'trickle' },
+    { read: 'queue', tile: 'queue' },
+  ] as const)('nulls only $tile and logs when the $read read fails', async ({ read, tile }) => {
+    const baseline = await call();
+    const error = new Error(`${read} read failed`);
+    switch (read) {
+      case 'schedule':
+        vi.spyOn(adminSettingsRepository, 'findBySettingNames').mockRejectedValueOnce(error);
+        break;
+      case 'exposure':
+        vi.spyOn(signupGrantPendingRepository, 'summarizePending').mockRejectedValueOnce(error);
+        break;
+      case 'budget':
+        vi.spyOn(adminSettingsRepository, 'findBySettingName').mockRejectedValueOnce(error);
+        break;
+      case 'spend':
+        vi.spyOn(signupGrantBudgetRepository, 'getSpent').mockRejectedValueOnce(error);
+        break;
+      case 'queue':
+        vi.spyOn(signupGrantPendingRepository, 'heldQueue').mockRejectedValueOnce(error);
+        break;
+    }
+    const warn = vi.fn();
+    expect(await call(warn)).toEqual({ ...baseline, [tile]: null });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(`Pending summary: ${tile} read failed`, { error });
   });
 });

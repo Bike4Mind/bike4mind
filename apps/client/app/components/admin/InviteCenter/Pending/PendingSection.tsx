@@ -138,12 +138,19 @@ export function PendingSection() {
   const filtered = Boolean(filters.status || filters.heldReason || filters.source);
   const canRelease = list.data?.pages[0]?.viewer.canRelease === true;
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
-  // A selection made under one filter must not ride into a bulk action under another.
+  const [dialog, setDialog] = useState<PendingBulkKind | null>(null);
+  const filterKey = JSON.stringify(filters);
+  const [selectionKey, setSelectionKey] = useState(filterKey);
+  // Reset on URL navigation too, before stale selections can reach a bulk action.
+  if (selectionKey !== filterKey) {
+    setSelectionKey(filterKey);
+    setSelection(NO_SELECTION);
+    setDialog(null);
+  }
   const updateList: typeof setListState = (...args) => {
     setSelection(NO_SELECTION);
     return setListState(...args);
   };
-  const [dialog, setDialog] = useState<PendingBulkKind | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
   // 'allMatching' is never offered: both bulk routes take explicit ids only.
   const selectedIds = selection.mode === 'explicit' ? selection.ids : [];

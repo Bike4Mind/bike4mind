@@ -24,7 +24,8 @@ const COPY: Readonly<
   release: {
     label: 'Release held grants for',
     done: 'Released held grants for',
-    description: 'Pays each held signup grant now, outside the daily pool. Undo takes the credits back.',
+    description:
+      'Pays each held signup grant now, outside the daily pool. Undo permanently revokes the paid credits; it does not restore the hold or make the revoked credits payable again.',
     presets: ADMIN_REASON_PRESETS.signupGrantRelease,
     // The release route records the batch in its audit entries, not a typed reason.
     audited: false,
@@ -88,7 +89,12 @@ export function PendingBulkDialog({
               `${plural(restored.insufficientBalance)} already spent the credits, so they were not taken back.`
             );
           if (restored.failed > 0) toast.warning(`${plural(restored.failed)} could not be restored.`);
-          if (restored.restored > 0) toast.success(`Restored ${plural(restored.restored)}`);
+          if (restored.restored > 0)
+            toast.success(
+              kind === 'release'
+                ? `Revoked credits from ${plural(restored.restored)}`
+                : `Restored ${plural(restored.restored)}`
+            );
         },
       });
     } catch (error) {

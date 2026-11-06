@@ -187,6 +187,34 @@ describe('PendingSection', () => {
     expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
   });
 
+  it.each([
+    { pendingStatus: 'blocked' },
+    { pendingReason: 'risk_review' },
+    { pendingSource: 'package' },
+    { pendingSort: 'remaining' },
+  ])('clears selection on an external URL change to %j', search => {
+    const { rerender } = render(<PendingSection />, { wrapper: Wrapper });
+    selectFirstRow();
+    expect(screen.getByTestId('admin-bulk-action-bar')).toBeInTheDocument();
+
+    mocks.search = search;
+    rerender(<PendingSection />);
+    expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
+
+    mocks.search = {};
+    rerender(<PendingSection />);
+    expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
+  });
+
+  it('keeps selection when data refreshes under the same filters', () => {
+    const { rerender } = render(<PendingSection />, { wrapper: Wrapper });
+    selectFirstRow();
+    mocks.list = listOf([row({ remaining: 1000 }), row({ id: 'b'.repeat(24) })]);
+    rerender(<PendingSection />);
+    fireEvent.click(screen.getByTestId('pending-bulk-block-btn'));
+    expect(screen.getByTestId('pending-bulk-dialog-stub')).toHaveAttribute('data-ids', 'a'.repeat(24));
+  });
+
   it('offers to clear filters when filters match nothing', () => {
     mocks.list = listOf([]);
     mocks.search = { pendingStatus: 'blocked' };

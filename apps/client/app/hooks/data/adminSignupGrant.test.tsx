@@ -7,10 +7,12 @@ import {
   useAdminSignupGrantPendingList,
   useAdminSignupGrantPendingSummary,
 } from './adminSignupGrant';
+import { useSignupRiskReviewDecision } from './signupRiskReviews';
 
 const apiGet = vi.fn();
+const apiPost = vi.fn();
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: (...args: unknown[]) => apiGet(...args), post: vi.fn() },
+  api: { get: (...args: unknown[]) => apiGet(...args), post: (...args: unknown[]) => apiPost(...args) },
 }));
 
 const setup = () => {
@@ -75,5 +77,37 @@ describe('useAdminSignupGrantPendingSummary', () => {
     expect(apiGet).toHaveBeenCalledWith('/api/admin/signup-grants/pending-summary');
     expect(result.current.data).toEqual(summary);
     expect(queryClient.getQueryData([...PENDING_GRANTS_QUERY_KEY, 'pending-summary'])).toEqual(summary);
+  });
+});
+
+describe('risk review pending refresh', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+  });
+
+  it.each(['approve', 'reopen'] as const)('invalidates pending exposure after %s', async action => {
+    apiPost.mockResolvedValue({ data: {} });
+    const { queryClient, Wrapper } = setup();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useSignupRiskReviewDecision(), { wrapper: Wrapper });
+
+    await act(() => result.current.mutateAsync({ action, userIds: ['a'.repeat(24)], reason: 'Review decision' }));
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_GRANTS_QUERY_KEY });
+  });
+
+  it('refreshes pending exposure when a request fails after a possible partial payout', async () => {
+    apiPost.mockRejectedValue(new Error('Request interrupted'));
+    const { queryClient, Wrapper } = setup();
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(() => useSignupRiskReviewDecision(), { wrapper: Wrapper });
+
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({ action: 'approve', userIds: ['a'.repeat(24)], reason: 'Review decision' })
+      ).rejects.toThrow('Request interrupted');
+    });
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: PENDING_GRANTS_QUERY_KEY });
   });
 });
