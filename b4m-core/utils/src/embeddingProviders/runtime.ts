@@ -11,6 +11,7 @@ import {
   type EmbeddingModelId,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
+import { OPENAI_KEY_MISSING_MESSAGE, VOYAGE_KEY_MISSING_MESSAGE } from '@bike4mind/fab-pipeline';
 import { GeminiEmbeddingProvider } from './gemini/GeminiEmbeddingProvider';
 import { BedrockEmbeddingProvider } from './bedrock/BedrockEmbeddingProvider';
 import { OpenAIEmbeddingProvider } from './openai/OpenAIEmbeddingProvider';
@@ -129,7 +130,11 @@ export const bindEmbeddingModel = (
   if (!Object.hasOwn(EMBEDDING_MODEL_CATALOG, model)) throw new Error(`Unknown embedding model: ${model}`);
   const capabilities = EMBEDDING_MODEL_CATALOG[model];
   const provider = registry.get(capabilities.provider);
-  if (!provider) throw new Error(`Embedding provider ${capabilities.provider} is not configured for ${model}`);
+  if (!provider) {
+    if (capabilities.provider === 'openai') throw new Error(OPENAI_KEY_MISSING_MESSAGE);
+    if (capabilities.provider === 'voyage') throw new Error(VOYAGE_KEY_MISSING_MESSAGE);
+    throw new Error(`Embedding provider ${capabilities.provider} is not configured for ${model}`);
+  }
   return {
     model,
     maxInputTokens: capabilities.maxInputTokens,

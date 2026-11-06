@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { ModelBackend } from '@bike4mind/common';
 import { resolveEmbeddingCredentials, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from './runtime';
-import { embeddingBackendForModel, getEmbeddingProviderRegistry } from './runtime';
+import { OPENAI_KEY_MISSING_MESSAGE, VOYAGE_KEY_MISSING_MESSAGE } from '@bike4mind/fab-pipeline';
+import {
+  bindEmbeddingModel,
+  buildEmbeddingRegistry,
+  embeddingBackendForModel,
+  getEmbeddingProviderRegistry,
+} from './runtime';
 import {
   BedrockEmbeddingModel,
   OllamaEmbeddingModel,
@@ -228,6 +234,23 @@ describe('catalog-backed runtime routing', () => {
       expect(() => embeddingBackendForModel(model)).toThrow(`Unknown embedding model: ${model}`);
     }
   );
+});
+
+describe('bindEmbeddingModel', () => {
+  const registry = buildEmbeddingRegistry({ openaiApiKey: 'sk-oai-dummy-routing-test' }, { includeBedrock: false });
+
+  it.each([
+    [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002, OPENAI_KEY_MISSING_MESSAGE],
+    [VoyageAIEmbeddingModel.VOYAGE_3, VOYAGE_KEY_MISSING_MESSAGE],
+  ])('throws the actionable key-missing message when %s has no usable key', (model, message) => {
+    expect(() => bindEmbeddingModel(registry, model)).toThrow(message);
+  });
+
+  it('keeps the generic message for a provider without a key-missing message', () => {
+    expect(() => bindEmbeddingModel(registry, OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B)).toThrow(
+      /Embedding provider ollama is not configured/
+    );
+  });
 });
 
 describe('getEmbeddingProviderRegistry', () => {
