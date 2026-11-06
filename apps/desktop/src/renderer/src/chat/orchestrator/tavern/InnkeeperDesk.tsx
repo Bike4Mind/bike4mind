@@ -21,6 +21,25 @@ const QUICK_ORDERS: readonly { label: string; text: string; send: boolean }[] = 
 const SLIP_WIDTH = 'clamp(290px, 31%, 380px)';
 const PARCHMENT = 'rgba(255, 250, 240, 0.96)';
 const INK = '#2a1d10';
+const WOOD = '#6b4523';
+const WOOD_DARK = '#4a2e14';
+const STORYBOOK = 'ui-serif, Georgia, "Times New Roman", serif';
+
+/** A border of whole pixels with notched corners, the pixel-art way, plus a hard drop shadow; no radius. */
+const pixelFrame = (width: number) =>
+  [
+    `0 -${width}px 0 0 ${INK}`,
+    `0 ${width}px 0 0 ${INK}`,
+    `-${width}px 0 0 0 ${INK}`,
+    `${width}px 0 0 0 ${INK}`,
+    `${width * 2}px ${width * 3}px 0 0 rgba(0, 0, 0, 0.3)`,
+  ].join(', ');
+
+const onParchment = {
+  color: INK,
+  '--Icon-color': INK,
+  '&:hover': { bgcolor: 'rgba(42, 29, 16, 0.08)' },
+} as const;
 
 /**
  * The order slip at the bar: a short message to the orchestrating conversation, the same thread the
@@ -103,15 +122,27 @@ export function OrderSlip({
         flexDirection: 'column',
         gap: 1,
         p: 1.25,
-        borderRadius: 'md',
-        bgcolor: 'background.surface',
-        border: '1px solid',
-        borderColor: 'divider',
-        boxShadow: 'lg',
+        pt: 1.75,
+        bgcolor: PARCHMENT,
+        color: INK,
+        boxShadow: pixelFrame(2),
+        // The ticket is pinned to the bar with a nail.
+        '&::before': {
+          content: '""',
+          position: 'absolute',
+          top: 5,
+          left: '50%',
+          width: 8,
+          height: 8,
+          transform: 'translateX(-50%)',
+          borderRadius: '50%',
+          background: 'radial-gradient(circle at 35% 35%, #d8d2c8, #5a544c 70%)',
+          boxShadow: '0 1px 1px rgba(0, 0, 0, 0.4)',
+        },
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Typography level="title-sm" sx={{ flex: 1 }}>
+        <Typography level="title-md" sx={{ flex: 1, color: INK, fontFamily: STORYBOOK, fontStyle: 'italic' }}>
           {INNKEEPER_GREETING}
         </Typography>
         <IconButton
@@ -122,6 +153,7 @@ export function OrderSlip({
           title="Close (Esc)"
           onClick={onClose}
           data-testid="orchestrator-tavern-order-close-btn"
+          sx={onParchment}
         >
           {'×'}
         </IconButton>
@@ -134,6 +166,15 @@ export function OrderSlip({
         placeholder="Tell the Innkeeper what you need"
         onChange={event => setText(event.target.value)}
         onKeyDown={onFieldKeyDown}
+        variant="plain"
+        sx={{
+          bgcolor: 'rgba(255, 255, 255, 0.55)',
+          color: INK,
+          borderRadius: 0,
+          boxShadow: `inset 0 0 0 1px rgba(42, 29, 16, 0.35)`,
+          '--Textarea-focusedHighlight': WOOD,
+          '& textarea::placeholder': { color: 'rgba(42, 29, 16, 0.55)' },
+        }}
         slotProps={{ textarea: { ref: input, 'data-testid': 'orchestrator-tavern-order-input' } }}
       />
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
@@ -141,9 +182,10 @@ export function OrderSlip({
           <Button
             key={order.label}
             size="sm"
-            variant="soft"
+            variant="outlined"
             color="neutral"
             onClick={() => (order.send ? send(order.text) : startDraft(order.text))}
+            sx={{ ...onParchment, borderRadius: 0, borderColor: 'rgba(42, 29, 16, 0.4)', bgcolor: 'transparent' }}
             data-testid={`orchestrator-tavern-order-chip-${order.label.toLowerCase().replace(/\s+/g, '-')}`}
           >
             {order.label}
@@ -157,7 +199,7 @@ export function OrderSlip({
           color="neutral"
           onClick={onOpenConversation}
           data-testid="orchestrator-tavern-order-open-conversation-btn"
-          sx={{ mr: 'auto', px: 0.75, whiteSpace: 'nowrap' }}
+          sx={{ ...onParchment, mr: 'auto', px: 0.75, whiteSpace: 'nowrap', textDecoration: 'underline' }}
         >
           Open conversation
         </Button>
@@ -166,6 +208,14 @@ export function OrderSlip({
           disabled={!text.trim()}
           onClick={() => send(text)}
           data-testid="orchestrator-tavern-order-send-btn"
+          sx={{
+            borderRadius: 0,
+            bgcolor: WOOD,
+            color: '#fbe9c8',
+            boxShadow: `0 2px 0 ${WOOD_DARK}`,
+            '&:hover': { bgcolor: WOOD_DARK },
+            '&.Mui-disabled': { bgcolor: 'rgba(42, 29, 16, 0.15)', color: 'rgba(42, 29, 16, 0.45)', boxShadow: 'none' },
+          }}
         >
           Send
         </Button>
@@ -209,8 +259,7 @@ export function ReplyBubble({
         width: 'clamp(180px, 34%, 320px)',
         px: '0.75em',
         py: '0.5em',
-        borderRadius: '8px',
-        border: `2px solid ${INK}`,
+        boxShadow: pixelFrame(2),
         bgcolor: PARCHMENT,
         color: INK,
         fontSize: 'clamp(11px, 2.4cqh, 14px)',
@@ -218,7 +267,7 @@ export function ReplyBubble({
         '&::after': {
           content: '""',
           position: 'absolute',
-          right: -9,
+          right: -11,
           top: '60%',
           borderWidth: '7px 0 7px 9px',
           borderStyle: 'solid',

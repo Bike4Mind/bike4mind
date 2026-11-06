@@ -1,11 +1,12 @@
 import Box from '@mui/joy/Box';
+import { useTheme } from '@mui/joy/styles';
 import { keyframes } from '@mui/system';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel, toolKind, type ToolKind } from '../activity';
 import { prefersReducedMotion } from '../motion';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
-import { AGENT_STATE_LABEL, spawnerName, type AgentView, type ParentView } from '../roster';
+import { AGENT_STATE_LABEL, spawnerName, type AgentState, type AgentView, type ParentView } from '../roster';
 import type { AgentPersona } from '@shared/agentPersona';
 import { INNKEEPER_GREETING, OrderSlip, ReplyBubble } from './InnkeeperDesk';
 import { innkeeperAct, innkeeperBubble } from './innkeeper';
@@ -22,6 +23,7 @@ import {
   type Placement,
   type SlotPoint,
 } from './scene';
+import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type InnkeeperPose } from './tavernArt';
 
 const BUBBLE_MAX = 28;
@@ -73,6 +75,12 @@ const bob = keyframes`
 const cheer = keyframes`
   0%, 100% { transform: translateY(0); }
   30%, 60% { transform: translateY(-12%); }
+`;
+
+// The quiet room's slow camera: a breath of drift, small enough that the door and hearth stay in frame.
+const drift = keyframes`
+  0%, 100% { transform: none; }
+  50% { transform: scale(1.035) translate(-0.8%, 0.5%); }
 `;
 
 const twinkle = keyframes`
@@ -222,14 +230,46 @@ function ContactShadow({ hidden = false }: { hidden?: boolean }) {
   );
 }
 
-function NameLabelPlate({ testId, label, text }: { testId: string; label: NameLabel; text: string }) {
+/** The lamp on each nameplate: the agent's state at a glance, without the bubble. */
+const STATE_LAMP: Record<AgentState, string> = {
+  'needs-you': '#f5c542',
+  working: '#ff9d3c',
+  done: '#7ed07a',
+  failed: '#e5534b',
+  stopped: '#a89a88',
+  idle: '#a89a88',
+};
+
+// Wood: a lit top edge and a dark bottom one, notched corners in the pixel-art way (no radius).
+const PLAQUE_WOOD = 'linear-gradient(#6b4523, #4a2e14)';
+const PLAQUE_EDGE =
+  'inset 0 1px 0 rgba(255, 214, 150, 0.35), 0 -1px 0 #1f1208, 0 1px 0 #1f1208, -1px 0 0 #1f1208, 1px 0 0 #1f1208, 0 2px 0 rgba(0, 0, 0, 0.45)';
+
+function NameLabelPlate({
+  testId,
+  label,
+  text,
+  state,
+}: {
+  testId: string;
+  label: NameLabel;
+  text: string;
+  state?: AgentState;
+}) {
   return (
     <Box
       data-testid={testId}
       data-name-label
       data-lane={label.lane}
+      data-state={state}
       // cqw/cqh resolve against the scene box, the nearest size container.
-      style={{ '--label-max': `${label.maxWidth}cqw`, '--label-drop': `${label.lane * LABEL_SPAN}cqh` } as CssVars}
+      style={
+        {
+          '--label-max': `${label.maxWidth}cqw`,
+          '--label-drop': `${label.lane * LABEL_SPAN}cqh`,
+          '--lamp': state ? STATE_LAMP[state] : 'transparent',
+        } as CssVars
+      }
       sx={{
         display: label.shown ? 'block' : 'none',
         position: 'absolute',
@@ -243,12 +283,27 @@ function NameLabelPlate({ testId, label, text }: { testId: string; label: NameLa
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
         px: '0.5em',
-        borderRadius: '4px',
-        bgcolor: 'rgba(20, 12, 6, 0.78)',
+        background: PLAQUE_WOOD,
+        boxShadow: PLAQUE_EDGE,
         color: '#fbe9c8',
+        textShadow: '0 1px 0 #1f1208',
         fontSize: 'clamp(9px, 1.9cqh, 12px)',
         lineHeight: 1.4,
         pointerEvents: 'none',
+        ...(state && {
+          pl: '1.25em',
+          '&::before': {
+            content: '""',
+            position: 'absolute',
+            left: '0.45em',
+            top: '50%',
+            width: '0.45em',
+            height: '0.45em',
+            transform: 'translateY(-50%)',
+            bgcolor: 'var(--lamp)',
+            boxShadow: '0 0 4px var(--lamp)',
+          },
+        }),
       }}
     >
       {truncate(text, NAME_MAX)}
@@ -344,7 +399,12 @@ function Sprite({
       {bubble && (
         <Bubble testId={`orchestrator-tavern-bubble-${agent.id}`} text={bubble} urgent={agent.state === 'needs-you'} />
       )}
-      <NameLabelPlate testId={`orchestrator-tavern-name-${agent.id}`} label={label} text={displayName} />
+      <NameLabelPlate
+        testId={`orchestrator-tavern-name-${agent.id}`}
+        label={label}
+        text={displayName}
+        state={agent.state}
+      />
     </Box>
   );
 }
@@ -466,7 +526,10 @@ export function TavernView({
   celebrating = false,
   sceneOverlay,
   desk,
+  settled = false,
 }: OrchestratorViewProps) {
+  const mode = useTheme().palette.mode;
+  const mood: TavernMood = settled ? 'last-call' : mode === 'dark' ? 'night' : 'day';
   const placements = usePlacements(agents);
   const arrived = useArrived(introPlaying);
   const act = innkeeperAct(parent, agents);
@@ -536,18 +599,39 @@ export function TavernView({
     // composer below sits on the same surface as the margin around it instead of cutting the scene off.
     <Box
       data-testid="orchestrator-tavern-frame"
+      data-settled={settled || undefined}
       sx={{
+        position: 'relative',
         flex: 1,
         minHeight: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        p: 1.5,
-        bgcolor: 'background.body',
+        p: settled ? 0 : 1.5,
+        bgcolor: settled ? '#0b0603' : 'background.body',
+        transition: 'padding 0.8s ease-in-out, background-color 0.8s ease-in-out',
         containerType: 'size',
         overflow: 'hidden',
+        [NO_MOTION]: { transition: 'none' },
       }}
     >
+      {/* Quiet, the room spills past its frame: a soft, dim copy of it fills the bars around the picture. */}
+      <Box
+        aria-hidden
+        data-testid="orchestrator-tavern-spill"
+        sx={{
+          position: 'absolute',
+          inset: '-6%',
+          backgroundImage: `url(${TAVERN_BACKDROP})`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          filter: 'blur(28px) brightness(0.45) saturate(1.2)',
+          opacity: settled ? 1 : 0,
+          transition: 'opacity 1.6s ease-in-out',
+          pointerEvents: 'none',
+          [NO_MOTION]: { transition: 'none' },
+        }}
+      />
       <Box
         data-testid="orchestrator-tavern"
         sx={{
@@ -556,11 +640,14 @@ export function TavernView({
           aspectRatio: '16 / 9',
           containerType: 'size',
           overflow: 'hidden',
-          borderRadius: 'lg',
+          borderRadius: settled ? 0 : 'lg',
           bgcolor: '#140c06',
-          boxShadow: 'md',
-          outline: '1px solid',
+          boxShadow: settled ? '0 0 80px 30px rgba(8, 4, 2, 0.85)' : 'md',
+          outline: settled ? 'none' : '1px solid',
           outlineColor: 'divider',
+          transition: 'border-radius 0.8s ease-in-out, box-shadow 1.6s ease-in-out',
+          animation: settled ? `${drift} 120s ease-in-out infinite` : 'none',
+          [NO_MOTION]: { transition: 'none', animation: 'none' },
         }}
       >
         <Box
@@ -578,6 +665,7 @@ export function TavernView({
             transition: 'opacity 0.6s ease-in',
           }}
         />
+        <TavernLight mood={mood} />
         {visible.map(({ agent, placement }) => (
           <Sprite
             key={agent.id}
