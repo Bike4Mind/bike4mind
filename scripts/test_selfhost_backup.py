@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -193,6 +194,12 @@ class Manifest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Object count'):
             sb.check_manifest(dest, buckets)
 
+    def test_missing_empty_bucket_directory_rejected(self):
+        dest, buckets, _ = self.make_backup()
+        (dest / 'objects' / 'b-app_files_bucket').rmdir()
+        with self.assertRaisesRegex(ValueError, 'Missing object directory'):
+            sb.check_manifest(dest, buckets)
+
     def test_unexpected_archive_name_rejected(self):
         dest, buckets, manifest = self.make_backup()
         manifest['mongo']['file'] = 'other.gz'
@@ -266,7 +273,9 @@ def kind(cmd):
 class Restore(unittest.TestCase):
     def restore(self, user_dbs='', *flags, dest=None, stored=None, after=None):
         backup_dir, buckets = make_backup_dir(self)
-        calls, fake_run = recorder(user_dbs, [stored or {}, after if after is not None else {n: 0 for n in buckets.values()}])
+        counts = [{name: output.get(name, 0) for name in buckets.values()}
+                  for output in (stored or {}, after or {})]
+        calls, fake_run = recorder(user_dbs, counts)
         args = sb.parser().parse_args(['restore', '--from', str(dest or backup_dir), *flags])
         with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, ENV)), \
                 mock.patch.object(sb, 'run', side_effect=fake_run):
@@ -326,7 +335,7 @@ class Restore(unittest.TestCase):
         self.assertIn("local/'a b'", script)
         self.assertIn('|| exit 1', script)
         self.assertNotIn('| wc', script)
-        self.assertEqual(sb.parse_counts("a b 3\nc 0\nnoise\n"), {'a b': 3, 'c': 0})
+        self.assertEqual(sb.parse_counts("a b 3\nc 0\n"), {'a b': 3, 'c': 0})
 
     def run_count_script(self, stub, buckets):
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,18 +346,59 @@ class Restore(unittest.TestCase):
             return subprocess.run(['sh', '-c', sb.count_script(buckets)], env=env,
                                   capture_output=True, text=True)
 
+    def count_stub(self, listing=''):
+        return ("case \"$1\" in alias) exit 0;; ls) "
+                "if [ \"$2\" = --json ]; then "
+                "echo '{\"status\":\"success\",\"type\":\"folder\",\"key\":\"there/\"}'; "
+                "else " + listing + "; fi;; esac\n")
+
     def test_count_script_counts_existing_and_missing_buckets(self):
-        stub = ('case "$1" in alias) exit 0;; stat) [ "$2" = local/there ] || exit 1;; '
-                'ls) printf "a\\nb\\nc\\n";; esac\n')
-        result = self.run_count_script(stub, ['there', 'gone'])
+        listing = "printf '%s\\n' " + shlex.quote('\n'.join(json.dumps({
+            'status': 'success', 'type': 'file', 'key': key,
+        }) for key in ['a', 'nested/b', 'line\nbreak']))
+        result = self.run_count_script(self.count_stub(listing), ['there', 'gone'])
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(sb.parse_counts(result.stdout), {'there': 3, 'gone': 0})
 
+    def test_count_script_counts_empty_existing_bucket(self):
+        result = self.run_count_script(self.count_stub(':'), ['there'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sb.parse_counts(result.stdout), {'there': 0})
+
     def test_count_script_fails_when_listing_errors(self):
-        stub = 'case "$1" in alias|stat) exit 0;; ls) exit 1;; esac\n'
-        result = self.run_count_script(stub, ['there'])
+        result = self.run_count_script(self.count_stub('exit 1'), ['there'])
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(sb.parse_counts(result.stdout), {})
+
+    def test_count_script_fails_when_bucket_discovery_errors(self):
+        for error in ['AccessDenied', 'connection refused', 'timeout']:
+            with self.subTest(error=error):
+                stub = 'case "$1" in alias) exit 0;; ls) echo ' + shlex.quote(error) + ' >&2; exit 1;; esac'
+                result = self.run_count_script(stub, ['there'])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stdout, '')
+                self.assertIn(error, result.stderr)
+
+    def test_count_script_rejects_invalid_json_and_error_records(self):
+        for output in ['garbage', '{"status":"error"}', '{"status":"success","type":"unknown"}']:
+            with self.subTest(output=output):
+                result = self.run_count_script(self.count_stub('echo ' + shlex.quote(output)), ['there'])
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_count_parser_rejects_missing_duplicate_and_malformed_counts(self):
+        for output in ['', 'there 0\nthere 1', 'there -1', 'noise', 'other 0', 'there \u00b2']:
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                sb.parse_counts(output, ['there'])
+
+    def test_incomplete_count_output_aborts_before_restore(self):
+        dest, buckets = make_backup_dir(self)
+        calls, fake_run = recorder(counts=[{}])
+        args = sb.parser().parse_args(['restore', '--from', str(dest)])
+        with mock.patch.object(sb, 'load', return_value=(['docker', 'compose'], buckets, ENV)), \
+                mock.patch.object(sb, 'run', side_effect=fake_run), \
+                self.assertRaisesRegex(ValueError, 'every configured bucket'):
+            sb.restore(args)
+        self.assertNotIn('mongorestore', [kind(cmd) for cmd in calls])
 
     def test_count_script_fails_when_alias_fails(self):
         result = self.run_count_script('exit 1\n', ['there'])

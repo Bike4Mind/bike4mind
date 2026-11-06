@@ -128,22 +128,32 @@ def mirror_script(buckets, restore, remove=False):
 
 
 def count_script(buckets):
-    """Print `<bucket> <object count>` per bucket; a bucket that does not exist yet counts 0."""
-    lines = [f'{MC_ALIAS} || exit 1']
+    """Count file objects, distinguishing absent buckets from failed storage reads."""
+    lines = [f'{MC_ALIAS} || exit 1',
+             'available=$(mc ls --json local/) || exit 1',
+             "printf '%s\\n' \"$available\" | jq -se 'all(.[]; .status == \"success\" and .type == \"folder\")' >/dev/null || exit 1"]
     for name in buckets:
         q = shlex.quote(name)
-        # Listing is a separate statement so a failing mc is not hidden behind the pipe to grep.
-        lines.append(f'if mc stat local/{q} >/dev/null 2>&1; then out=$(mc ls --recursive local/{q}) || exit 1; '
-                     f'echo {q} $(printf "%s\\n" "$out" | grep -c .); else echo {q} 0; fi')
+        key = shlex.quote(name + '/')
+        lines.append(
+            f"if printf '%s\\n' \"$available\" | jq -se --arg key {key} 'any(.[]; .key == $key)' >/dev/null; then "
+            f'out=$(mc ls --recursive --json local/{q}) || exit 1; '
+            "count=$(printf '%s\\n' \"$out\" | jq -se 'if all(.[]; .status == \"success\" and "
+            "(.type == \"file\" or .type == \"folder\")) then [.[] | select(.type == \"file\")] | length "
+            "else error(\"Invalid object listing\") end') || exit 1; "
+            f'printf "%s %s\\n" {q} "$count"; else printf "%s 0\\n" {q}; fi')
     return '; '.join(lines)
 
 
-def parse_counts(text):
+def parse_counts(text, buckets=None):
     counts = {}
     for line in (text or '').splitlines():
         name, _, number = line.rpartition(' ')
-        if name and number.isdigit():
-            counts[name] = int(number)
+        if not name or not number.isascii() or not number.isdigit() or name in counts:
+            raise ValueError('Invalid object count output')
+        counts[name] = int(number)
+    if buckets is not None and set(counts) != set(buckets):
+        raise ValueError('Object count output does not cover every configured bucket')
     return counts
 
 
@@ -185,7 +195,10 @@ def check_manifest(dest, buckets):
     if sha256(Path(dest) / MONGO_ARCHIVE) != manifest['mongo']['sha256']:
         raise ValueError('Mongo archive checksum mismatch')
     for name, info in manifest['buckets'].items():
-        if count_files(Path(dest) / 'objects' / name) != info['objects']:
+        directory = Path(dest) / 'objects' / name
+        if not directory.is_dir():
+            raise ValueError(f'Missing object directory for bucket {name}')
+        if count_files(directory) != info['objects']:
             raise ValueError(f'Object count mismatch for bucket {name}')
     return manifest
 
@@ -282,7 +295,7 @@ def restore(args):
     def target_counts():
         script = count_script(buckets.values())
         out = step('count objects', mc_cmd(compose, objects, script, True), env=env, stdout=subprocess.PIPE).stdout
-        return parse_counts(out)
+        return parse_counts(out, buckets.values())
 
     stored = [name for name, count in target_counts().items() if count]
     if (existing or stored) and not args.yes:
@@ -290,7 +303,8 @@ def restore(args):
         raise SystemExit(f'Target already has data ({found}); restore into a fresh project or pass --yes to overwrite')
     if existing:
         step('drop user databases', mongo_drop_dbs_cmd(compose), redact_stderr=True, env=env)
-    step('mongorestore', mongorestore_cmd(compose), redact_stderr=True, env=env, stdin=open(dest / MONGO_ARCHIVE, 'rb'))
+    with open(dest / MONGO_ARCHIVE, 'rb') as archive:
+        step('mongorestore', mongorestore_cmd(compose), redact_stderr=True, env=env, stdin=archive)
     step('createbuckets', [*compose, 'run', '--rm', '--no-deps', 'createbuckets'], env=env)  # buckets, webhooks, lifecycle
     script = mirror_script(buckets.values(), restore=True, remove=args.yes)
     step('object mirror', mc_cmd(compose, objects, script, True), env=env)

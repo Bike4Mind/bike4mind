@@ -786,7 +786,7 @@ The drill derives its broker image, configuration mount, and storage mounts from
 
 `scripts/selfhost_backup.py` backs up the durable user state of the Compose stack while it is running, and restores it into a fresh project. Python 3 and Docker Compose are required; run it from the repository root with the same `-f`, `--env-file`, and `--profile` flags you use to run the stack.
 
-**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless); the reverse is rare and needs an object deleted or expired during the backup window. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup whose archive checksum or per-bucket file counts do not match it. The counts come from the backup copy, so they prove the copy is intact, not that every source object was captured. After restoring, the tool re-counts each target bucket and fails if it differs from the manifest.
+**What is backed up:** the whole MongoDB instance (`mongodump --oplog`, a point-in-time-consistent archive) and all seven MinIO buckets (`APP_FILES`, `EMAIL_INGESTION`, `FAB_FILE`, `GENERATED_IMAGES`, `HISTORY_IMPORT`, `PUBLISHED_ARTIFACTS`, `SLACK_EXPORT`), mirrored with `mc mirror`. Bucket names and the Mongo URI come from your resolved Compose configuration. Mongo is dumped first, so a file may exist without a database row (harmless); the reverse is rare and needs an object deleted or expired during the backup window. A `manifest.json` records timing, revision, the archive checksum, and per-bucket object counts; restore refuses a backup whose archive checksum or per-bucket file counts do not match it. The counts come from the backup copy: they detect missing files, but do not verify object bytes or prove every source object was captured. After restoring, the tool re-counts each target bucket and fails if it differs from the manifest.
 
 **Requirements:**
 
@@ -833,7 +833,7 @@ To restore over the original project, stop every service except `mongo` and `min
 
 ### Recovery point and retention
 
-- **Recovery point:** the time the last backup finished. Mongo is consistent as of the end of its dump; objects are a slightly later, non-atomic view. Anything after that is lost.
+- **Recovery point:** Mongo is consistent as of the end of its dump; objects are a slightly later, non-atomic view. Use the manifest start time as a conservative recovery point, rather than its finish time. Database writes made during the object mirror are not included.
 - **Retention:** the tool does no scheduling or rotation. Assumed policy: run it daily from cron, keep 7 daily and 4 weekly copies, and copy each off the host. If you need a tighter recovery point, use a managed MongoDB with point-in-time recovery and an S3-compatible store with versioning.
 - **Alternative:** operators who already snapshot volumes can stop the stack and snapshot `mongo-data` and `minio-data` together. That copy is tied to the exact MongoDB and MinIO on-disk format and needs downtime.
 
