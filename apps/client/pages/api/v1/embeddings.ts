@@ -112,7 +112,7 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
       { names: ['enforceCredits'], skipCache: true }
     );
     // Only OpenAI models are counted with their own tokenizer; every other model falls back to cl100k_base,
-    // and settlement trusts the provider's count, which the hold caps (see tokenCounting.ts).
+    // and settlement trusts the provider's count, capped at the hold by reserveRequestCredits' settle.
     const approximateTokenizer = provider !== 'openai';
     const reservationTokens = approximateTokenizer
       ? Math.ceil(promptTokens * APPROXIMATE_TOKEN_RESERVATION_MARGIN)
@@ -163,6 +163,13 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
       if (result.inputTokens !== undefined) {
         billedTokens = result.inputTokens;
         settledBasis = 'provider';
+        if (billedTokens > reservationTokens) {
+          req.logger.warn('Provider-reported embedding tokens exceed the reservation; settlement is capped', {
+            model,
+            reservationTokens,
+            providerTokens: billedTokens,
+          });
+        }
       }
     } catch (error) {
       req.logger.error('Embedding generation failed', {

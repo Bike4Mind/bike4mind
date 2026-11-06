@@ -116,9 +116,10 @@ type Handler = (req: unknown, res: unknown) => Promise<void>;
 
 const run = async (body: unknown, headers: Record<string, string> = {}) => {
   const { req, res } = createMocks({ method: 'POST', body, headers });
-  Object.assign(req, { user: { id: 'u1' }, logger: { error: vi.fn(), warn: vi.fn() } });
+  const logger = { error: vi.fn(), warn: vi.fn() };
+  Object.assign(req, { user: { id: 'u1' }, logger });
   await (handler as unknown as Handler)(req, res);
-  return { status: res._getStatusCode(), body: res._getJSONData() };
+  return { status: res._getStatusCode(), body: res._getJSONData(), logger };
 };
 
 const vectorOf = (width: number) => Array.from({ length: width }, (_, i) => (i === 0 ? 1 : 0));
@@ -246,9 +247,13 @@ describe('POST /api/v1/embeddings', () => {
     countTokens.mockResolvedValue(5000);
     settlementDraw.mockReturnValue(0.25);
     embedProvider.mockResolvedValueOnce({ vectors: [vectorOf(1536)], inputTokens: 7000 });
-    const { body, status } = await run({ model: 'text-embedding-3-small', input: 'a' });
+    const { body, status, logger } = await run({ model: 'text-embedding-3-small', input: 'a' });
     expect(status).toBe(200);
     expect(body.usage).toEqual({ prompt_tokens: 7000, total_tokens: 7000 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('settlement is capped'),
+      expect.objectContaining({ reservationTokens: 5000, providerTokens: 7000 })
+    );
     expect(settle).toHaveBeenCalledWith(1, expect.objectContaining({ inputTokens: 7000 }));
     expect(recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({
