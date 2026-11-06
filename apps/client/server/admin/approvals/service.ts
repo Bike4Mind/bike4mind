@@ -285,11 +285,15 @@ export async function rejectApproval(req: Request, id: string, reason: string): 
     });
   } catch (error) {
     // An unaudited rejection must not stand; the request goes back to pending.
-    await adminApprovalRepository.finish(rejected.id, 'rejected', 'pending', {
-      decidedBy: undefined,
-      decidedAt: undefined,
-      decisionReason: undefined,
-    });
+    try {
+      await adminApprovalRepository.finish(rejected.id, 'rejected', 'pending', {
+        decidedBy: undefined,
+        decidedAt: undefined,
+        decisionReason: undefined,
+      });
+    } catch (rollbackError) {
+      req.logger.error('[ADMIN_APPROVAL_REJECT_ROLLBACK_FAILED]', { approvalId: rejected.id, error: rollbackError });
+    }
     throw error;
   }
   return rejected;

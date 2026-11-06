@@ -251,6 +251,15 @@ describe('rejectApproval', () => {
       decisionReason: undefined,
     });
   });
+
+  it('rethrows the audit error, not the rollback error, when the rollback also fails', async () => {
+    mocks.record.mockRejectedValueOnce(new Error('audit down'));
+    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
+    const error = vi.fn();
+    const req = Object.assign(fullAdmin(APPROVER), { logger: { error } });
+    await expect(rejectApproval(req, ID, 'no')).rejects.toThrow('audit down');
+    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_REJECT_ROLLBACK_FAILED]', expect.anything());
+  });
 });
 
 describe('redeemApproval', () => {
