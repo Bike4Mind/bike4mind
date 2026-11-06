@@ -265,6 +265,10 @@ export const Artifact: Model<IArtifactDocument> =
   model<IArtifactDocument>('Artifact', ArtifactSchema);
 
 // Repository implementation
+// Fields the public artifact list and search return; content and sharing state are never loaded.
+const PUBLIC_ARTIFACT_LIST_FIELDS =
+  'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt';
+
 export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   constructor(model: Model<IArtifactDocument>) {
     super(model);
@@ -308,21 +312,22 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
   }
 
   /**
-   * One newest-first page of the live artifacts a user owns, for the public list. Shares are left to
-   * the by-id read. Content and sharing fields are not loaded.
+   * One newest-first page of `conditions`, bounded before `beforeId` when given. Shared by the public
+   * list and search so their cursor handling, projection and hasMore rule cannot drift apart.
    */
-  async listOwnedBeforeId(userId: string, { beforeId, limit }: { beforeId?: string; limit: number }) {
-    const conditions: Record<string, unknown> = { userId, deletedAt: null };
+  private async pageBeforeId(
+    conditions: Record<string, unknown>,
+    { beforeId, limit }: { beforeId?: string; limit: number }
+  ) {
+    const bounded = { ...conditions };
     if (beforeId !== undefined) {
       if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
-      conditions._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+      bounded._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
     }
 
     const result = await this.model
-      .find(conditions)
-      .select(
-        'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt'
-      )
+      .find(bounded)
+      .select(PUBLIC_ARTIFACT_LIST_FIELDS)
       .sort({ _id: -1 })
       .limit(limit + 1)
       .lean()
@@ -330,6 +335,14 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
 
     const hasMore = result.length > limit;
     return { data: result.slice(0, limit), hasMore };
+  }
+
+  /**
+   * One newest-first page of the live artifacts a user owns, for the public list. Shares are left to
+   * the by-id read. Content and sharing fields are not loaded.
+   */
+  async listOwnedBeforeId(userId: string, { beforeId, limit }: { beforeId?: string; limit: number }) {
+    return this.pageBeforeId({ userId, deletedAt: null }, { beforeId, limit });
   }
 
   /**
@@ -343,29 +356,10 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
     searchTerm: string,
     { type, beforeId, limit }: { type?: string; beforeId?: string; limit: number }
   ) {
-    const conditions: Record<string, unknown> = {
-      userId,
-      deletedAt: null,
-      $text: { $search: searchTerm },
-      ...(type !== undefined && { type }),
-    };
-    if (beforeId !== undefined) {
-      if (!mongoose.isObjectIdOrHexString(beforeId)) throw new Error(`Invalid artifact cursor id: ${beforeId}`);
-      conditions._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
-    }
-
-    const result = await this.model
-      .find(conditions)
-      .select(
-        'id type title description version versionTag status tags sessionId projectId visibility createdAt updatedAt'
-      )
-      .sort({ _id: -1 })
-      .limit(limit + 1)
-      .lean()
-      .exec();
-
-    const hasMore = result.length > limit;
-    return { data: result.slice(0, limit), hasMore };
+    return this.pageBeforeId(
+      { userId, deletedAt: null, $text: { $search: searchTerm }, ...(type !== undefined && { type }) },
+      { beforeId, limit }
+    );
   }
 
   // Implement artifact-specific methods
