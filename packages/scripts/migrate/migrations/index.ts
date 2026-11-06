@@ -299,6 +299,8 @@ import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-i
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedule-keys';
+// Id stays below SeedSignupGrantPools, whose test orders every signup migration before it.
+import DropQuestSignupActivity from './20260921237490_drop-quest-signup-activity';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settings';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -507,6 +509,7 @@ const coreMigrations: MigrationFile[] = [
   SeedSignupGrantSchedule,
   PinSignupGrantInitialAndCap,
   PinSignupGrantScheduleKeys,
+  DropQuestSignupActivity,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
   EnsureQuestSessionKeysetIndex,

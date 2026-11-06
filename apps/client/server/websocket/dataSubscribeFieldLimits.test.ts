@@ -23,7 +23,6 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
-      signupActivity: false,
     });
   });
 
@@ -142,7 +141,6 @@ describe('resolveFieldLimits', () => {
       callback: false,
       embedding: false,
       slackNotification: false,
-      signupActivity: false,
     });
   });
 

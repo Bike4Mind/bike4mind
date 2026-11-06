@@ -568,11 +568,6 @@ export const PromptMetaSchema: Schema<PromptMeta> = new Schema<PromptMeta>(
 export const ChatHistoryItemSchema: Schema<IChatHistoryItemDocument> = new Schema<IChatHistoryItemDocument>(
   {
     sessionId: { type: String, required: true },
-    signupActivity: {
-      type: new Schema({ userId: String, turnId: String, startedAt: Date }, { _id: false }),
-      default: undefined,
-      select: false,
-    },
     conversationItemId: { type: String, required: false },
     openaiMessageId: { type: String, required: false },
     claudeMessageId: { type: String, required: false },
@@ -1723,16 +1718,6 @@ function initializeQuestModel() {
     // Keyset order of findPageAfterBySessionId (GET /api/v1/sessions/{id}/quests). Built in
     // production by migration 20260921237700_ensure-quest-session-keyset-index; keep in sync.
     ChatHistoryItemSchema.index({ sessionId: 1, timestamp: 1, _id: 1 }, { name: 'sessionId_timestamp_id' });
-    // Built in production by migration 20260921235966_ensure-quest-signup-activity-index; keep the
-    // name and key in sync with it. Partial so the build and its entries cover only turns carrying
-    // provenance, not every quest; the activity aggregate's equality on userId implies the filter.
-    ChatHistoryItemSchema.index(
-      { 'signupActivity.userId': 1, status: 1, 'signupActivity.startedAt': 1 },
-      {
-        name: 'signupActivity_user_status_startedAt',
-        partialFilterExpression: { 'signupActivity.userId': { $exists: true } },
-      }
-    );
 
     // Index for status-based queries (used in cancellation watcher)
     ChatHistoryItemSchema.index({ _id: 1, status: 1 }, { name: 'id_status' });
