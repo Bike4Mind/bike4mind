@@ -473,6 +473,8 @@ export const SettingKeySchema = z.enum([
   'otcLimitSendPerEmailPerIp',
   'otcLimitSendPerEmailPerIpDaily',
   'otcLimitSendPerEmail',
+  'otcLimitSendPerEmailDaily',
+  'otcLimitSendGlobalHourly',
   'otcLimitRegisterPerDomainHourly',
   'otcLimitRegisterPerDomainDaily',
   'otcLimitSendPerIpDistinctEmails',
@@ -2609,6 +2611,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
       { key: 'otcLimitVerifyPerIp', order: 10 },
       { key: 'otcLimitFormTokenPerIp', order: 11 },
+      { key: 'otcLimitSendPerEmailDaily', order: 12 },
+      { key: 'otcLimitSendGlobalHourly', order: 13 },
     ],
   },
   SUBSCRIBER_LIMITS: {
@@ -3874,7 +3878,8 @@ export const settingsMap = {
     key: 'ReferralCreditsAmount',
     name: 'Referral Credits Amount',
     defaultValue: 10000,
-    description: 'Credits to give to the referred user.',
+    description:
+      'Credits a user who signs up with a referral invite receives, as a floor: a larger amount on the invite wins. Other self-serve signups receive the signup grant schedule (Signup Grant Initial Credits) instead.',
     category: 'Referrals',
     // ReferralModal renders this for every non-admin sender - no secret, just the number
     // displayed in the "invited person gets N credits" line.
@@ -4408,7 +4413,7 @@ export const settingsMap = {
     name: 'Allow Open Registration',
     defaultValue: false,
     description:
-      'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the Default Free Credits grant is then applied after they verify their email (anti-spam — see Default Free Credits). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
+      'Master switch for self-serve signup. When OFF (default), a valid invite code is required to register. When ON, users may register without an invite code; the signup grant (Signup Grant Initial Credits) is then released after they verify their email (anti-spam). Safe to enable: the pre-request credit reservation caps every free user at the credits they are granted.',
     category: 'Users',
   }),
   // New-account trust gate for API keys and outbound actions (see assertOutboundActionAllowed). A trusted
@@ -4685,6 +4690,34 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
     order: 3,
   }),
+  otcLimitSendPerEmailDaily: makeNumberSetting({
+    key: 'otcLimitSendPerEmailDaily',
+    name: 'Sign-in Codes: Send: Per Inbox Before Challenge (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 20,
+    int: true,
+    description:
+      'Codes one inbox may receive in a day before further requests must pass a Turnstile challenge. Never refuses on its own: without a Turnstile secret and site key it only logs. Built-in: 20. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 12,
+  }),
+  otcLimitSendGlobalHourly: makeNumberSetting({
+    key: 'otcLimitSendGlobalHourly',
+    name: 'Sign-in Codes: Send: All Inboxes Before Challenge (per hour)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 1000,
+    int: true,
+    description:
+      'Codes the whole deployment may send in an hour before every further request must pass a Turnstile challenge. Never refuses on its own: without a Turnstile secret and site key it only logs. Built-in: 1000. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 13,
+  }),
   otcLimitRegisterPerDomainHourly: makeNumberSetting({
     key: 'otcLimitRegisterPerDomainHourly',
     name: 'Sign-in Codes: New Accounts per Domain (per hour)',
@@ -4858,7 +4891,7 @@ export const settingsMap = {
     defaultValue: false,
     userReadable: true,
     description:
-      'Legacy fallback: every new signup is enrolled in a staged grant regardless of this switch. It only decides which older keys apply while Signup Grant Initial Credits or Signup Grant Drip Cap is unset (OFF keeps the flat grant: Default Free Credits, nothing locked).',
+      'Retired: no longer read. Every new signup is enrolled in a staged grant, and Signup Grant Initial Credits and Signup Grant Drip Cap decide what it pays (a drip cap of 0 locks nothing).',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -4870,7 +4903,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits released after email verification for newly enrolled staged accounts. Copied once from Default Free Credits when staged grants were installed; later changes to Default Free Credits do not update it. 0 grants nothing.',
+      'Credits released after email verification for newly enrolled staged accounts. Used only while Signup Grant Initial Credits is unset. 0 grants nothing.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5001,7 +5034,7 @@ export const settingsMap = {
     // The client resolves the legacy drip cap from it while signupGrantDripCap is unset.
     userReadable: true,
     description:
-      'Legacy fallback: while Signup Grant Drip Cap is unset and Staged Signup Grants is ON, the drip cap is the smaller of this and Verified Unlock Credits (an unset Verified Unlock Credits counts as 0, so nothing drips). With staging OFF the cap is 0. Set Signup Grant Drip Cap instead.',
+      'Legacy fallback: while Signup Grant Drip Cap is unset, the drip cap is the smaller of this and Verified Unlock Credits (an unset Verified Unlock Credits counts as 0, so nothing drips). Set Signup Grant Drip Cap instead.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5035,7 +5068,7 @@ export const settingsMap = {
     int: true,
     userReadable: true,
     description:
-      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies if staged signup grants are enabled, then the default free credits.',
+      'Credits a new account receives after email verification. While unset, Signup Grant Credits applies, else 0.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -5101,12 +5134,11 @@ export const settingsMap = {
   }),
   defaultFreeCredits: makeNumberSetting({
     key: 'defaultFreeCredits',
-    // Read by the new-user welcome to state the amount an unverified sign-up is about to unlock.
     userReadable: true,
     name: 'Default Free Credits',
     defaultValue: 0,
     description:
-      'Legacy fallback: the credits a signup WITHOUT an invite code receives after email verification while Signup Grant Initial Credits is unset and either Staged Signup Grants is OFF or Signup Grant Credits is unset. Once Signup Grant Initial Credits is set, editing this no longer changes open-signup grants. Includes eligible partner signups when Allow Open Registration is OFF; partner-rule credits are added on top. 0 grants nothing. An unverified account receives no credits.',
+      'Retired: no longer sizes any signup grant. A self-serve signup receives Signup Grant Initial Credits after email verification; set that instead. Kept only so a stored value stays visible.',
     category: 'Users',
   }),
   preferenceArenaEnabled: makeBooleanSetting({
@@ -5491,17 +5523,15 @@ export const settingsMap = {
       'When Cloudflare verification cannot be reached, refuse the request instead of letting it through. Off keeps sign-in available during a Cloudflare outage.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
-    dependsOn: 'turnstileEnabled',
   }),
   turnstileSiteKey: makeStringSetting({
     key: 'turnstileSiteKey',
     name: 'Turnstile Site Key',
     defaultValue: '',
     description:
-      'The public Cloudflare Turnstile site key shown to the sign-in form. The secret key is never stored here.',
+      'The public Cloudflare Turnstile site key shown to the sign-in form. With the toggle above off, a set key still challenges sign-in code requests past the send budgets (see Sign-in Code Limits). The secret key is never stored here.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
-    dependsOn: 'turnstileEnabled',
   }),
   signupBurstThreshold: makeNumberSetting({
     key: 'signupBurstThreshold',

@@ -5,6 +5,7 @@ import type { LLMModelConfig } from '../types/entities/LLMTypes';
 import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
   filterRunnableModels,
+  getMaxEditReferenceImages,
   getMaxReferenceImages,
   supportsPromptUpsampling,
   isVideoModel,
@@ -19,6 +20,7 @@ import {
   isModelAccessible,
   isBflImageModel,
   supportsImageEdit,
+  supportsImageEditEndpoint,
 } from './modelHelpers';
 
 describe('requiresImageInput', () => {
@@ -360,6 +362,34 @@ describe('getMaxReferenceImages', () => {
     [ImageModels.GEMINI_3_PRO_IMAGE, 0],
   ])('%s accepts %s references', (model, limit) => {
     expect(getMaxReferenceImages(model)).toBe(limit);
+  });
+});
+
+describe('getMaxEditReferenceImages', () => {
+  it.each([
+    [ImageModels.GPT_IMAGE_2, 15],
+    [ImageModels.FLUX_2_PRO, 7],
+    [ImageModels.FLUX_2_MAX, 7],
+    [ImageModels.FLUX_2_KLEIN_9B, 3],
+    [ImageModels.FLUX_2_KLEIN_4B, 3],
+    [ImageModels.FLUX_PRO_FILL, 0],
+    [ImageModels.GEMINI_3_PRO_IMAGE, 0],
+  ])('%s accepts %s references beside the source', (model, limit) => {
+    expect(getMaxEditReferenceImages(model)).toBe(limit);
+  });
+});
+
+describe('supportsImageEditEndpoint', () => {
+  it.each([
+    [ImageModels.FLUX_2_PRO, true],
+    [ImageModels.FLUX_2_KLEIN_4B, true],
+    [ImageModels.FLUX_PRO_FILL, true],
+    [ImageModels.GPT_IMAGE_2, true],
+    [ImageModels.GEMINI_3_PRO_IMAGE, true],
+    [ImageModels.FLUX_PRO_1_1, false],
+    [undefined, false],
+  ])('%s -> %s', (model, expected) => {
+    expect(supportsImageEditEndpoint(model)).toBe(expected);
   });
 });
 

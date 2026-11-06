@@ -34,6 +34,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/server-utils/websocket/utils', () => ({ sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws://test' } } }));
+vi.mock('@server/credits/orgInviteBonus', () => ({ payOrgInviteBonus: vi.fn() }));
 
 import '@pages/api/invites/[id]/refuse';
 

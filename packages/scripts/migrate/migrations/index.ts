@@ -272,6 +272,7 @@ import EnsureSpendRollupIndexes from './20260921237200_ensure-spend-rollup-index
 import QueueHeldSignupGrantsForRiskReview from './20260921237300_queue-held-signup-grants-for-risk-review';
 import SeedSignupGrantSchedule from './20260921237400_seed-signup-grant-schedule';
 import SeedSignupGrantPools from './20260921237500_seed-signup-grant-pools';
+import PinSignupGrantInitialAndCap from './20260921237450_pin-signup-grant-initial-and-cap';
 import EnsureHeldCreditRewardIndexes from './20260921237600_ensure-heldcreditreward-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureQuestSessionKeysetIndex from './20260921237700_ensure-quest-session-keyset-index';
@@ -297,6 +298,7 @@ import EnsureOverwatchUserDayInternalIndex from './20260921239900_ensure-overwat
 import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-deletion-scheduledfor-index';
 import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-indexes';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
+import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 import EnsureAutoContainmentDecisionIndexes from './20260921239950_ensure-auto-containment-decision-indexes';
@@ -501,6 +503,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureSpendRollupIndexes,
   QueueHeldSignupGrantsForRiskReview,
   SeedSignupGrantSchedule,
+  PinSignupGrantInitialAndCap,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
   EnsureQuestSessionKeysetIndex,
@@ -521,6 +524,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureStripeDisputeIndexes,
   ConvertLegacyQuestPlansToFiles,
   EnsureUserSignupGrantStageIndex,
+  EnsureUserLimitEventIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

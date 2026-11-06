@@ -25,8 +25,21 @@ import {
   type UserAuthAuditRow,
 } from './userActivity';
 import { authEventSummary } from './userSignIns';
+import {
+  emailDomainOf,
+  fetchModerationEntries,
+  fetchPaymentEntries,
+  fetchSignupEntries,
+  loadSignInNetworks,
+  type TimelineAccount,
+} from './userTimelineAccount';
+import { fetchLimitEntries } from './userTimelineLimits';
+import { listSpendGroups, loadSpendLookups, spendGroupToEntry } from './userTimelineSpend';
 
 const QUERY_MAX_TIME_MS = 15_000;
+
+/** The audited user plus the account fields the spend, signup and sign-in rows read. */
+export type TimelineSubject = ActivitySubject & { account: TimelineAccount };
 
 export type TimelineRange = { from?: Date; to?: Date };
 
@@ -47,11 +60,14 @@ const fetchedPage = <Row>(rows: Row[], limit: number, toEntry: (row: Row) => Use
 
 // --- Sources ---
 
-const fetchAdminEntries = async (subject: ActivitySubject, page: TimelinePageOptions): Promise<SourcePage> => {
+const listAdminTarget = async (
+  target: { kind: 'user' | 'system'; id: string },
+  page: TimelinePageOptions
+): Promise<SourcePage> => {
   const { entries, nextCursor } = await adminAuditLogRepository.list(
     {
-      targetKind: 'user',
-      targetId: subject.id,
+      targetKind: target.kind,
+      targetId: target.id,
       from: page.range.from?.toISOString(),
       to: page.range.to?.toISOString(),
     },
@@ -69,7 +85,22 @@ const fetchAdminEntries = async (subject: ActivitySubject, page: TimelinePageOpt
   };
 };
 
-const fetchSignInEntries = async (subject: ActivitySubject, page: TimelinePageOptions): Promise<SourcePage> => {
+/**
+ * Admin actions on the user, plus decisions on a signup hold for the user's email domain: those are
+ * audited against the domain (signup-domain-holds.ts), but they decided this account's credits too.
+ */
+const fetchAdminEntries = async (subject: TimelineSubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const domain = emailDomainOf(subject.account.email);
+  const pages = await Promise.all([
+    listAdminTarget({ kind: 'user', id: subject.id }, page),
+    ...(domain ? [listAdminTarget({ kind: 'system', id: `signup-domain-hold:${domain}` }, page)] : []),
+  ]);
+  if (pages.length === 1) return pages[0];
+  const merged = mergeTimelinePages(pages, page.limit);
+  return { entries: merged.entries, hasMore: merged.nextCursor !== null };
+};
+
+const fetchSignInEntries = async (subject: TimelineSubject, page: TimelinePageOptions): Promise<SourcePage> => {
   const rows = await UserAuthAuditLogModel.find({
     $and: [{ userId: subject.id }, ...createdAtRangeClauses(page.range), ...createdAtCursorClauses(page.cursor)],
   })
@@ -77,17 +108,27 @@ const fetchSignInEntries = async (subject: ActivitySubject, page: TimelinePageOp
     .limit(page.limit + 1)
     .maxTimeMS(QUERY_MAX_TIME_MS)
     .lean<UserAuthAuditRow[]>();
-  const directory = await buildActorDirectory(
-    rows.map(row => row.actorUserId).filter((id): id is string => id !== undefined && id !== subject.id)
-  );
-  return fetchedPage(rows, page.limit, row => ({
-    type: 'signin',
-    id: row._id.toString(),
-    at: row.createdAt,
-    summary: authEventSummary(row.event, authMethodLabel(row.strategy)),
-    detail: row.actorIp,
-    audit: authAuditRowToEntry(row, subject, directory),
-  }));
+  const [directory, networks] = await Promise.all([
+    buildActorDirectory(
+      rows.map(row => row.actorUserId).filter((id): id is string => id !== undefined && id !== subject.id)
+    ),
+    loadSignInNetworks(subject.id, rows.slice(0, page.limit), subject.account.signupMeta),
+  ]);
+  return fetchedPage(rows, page.limit, row => {
+    const network = networks.get(row._id.toString());
+    const flags = [network?.newIp ? 'New IP' : undefined, network?.newCountry ? 'New country' : undefined].filter(
+      (flag): flag is string => flag !== undefined
+    );
+    return {
+      type: 'signin',
+      id: row._id.toString(),
+      at: row.createdAt,
+      summary: authEventSummary(row.event, authMethodLabel(row.strategy)),
+      detail: [row.actorIp, network?.country].filter(Boolean).join(' \u00b7 ') || undefined,
+      flags: flags.length > 0 ? flags : undefined,
+      audit: authAuditRowToEntry(row, subject, directory),
+    };
+  });
 };
 
 const API_KEY_VERBS: Readonly<Record<UserApiKeyAuditRow['action'], string>> = {
@@ -123,6 +164,8 @@ type CreditRow = {
   credits: number;
   description?: string;
   status?: string;
+  stripeDisputeId?: string;
+  stripeRefundId?: string;
   createdAt: Date;
 };
 
@@ -133,6 +176,13 @@ const CREDIT_SUMMARIES: Readonly<Record<CreditRow['type'], string>> = {
   generic_deduct: 'Credits removed',
   transfer_credit: 'Transferred credits',
   received_credit: 'Received credits',
+};
+
+const creditSummary = (row: CreditRow): string => {
+  if (row.stripeDisputeId) return 'Dispute: credits removed';
+  if (row.stripeRefundId) return 'Refund: credits removed';
+  if (row.type === 'purchase' && row.status === 'failed') return 'Purchase failed';
+  return CREDIT_SUMMARIES[row.type];
 };
 
 const formatSignedCredits = (credits: number): string =>
@@ -162,12 +212,13 @@ const fetchCreditEntries = async (subject: ActivitySubject, page: TimelinePageOp
     type: 'credit',
     id: row._id.toString(),
     at: row.createdAt,
-    summary: `${CREDIT_SUMMARIES[row.type]}: ${formatSignedCredits(row.credits)}`,
+    summary: `${creditSummary(row)}: ${formatSignedCredits(row.credits)}`,
     detail: [row.description, row.status && row.status !== 'completed' ? `Payment ${row.status}` : undefined]
       .filter(Boolean)
       .join(' \u00b7 '),
     credits: row.credits,
     transactionType: row.type,
+    alert: !!row.stripeDisputeId || row.status === 'failed' || undefined,
   }));
 };
 
@@ -234,14 +285,30 @@ const fetchUsageEntries = async (subject: ActivitySubject, page: TimelinePageOpt
   }));
 };
 
+const fetchSpendEntries = async (subject: TimelineSubject, page: TimelinePageOptions): Promise<SourcePage> => {
+  const { groups, hasMore } = await listSpendGroups({
+    ownerId: subject.id,
+    currentBalance: subject.account.currentCredits,
+    ...page,
+  });
+  const shown = groups.slice(0, page.limit);
+  const lookups = await loadSpendLookups(shown);
+  return { entries: shown.map(group => spendGroupToEntry(group, lookups)), hasMore };
+};
+
 const SOURCES: Readonly<
-  Record<UserTimelineType, (subject: ActivitySubject, page: TimelinePageOptions) => Promise<SourcePage>>
+  Record<UserTimelineType, (subject: TimelineSubject, page: TimelinePageOptions) => Promise<SourcePage>>
 > = {
+  signup: (subject, page) => fetchSignupEntries(subject.id, subject.account, page),
   signin: fetchSignInEntries,
-  usage: fetchUsageEntries,
-  credit: fetchCreditEntries,
   key: fetchKeyEntries,
+  usage: fetchUsageEntries,
+  spend: fetchSpendEntries,
+  limit: (subject, page) => fetchLimitEntries(subject.id, page.limit, page),
+  credit: fetchCreditEntries,
+  payment: (subject, page) => fetchPaymentEntries(subject.id, page.limit, page),
   admin: fetchAdminEntries,
+  moderation: (subject, page) => fetchModerationEntries(subject.id, page.limit, page),
 };
 
 // --- Merge ---
@@ -274,7 +341,7 @@ export const mergeTimelinePages = (
  * A failing source fails the page: a timeline that silently dropped one would read as "nothing happened".
  */
 export const listUserTimeline = async (
-  subject: ActivitySubject,
+  subject: TimelineSubject,
   options: { types: readonly UserTimelineType[]; limit: number; cursor?: AuditLogCursor; range: TimelineRange }
 ) => {
   const { types, ...page } = options;

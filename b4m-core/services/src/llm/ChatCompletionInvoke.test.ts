@@ -58,6 +58,7 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
   beforeEach(() => {
     mockedGetAvailableModels.mockReset().mockResolvedValue([]);
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn() },
       organizations: { findById: vi.fn() },
       quests: { findById: vi.fn(), create: vi.fn(), update: vi.fn() },
@@ -448,6 +449,7 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     invokeLambda = vi.fn();
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: {
         findById: vi.fn().mockResolvedValue({ id: 'session-1', userId: OWNER_ID, users: [], agentIds: [] }),
         update: vi.fn().mockResolvedValue(undefined),
@@ -526,6 +528,22 @@ describe('ChatCompletionInvoke.invoke - deprecated model redirect', () => {
     // The caller's plan, not a fault: logged at warn so it does not page.
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(`Model ${SUCCESSOR_ID} is not admitted`));
     expect(logger.error).not.toHaveBeenCalledWith(expect.stringContaining('is not admitted'));
+    expect(mockDb.recordLimitEvent).toHaveBeenCalledWith({
+      userId: OWNER_ID,
+      kind: 'model_requires_paid_plan',
+      model: SUCCESSOR_ID,
+    });
+    expectErrorWithoutPin('requires a paid plan');
+  });
+
+  it('still refuses with the paid-plan reply when recording the refusal fails', async () => {
+    mockedGetAvailableModels.mockResolvedValue([successor] as any);
+    gate.loadFreeTierAllowedModels.mockResolvedValue(new Set(['some-free-model']));
+    mockDb.recordLimitEvent.mockRejectedValue(new Error('db down'));
+
+    const invoke = makeInvoke({ getEntitlements: vi.fn().mockResolvedValue(['base']) });
+    await invoke.invoke({ body: bodyFor(SUCCESSOR_ID), userId: OWNER_ID, authOrigin: 'session' });
+
     expectErrorWithoutPin('requires a paid plan');
   });
 
@@ -818,6 +836,7 @@ describe('ChatCompletionInvoke.invoke - model modality', () => {
   beforeEach(() => {
     mockedGetAvailableModels.mockReset();
     mockDb = {
+      recordLimitEvent: vi.fn().mockResolvedValue(undefined),
       sessions: { findById: vi.fn().mockResolvedValue(session), update: vi.fn().mockResolvedValue(undefined) },
       organizations: { findById: vi.fn() },
       // Echo the created document back so questStartParams carries the promptMeta actually written,

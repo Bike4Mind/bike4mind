@@ -56,6 +56,12 @@ the same account do not combine their counts. Each alarm compares its `Sum` with
 the configured threshold using `GreaterThanOrEqualToThreshold`; missing data is
 not breaching.
 
+`otc-code-suppressed` is logged when a sign-in code is issued but not mailed
+because the address was refused (blocked domain or no mail host) and has no
+account. It carries `reason` and the address's `domain`, never the full address.
+It is counted as `SignupCodeSuppressed` in the same namespace, with no alarm, so
+a run of wrongly refused domains shows up on the metric.
+
 ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK).
 The out-of-band email topic (`OPS_ALERT_EMAIL`) is reserved for the alarms that
 report the Slack relay itself failing. Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
@@ -79,10 +85,12 @@ Hourly, production only. Uses the scheduled event time as the end of a fixed
 The target clears SST's default literal input so EventBridge passes the original
 scheduled event, including `time`. Missing or invalid timestamps fail the run
 instead of silently shifting the window on a retry.
-Sums AI credit spend by accounts created in the 7 days before that end time and posts to the LiveOps Slack webhook when the total
-exceeds `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS` or the number of distinct spending
-accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The message lists the top
-10 user ids by spend, the counts, and the window. It does not include emails.
+Sums AI credit spend by accounts created in the 7 days before that end time and posts a warning-level
+card through the alarms Slack webhook (the same relay path and card shape as the CloudWatch alarms)
+when the total exceeds `YOUNG_ACCOUNT_SPEND_ALERT_CREDITS` or the number of distinct spending
+accounts exceeds `YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS`. The card lists the top 10 accounts by spend
+with their email (the user id when there is none), an admin link and the Stripe customer, plus the
+counts and the window.
 Each run logs `young-account-spend` with `windowStart`, `windowEnd` and the totals.
 
 A breached run also records one shadow detection per listed account (detector

@@ -48,6 +48,12 @@ const quietPlatformHistory = (creditsPerBucket = 100): ISpendRollup[] =>
     rollup('platform', 'all', new Date(WINDOW_START.getTime() - (i + 1) * BUCKET_MS), creditsPerBucket)
   );
 
+/** A steady 7 days on one scope: every 15-minute window sums to 3 x creditsPerBucket, so that is its p95 baseline. */
+const steadyHistory = (scopeType: SpendRollupScopeType, scopeId: string, creditsPerBucket: number): ISpendRollup[] =>
+  Array.from({ length: (7 * DAY_MS) / BUCKET_MS }, (_, i) =>
+    rollup(scopeType, scopeId, new Date(WINDOW_START.getTime() - (i + 1) * BUCKET_MS), creditsPerBucket)
+  );
+
 function createFakes() {
   let storedRollups: ISpendRollup[] = [];
   // Each later window shifts every rollup (and the run time) forward one bucket, as the real cron sees it.
@@ -456,6 +462,171 @@ describe('evaluateSpend', () => {
       ([scopeType]) => scopeType === 'User' || scopeType === 'Organization'
     );
     expect(accountSums).toHaveLength(2);
+  });
+
+  describe('folding api keys into their payer', () => {
+    const keyDeps = (
+      fakes: ReturnType<typeof createFakes>,
+      key: { userId: string; billingOwnerType?: string; organizationId?: string }
+    ) => {
+      fakes.deps.resolveScopeDeps = {
+        ...fakes.deps.resolveScopeDeps,
+        findApiKeysByIds: async ids => ids.map(id => ({ id, name: 'ci-key', ...key })),
+        findOrganizationsByIds: async ids => ids.map(id => ({ id, name: `Org ${id}` })),
+      };
+    };
+    const platform = windowBuckets('platform', 'all', 100);
+
+    it('posts one account incident for a key and its owner, naming the key', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({ rule: 'account_ceiling', context: { viaKeys: ['ci-key'] } });
+      expect(JSON.stringify(fakes.posts[0])).toContain('ci-key');
+    });
+
+    it('folds an org-billed key into its Organization', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u9', billingOwnerType: 'Organization', organizationId: 'o1' });
+      fakes.setRollups([
+        ...platform,
+        ...windowBuckets('Organization', 'o1', 2000),
+        ...windowBuckets('apiKey', 'k1', 2000),
+      ]);
+
+      await run(fakes);
+
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({
+        scopeType: 'Organization',
+        scopeId: 'o1',
+        context: { viaKeys: ['ci-key'] },
+      });
+    });
+
+    it('folds a spiking key into its owner at the ceiling, as one card', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      // Key: 3,000 over a 300 baseline is a 10x spike below the 5,000 ceiling. Owner: 6,000, past the ceiling.
+      fakes.setRollups([
+        ...platform,
+        ...steadyHistory('apiKey', 'k1', 100),
+        ...windowBuckets('apiKey', 'k1', 1000),
+        ...windowBuckets('User', 'u1', 2000),
+      ]);
+
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({
+        rule: 'account_ceiling',
+        scopeType: 'User',
+        context: { viaKeys: ['ci-key'], viaKeyIds: ['k1'] },
+      });
+    });
+
+    it('keeps the key incident when its owner did not breach', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      fakes.setRollups([...platform, ...windowBuckets('apiKey', 'k1', 2000)]);
+
+      await run(fakes);
+
+      expect(fakes.alerts).toHaveLength(1);
+      expect(fakes.alerts[0]).toMatchObject({ rule: 'apikey_ceiling', scopeType: 'apiKey' });
+      expect(fakes.alerts[0].context).not.toHaveProperty('viaKeys');
+    });
+
+    it('resolves a standing key incident silently once its owner breaches too', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      fakes.setRollups([...platform, ...windowBuckets('apiKey', 'k1', 2000)]);
+      await run(fakes);
+
+      fakes.nextWindow();
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 1 });
+
+      expect(fakes.alerts.map(a => [a.rule, a.status])).toEqual([
+        ['apikey_ceiling', 'resolved'],
+        ['account_ceiling', 'open'],
+      ]);
+      expect(fakes.posts.map(p => p.text).join('\n')).not.toContain('Resolved');
+    });
+
+    it('does not open a key incident while the payer incident that folded it is still clearing', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+      await run(fakes);
+
+      fakes.nextWindow();
+      fakes.setRollups([...platform, ...windowBuckets('apiKey', 'k1', 2000)]);
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 0 });
+
+      expect(fakes.alerts.map(a => [a.rule, a.status])).toEqual([['account_ceiling', 'open']]);
+    });
+
+    it('remembers every folded key across payer updates while showing only current keys', async () => {
+      const fakes = createFakes();
+      keyDeps(fakes, { userId: 'u1' });
+      const history = steadyHistory('apiKey', 'k1', 100);
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+      await run(fakes);
+
+      fakes.nextWindow();
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k2', 2000)]);
+      await run(fakes);
+      expect(fakes.alerts[0].context).toMatchObject({ viaKeys: ['ci-key'], viaKeyIds: ['k1', 'k2'] });
+
+      fakes.nextWindow();
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000)]);
+      await run(fakes);
+      expect(fakes.alerts[0].context).toMatchObject({ viaKeyIds: ['k1', 'k2'] });
+      expect(fakes.alerts[0].context).not.toHaveProperty('viaKeys');
+
+      fakes.nextWindow();
+      fakes.setRollups([
+        ...platform,
+        ...history,
+        ...windowBuckets('User', 'u1', 1000),
+        ...windowBuckets('apiKey', 'k1', 1000),
+      ]);
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 0 });
+      expect(fakes.alerts.map(alert => [alert.rule, alert.status])).toEqual([['account_ceiling', 'open']]);
+    });
+
+    it('still posts the unfolded cards when the lookup fails', async () => {
+      const fakes = createFakes();
+      fakes.deps.resolveScopeDeps = {
+        ...fakes.deps.resolveScopeDeps,
+        findApiKeysByIds: vi.fn().mockRejectedValueOnce(new Error('mongo down')).mockResolvedValue([]),
+      };
+      fakes.setRollups([...platform, ...windowBuckets('User', 'u1', 2000), ...windowBuckets('apiKey', 'k1', 2000)]);
+
+      await expect(run(fakes)).resolves.toMatchObject({ posted: 2 });
+      expect(fakes.alerts).toHaveLength(2);
+      expect(fakes.deps.logger.error).toHaveBeenCalledWith('spend-monitor-fold-failed', expect.anything());
+    });
+  });
+
+  it('mentions the group once per run, on the platform critical', async () => {
+    const fakes = createFakes();
+    fakes.deps.messageContext = { ...fakes.deps.messageContext, mention: 'channel' };
+    fakes.setRollups([
+      ...quietPlatformHistory(100),
+      ...windowBuckets('platform', 'all', 5000),
+      ...windowBuckets('User', 'u1', 2000),
+      ...windowBuckets('User', 'u2', 2000),
+    ]);
+
+    await expect(run(fakes)).resolves.toMatchObject({ posted: 3 });
+
+    const mentioned = fakes.posts.filter(post => post.text.includes('<!channel>'));
+    expect(mentioned).toHaveLength(1);
+    expect(mentioned[0].text).toContain('Platform');
   });
 
   describe('trusted accounts', () => {

@@ -67,7 +67,7 @@
     },
     // migrations/index.test.ts statically imports the same premium.generated.ts stub - same
     // cross-package edge as the typecheck overrides above, for the same reason.
-    // Several tests read workspace manifests under b4m-core/ and packages/, which sit outside the
+    // Several tests read workspace manifests under b4m-core/ and packages/ and the curated lists, which sit outside the
     // package: without them as inputs, an edit to one replays a cached pass.
     "@bike4mind/scripts#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
@@ -76,8 +76,14 @@
         "../server-utils/**",
         "!../server-utils/node_modules/**",
         "$TURBO_ROOT$/b4m-core/*/package.json",
-        "$TURBO_ROOT$/packages/*/package.json"
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/catalog/model-hub/**"
       ]
+    },
+    // The curated v3 schema and v2 converter tests read the lists in catalog/model-hub.
+    "@bike4mind/common#test": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/catalog/model-hub/**"]
     },
     // electron-vite writes three bundles (main, preload, renderer) to out/, not dist/, and
     // its config plus the split tsconfigs sit outside the generic task's "src/**" inputs.

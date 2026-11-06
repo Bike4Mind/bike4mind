@@ -5,14 +5,16 @@ import * as stagedSignupGrant from './stagedSignupGrant';
 import { grantFreeCredits, releasePendingFreeCredits, resolveFreeCreditAmount } from './freeCredits';
 import * as signupProtection from './signupProtection';
 
-const buildAdapters = (defaultFreeCredits: string | null = '100') => {
+const buildAdapters = (initialCredits: string | null = '100', extra: Record<string, string> = {}) => {
+  const stored: Record<string, string> = {
+    ...extra,
+    ...(initialCredits === null ? {} : { signupGrantInitialCredits: initialCredits }),
+  };
   const logger = { error: vi.fn() };
   const adapters = {
     db: {
       adminSettings: {
-        findBySettingName: vi
-          .fn()
-          .mockResolvedValue(defaultFreeCredits === null ? null : { settingValue: defaultFreeCredits }),
+        findBySettingName: vi.fn(async (name: string) => (name in stored ? { settingValue: stored[name] } : null)),
       },
       creditTransactions: { findOne: vi.fn().mockResolvedValue(null) },
       creditLots: {},
@@ -47,9 +49,14 @@ describe('free credits service', () => {
       expect(await resolveFreeCreditAmount(0, db.adminSettings)).toBe(0);
     });
 
-    it.each([null, undefined])('falls back to the defaultFreeCredits setting for %s', async pending => {
+    it.each([null, undefined])('falls back to the schedule initial credits for %s', async pending => {
       const { db } = buildAdapters('100');
       expect(await resolveFreeCreditAmount(pending, db.adminSettings)).toBe(100);
+    });
+
+    it('never sizes the fallback from the retired defaultFreeCredits or staged toggle', async () => {
+      const { db } = buildAdapters(null, { defaultFreeCredits: '5000', stagedSignupGrantEnabled: 'false' });
+      expect(await resolveFreeCreditAmount(null, db.adminSettings)).toBe(0);
     });
 
     it('returns 0 when the setting is missing or unparseable', async () => {

@@ -54,6 +54,16 @@
         "default": "./dist/licenses.cjs"
       }
     },
+    "./model-settings": {
+      "import": {
+        "types": "./dist/model-settings.d.mts",
+        "default": "./dist/model-settings.mjs"
+      },
+      "require": {
+        "types": "./dist/model-settings.d.cts",
+        "default": "./dist/model-settings.cjs"
+      }
+    },
     "./testing": {
       "import": {
         "types": "./dist/testing.d.mts",

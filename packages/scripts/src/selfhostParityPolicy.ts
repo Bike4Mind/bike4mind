@@ -1070,8 +1070,9 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/cron.ts:youngAccountSpendAlert',
-    '0f351e3081a732ae7ebcb35c048e4d5a5031666986942fbba872f472c6fa7ad2',
-    'Hosted production abuse alert to Slack; not applicable to a portable deployment.'
+    'a558cc053bc3978e871a25020244927a1c19b2205ff283bd8d51de48b7df416a',
+    'Hosted production abuse alert to Slack; not applicable to a portable deployment.',
+    ['ssm:GetParameter']
   ),
   hostedOnly(
     'schedule:infra/cron.ts:spendMonitor',

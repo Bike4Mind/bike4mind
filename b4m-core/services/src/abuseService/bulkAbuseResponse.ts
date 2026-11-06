@@ -31,11 +31,11 @@ import { endRealtimeConnections } from '../authSessionService/endRealtimeConnect
 
 export const ABUSE_CLAWBACK_REASON = 'abuse_clawback';
 
-/** Ledger ids of the verified-email signup grant; must stay in sync with userService/freeCredits.ts. */
-export const signupGrantTransactionIds = (userId: string): string[] => [
-  `verify-grant:${userId}`,
-  `otc-register-grant:${userId}`,
-];
+/**
+ * Ledger ids of free signup credits: the signup tranche, staged unlocks and drips, and the invite bonus.
+ * Must stay in sync with userService/freeCredits.ts, stagedSignupGrant.ts and inviteBonus.ts.
+ */
+export const SIGNUP_GRANT_TRANSACTION_ID = /^(verify-grant|otc-register-grant|unlock-grant|invite-bonus):/;
 
 // Users run in parallel up to this many at a time; each holds its own transaction.
 const EXECUTE_CONCURRENCY = 8;
@@ -275,15 +275,18 @@ const toSummary = (user: IUser): BulkAbuseUserSummary => ({
   currentCredits: user.currentCredits,
 });
 
-/** Signup grant credits per user, keyed by owner id. */
+/** Free signup credits granted per user, keyed by owner id; each ledger id pays once, so rows add up. */
 async function signupGrants(
   userIds: string[],
   { db }: { db: { creditTransactions: Pick<ICreditTransactionRepository, 'find'> } }
 ): Promise<Map<string, number>> {
   if (userIds.length === 0) return new Map();
-  const rows = await db.creditTransactions.find({ transactionId: { $in: userIds.flatMap(signupGrantTransactionIds) } });
+  const rows = await db.creditTransactions.find({
+    ownerId: { $in: userIds },
+    transactionId: { $regex: SIGNUP_GRANT_TRANSACTION_ID },
+  });
   const grants = new Map<string, number>();
-  for (const row of rows) grants.set(row.ownerId, Math.max(grants.get(row.ownerId) ?? 0, row.credits));
+  for (const row of rows) grants.set(row.ownerId, (grants.get(row.ownerId) ?? 0) + row.credits);
   return grants;
 }
 

@@ -171,6 +171,7 @@ const disposableDomainRefreshCron = runsScheduledJobs
     })
   : undefined;
 
+const youngAccountSpendAlertMention = alarmSlackMentionFunctionArgs();
 const youngAccountSpendAlert =
   runsScheduledJobs && youngAccountSpendAlertDeadLetter
     ? new sst.aws.Cron('youngAccountSpendAlert', {
@@ -186,8 +187,9 @@ const youngAccountSpendAlert =
             ...DEFAULT_LAMBDA_ENVIRONMENT,
             YOUNG_ACCOUNT_SPEND_ALERT_CREDITS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_CREDITS || '',
             YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS: process.env.YOUNG_ACCOUNT_SPEND_ALERT_ACCOUNTS || '',
+            ...youngAccountSpendAlertMention.environment,
           },
-          permissions: [youngAccountSpendAlertDeadLetter.sendPermission],
+          permissions: [youngAccountSpendAlertDeadLetter.sendPermission, ...youngAccountSpendAlertMention.permissions],
           transform: youngAccountSpendAlertDeadLetter.functionTarget,
           logging: {
             retention: '1 week',

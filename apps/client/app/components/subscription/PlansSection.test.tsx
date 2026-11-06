@@ -263,7 +263,7 @@ describe('PlansSection', () => {
   });
 
   it('says every account starts with free credits rather than claiming there is no free tier', () => {
-    settingValues = { defaultFreeCredits: 5000 };
+    settingValues = { signupGrantInitialCredits: 5000 };
     renderSection();
 
     expect(screen.getByTestId('subscription-modal-starter-credits')).toHaveTextContent(
@@ -273,7 +273,7 @@ describe('PlansSection', () => {
   });
 
   it('makes no starter-credits claim when sign-ups are granted nothing', () => {
-    settingValues = { defaultFreeCredits: 0 };
+    settingValues = { signupGrantInitialCredits: 0 };
     renderSection();
 
     expect(screen.queryByTestId('subscription-modal-starter-credits')).not.toBeInTheDocument();

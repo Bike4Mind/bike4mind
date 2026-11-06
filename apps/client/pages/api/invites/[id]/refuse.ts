@@ -4,17 +4,7 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
-import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
-import { sharingService } from '@bike4mind/services';
-import {
-  inviteRepository,
-  fabFileRepository,
-  sessionRepository,
-  projectRepository,
-  organizationRepository,
-  Group,
-} from '@bike4mind/database';
-import { Resource } from 'sst';
+import { notifyInvitesRefetch, refuseInviteForUser } from '@server/managers/inviteResponses';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -24,35 +14,13 @@ const handler = baseApi().post(
       return res.status(400).json({ message: 'Invalid refuse invite request' });
     }
 
-    // Public-ness (link vs email invite) is derived from invite state in the service;
-    // no client-supplied flag is trusted for the recipient check. Revoking the whole
-    // invite (rather than just the caller's own slot) needs the share-authority
-    // adapters the service checks via authorizeByInviteType.
-    const invite = await sharingService.refuseWholeInvite(
-      req.user,
-      { id },
-      {
-        db: {
-          invites: inviteRepository,
-          fabFiles: fabFileRepository,
-          sessions: sessionRepository,
-          projects: projectRepository,
-          organizations: organizationRepository,
-          groups: Group,
-        },
-      }
-    );
+    const invite = await refuseInviteForUser(req, id);
 
     if (!invite) {
       return res.status(404).json({ message: 'Invite not found' });
     }
 
-    // trigger refetch on inbox
-    const wsEndpoint = Resource.websocket.managementEndpoint;
-    await sendToClient(req.user.id, wsEndpoint, {
-      action: 'invites_refetch',
-      status: 'Refused invite',
-    });
+    await notifyInvitesRefetch(req.user.id, 'Refused invite');
 
     // Invitee-facing: strip co-recipients' emails from the returned invite.
     return res.json(filterInviteRecipientsToSelf(invite, req.user.email));

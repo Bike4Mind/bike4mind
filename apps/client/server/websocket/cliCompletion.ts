@@ -37,6 +37,7 @@ import { getUserEntitlements } from '@server/entitlements';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
 import { isAuthInfraFailure } from '@bike4mind/server-utils/auth/apiKeyAuthFailure';
 import { admitApiKeyCompletion, NO_COMPLETION_QUOTA } from '@server/utils/untrustedCompletionQuota';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 
 const AUTH_FAILED_MESSAGE = 'Authentication failed. Provide a valid API key or JWT token.';
 
@@ -203,6 +204,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         usageEvents: usageEventRepository,
         organizations: organizationRepository,
         cache: cacheRepository,
+        recordLimitEvent: recordUserLimitEvent,
       },
       apiKeyInfo: apiKeyInfoForCompletion,
       scopeActor: actorScopeForKey(apiKeyInfo),
