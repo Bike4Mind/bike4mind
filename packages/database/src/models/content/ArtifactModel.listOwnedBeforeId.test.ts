@@ -84,3 +84,50 @@ describe('ArtifactRepository.listOwnedBeforeId', () => {
     await expect(artifactRepository.listOwnedBeforeId(OWNER, { beforeId: 'nope', limit: 1 })).rejects.toThrow();
   });
 });
+
+describe('ArtifactRepository.searchOwnedBeforeId', () => {
+  beforeAll(async () => {
+    await Artifact.init();
+  });
+
+  async function collectSearchPages(term: string, limit: number, type?: string) {
+    const titles: string[] = [];
+    let beforeId: string | undefined;
+    for (let guard = 0; guard < 20; guard++) {
+      const page = await artifactRepository.searchOwnedBeforeId(OWNER, term, { type, beforeId, limit });
+      titles.push(...page.data.map(a => a.title));
+      if (!page.hasMore) return titles;
+      beforeId = String(page.data.at(-1)!._id);
+    }
+    throw new Error('paging did not terminate');
+  }
+
+  it('matches only live artifacts the user owns, newest first', async () => {
+    await makeArtifact('signup a');
+    await makeArtifact('signup deleted', { deletedAt: new Date(), status: 'deleted' });
+    await makeArtifact('signup theirs', { userId: OTHER });
+    await makeArtifact('unrelated');
+    await makeArtifact('signup b');
+
+    expect(await collectSearchPages('signup', 10)).toEqual(['signup b', 'signup a']);
+  });
+
+  it('pages across the matches without gaps or repeats', async () => {
+    for (let i = 0; i < 5; i++) await makeArtifact(`signup ${i}`);
+
+    expect(await collectSearchPages('signup', 2)).toEqual(['signup 4', 'signup 3', 'signup 2', 'signup 1', 'signup 0']);
+  });
+
+  it('narrows by type', async () => {
+    await makeArtifact('signup flow', { type: 'mermaid' });
+    await makeArtifact('signup page', { type: 'html' });
+
+    expect(await collectSearchPages('signup', 10, 'html')).toEqual(['signup page']);
+  });
+
+  it('throws on a non-ObjectId cursor', async () => {
+    await expect(
+      artifactRepository.searchOwnedBeforeId(OWNER, 'signup', { beforeId: 'nope', limit: 1 })
+    ).rejects.toThrow();
+  });
+});
