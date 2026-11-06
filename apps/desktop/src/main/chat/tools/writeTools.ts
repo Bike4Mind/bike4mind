@@ -2,8 +2,18 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
+import { wslLocation } from '../../wsl/wslPath';
 import { buildDiff, diffLines, splitLines, summarizeDiff } from './diff';
-import { PathAccessDenied, physicalTarget, realpathNearest, resolveWithinRoots, withinGuarded } from './paths';
+import {
+  hostPhysicalTarget,
+  ownLocation,
+  PathAccessDenied,
+  physicalTarget,
+  realpathNearest,
+  realpathSyncNearest,
+  resolveWithinRoots,
+  withinGuarded,
+} from './paths';
 import { recordRecentFile } from './recentFiles';
 import { protectionFor } from './sandbox';
 import { recordSessionWrite } from './sessionScripts';
@@ -31,16 +41,33 @@ export const MAX_WRITE_BYTES = 1_000_000;
  */
 export async function resolveWritablePath(requested: string, context: ToolContext): Promise<string> {
   const target = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
+  const unresolved = context.unresolvedProtectedPaths?.[0];
+  if (unresolved !== undefined) {
+    throw new PathAccessDenied(
+      requested,
+      `Refused: ${requested} cannot be written to while Desktop cannot resolve the protected folder ${unresolved}. ` +
+        'Try again later.'
+    );
+  }
   const real = await physicalTarget(target);
+  // A Linux link under the WSL share is followed by the distro, which the host's view above does not see.
+  const inDistro = wslLocation(target) ? await hostPhysicalTarget(target).catch(() => null) : undefined;
+  // A delete or move acts on a final link itself, wherever its parent really is.
+  const own = ownLocation(target);
+  const nearest = realpathSyncNearest(target);
+  if (own === null || nearest === null || inDistro === null) {
+    throw new PathAccessDenied(requested, `Refused: ${requested} cannot be written to. Choose a different path.`);
+  }
+  const candidates = [target, real, own, nearest, ...(inDistro === undefined ? [] : [inDistro])];
 
-  if (withinGuarded(context.protectedPaths ?? [], [target, real])) {
+  if (withinGuarded(context.protectedPaths ?? [], candidates)) {
     throw new PathAccessDenied(
       requested,
       `Refused: ${requested} is a protected location and cannot be written to, ` +
         'whatever folders are shared. Choose a different path.'
     );
   }
-  const reason = protectionFor([target, real], 'write');
+  const reason = protectionFor(candidates, 'write');
   if (reason) {
     throw new PathAccessDenied(
       requested,

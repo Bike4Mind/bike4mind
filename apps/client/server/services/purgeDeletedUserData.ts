@@ -1,6 +1,7 @@
 import {
   User,
   authEventRepository,
+  userLimitEventRepository,
   embedConversationRepository,
   hideDeletedAuthorAnnotations,
   integrationRequestRepository,
@@ -38,6 +39,7 @@ export const PURGED_USER_DATA: readonly string[] = [
   'Personal files and generated media (except moderation-held content or copies still owned by others)',
   'Personal projects, artifacts, skills and memories',
   'Personal data lakes, agent records and connected-device credentials',
+  'API keys, including the AI provider keys you saved',
   'Sign-in sessions and sign-in history',
   'Google Drive and Atlassian connections',
   'Published pages',
@@ -115,6 +117,14 @@ export async function purgeDeletedUserData(
     logger.info(`Deleted ${deleted} auth event(s) of deleted user ${userId}`);
   } catch (err) {
     logger.error(`Failed to delete auth events for deleted user ${userId}: ${String(err)}`);
+  }
+
+  // Limit hits feed only the admin timeline of this account.
+  try {
+    const deleted = await userLimitEventRepository.deleteAllForUser(userId);
+    logger.info(`Deleted ${deleted} limit event(s) of deleted user ${userId}`);
+  } catch (err) {
+    logger.error(`Failed to delete limit events for deleted user ${userId}: ${String(err)}`);
   }
 
   // Shadow detections name the account (and a signup-burst one holds its raw IP): the user leaves every

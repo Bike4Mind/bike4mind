@@ -5,3 +5,4 @@ export * from './SecurityScanScheduleModel';
 export * from './SystemSecretsModel';
 export * from './ShadowDetectionModel';
 export * from './AbuseAssessmentModel';
+export * from './AutoContainmentDecisionModel';

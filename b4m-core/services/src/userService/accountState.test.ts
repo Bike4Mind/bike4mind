@@ -13,6 +13,7 @@ import {
   entersSuspension,
   suspensionReasons,
   isAiAccessRevoked,
+  isAiAccessRefusal,
   type AccountStateFields,
 } from './accountState';
 
@@ -182,5 +183,29 @@ describe('aiAccessDeniedMessage', () => {
     expect(aiAccessDeniedMessage({ deletion })).toBe(AI_ACCESS_DELETION_PENDING_MESSAGE);
     expect(aiAccessDeniedMessage({ deletion, isBanned: true })).toBe(ACCOUNT_BANNED_MESSAGE);
     expect(aiAccessDeniedMessage({ deletion: null })).toBeNull();
+  });
+});
+
+describe('isAiAccessRefusal', () => {
+  const forbidden = (message: string) => Object.assign(new Error(message), { statusCode: 403 });
+
+  it.each<[string, Parameters<typeof aiAccessDeniedMessage>[0]]>([
+    ['banned', { isBanned: true }],
+    ['dispute-pending', { disputePending: true }],
+    ['suspended', { moderation: { status: 'suspended' } }],
+    ['deletion-pending', { deletion: { scheduledFor: new Date() } }],
+    ['moderated', { isModerated: true }],
+    ['review-held', { riskScore: { reviewState: 'pending' } }],
+  ])('classifies the gate refusal for a %s account', (_, user) => {
+    const message = aiAccessDeniedMessage(user);
+    expect(message).not.toBeNull();
+    expect(isAiAccessRefusal(forbidden(message!))).toBe(true);
+  });
+
+  it('does not classify an unrelated 403, another status, or a non-error', () => {
+    expect(isAiAccessRefusal(forbidden('Unauthorized. Admin access required.'))).toBe(false);
+    expect(isAiAccessRefusal(Object.assign(new Error(ACCOUNT_BANNED_MESSAGE), { statusCode: 500 }))).toBe(false);
+    expect(isAiAccessRefusal(new Error(ACCOUNT_BANNED_MESSAGE))).toBe(false);
+    expect(isAiAccessRefusal(ACCOUNT_BANNED_MESSAGE)).toBe(false);
   });
 });

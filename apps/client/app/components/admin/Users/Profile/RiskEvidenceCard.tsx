@@ -28,6 +28,9 @@ const PROVENANCE_LABELS: Record<RiskEvidenceFacts[RiskEvidenceFactName]['provena
 
 const MISSING_REASON_LABELS = { not_captured: 'Not captured', no_activity: 'No activity' } as const;
 
+// no_activity means the source was read and held nothing in the window, so it must not read as "Unknown".
+const MISSING_STATUS_LABELS = { not_captured: 'Unknown', no_activity: 'None' } as const;
+
 const EM_DASH = '\u2014';
 
 const camelToWords = (key: string) => key.replace(/([A-Z])/g, ' $1').toLowerCase();
@@ -67,7 +70,7 @@ const FactRow: React.FC<{ name: RiskEvidenceFactName; fact: RiskEvidenceFacts[Ri
       </Box>
       <Box component="td" sx={cell}>
         {fact.status === 'observed' && <StatusChip tone="info" label="Observed" />}
-        {fact.status === 'missing' && <StatusChip tone="neutral" label="Unknown" />}
+        {fact.status === 'missing' && <StatusChip tone="neutral" label={MISSING_STATUS_LABELS[fact.reason]} />}
         {fact.status === 'failed' && <StatusChip tone="bad" label="Failed" />}
       </Box>
       <Box component="td" sx={cell}>

@@ -361,7 +361,7 @@ describe('apiKeyAuth blocked owner log', () => {
       { id: 'user-1', moderation: { status: 'suspended' } },
       /suspended for repeated content-policy violations/,
     ],
-    ['disputePending', { id: 'user-1', disputePending: true }, /pending dispute resolution/],
+    ['disputePending', { id: 'user-1', disputePending: true }, /on hold pending a payment review/],
     ['ownerNotFound', null, 'User not found or banned'],
   ])('logs and rejects a %s owner', async (reason, owner, message) => {
     findByIdMock.mockResolvedValue(owner);

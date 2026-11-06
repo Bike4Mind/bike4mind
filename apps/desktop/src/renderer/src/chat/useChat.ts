@@ -15,6 +15,7 @@ import type {
   CreateCodeSessionRequest,
   ModelPhase,
   ReasoningEffortSetting,
+  SessionSetupStep,
   UpdateProjectRequest,
 } from '@shared/chat';
 import { summarizeSession } from '@shared/agentOutcome';
@@ -288,8 +289,8 @@ export function useSessionStatuses(): ReadonlyMap<string, ChatSessionStatus> {
 
 export interface SessionStatusFeed {
   statuses: ReadonlyMap<string, ChatSessionStatus>;
-  /** Busy sessions still being prepared; a subset of the 'processing' ones in `statuses`. */
-  preparing: ReadonlySet<string>;
+  /** Busy sessions still being prepared, by setup step; a subset of the 'processing' ones in `statuses`. */
+  preparing: ReadonlyMap<string, SessionSetupStep>;
   /** True once the first snapshot has been folded in, so `statuses` is a baseline rather than a gap. */
   loaded: boolean;
 }
@@ -298,7 +299,7 @@ export interface SessionStatusFeed {
 export function useSessionStatusFeed(): SessionStatusFeed {
   const [feed, setFeed] = useState<SessionStatusFeed>(() => ({
     statuses: new Map(),
-    preparing: new Set(),
+    preparing: new Map(),
     loaded: false,
   }));
 

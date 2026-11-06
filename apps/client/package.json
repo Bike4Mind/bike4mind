@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.99",
+  "version": "0.1.100",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -159,6 +159,7 @@
     "jsonrepair": "^3.15.0",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.1",
+    "jszip": "^3.10.2",
     "katex": "0.18.10",
     "leaflet": "^1.9.4",
     "lexical": "^0.47.0",

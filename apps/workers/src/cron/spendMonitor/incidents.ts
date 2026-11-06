@@ -8,7 +8,8 @@ export type IncidentDecision =
   | { kind: 'open'; alert: ISpendAlert }
   | { kind: 'escalate'; id: string; patch: IncidentPatch }
   | { kind: 'update'; id: string; patch: IncidentPatch }
-  | { kind: 'resolve'; id: string; patch: IncidentPatch };
+  /** `announce: false` resolves without a Slack post. */
+  | { kind: 'resolve'; id: string; patch: IncidentPatch; announce?: boolean };
 
 /** Consecutive runs with no breach before an incident resolves. */
 const CLEAR_RUNS_TO_RESOLVE = 2;
@@ -18,15 +19,36 @@ const ESCALATION_MULTIPLE = 2;
 
 const SEVERITY_RANK: Record<SpendAlertSeverity, number> = { warning: 0, critical: 1 };
 
-/** Snapshot rendered in Slack; `trusted` is only written for a trusted scope, so a standard one keeps its shape. */
-const contextOf = (breach: SpendBreach): Record<string, unknown> => ({
-  baseline: breach.baseline,
-  ratio: breach.ratio,
-  ...(breach.trusted ? { trusted: true } : {}),
-});
-
 const higherSeverity = (a: SpendAlertSeverity, b: SpendAlertSeverity): SpendAlertSeverity =>
   SEVERITY_RANK[a] >= SEVERITY_RANK[b] ? a : b;
+
+/** Key ids last for the incident; displayed names describe only the current breach. */
+function breachContext(breach: SpendBreach, previous: Record<string, unknown> = {}): Record<string, unknown> {
+  const previousKeyIds = Array.isArray(previous.viaKeyIds)
+    ? previous.viaKeyIds.filter((keyId): keyId is string => typeof keyId === 'string')
+    : [];
+  const viaKeyIds = [...new Set([...previousKeyIds, ...(breach.viaKeyIds ?? [])])];
+  return {
+    baseline: breach.baseline,
+    ratio: breach.ratio,
+    ...(breach.trusted ? { trusted: true } : {}),
+    ...(breach.trustedExcluded ? { trustedExcluded: breach.trustedExcluded } : {}),
+    ...(breach.viaKeys ? { viaKeys: breach.viaKeys } : {}),
+    ...(viaKeyIds.length > 0 ? { viaKeyIds } : {}),
+  };
+}
+
+const SPIKE_RULES: ReadonlySet<string> = new Set(['account_spike', 'apikey_spike']);
+const CEILING_RULES: ReadonlySet<string> = new Set(['account_ceiling', 'apikey_ceiling']);
+
+function decideSuperseded(alert: SpendAlertRecord, now: Date, windowEnd: Date): IncidentDecision {
+  return {
+    kind: 'resolve',
+    id: alert.id,
+    patch: { status: 'resolved', resolvedAt: now, clearRuns: CLEAR_RUNS_TO_RESOLVE, lastEvaluatedWindowEnd: windowEnd },
+    announce: false,
+  };
+}
 
 function decideForBreach(alert: SpendAlertRecord, breach: SpendBreach, windowEnd: Date): IncidentDecision {
   const patch: IncidentPatch = {
@@ -34,7 +56,7 @@ function decideForBreach(alert: SpendAlertRecord, breach: SpendBreach, windowEnd
     peakValue: Math.max(alert.peakValue, breach.value),
     clearRuns: 0,
     lastEvaluatedWindowEnd: windowEnd,
-    context: contextOf(breach),
+    context: breachContext(breach, alert.context),
   };
   const severity = higherSeverity(alert.severity, breach.severity);
   // Compared against what was announced, not the stored severity, so a critical whose post failed is retried.
@@ -66,15 +88,21 @@ const alreadyEvaluated = (alert: SpendAlertRecord, windowEnd: Date): boolean =>
 /**
  * Pure transition of the active incidents given the breaches of the window ending at `windowEnd`. An
  * incident already evaluated for that window is skipped (a Lambda retry or an overlapping run), but
- * still blocks a duplicate open. A resolve patch does not clear openKey: the caller must also unset it
+ * still blocks a duplicate open. A spike incident whose scope now carries a ceiling breach, and any key
+ * in `superseded`, resolves silently; a spike does not open while its scope's ceiling incident stays active.
+ * A resolve patch does not clear openKey: the caller must also unset it
  * so the key frees up for the next incident.
  */
 export function decideIncidents(
   active: SpendAlertRecord[],
   breaches: SpendBreach[],
   now: Date,
-  windowEnd: Date
+  windowEnd: Date,
+  superseded?: ReadonlySet<string>
 ): IncidentDecision[] {
+  const ceilingScopes = new Set(
+    breaches.filter(b => CEILING_RULES.has(b.rule)).map(b => `${b.scopeType}:${b.scopeId}`)
+  );
   const breachesByKey = new Map(breaches.map(b => [spendAlertOpenKey(b.rule, b.scopeType, b.scopeId), b]));
   const decisions: IncidentDecision[] = [];
   const activeKeys = new Set<string>();
@@ -83,12 +111,25 @@ export function decideIncidents(
     const key = alert.openKey ?? spendAlertOpenKey(alert.rule, alert.scopeType, alert.scopeId);
     activeKeys.add(key);
     if (alreadyEvaluated(alert, windowEnd)) continue;
+    const supersededByCeiling = SPIKE_RULES.has(alert.rule) && ceilingScopes.has(`${alert.scopeType}:${alert.scopeId}`);
+    if (supersededByCeiling || superseded?.has(key)) {
+      decisions.push(decideSuperseded(alert, now, windowEnd));
+      continue;
+    }
     const breach = breachesByKey.get(key);
     decisions.push(breach ? decideForBreach(alert, breach, windowEnd) : decideForClearRun(alert, now, windowEnd));
   }
 
+  const resolvingIds = new Set(decisions.flatMap(d => (d.kind === 'resolve' ? [d.id] : [])));
+  const activeCeilingScopes = new Set(
+    active
+      .filter(alert => CEILING_RULES.has(alert.rule) && !resolvingIds.has(alert.id))
+      .map(alert => `${alert.scopeType}:${alert.scopeId}`)
+  );
+
   for (const [key, breach] of breachesByKey) {
     if (activeKeys.has(key)) continue;
+    if (SPIKE_RULES.has(breach.rule) && activeCeilingScopes.has(`${breach.scopeType}:${breach.scopeId}`)) continue;
     decisions.push({
       kind: 'open',
       alert: {
@@ -103,7 +144,7 @@ export function decideIncidents(
         lastValue: breach.value,
         clearRuns: 0,
         lastEvaluatedWindowEnd: windowEnd,
-        context: contextOf(breach),
+        context: breachContext(breach),
       },
     });
   }

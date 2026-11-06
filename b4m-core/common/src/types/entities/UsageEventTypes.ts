@@ -151,6 +151,11 @@ export const UsageEvent = z.object({
    */
   writtenOffCredits: z.number().optional(),
   /**
+   * The credit hold the settled turn reserved before it ran (chat settlement events only). Set so a
+   * turn that settled far above its hold can be found per account; absent on other events.
+   */
+  reservedCredits: z.number().optional(),
+  /**
    * creditsCharged split by what funded it, stamped by UsageEventRepository.record() from
    * the holder's credit lots (see attributeChargeToFundingSources). Absent on zero-credit
    * rows and on rows written before stamping existed.
@@ -498,6 +503,10 @@ export interface ISpendSummaryFilters {
 export interface ISpendAccountBucket extends IUsageSpendBucket {
   ownerId: string;
   ownerType: CreditHolderType;
+  /** error + timeout events, the same fold as the window-level error rate. */
+  failures: number;
+  /** p95 latency in ms over this account's events; 0 when none carries latencyMs. */
+  p95LatencyMs: number;
 }
 
 /** COGS for one UTC day (Spend daily-cost line point). */
@@ -587,6 +596,22 @@ export interface SpendKpi {
   higherIsBetter: boolean;
 }
 
+/** A fixed limit an account crossed in the window (see SPEND_ACCOUNT_FLAG_THRESHOLDS). */
+export type SpendAccountFlag = 'dailyCost' | 'errorRate' | 'p95Latency';
+
+/**
+ * Fixed limits for flagging an account on the Spend tab. Cost is the window's
+ * average per day (estCost / window days, at least one day), not the peak day.
+ * The rate and latency flags need `minRequests` events so a handful of calls
+ * can't trip them. The tab prints these values, so a change here shows there.
+ */
+export const SPEND_ACCOUNT_FLAG_THRESHOLDS = {
+  dailyCostUsd: 50,
+  errorRate: 0.05,
+  p95LatencyMs: 120_000,
+  minRequests: 20,
+} as const;
+
 export interface SpendByAccountRow {
   accountId: string;
   accountName: string;
@@ -594,6 +619,11 @@ export interface SpendByAccountRow {
   requests: number;
   creditsUsed: number;
   costPerRequest: number;
+  /** (errors + timeouts) / requests, 0..1. */
+  errorRate: number;
+  p95LatencyMs: number;
+  /** Limits this account crossed; empty when none. */
+  flags: SpendAccountFlag[];
 }
 
 export interface CostByModelRow {
@@ -682,6 +712,14 @@ export interface ISessionUsageResponse {
   executions: ISessionAgentExecution[];
 }
 
+/** The settlement that most exceeded its hold, from largestSettlementOverHold. */
+export interface ISettlementOverHold {
+  reservedCredits: number;
+  settledCredits: number;
+  /** settledCredits / reservedCredits. */
+  ratio: number;
+}
+
 export interface IUserUsageActivity {
   events: number;
   completed: number;
@@ -709,6 +747,13 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Credits each user has spent in total, charged plus written off; users with none are absent. */
   creditsSpentByUsers(userIds: string[]): Promise<Record<string, number>>;
+
+  /**
+   * Per user, the chat settlement since `since` that settled furthest above its hold: settled credits
+   * (charged plus written off) over reservedCredits. Only events that recorded a hold count; users
+   * with none are absent.
+   */
+  largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>>;
 
   /** Margin buckets per user over the trailing N days (default 30), worst margin first. */
   marginByUser(days?: number): Promise<IUserMargin[]>;

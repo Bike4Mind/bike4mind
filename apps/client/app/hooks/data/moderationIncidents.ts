@@ -108,6 +108,11 @@ export type ModerationIncidentView = {
   questId: string | null;
   fabFileId: string | null;
   ncmecReportId: string | null;
+  /** Null when no reviewer alert was delivered. */
+  alertedAt: string | null;
+  lastReminderAt: string | null;
+  reportedAt: string | null;
+  falsePositiveAt: string | null;
   image:
     | { availability: 'ready'; url: string; expiresAt: string }
     | { availability: 'unavailable'; reason: 'no_stored_image' | 'not_displayable' };

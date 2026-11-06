@@ -58,7 +58,7 @@ export async function resolveRegistrationInvite(
 
 /**
  * Grant total a referral invitee is owed: the invite's own startingCredits, else the admin
- * ReferralCreditsAmount. Mirrors registerUser's invite > admin-default priority (subscriber
+ * ReferralCreditsAmount. Mirrors registerUser's priority for a referral code (subscriber
  * allocations never apply to a refer-flow code). 0 means "no override, use the default grant".
  */
 export async function referralInviteCredits(

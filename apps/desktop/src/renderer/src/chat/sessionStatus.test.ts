@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatSessionStatus } from '@shared/chat';
+import type { ChatSessionStatus, SessionSetupStep } from '@shared/chat';
 import { applyPreparingEvents, applyStatusEvents, STATUS_LABEL } from './sessionStatus';
 
 const empty: ReadonlyMap<string, ChatSessionStatus> = new Map();
@@ -62,21 +62,24 @@ describe('applyStatusEvents', () => {
 });
 
 describe('applyPreparingEvents', () => {
-  const none: ReadonlySet<string> = new Set();
+  const none: ReadonlyMap<string, SessionSetupStep> = new Map();
 
-  it('adds on a preparing event and removes on one without the flag', () => {
-    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: true }]);
-    expect(preparing.has('a')).toBe(true);
+  it('tracks the step of a preparing event, and removes on one without it', () => {
+    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: 'worktree' }]);
+    expect(preparing.get('a')).toBe('worktree');
 
-    const replying = applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing' }]);
+    const starting = applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing', preparing: 'starting' }]);
+    expect(starting.get('a')).toBe('starting');
+
+    const replying = applyPreparingEvents(starting, [{ sessionId: 'a', status: 'processing' }]);
     expect(replying.has('a')).toBe(false);
-    expect(preparing.has('a')).toBe(true);
+    expect(preparing.get('a')).toBe('worktree');
   });
 
-  it('returns the same set when nothing changed', () => {
-    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: true }]);
+  it('returns the same map when nothing changed', () => {
+    const preparing = applyPreparingEvents(none, [{ sessionId: 'a', status: 'processing', preparing: 'worktree' }]);
 
-    expect(applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing', preparing: true }])).toBe(
+    expect(applyPreparingEvents(preparing, [{ sessionId: 'a', status: 'processing', preparing: 'worktree' }])).toBe(
       preparing
     );
     expect(applyPreparingEvents(none, [{ sessionId: 'b', status: 'done' }])).toBe(none);

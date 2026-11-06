@@ -1,5 +1,21 @@
 # @bike4mind/infra
 
+## 6.1.0
+
+### Minor Changes
+
+- [#6370](https://github.com/Bike4Mind/bike4mind/pull/6370) [`f2f54a1`](https://github.com/Bike4Mind/bike4mind/commit/f2f54a120ec107d87e9e21e1f7026e7235b0547a) Thanks [@poysama](https://github.com/poysama)! - rebuild the security dashboard around an incident view
+
+- [#6422](https://github.com/Bike4Mind/bike4mind/pull/6422) [`f21f3e9`](https://github.com/Bike4Mind/bike4mind/commit/f21f3e9eb90774500f9311e6912ea940ef40cb2f) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - publish four file routes as v1 contracts
+
+- [#6447](https://github.com/Bike4Mind/bike4mind/pull/6447) [`9062016`](https://github.com/Bike4Mind/bike4mind/commit/9062016db6efbd76191cf5066c71825ac240df38) Thanks [@cgtorniado](https://github.com/cgtorniado)! - self-serve account deletion with step-up, lockdown and 14-day grace
+
+- [#6448](https://github.com/Bike4Mind/bike4mind/pull/6448) [`47f2ade`](https://github.com/Bike4Mind/bike4mind/commit/47f2ade4b0ef3b516ae0885628c459b55421b2f8) Thanks [@poysama](https://github.com/poysama)! - re-alert unalerted image incidents on a schedule
+
+- [#6450](https://github.com/Bike4Mind/bike4mind/pull/6450) [`5932bfc`](https://github.com/Bike4Mind/bike4mind/commit/5932bfcf53585c5816ec70c251c962439bcb0fa3) Thanks [@poysama](https://github.com/poysama)! - add an admin review page for image incidents
+
+- [#6487](https://github.com/Bike4Mind/bike4mind/pull/6487) [`0eaab83`](https://github.com/Bike4Mind/bike4mind/commit/0eaab83c12a8e017e93dd1cf5eb89451d8b95c34) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - mint and redeem verified hops
+
 ## 6.0.0
 
 ### Major Changes

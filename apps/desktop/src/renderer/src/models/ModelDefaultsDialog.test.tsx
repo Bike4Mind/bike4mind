@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatModelOption } from '@shared/chat';
-import type { ModelLoadOffer, ModelSettings } from '@shared/modelSettings';
+import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from '@shared/modelSettings';
 import type { LoadedModelState } from '@shared/models';
 import { desktopTheme } from '../theme';
 import { contextSizeLabel } from '@shared/localContextSetting';
@@ -72,6 +72,7 @@ const OLLAMA_OFFER: ModelLoadOffer = {
 let root: Root;
 let host: HTMLElement;
 let stored: ModelSettings;
+let unsupported: UnsupportedModelSetting[];
 let offer: ModelLoadOffer;
 let loadedState: LoadedModelState;
 const setModelSettings = vi.fn<(modelId: string, settings: ModelSettings) => Promise<ModelSettings | null>>();
@@ -79,6 +80,7 @@ const getModelLoadOffer = vi.fn<(modelId: string, draftTokens?: number) => Promi
 
 beforeEach(() => {
   stored = {};
+  unsupported = [];
   offer = {};
   loadedState = { kind: 'unloaded' };
   setModelSettings.mockReset();
@@ -86,7 +88,12 @@ beforeEach(() => {
   getModelLoadOffer.mockReset();
   getModelLoadOffer.mockImplementation(async () => offer);
   (window as unknown as { b4m: unknown }).b4m = {
-    chat: { getModelSettings: vi.fn(async () => stored), setModelSettings, getModelLoadOffer },
+    chat: {
+      getModelSettings: vi.fn(async () => stored),
+      getUnsupportedModelSettings: vi.fn(async () => unsupported),
+      setModelSettings,
+      getModelLoadOffer,
+    },
     models: { getLoadedState: vi.fn(async () => loadedState) },
   };
   host = document.createElement('div');
@@ -208,7 +215,7 @@ describe('ModelDefaultsDialog', () => {
     expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.6 } });
   });
 
-  it('saves a thinking level only for a model that lists levels', async () => {
+  it('saves a stored thinking level back as it was, on a model that lists levels or not', async () => {
     stored = { effort: 'high' };
     await render(GPT_OSS);
     await click('model-defaults-save-btn');
@@ -216,7 +223,55 @@ describe('ModelDefaultsDialog', () => {
 
     await render(QWEN);
     await click('model-defaults-save-btn');
-    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, {});
+    expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, { effort: 'high' });
+  });
+
+  it('saves a hidden topK and an unlisted xhigh level back as stored when another field changes', async () => {
+    stored = { generation: { temperature: 0.6, topK: 30 }, effort: 'xhigh' };
+    await render(GPT_OSS);
+    await fill('temperature', '0.7');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(GPT_OSS.id, {
+      generation: { temperature: 0.7, topK: 30 },
+      effort: 'xhigh',
+    });
+  });
+
+  it('saves an untouched stored value past what the control allows unclamped', async () => {
+    stored = { generation: { temperature: 0.6, topK: 500 } };
+    await render(QWEN);
+    expect(input('topK').value).toBe('500');
+    await fill('temperature', '0.7');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.7, topK: 500 } });
+  });
+
+  it('leaves a stored value past what the control allows unclamped when focus passes through its field', async () => {
+    stored = { generation: { temperature: 0.6, topK: 500 } };
+    await render(QWEN);
+    await act(async () => {
+      input('topK').focus();
+      input('topK').blur();
+    });
+    expect(input('topK').value).toBe('500');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(QWEN.id, { generation: { temperature: 0.6, topK: 500 } });
+  });
+
+  it('clears the fields it does not draw too on Clear all', async () => {
+    stored = { generation: { topK: 30 }, effort: 'xhigh' };
+    await render(GPT_OSS);
+    await click('model-defaults-clear-btn');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenCalledWith(GPT_OSS.id, {});
+  });
+
+  it('names a stored value this version keeps but does not use', async () => {
+    unsupported = [{ field: 'effort', value: 'ultra' }];
+    await render(GPT_OSS);
+    expect(
+      [...document.querySelectorAll('[data-testid="model-defaults-unsupported-note"]')].map(n => n.textContent)
+    ).toEqual(['effort "ultra" is kept in the settings file but not used by this version of Desktop.']);
   });
 
   it('clears every field, and saving that clears the stored defaults', async () => {
@@ -267,6 +322,20 @@ describe('ModelDefaultsDialog', () => {
     await render(QWEN);
     expect(byTestId('model-defaults-error')?.textContent).toBe(
       "Desktop could not read this model's settings: EACCES: denied"
+    );
+  });
+
+  it('drops the error name Electron puts before a named error, so the file and its fix read plainly', async () => {
+    const message =
+      'The model settings file /data/model-settings.json is not valid JSON. Fix it, or delete it to clear the saved settings of every model.';
+    (window as unknown as { b4m: { chat: { getModelSettings: unknown } } }).b4m.chat.getModelSettings = vi.fn(
+      async () => {
+        throw new Error(`Error invoking remote method 'chat:get-model-settings': ModelSettingsFileError: ${message}`);
+      }
+    );
+    await render(QWEN);
+    expect(byTestId('model-defaults-error')?.textContent).toBe(
+      `Desktop could not read this model's settings: ${message}`
     );
   });
 
@@ -342,7 +411,7 @@ describe('ModelDefaultsDialog load options', () => {
     await render(QWEN);
     expect(byTestId('model-defaults-kv-cache-value')?.textContent).toBe('q8_0');
     expect(byTestId('model-defaults-kv-cache-note')?.textContent).toBe(
-      'Set for the whole server with OLLAMA_KV_CACHE_TYPE, as entered under Settings, Model servers, Hardware.'
+      'Set for the whole server with OLLAMA_KV_CACHE_TYPE, which this Ollama runs with.'
     );
     expect(byTestId('model-defaults-kv-cache-select')).toBeNull();
     await click('model-defaults-save-btn');
@@ -352,7 +421,7 @@ describe('ModelDefaultsDialog load options', () => {
     await render(GEMMA);
     expect(byTestId('model-defaults-load-section')).not.toBeNull();
     expect(byTestId('model-defaults-kv-cache-value')?.textContent).toBe('f16');
-    expect(byTestId('model-defaults-kv-cache-note')?.textContent).toMatch(/^Ollama's default\. /);
+    expect(byTestId('model-defaults-kv-cache-note')?.textContent).toMatch(/^Ollama's default, .*Launch settings/);
   });
 
   it('offers only a smaller context, as a budget, on a server that fixes its own', async () => {
@@ -700,6 +769,26 @@ describe('ModelDefaultsDialog load options', () => {
     await click('model-defaults-clear-btn');
     await click('model-defaults-save-btn');
     expect(setModelSettings).toHaveBeenLastCalledWith(QWEN.id, {});
+  });
+
+  it('saves the stored values typed or picked again after Clear all', async () => {
+    offer = OLLAMA_OFFER;
+    stored = {
+      generation: { temperature: 0.7 },
+      effort: 'high',
+      context: { mode: 'fixed', tokens: 65536 },
+      draftTokens: 2,
+      keepAlive: 3600,
+    };
+    await render(GPT_OSS);
+    await click('model-defaults-clear-btn');
+    await fill('temperature', '0.7');
+    await pick('effort', 'high');
+    await pick('context', '65536');
+    await fill('draft', '2');
+    await pick('keep-alive', '3600');
+    await click('model-defaults-save-btn');
+    expect(setModelSettings).toHaveBeenLastCalledWith(GPT_OSS.id, stored);
   });
 });
 

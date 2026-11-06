@@ -49,6 +49,9 @@ vi.mock('@server/security/abuseAssessment/abuseAssessment', () => ({
   loadAbuseAssessmentSettings: h.loadSettings,
   summarizeDetection: h.summarize,
 }));
+vi.mock('@server/security/abuseAssessment/linkedAccountEvidence', () => ({
+  linkedAccountGroupEvidence: vi.fn(),
+}));
 vi.mock('@server/utils/adminAudit', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/adminAudit')>()),
   recordAdminActionFromRequest: h.record,
@@ -199,6 +202,7 @@ describe('POST /api/admin/shadow-detections/assessments', () => {
       trigger: 'admin',
       requestedBy: ADMIN_ID,
       logger: (req as unknown as { logger: unknown }).logger,
+      deps: { groupEvidence: expect.any(Function) },
     });
   });
 
@@ -308,6 +312,16 @@ describe('POST /api/admin/shadow-detections/assessment-replay', () => {
     });
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ status: 'completed', reason: null, rows: [], missing: [OTHER_DETECTION_ID] });
+  });
+
+  it('reports a self-assessed detection as missing and never replays it', async () => {
+    h.findById.mockResolvedValue(detection({ detector: 'signupDomainHold' }));
+    const { req, res } = request('POST', { body: { detectionIds: [DETECTION_ID], models: ['test-decisions'] } });
+
+    await h.handlers.replay.post(req, res);
+
+    expect(h.replay).toHaveBeenCalledWith(expect.objectContaining({ examples: [] }));
+    expect(res._getJSONData()).toMatchObject({ missing: [DETECTION_ID] });
   });
 
   it('labels an ungraded detection null', async () => {

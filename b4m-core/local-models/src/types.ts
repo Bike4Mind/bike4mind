@@ -86,6 +86,28 @@ export interface PullOptions {
   runner?: string;
 }
 
+/** Ollama's `/api/create` from blobs it already holds: file names (shards keep theirs) to `sha256:<hex>` digests. */
+export interface OllamaCreateRequest {
+  model: string;
+  files: Record<string, string>;
+  parameters?: Record<string, unknown>;
+}
+
+/** What a split GGUF import needs from the Ollama it lands on. */
+export interface ModelImportRuntime {
+  hasBlob(digest: string, options?: { signal?: AbortSignal }): Promise<boolean>;
+  /**
+   * Streams the file at `path`; Ollama refuses it unless its sha256 is `digest`. `onProgress` gets bytes sent.
+   * `idleTimeoutMs` replaces both the between-chunks idle limit and the wait for Ollama to hash the finished upload.
+   */
+  uploadBlob(
+    digest: string,
+    path: string,
+    options?: { signal?: AbortSignal; onProgress?: (sentBytes: number) => void; idleTimeoutMs?: number }
+  ): Promise<void>;
+  create(request: OllamaCreateRequest, options?: { signal?: AbortSignal }): Promise<void>;
+}
+
 export interface LoadedModel {
   name: string;
   sizeBytes: number;

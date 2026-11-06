@@ -10,7 +10,7 @@ import {
   type AuditReviewQueueEntry,
   type AuditReviewQueueQuery,
   type AuditSummary,
-  type IAdminAuditLogRepository,
+  type SubscriptionTimelineAuditLogRepository,
   type NewAdminAuditEntry,
 } from '@bike4mind/common';
 import { AdminAuditReviewModel, toAuditReview } from './AdminAuditReviewModel';
@@ -175,6 +175,10 @@ const LIST_QUERY_MAX_TIME_MS = 15_000;
 
 type FilterClause = Record<string, unknown>;
 
+const deletionActionFilter = (): FilterClause => ({
+  $or: [{ action: { $regex: /\.deleted$/ } }, { action: 'user.deletion.completed' }],
+});
+
 const buildFilterClauses = (filters: AuditLogFilters): FilterClause[] => {
   const clauses: FilterClause[] = [];
   const equals = (field: string, value: string | undefined) => {
@@ -192,7 +196,8 @@ const buildFilterClauses = (filters: AuditLogFilters): FilterClause[] => {
   equals('context.requestId', filters.requestId);
   equals('related.impersonationSessionId', filters.impersonationSessionId);
   // The schema restricts verb to [a-z_], so it needs no regex escaping.
-  if (filters.verb !== undefined) clauses.push({ action: { $regex: `\\.${filters.verb}$` } });
+  if (filters.verb === 'deleted') clauses.push(deletionActionFilter());
+  else if (filters.verb !== undefined) clauses.push({ action: { $regex: `\\.${filters.verb}$` } });
   if (filters.from !== undefined) clauses.push({ occurredAt: { $gte: new Date(filters.from) } });
   if (filters.to !== undefined) clauses.push({ occurredAt: { $lte: new Date(filters.to) } });
   return clauses;
@@ -267,7 +272,7 @@ const writeErrorCode = (writeError: unknown): unknown => {
   return undefined;
 };
 
-class AdminAuditLogRepository implements IAdminAuditLogRepository {
+class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository {
   constructor(private readonly auditLogModel: Model<AdminAuditLogRecord>) {}
 
   async append(entry: NewAdminAuditEntry): Promise<AuditEntry> {
@@ -292,6 +297,18 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
         ? { 'target.kind': 'user', 'target.id': owner.id }
         : { $or: [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }] };
     return this.listPage([ownerClause, { 'details.subscriptionId': { $in: subscriptionIds } }], page);
+  }
+
+  async listForSubscriptionOrOwner(
+    scope: { owner: { kind: 'user' | 'organization'; id: string }; subscriptionIds: string[] },
+    page: { limit: number; cursor?: AuditLogCursor }
+  ): Promise<{ entries: AuditEntry[]; nextCursor: AuditLogCursor | null }> {
+    const { owner, subscriptionIds } = scope;
+    const ownerClauses: FilterClause[] =
+      owner.kind === 'user'
+        ? [{ 'target.kind': 'user', 'target.id': owner.id }]
+        : [{ organizationId: owner.id }, { 'target.kind': 'organization', 'target.id': owner.id }];
+    return this.listPage([{ $or: [...ownerClauses, { 'details.subscriptionId': { $in: subscriptionIds } }] }], page);
   }
 
   private async listPage(
@@ -426,8 +443,8 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
               action: { $nin: [IMPERSONATION_STARTED_ACTION, IMPERSONATION_ENDED_ACTION] },
             }),
             impersonations: facetCount({ action: IMPERSONATION_STARTED_ACTION }),
-            deletions: facetCount({ action: { $regex: '\\.deleted$' } }),
-            deniedAttempts: facetCount({ action: { $regex: '\\.denied$' } }),
+            deletions: facetCount(deletionActionFilter()),
+            deniedAttempts: facetCount({ action: { $regex: /\.denied$/ } }),
           },
         },
       ])
@@ -500,4 +517,6 @@ class AdminAuditLogRepository implements IAdminAuditLogRepository {
   }
 }
 
-export const adminAuditLogRepository: IAdminAuditLogRepository = new AdminAuditLogRepository(AdminAuditLogModel);
+export const adminAuditLogRepository: SubscriptionTimelineAuditLogRepository = new AdminAuditLogRepository(
+  AdminAuditLogModel
+);

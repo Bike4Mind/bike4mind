@@ -13,8 +13,10 @@ export interface HttpClient {
 }
 
 export interface RequestOptions {
-  method?: 'GET' | 'POST' | 'DELETE';
+  method?: 'GET' | 'HEAD' | 'POST' | 'DELETE';
   body?: unknown;
+  /** Sent as raw bytes in place of a JSON `body`. */
+  stream?: ReadableStream<Uint8Array>;
   signal?: AbortSignal;
   /** Omit for no deadline beyond `signal`. */
   timeoutMs?: number;
@@ -129,12 +131,15 @@ export function assertHeaderValues(headers: Record<string, string> | undefined, 
 export async function send(client: HttpClient, path: string, options: RequestOptions = {}): Promise<Response> {
   assertHeaderValues(client.headers, client.runtimeId);
   const hasBody = options.body !== undefined;
+  const contentType = options.stream ? 'application/octet-stream' : hasBody ? 'application/json' : null;
   let response: Response;
   try {
     response = await client.fetch(`${client.baseUrl}${path}`, {
       method: options.method ?? 'GET',
-      headers: { ...client.headers, ...(hasBody ? { 'content-type': 'application/json' } : {}) },
-      body: hasBody ? JSON.stringify(options.body) : undefined,
+      headers: { ...client.headers, ...(contentType ? { 'content-type': contentType } : {}) },
+      body: options.stream ?? (hasBody ? JSON.stringify(options.body) : undefined),
+      // Node's fetch refuses a stream body without it.
+      ...(options.stream ? { duplex: 'half' } : {}),
       signal: combinedSignal(options.signal, options.timeoutMs),
       // A redirect could carry the Authorization header to another origin or turn a POST into a GET.
       redirect: 'error',

@@ -5,7 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const { state } = vi.hoisted(() => ({
-  state: { defaultFreeCredits: 100 as number | undefined, organizationId: null as string | null, freeToRun: false },
+  state: { signupGrantCredits: 100 as number | undefined, organizationId: null as string | null, freeToRun: false },
 }));
 
 vi.mock('@client/app/contexts/LLMContext', () => ({
@@ -13,9 +13,9 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
     selector({ model: 'model-a', organizationId: state.organizationId }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useGetSettingsValue: (key: string) => (key === 'defaultFreeCredits' ? state.defaultFreeCredits : undefined),
+  useGetSettingsValue: (key: string) => (key === 'signupGrantInitialCredits' ? state.signupGrantCredits : undefined),
   useSettingsFromServer: () => ({
-    data: [{ settingName: 'defaultFreeCredits', settingValue: state.defaultFreeCredits }],
+    data: [{ settingName: 'signupGrantInitialCredits', settingValue: state.signupGrantCredits }],
   }),
 }));
 vi.mock('@client/app/hooks/useEffectiveCredits', () => ({ useEffectiveCredits: () => 1000 }));
@@ -46,7 +46,7 @@ const renderModal = () =>
 
 describe('CreditsExplanation', () => {
   beforeEach(() => {
-    state.defaultFreeCredits = 100;
+    state.signupGrantCredits = 100;
     state.organizationId = null;
     state.freeToRun = false;
   });
@@ -59,7 +59,7 @@ describe('CreditsExplanation', () => {
   });
 
   it('hides the no-card sentence when no free credits are configured', () => {
-    state.defaultFreeCredits = 0;
+    state.signupGrantCredits = 0;
     renderModal();
     expect(screen.queryByText(/require no card/)).toBeNull();
     expect(screen.getByText(/Your chats and files remain yours/)).toBeInTheDocument();

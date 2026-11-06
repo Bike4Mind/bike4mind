@@ -39,6 +39,7 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { newAccountSpendCapAdaptersWithAlert } from '@server/billing/newAccountSpendCapWithAlert';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 import { imageModerationIncidents } from '@server/moderation/imageModerationIncidents';
 import { lakeWriteToolDb } from '@bike4mind/server-utils/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
@@ -63,6 +64,7 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
 import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { withEventContext } from '@workers/utils/eventContext';
@@ -122,6 +124,7 @@ export const getStaticOptions = () => {
       organizations: organizationRepository,
       mcpServers: mcpServerRepository,
       newAccountSpendCap: newAccountSpendCapAdaptersWithAlert,
+      recordLimitEvent: recordUserLimitEvent,
       creditTransactions: creditTransactionRepository,
       usageEvents: usageEventRepository,
       operationalBilling: operationalBillingAdapters,
@@ -475,11 +478,11 @@ export const handler = withEventContext(async (event, logger) => {
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
     });
   } catch (processError) {
-    // A credit refusal fails identically on every retry, so it is an expected outcome, not a fault.
-    const isCreditRefusal = isTerminalCreditRefusal(processError);
+    // A credit or AI-access refusal fails identically on every retry, so it is an expected outcome, not a fault.
+    const isExpectedRefusal = isTerminalCreditRefusal(processError) || isAiAccessRefusal(processError);
     const failureLog = { questId: params.questId, error: processError };
-    if (isCreditRefusal) {
-      logger.warn('[SLACK-NOTIFY] Chat processing refused by billing before a reply was delivered', failureLog);
+    if (isExpectedRefusal) {
+      logger.warn('[SLACK-NOTIFY] Chat processing refused before a reply was delivered', failureLog);
     } else {
       logger.error('[SLACK-NOTIFY] Chat processing failed before a reply was delivered', failureLog);
     }
@@ -492,7 +495,7 @@ export const handler = withEventContext(async (event, logger) => {
       });
     }
     // The notice already tells the user; consume the event rather than retrying into the DLQ.
-    if (isCreditRefusal) return;
+    if (isExpectedRefusal) return;
     throw processError;
   }
 

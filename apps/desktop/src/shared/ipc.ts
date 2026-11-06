@@ -16,6 +16,7 @@ import type { CapabilityLedgerState } from './capabilities';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   ModelServerAddInput,
+  ModelServerLaunchAction,
   ModelServerMutationResult,
   ModelServerProbeInput,
   ModelServerProbeResult,
@@ -63,7 +64,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { GenerationSettings } from './generation';
-import type { ModelLoadOffer, ModelSettings } from './modelSettings';
+import type { ModelLoadOffer, ModelSettings, UnsupportedModelSetting } from './modelSettings';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { ShareDirectoryResult } from './directoryRequest';
 import type { PrActionResult, PrBarState, PrOption, PrSummaryEvent } from './pullRequest';
@@ -174,6 +175,7 @@ export const IPC_CHANNELS = {
   chatSetSessionPromptCacheTtl: 'chat:set-session-prompt-cache-ttl',
   chatSetSessionGeneration: 'chat:set-session-generation',
   chatGetModelSettings: 'chat:get-model-settings',
+  chatGetUnsupportedModelSettings: 'chat:get-unsupported-model-settings',
   chatSetModelSettings: 'chat:set-model-settings',
   chatGetModelLoadOffer: 'chat:get-model-load-offer',
   chatSetSessionPinned: 'chat:set-session-pinned',
@@ -297,6 +299,7 @@ export const IPC_CHANNELS = {
   modelServersRemove: 'servers:remove',
   modelServersCheck: 'servers:check',
   modelServersProbedHardware: 'servers:probed-hardware',
+  modelServersLaunch: 'servers:launch',
   /** main -> renderer push; a server was added, changed, or its health was rechecked. */
   modelServersChanged: 'servers:changed',
   toolsGetAccess: 'tools:get-access',
@@ -503,6 +506,8 @@ export const IPC_CHANNELS = {
   attentionSetBadge: 'attention:set-badge',
   /** main -> renderer push: the user clicked a notice. */
   attentionOpen: 'attention:open',
+  /** A notice clicked while no window was open, waiting for the window it reopened; see takePendingOpen. */
+  attentionTakePendingOpen: 'attention:take-pending-open',
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
@@ -785,6 +790,8 @@ export interface DesktopApi {
     setSessionGeneration(sessionId: string, generation: GenerationSettings): Promise<ChatSessionSummary | null>;
     /** A device-side model's defaults from the Models screen; `{}` when none are set, null for an id that is not one. */
     getModelSettings(modelId: string): Promise<ModelSettings | null>;
+    /** Values the settings file holds for this model that this version keeps but does not use. Null for an id that is not one. */
+    getUnsupportedModelSettings(modelId: string): Promise<UnsupportedModelSetting[] | null>;
     /** Replace a device-side model's defaults; `{}` clears them. Null when the id or set is not valid. */
     setModelSettings(modelId: string, settings: ModelSettings): Promise<ModelSettings | null>;
     /**
@@ -1154,6 +1161,8 @@ export interface DesktopApi {
     check(id?: string): Promise<ModelServerView[]>;
     /** This computer's hardware as probed, before entered specs; null when the probe failed. */
     probedHardware(): Promise<MachineView | null>;
+    /** Starts, stops or restarts the server Desktop runs at a server's address on this computer. */
+    launch(id: string, action: ModelServerLaunchAction): Promise<ModelServerMutationResult>;
     onChanged(listener: (servers: ModelServerView[]) => void): () => void;
   };
   /** User-made sidebar sections; see @shared/sidebarSections. */
@@ -1269,6 +1278,12 @@ export interface DesktopApi {
     /** Sessions waiting on the user, as the macOS dock badge; 0 clears it. A no-op elsewhere. */
     setBadgeCount(count: number): Promise<void>;
     onOpen(listener: (event: AttentionOpenEvent) => void): () => void;
+    /**
+     * The notice clicked while every window was closed, which reopened this one; null if none. Taken
+     * once: a later call returns null. Pulled rather than pushed, since the push would land before
+     * the renderer is listening.
+     */
+    takePendingOpen(): Promise<AttentionOpenEvent | null>;
   };
   /**
    * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.

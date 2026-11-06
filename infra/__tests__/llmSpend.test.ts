@@ -18,6 +18,9 @@ const resources = vi.hoisted(() => {
     ]) as string,
     topic: { arn: 'alarm-topic' } as { arn: string } | undefined,
     cliCompletionLogGroup: { name: 'cli-completion-logs' } as { name: string } | undefined,
+    slackQuestLogGroup: { name: 'slack-quest-logs' } as { name: string } | undefined,
+    webServerLogGroup: { name: 'web-server-logs' } as { name: string } | undefined,
+    hasWebServer: true,
   };
 });
 
@@ -35,6 +38,25 @@ vi.mock('../websocket', () => ({
     nodes: {
       get function() {
         return resources.output({ nodes: { logGroup: resources.cliCompletionLogGroup } });
+      },
+    },
+  },
+}));
+vi.mock('../functions', () => ({
+  slackQuestProcessor: {
+    nodes: {
+      get logGroup() {
+        return resources.output(resources.slackQuestLogGroup);
+      },
+    },
+  },
+}));
+vi.mock('../web', () => ({
+  web: {
+    nodes: {
+      get server() {
+        if (!resources.hasWebServer) return undefined;
+        return resources.output({ nodes: { logGroup: resources.webServerLogGroup } });
       },
     },
   },
@@ -89,6 +111,9 @@ beforeEach(() => {
   ]);
   resources.topic = { arn: 'alarm-topic' };
   resources.cliCompletionLogGroup = { name: 'cli-completion-logs' };
+  resources.slackQuestLogGroup = { name: 'slack-quest-logs' };
+  resources.webServerLogGroup = { name: 'web-server-logs' };
+  resources.hasWebServer = true;
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -146,34 +171,39 @@ describe('LLM spend metric filters', () => {
     expect(callFor(resources.filter, 'llmSpendYoungAccountUsdFilter')?.metricTransformation).not.toHaveProperty(
       'dimensions'
     );
-    expect(resources.filter).toHaveBeenCalledTimes(10);
+    // Five filters for each of the four log groups that log the line.
+    expect(resources.filter).toHaveBeenCalledTimes(20);
   });
 
-  it('applies every filter to the cli_completion_request log group into the same metrics', async () => {
+  it.each([
+    ['cli_completion_request', 'cli-completion', 'cli-completion-logs'],
+    ['Slack quest processor', 'slack-quest', 'slack-quest-logs'],
+    ['Next.js server', 'web-server', 'web-server-logs'],
+  ])('applies every filter to the %s log group into the same metrics', async (_label, key, logGroupName) => {
     await load();
     const chatCompletionFilters = resources.filter.mock.calls.filter(
       ([, args]) => (args.logGroupName as { value: string }).value === 'chat-completion-logs'
     );
     expect(chatCompletionFilters).toHaveLength(5);
     for (const [logicalName, args] of chatCompletionFilters) {
-      expect(callFor(resources.filter, `${logicalName}-cli-completion`)).toEqual({
+      expect(callFor(resources.filter, `${logicalName}-${key}`)).toEqual({
         ...args,
-        name: String(args.name).replace('test-app-production-', 'test-app-production-cli-completion-'),
-        logGroupName: expect.objectContaining({ value: 'cli-completion-logs' }),
+        name: String(args.name).replace('test-app-production-', `test-app-production-${key}-`),
+        logGroupName: expect.objectContaining({ value: logGroupName }),
       });
     }
-    expect(callFor(resources.filter, 'completionCreditOverdraftFilter-cli-completion')).toMatchObject({
-      name: 'test-app-production-cli-completion-completion-credit-overdraft',
+    expect(callFor(resources.filter, `completionCreditOverdraftFilter-${key}`)).toMatchObject({
+      name: `test-app-production-${key}-completion-credit-overdraft`,
       metricTransformation: { name: 'CompletionCreditOverdrafts', namespace: 'test-app/production/LLMSpend' },
     });
   });
 
-  it('counts completions charged down to zero', async () => {
-    const { COMPLETION_CREDIT_OVERDRAFT_MESSAGE } = await load();
+  it('counts completions that cost more than the balance, on the CLI and in web chat', async () => {
+    const { COMPLETION_CREDIT_OVERDRAFT_MESSAGE, SETTLEMENT_DEBT_MESSAGE } = await load();
     expect(callFor(resources.filter, 'completionCreditOverdraftFilter')).toEqual({
       name: 'test-app-production-completion-credit-overdraft',
       logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
-      pattern: `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" }`,
+      pattern: `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" || $.message = "${SETTLEMENT_DEBT_MESSAGE}" }`,
       metricTransformation: {
         name: 'CompletionCreditOverdrafts',
         namespace: 'test-app/production/LLMSpend',
@@ -181,8 +211,11 @@ describe('LLM spend metric filters', () => {
         unit: 'Count',
       },
     });
-    const source = readFileSync(new URL('../../b4m-core/services/src/cliCompletions.ts', import.meta.url), 'utf8');
-    expect(source).toContain(`'${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}'`);
+    // The alarm only sees these lines if the emitters log them verbatim.
+    const read = (path: string) =>
+      readFileSync(new URL(`../../b4m-core/services/src/${path}`, import.meta.url), 'utf8');
+    expect(read('cliCompletions.ts')).toContain(`'${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}'`);
+    expect(read('llm/ChatCompletionProcess.ts')).toContain(`'${SETTLEMENT_DEBT_MESSAGE}'`);
   });
 
   it('selects every extracted metric value and dimension in the CloudWatch pattern', async () => {
@@ -265,7 +298,7 @@ describe('LLM spend alarms', () => {
       namespace: 'test-app/production/LLMSpend',
       period: 3600,
       statistic: 'Sum',
-      threshold: 2,
+      threshold: 5,
       treatMissingData: 'notBreaching',
       alarmActions: ['alarm-topic'],
       okActions: ['alarm-topic'],
@@ -365,6 +398,21 @@ describe('LLM spend alarms', () => {
   it('fails loudly when the cli_completion_request log group cannot be resolved', async () => {
     resources.cliCompletionLogGroup = undefined;
     await expect(load()).rejects.toThrow('cli_completion_request function is missing its CloudWatch log group');
+  });
+
+  it('fails loudly when the Slack quest processor log group cannot be resolved', async () => {
+    resources.slackQuestLogGroup = undefined;
+    await expect(load()).rejects.toThrow('SlackQuestProcessor function is missing its CloudWatch log group');
+  });
+
+  it('fails loudly when the Next.js server log group cannot be resolved', async () => {
+    resources.webServerLogGroup = undefined;
+    await expect(load()).rejects.toThrow('Next.js server function is missing its CloudWatch log group');
+  });
+
+  it('fails loudly when the Next.js server function is missing', async () => {
+    resources.hasWebServer = false;
+    await expect(load()).rejects.toThrow('LLM spend log sources require the Next.js server function');
   });
 });
 

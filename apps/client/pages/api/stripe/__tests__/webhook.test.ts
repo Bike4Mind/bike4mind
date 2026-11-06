@@ -31,6 +31,15 @@ const mocks = vi.hoisted(() => ({
   forfeitHeldUnlockForFraudWarning: vi.fn(),
   flagDisputePending: vi.fn(),
   retrieveCharge: vi.fn(),
+  updateUser: vi.fn(),
+  findOrgByStripeCustomerId: vi.fn(),
+  recordDisputeOpened: vi.fn(),
+  recordDisputeClosed: vi.fn(),
+  markDisputeUserGone: vi.fn(),
+  resolveLostUserDispute: vi.fn(),
+  resolveWonDispute: vi.fn(),
+  recordBillingEvent: vi.fn(),
+  publishSubscriptionUpdated: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -48,9 +57,27 @@ vi.mock('@bike4mind/database', () => ({
     findByPaymentIntentId: mocks.findByPaymentIntentId,
     updateTransactionStatus: mocks.updateTransactionStatus,
   },
-  organizationRepository: {},
+  organizationRepository: { findByStripeCustomerId: mocks.findOrgByStripeCustomerId },
   realtimeConnectionRepository: {},
-  userRepository: { findById: mocks.findUserById, findByStripeCustomerId: mocks.findUserByStripeCustomerId },
+  stripeDisputeRepository: {
+    recordOpened: mocks.recordDisputeOpened,
+    recordClosed: mocks.recordDisputeClosed,
+    markUserGone: mocks.markDisputeUserGone,
+  },
+  userRepository: {
+    findById: mocks.findUserById,
+    findByStripeCustomerId: mocks.findUserByStripeCustomerId,
+    update: mocks.updateUser,
+  },
+}));
+vi.mock('@server/billing/stripeDisputes', () => ({
+  disputeFacts: (dispute: { id: string }, subject: string, subjectId: string | null) => ({
+    stripeDisputeId: dispute.id,
+    subject,
+    subjectId,
+  }),
+  resolveLostUserDispute: mocks.resolveLostUserDispute,
+  resolveWonDispute: mocks.resolveWonDispute,
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
@@ -72,7 +99,9 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({ emitMetric: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/analyticsLog', () => ({ logEventSafe: vi.fn() }));
-vi.mock('@server/utils/eventBus', () => ({ StripeEvents: {} }));
+vi.mock('@server/utils/eventBus', () => ({
+  StripeEvents: { CustomerSubscriptionUpdated: { publish: mocks.publishSubscriptionUpdated } },
+}));
 vi.mock('@bike4mind/server-utils/integrations/stripe/stripe', () => ({
   CustomerType: {},
   customerExists: vi.fn(),
@@ -116,6 +145,8 @@ vi.mock('@server/billing/paymentFailureNotice', () => ({
   notifyPaymentFailed: mocks.notifyPaymentFailed,
   notifyCanceledForNonPayment: mocks.notifyCanceledForNonPayment,
 }));
+// The store itself (stage check, owner, projection) is covered in server/billing/billingEventStore.test.ts.
+vi.mock('@server/billing/billingEventStore', () => ({ recordBillingEvent: mocks.recordBillingEvent }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'wss://test' }, App: { stage: 'test' } } }));
 
 import '@pages/api/stripe/webhook';
@@ -168,6 +199,8 @@ beforeEach(() => {
   mocks.findUserByStripeCustomerId.mockResolvedValue(null);
   mocks.findByPaymentIntentId.mockResolvedValue(null);
   mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: 0 });
+  mocks.findOrgByStripeCustomerId.mockResolvedValue(null);
+  mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({ ...facts, state: 'open' }));
 });
 
 describe('signup unlock forfeits', () => {
@@ -186,6 +219,14 @@ describe('signup unlock forfeits', () => {
 
   it('forfeits on a refunded charge before its credit purchase lookup', async () => {
     const charge = { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1', refunds: { data: [{ id: 're_1' }] } };
+
+    await deliver({ type: 'charge.refunded', data: { object: charge } });
+
+    expect(mocks.forfeitHeldUnlockForRefund).toHaveBeenCalledExactlyOnceWith(charge, logger);
+  });
+
+  it('forfeits on a refunded charge that carries no refund list', async () => {
+    const charge = { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1' };
 
     await deliver({ type: 'charge.refunded', data: { object: charge } });
 
@@ -745,5 +786,331 @@ describe('charge.dispute.created - inviter reward', () => {
     const res = await deliver(dispute());
     expect(res._getStatusCode()).toBe(200);
     expect(reverseReward).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('charge.dispute.closed', () => {
+  // Stripe fixture: a closed dispute paid by customer cus_1.
+  const closed = (status: string) => ({
+    type: 'charge.dispute.closed',
+    data: {
+      object: {
+        id: 'dp_1',
+        status,
+        amount: 3000,
+        currency: 'usd',
+        reason: 'fraudulent',
+        created: 1_790_000_000,
+        payment_intent: 'pi_1',
+        charge: 'ch_1',
+      },
+    },
+  });
+  const contained = {
+    status: 'contained',
+    item: { contain: { suspended: true, creditDelta: -500, apiKeysRevoked: 2 } },
+  };
+
+  beforeEach(() => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+  });
+
+  it('resolves a lost user dispute with a Contain and keeps the dispute flag', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.resolveLostUserDispute.mockResolvedValue(contained);
+
+    const res = await deliver(closed('lost'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'user', subjectId: 'user_1' },
+      expect.any(Date)
+    );
+    expect(mocks.resolveLostUserDispute).toHaveBeenCalledWith(
+      expect.objectContaining({ stripeDisputeId: 'dp_1', state: 'open' }),
+      owner,
+      logger
+    );
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        'Dispute flag kept. Account contained: suspended, 500 credits removed, 2 API key(s) revoked.'
+      )
+    );
+  });
+
+  it('stays quiet when a redelivered close finds the dispute already resolved', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.resolveLostUserDispute.mockResolvedValue({ status: 'already_resolved' });
+
+    await deliver(closed('lost'));
+
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('alerts and warns when an admin resolved the dispute before the lost close arrived', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({
+      ...facts,
+      state: 'resolved',
+      resolution: { outcome: 'admin' },
+    }));
+    mocks.resolveLostUserDispute.mockResolvedValue({ status: 'already_resolved' });
+
+    const res = await deliver(closed('lost'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('resolved by an admin first'));
+    expect(mocks.postMessageToSlack).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('An admin resolved this dispute before the close arrived')
+    );
+  });
+
+  it('does not contain when the record names a different user than the close found', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({
+      ...facts,
+      subject: 'user',
+      subjectId: 'user_other',
+      state: 'open',
+    }));
+
+    const res = await deliver(closed('lost'));
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('names a different user'));
+    expect(mocks.postMessageToSlack).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('The record names a different account')
+    );
+  });
+
+  it('fails the delivery when the Contain throws, so Stripe retries it', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.resolveLostUserDispute.mockRejectedValue(new Error('contain failed'));
+
+    await expect(deliver(closed('lost'))).rejects.toThrow('contain failed');
+  });
+
+  it('queues a lost organization dispute for an admin without containing anyone', async () => {
+    mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'org_1' });
+
+    await deliver(closed('lost'));
+
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'organization', subjectId: 'org_1' },
+      expect.any(Date)
+    );
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('Resolve it in Admin > Disputes.'));
+  });
+
+  it('does not post a redelivered lost organization close to Slack again', async () => {
+    mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'org_1' });
+    mocks.recordDisputeClosed.mockImplementation(async (facts: object) => ({
+      ...facts,
+      state: 'open',
+      redelivered: true,
+    }));
+
+    await deliver(closed('lost'));
+
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('re-files a lost dispute whose user is gone as unmatched so an admin can resolve it', async () => {
+    mocks.recordDisputeClosed.mockResolvedValue({ stripeDisputeId: 'dp_1', subject: 'user', state: 'open' });
+
+    await deliver(closed('lost'));
+
+    expect(mocks.markDisputeUserGone).toHaveBeenCalledExactlyOnceWith('dp_1');
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+  });
+
+  it('records a lost dispute with no matching account as unmatched', async () => {
+    await deliver(closed('lost'));
+
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'unmatched', subjectId: null },
+      expect.any(Date)
+    );
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+  });
+
+  it('clears the dispute flag only on a won dispute, and resolves its record', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+
+    await deliver(closed('won'));
+
+    expect(mocks.updateUser).toHaveBeenCalledExactlyOnceWith({ id: 'user_1', disputePending: false });
+    expect(mocks.resolveWonDispute).toHaveBeenCalledWith('dp_1', logger);
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+  });
+
+  it('records any other closing status for an admin and takes no account action', async () => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+
+    await deliver(closed('warning_closed'));
+
+    expect(mocks.recordDisputeClosed).toHaveBeenCalledWith(
+      { stripeDisputeId: 'dp_1', subject: 'user', subjectId: 'user_1' },
+      expect.any(Date)
+    );
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+    expect(mocks.resolveLostUserDispute).not.toHaveBeenCalled();
+    expect(mocks.resolveWonDispute).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+});
+
+describe('charge.dispute.created - dispute record', () => {
+  it('records a user dispute against the matched account', async () => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+    mocks.findUserByStripeCustomerId.mockResolvedValue(owner);
+
+    await deliver({
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_1', charge: 'ch_1', amount: 3000, currency: 'usd', reason: 'fraudulent' } },
+    });
+
+    expect(mocks.recordDisputeOpened).toHaveBeenCalledExactlyOnceWith({
+      stripeDisputeId: 'dp_1',
+      subject: 'user',
+      subjectId: 'user_1',
+    });
+  });
+
+  it('records a dispute with no matching account as unmatched', async () => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+
+    await deliver({
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_1', charge: 'ch_1', amount: 3000, currency: 'usd', reason: 'fraudulent' } },
+    });
+
+    expect(mocks.recordDisputeOpened).toHaveBeenCalledExactlyOnceWith({
+      stripeDisputeId: 'dp_1',
+      subject: 'unmatched',
+      subjectId: null,
+    });
+  });
+
+  it('records an organization dispute for the admin queue', async () => {
+    mocks.retrieveCharge.mockResolvedValue({ id: 'ch_1', customer: 'cus_1' });
+    mocks.findOrgByStripeCustomerId.mockResolvedValue({ id: 'org_1' });
+
+    await deliver({
+      type: 'charge.dispute.created',
+      data: { object: { id: 'dp_1', charge: 'ch_1', amount: 3000, currency: 'usd', reason: 'fraudulent' } },
+    });
+
+    expect(mocks.recordDisputeOpened).toHaveBeenCalledExactlyOnceWith({
+      stripeDisputeId: 'dp_1',
+      subject: 'organization',
+      subjectId: 'org_1',
+    });
+  });
+});
+
+describe('BillingEvent recording', () => {
+  const dispute = {
+    id: 'evt_dispute_1',
+    type: 'charge.dispute.created',
+    data: {
+      object: { id: 'dp_1', amount: 3000, currency: 'usd', reason: 'fraudulent', payment_intent: 'pi_1', charge: null },
+    },
+  };
+
+  beforeEach(() => {
+    mocks.findByPaymentIntentId.mockResolvedValue({ id: 'tx_1', ownerId: 'user_1', credits: 50000 });
+    mocks.flagDisputePending.mockResolvedValue({ deactivatedKeys: false });
+  });
+
+  it('records the event after its side effects, with the owner the handler resolved', async () => {
+    const res = await deliver(dispute);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(
+      dispute,
+      { owner: { ownerType: 'user', ownerId: 'user_1' } },
+      logger
+    );
+    expect(mocks.subtractCredits.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.recordBillingEvent.mock.invocationCallOrder[0]
+    );
+    expect(mocks.flagDisputePending.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.recordBillingEvent.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('records nothing and fails the delivery when a side effect fails, so the redelivery re-runs it', async () => {
+    mocks.subtractCredits.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(deliver(dispute)).rejects.toThrow('mongo down');
+    expect(mocks.recordBillingEvent).not.toHaveBeenCalled();
+
+    const res = await deliver(dispute);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.subtractCredits).toHaveBeenCalledTimes(2);
+    expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
+  });
+
+  it('re-runs a replay under the per-entity key, which dedupes the clawback, and hands the same event id to the store', async () => {
+    await deliver(dispute);
+    mocks.subtractCredits.mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }));
+
+    const res = await deliver(dispute);
+
+    expect(res._getStatusCode()).toBe(200);
+    // The duplicate-key clawback is a no-op, so the lot clawback that follows it runs only once.
+    expect(mocks.clawbackCreditLotsByStripeRef).toHaveBeenCalledOnce();
+    expect(mocks.recordBillingEvent).toHaveBeenCalledTimes(2);
+    expect(mocks.recordBillingEvent.mock.calls.map(([event]) => event.id)).toEqual(['evt_dispute_1', 'evt_dispute_1']);
+  });
+
+  it('records a worker-handled event once its publish succeeded, and not when the publish fails', async () => {
+    const updated = {
+      id: 'evt_upd_1',
+      type: 'customer.subscription.updated',
+      data: { object: { id: 'sub_1', object: 'subscription' } },
+    };
+
+    await deliver(updated);
+    expect(mocks.publishSubscriptionUpdated).toHaveBeenCalledWith({ subscriptionId: 'sub_1' });
+    expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(updated, {}, logger);
+
+    mocks.publishSubscriptionUpdated.mockRejectedValueOnce(new Error('bus down'));
+    await expect(deliver(updated)).rejects.toThrow('bus down');
+    expect(mocks.recordBillingEvent).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'invoice.paid',
+    'invoice.finalized',
+    'customer.subscription.trial_will_end',
+    'customer.subscription.created',
+  ])('hands an unhandled %s to the store and does nothing else', async type => {
+    const event = { id: 'evt_x', type, data: { object: { id: 'in_1', object: 'invoice' } } };
+
+    const res = await deliver(event);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.recordBillingEvent).toHaveBeenCalledExactlyOnceWith(event, {}, logger);
+    expect(mocks.markPastDue).not.toHaveBeenCalled();
+    expect(mocks.updateByStripeSubscriptionId).not.toHaveBeenCalled();
+    expect(mocks.publishSubscriptionUpdated).not.toHaveBeenCalled();
+    expect(mocks.postMessageToSlack).not.toHaveBeenCalled();
+  });
+
+  it('marks a payment failure whose dunning email this delivery sent', async () => {
+    mocks.notifyPaymentFailed.mockResolvedValueOnce(true);
+
+    await deliver(failedInvoice());
+
+    expect(mocks.recordBillingEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'invoice.payment_failed' }),
+      { data: { dunningNoticeSent: true } },
+      logger
+    );
   });
 });

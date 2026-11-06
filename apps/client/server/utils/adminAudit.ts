@@ -124,6 +124,21 @@ export const recordAdminActionFromRequest = async (
     await writerAdapters(req, input.action, options.creditGrantPolicy)
   );
 
+/**
+ * Writes one admin audit entry for a caller that has already decided who the actor is. Lets shared
+ * admin operations (the bulk user actions, blockedEmailDomains) run from a request or from a job.
+ */
+export type AdminAuditWriter = (
+  input: RecordAdminActionFromRequestInput,
+  options?: { creditGrantPolicy?: () => Promise<adminAuditService.CreditGrantPolicy> }
+) => Promise<AuditEntry | null>;
+
+/** The writer for a request: the request's admin is the actor. */
+export const requestAuditWriter =
+  (req: AuditRequest): AdminAuditWriter =>
+  (input, options) =>
+    recordAdminActionFromRequest(req, input, options);
+
 /** For routes with no req.user (returnToAdmin authenticates by cookie): the caller names the actor. */
 export const recordAdminActionForActor = async (
   req: AuditRequest,

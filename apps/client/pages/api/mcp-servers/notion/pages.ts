@@ -102,9 +102,9 @@ const handler = baseApi().get(async (req, res) => {
     }
 
     if (error instanceof NotionReconnectRequiredError) {
-      console.warn('[Notion Pages] Browse requested on a revoked Notion connection');
+      console.warn('[Notion Pages] Browse requested on a Notion connection that needs reconnecting');
       return res.status(401).json({
-        error: 'Your Notion connection has been revoked. Please reconnect in Settings > Integrations.',
+        error: 'Your Notion connection needs to be re-established. Please reconnect in Settings > Integrations.',
         code: 'NOTION_RECONNECT_REQUIRED',
       });
     }
@@ -113,7 +113,7 @@ const handler = baseApi().get(async (req, res) => {
 
     // Surface specific, actionable error messages to the client
     if (error instanceof Error) {
-      // A connection exists but its token could not be read (decrypt or lookup failure).
+      // The connection could not be loaded (an unreadable stored token surfaces above as reconnect-required).
       if (error.message.includes('Failed to get valid Notion tokens')) {
         return res.status(500).json({
           error: 'Notion credentials could not be read. Please disconnect and reconnect your Notion account.',

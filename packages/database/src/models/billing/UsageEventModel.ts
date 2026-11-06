@@ -7,6 +7,7 @@ import {
   IFundingCohortCost,
   ILakeUsageSummary,
   IModelDayMargin,
+  ISettlementOverHold,
   IUserUsageActivity,
   IOwnerSpendDay,
   IOwnerSpendFeature,
@@ -82,6 +83,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     costUsd: { type: Number, required: true },
     creditsCharged: { type: Number, required: true },
     writtenOffCredits: { type: Number, required: false },
+    reservedCredits: { type: Number, required: false },
 
     status: { type: String, required: true, enum: [...USAGE_EVENT_STATUSES], default: 'ok' },
     latencyMs: { type: Number, required: false },
@@ -302,6 +304,37 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     return Object.fromEntries(rows.map(row => [String(row._id), row.credits]));
   }
 
+  async largestSettlementOverHold(userIds: string[], since: Date): Promise<Record<string, ISettlementOverHold>> {
+    if (userIds.length === 0) return {};
+    // The {userId, createdAt} index serves the match for a bounded id list and window.
+    const rows = await this.model.aggregate<{ _id: string } & ISettlementOverHold>([
+      { $match: { userId: { $in: userIds }, createdAt: { $gte: since }, reservedCredits: { $gt: 0 } } },
+      {
+        $project: {
+          userId: 1,
+          reservedCredits: 1,
+          settledCredits: { $add: ['$creditsCharged', { $ifNull: ['$writtenOffCredits', 0] }] },
+        },
+      },
+      { $addFields: { ratio: { $divide: ['$settledCredits', '$reservedCredits'] } } },
+      { $sort: { ratio: -1 } },
+      {
+        $group: {
+          _id: '$userId',
+          reservedCredits: { $first: '$reservedCredits' },
+          settledCredits: { $first: '$settledCredits' },
+          ratio: { $first: '$ratio' },
+        },
+      },
+    ]);
+    return Object.fromEntries(
+      rows.map(({ _id, reservedCredits, settledCredits, ratio }) => [
+        String(_id),
+        { reservedCredits, settledCredits, ratio },
+      ])
+    );
+  }
+
   async marginByModelDay(since?: Date): Promise<IModelDayMargin[]> {
     const from = since ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     return this.model.aggregate<IModelDayMargin>([
@@ -469,9 +502,28 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
             { $sort: { cogsUsd: -1, provider: 1, model: 1 } },
             { $limit: SPEND_MODEL_LIMIT },
           ],
+          // failures and p95 feed the Spend tab's per-account threshold flags.
           byAccount: [
-            { $group: { _id: { ownerId: '$ownerId', ownerType: '$ownerType' }, ...spendSums } },
-            { $project: { _id: 0, ownerId: '$_id.ownerId', ownerType: '$_id.ownerType', ...spendFields } },
+            {
+              $group: {
+                _id: { ownerId: '$ownerId', ownerType: '$ownerType' },
+                ...spendSums,
+                failures: { $sum: { $cond: [{ $in: ['$status', ['error', 'timeout']] }, 1, 0] } },
+                // $percentile skips non-numeric values, so rows without latencyMs drop out on their own.
+                // any: the operator postdates mongoose's typed AccumulatorOperator.
+                p95: { $percentile: { input: '$latencyMs', p: [0.95], method: 'approximate' } } as any,
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                ownerId: '$_id.ownerId',
+                ownerType: '$_id.ownerType',
+                ...spendFields,
+                failures: 1,
+                p95LatencyMs: { $round: [{ $ifNull: [{ $first: '$p95' }, 0] }, 0] },
+              },
+            },
             { $sort: { cogsUsd: -1, ownerId: 1 } },
             { $limit: SPEND_ACCOUNT_LIMIT },
           ],

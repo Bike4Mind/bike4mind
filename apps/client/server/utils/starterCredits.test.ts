@@ -23,10 +23,10 @@ describe('getOpenSignupStarterCredits', () => {
     findBySettingNames.mockReset();
   });
 
-  it('returns the default grant when open registration is on, in one query', async () => {
-    stored(rows(true, 5000));
+  it('returns the initial grant when open registration is on, in one query', async () => {
+    stored([...rows(true, 5000), { settingName: 'signupGrantInitialCredits', settingValue: 700 }]);
 
-    await expect(getOpenSignupStarterCredits()).resolves.toBe(5000);
+    await expect(getOpenSignupStarterCredits()).resolves.toBe(700);
     expect(findBySettingNames).toHaveBeenCalledTimes(1);
   });
 
@@ -42,7 +42,7 @@ describe('getOpenSignupStarterCredits', () => {
     await expect(getOpenSignupStarterCredits()).resolves.toBe(0);
   });
 
-  it('returns the staged signup tranche when staged grants are on, still in one query', async () => {
+  it('returns the signup tranche while the initial grant is unset, still in one query', async () => {
     stored([
       ...rows(true, 5000),
       { settingName: 'stagedSignupGrantEnabled', settingValue: true },
@@ -52,14 +52,14 @@ describe('getOpenSignupStarterCredits', () => {
     await expect(getOpenSignupStarterCredits()).resolves.toBe(250);
     expect(findBySettingNames).toHaveBeenCalledTimes(1);
     expect(findBySettingNames.mock.calls[0][0]).toEqual(
-      expect.arrayContaining(['stagedSignupGrantEnabled', 'signupGrantCredits'])
+      expect.arrayContaining(['signupGrantCredits', 'signupGrantInitialCredits'])
     );
   });
 
-  it('falls back to defaultFreeCredits as the tranche when staged is on but signupGrantCredits is unset', async () => {
-    stored([...rows(true, 5000), { settingName: 'stagedSignupGrantEnabled', settingValue: 'true' }]);
+  it('never advertises the retired defaultFreeCredits', async () => {
+    stored([...rows(true, 5000), { settingName: 'stagedSignupGrantEnabled', settingValue: 'false' }]);
 
-    await expect(getOpenSignupStarterCredits()).resolves.toBe(5000);
+    await expect(getOpenSignupStarterCredits()).resolves.toBe(0);
   });
 
   it('returns 0 when staged grants are on and neither signupGrantCredits nor defaultFreeCredits is stored', async () => {
@@ -81,14 +81,14 @@ describe('getOpenSignupStarterCredits', () => {
     await expect(getOpenSignupStarterCredits()).resolves.toBe(0);
   });
 
-  it('ignores signupGrantCredits when staged grants are off', async () => {
+  it('ignores the retired staged toggle', async () => {
     stored([
       ...rows(true, 5000),
       { settingName: 'stagedSignupGrantEnabled', settingValue: false },
       { settingName: 'signupGrantCredits', settingValue: 250 },
     ]);
 
-    await expect(getOpenSignupStarterCredits()).resolves.toBe(5000);
+    await expect(getOpenSignupStarterCredits()).resolves.toBe(250);
   });
 
   it('returns 0 on an invite-only deployment even with staged grants on', async () => {

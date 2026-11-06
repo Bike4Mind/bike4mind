@@ -85,6 +85,7 @@ import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE }
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { timedOutAttemptUsageFields, timedOutUsageOf } from './llm/timedOutAttemptUsage';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
+import type { LimitEventRecord } from './llm/ChatCompletionFeatures';
 import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 import { logLlmUsageSettled } from './llm/llmUsageSettledLog';
 import { createModelAdmission, loadFreeTierAllowedModels, loadModelConfigurations } from './llm/modelAdmission';
@@ -183,6 +184,8 @@ export interface CompletionParams {
     userApiKeys?: IUserApiKeyRepository;
     /** Required: backs the daily token cap and per-minute limit, which are skipped when absent. */
     cache: Pick<ICacheRepository, 'tryAddWithinLimitFixedWindow' | 'tryIncrementWithinLimitFixedWindow'>;
+    /** Records each credit refusal for the admin user timeline; must not throw (see ChatCompletionFeatures). */
+    recordLimitEvent: (event: LimitEventRecord) => Promise<void>;
   };
   /**
    * Applied to the reloaded caller before model admission, e.g. to withhold an admin role the
@@ -822,6 +825,23 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     );
   }
 
+  const recordRefusal = async (reason: string, required: number, available?: number): Promise<void> => {
+    try {
+      await db.recordLimitEvent({
+        userId,
+        kind: 'insufficient_credits',
+        model: chargedModelInfo?.id ?? model,
+        details: {
+          reason,
+          requiredCredits: Math.ceil(required),
+          ...(available === undefined ? {} : { availableCredits: Math.floor(available) }),
+        },
+      });
+    } catch (error) {
+      logger?.warn?.('[USER_LIMIT_EVENT] failed to record', { reason, error });
+    }
+  };
+
   const outOfCreditsError = (available: number, required: number) =>
     new InsufficientCreditsError(
       billToOrg
@@ -840,6 +860,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     const required = chargedModelInfo
       ? usdToCredits(getTextModelCost(chargedModelInfo, estimateInputTokens(messages), maxTokens)) || 1
       : 1;
+    await recordRefusal('restricted_tier_token_cap', required);
     throw outOfCreditsError(0, required);
   }
 
@@ -922,6 +943,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (billToOrg) {
       const capCheckCredits = usdToCredits(getTextModelCost(chargedModelInfo!, estimatedInputTokens, maxTokens));
       if (isMemberCreditCapExceeded(organization!, userId, capCheckCredits)) {
+        await recordRefusal('member_cap', capCheckCredits);
         throw new InsufficientCreditsError(MEMBER_CREDIT_CAP_MESSAGE, 'insufficient_credits');
       }
     }
@@ -935,6 +957,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // Rollback the reservation immediately
         await holderMethods.incrementCredits(holderId, reservedCredits);
         const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
+        await recordRefusal('balance', reservedCredits, actualBalance);
         throw outOfCreditsError(actualBalance, reservedCredits);
       }
 
@@ -979,6 +1002,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     if (!firstRound.affordable) {
       await refundReservation();
       const available = balanceAfterHold + reservedCredits;
+      await recordRefusal('balance', firstRound.minimumCredits, available);
       throw new InsufficientCreditsError(
         billToOrg
           ? `Your organization does not have enough credits. It has ${available} credits, but even a short answer requires approximately ${firstRound.minimumCredits}. Please contact your organization administrator to add more credits.`

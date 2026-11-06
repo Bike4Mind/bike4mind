@@ -748,6 +748,25 @@ describe('OpenAICompatibleChat on a server that fronts several models', () => {
       expect(await client.contextTokens(MODEL_A)).toBe(32768);
     });
 
+    it('lists the server at its served context while the settings cannot be read, and still rejects the budget', async () => {
+      const unreadable = 'The model settings file /data/model-settings.json is not valid JSON.';
+      const client = new OpenAICompatibleChat({
+        runtimeId: 'srv-abc123',
+        baseUrl: BASE,
+        label: 'vllm box',
+        product: 'vllm',
+        fetch: proxy(65536).fetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        loadSettings: () => Promise.reject(new Error(unreadable)),
+      });
+      expect((await client.listModels()).map(model => [model.name, model.contextWindow])).toEqual([
+        ['a', 65536],
+        ['b', 65536],
+      ]);
+      await expect(client.contextTokens(MODEL_A)).rejects.toThrow(unreadable);
+    });
+
     it('offers only sizes below what the server runs, and nothing when it does not say', async () => {
       expect(await budgeted(proxy(65536).fetch).loadOffer(MODEL_A)).toEqual({
         context: { kind: 'budget', server: 65536, sizes: [16384, 32768] },
@@ -929,6 +948,50 @@ describe('OpenAICompatibleChat max output on a context the server fixes', () => 
     await client.listModels();
     await collect(client, ask(400, 2048));
     expect(bodies.map(body => body.max_tokens)).toEqual([2048, CONTEXT - 7000]);
+  });
+
+  it('adds the tool definitions to the messages when an OpenAI refusal reports them apart', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model', max_model_len: CONTEXT }] });
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (bodies.length > 1) return sse([delta({ content: 'ok' }, 'stop'), '[DONE]']);
+      return Response.json(
+        {
+          error: {
+            message:
+              "This model's maximum context length is 8192 tokens. However, you requested 9000 tokens (6000 in the messages, 1000 in the functions, 2000 in the completion). Please reduce the length of the messages, functions, or completion.",
+          },
+        },
+        { status: 400 }
+      );
+    };
+    const client = chat(fetch, 'vllm');
+    await client.listModels();
+    await collect(client, ask(400, 2048));
+    expect(bodies.map(body => body.max_tokens)).toEqual([2048, CONTEXT - 7000]);
+  });
+
+  it('does not ask again when the refusal reports a functions count that is not a safe integer', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetch: FetchLike = async (url, init) => {
+      if (String(url).endsWith('/v1/models'))
+        return Response.json({ object: 'list', data: [{ id: 'qwen3-8b', object: 'model', max_model_len: CONTEXT }] });
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json(
+        {
+          error: {
+            message: `This model's maximum context length is 8192 tokens. However, you requested 9000 tokens (6000 in the messages, ${'9'.repeat(400)} in the functions, 2000 in the completion).`,
+          },
+        },
+        { status: 400 }
+      );
+    };
+    const client = chat(fetch, 'vllm');
+    await client.listModels();
+    await expect(collect(client, ask(400, 4096))).rejects.toThrow();
+    expect(bodies.map(body => body.max_tokens)).toEqual([4096]);
   });
 
   it('asks again with the room left and without the tools the server refused', async () => {

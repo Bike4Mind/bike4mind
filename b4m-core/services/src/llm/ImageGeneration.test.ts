@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ImageGenerationService } from './ImageGeneration';
+import { ImageGenerationBodySchema, ImageGenerationService } from './ImageGeneration';
 import type { SaveGeneratedAssetFn } from './saveGeneratedImage';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
@@ -2233,5 +2233,21 @@ describe('ImageGenerationService.process (terminal state on early failure)', () 
     expect(startQuestHeartbeat).not.toHaveBeenCalled();
     expect(users).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+// process() looks the model up among the available models, and a retired one is no longer listed
+// there, so a message queued with one (or sent by a stale client) must already carry its successor.
+describe('ImageGenerationBodySchema (queued message) legacy model remap', () => {
+  it('runs a queued gpt-image-1 job as gpt-image-2', () => {
+    const body = ImageGenerationBodySchema.parse({
+      prompt: 'a red apple',
+      model: ImageModels.GPT_IMAGE_1,
+      sessionId: 'session-1',
+      questId: 'quest-1',
+      userId: 'user-1',
+    });
+
+    expect(body.model).toBe(ImageModels.GPT_IMAGE_2);
   });
 });

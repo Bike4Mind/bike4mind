@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-10-24T12:32:55.506Z",
-  "notice": "Fallback defaults last maintained on 2026-10-24. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
+  "generatedAt": "2026-11-05T14:53:33.795Z",
+  "notice": "Fallback defaults last maintained on 2026-11-05. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
@@ -2994,7 +2994,8 @@
         "supportsImageVariation": true,
         "lifecycle": {
           "status": "deprecated",
-          "deprecationDate": "2026-10-23"
+          "deprecationDate": "2026-10-23",
+          "replacedBy": "gpt-image-2"
         },
         "description": "OpenAI GPT-Image-1 - Advanced multimodal image generation with text integration, supporting up to 2048x2048 resolution and image editing capabilities.",
         "rank": 10

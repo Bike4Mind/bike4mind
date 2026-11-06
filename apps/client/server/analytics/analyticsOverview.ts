@@ -14,9 +14,14 @@ import {
   type AnalyticsOverview,
   type AnalyticsOverviewQuery,
   type AnalyticsSignupsMode,
+  ANALYTICS_OTHER_FEATURE,
+  ANALYTICS_TOP_FEATURES,
+  ANALYTICS_TOP_MODELS,
   type AnalyticsStat,
+  type ModelUsage,
   type RequestsBySourceDay,
   type SignupBucket,
+  type UsageDay,
 } from '@client/app/utils/analyticsOverview';
 import {
   classifyCohort,
@@ -111,6 +116,9 @@ export type OverviewDailyRow = {
   mau: number;
   signups: IAnalyticsDailySignups;
   requestsBySource: Record<string, number>;
+  requestsByFeature: Record<string, number>;
+  requestsByModel: Record<string, number>;
+  creditsConsumed: number;
   internal?: Omit<IAnalyticsDailyInternal, 'userIds'>;
   computedAt: Date;
 };
@@ -125,6 +133,72 @@ const mean = (values: readonly number[]) => (values.length ? sum(values) / value
 /** Differs from `cohortSignupCount` (analyticsCohorts.ts), which also counts unclassified signups as legit; keep the two in step. */
 const signupTotal = (signups: IAnalyticsDailySignups, mode: AnalyticsSignupsMode) =>
   mode === 'legit' ? signups.legit : signups.legit + signups.suspected + signups.unclassified;
+
+const ranked = (totals: Map<string, number>) =>
+  [...totals.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+const addInto = (totals: Map<string, number>, counts: Record<string, number> | undefined) => {
+  for (const [key, count] of Object.entries(counts ?? {})) totals.set(key, (totals.get(key) ?? 0) + count);
+};
+
+/**
+ * Usage section (spec 4.7). Rankings and totals use the complete days (or today alone when none of them
+ * has a rollup), so they equal a sum over analytics_daily; the per-day series also carry today's live slice.
+ */
+function buildUsage(
+  rangeDays: readonly string[],
+  summaryDays: readonly string[],
+  partialDay: string | null,
+  valuesFor: (day: string) => LiveDay | undefined
+): AnalyticsOverview['usage'] {
+  const featureTotals = new Map<string, number>();
+  const modelTotals = new Map<string, number>();
+  let requests = 0;
+  let credits = 0;
+  let coveredDays = 0;
+  for (const day of summaryDays) {
+    const values = valuesFor(day);
+    if (!values) continue;
+    if (day !== partialDay) coveredDays++;
+    addInto(featureTotals, values.requestsByFeature);
+    addInto(modelTotals, values.requestsByModel);
+    requests += sum(Object.values(values.requestsByFeature ?? {}));
+    credits += values.creditsConsumed ?? 0;
+  }
+
+  const allFeatures = new Set<string>(featureTotals.keys());
+  for (const day of rangeDays) Object.keys(valuesFor(day)?.requestsByFeature ?? {}).forEach(f => allFeatures.add(f));
+  const top = ranked(featureTotals)
+    .slice(0, ANALYTICS_TOP_FEATURES)
+    .map(([feature]) => feature);
+  const topSet = new Set(top);
+  const features = [...allFeatures].some(feature => !topSet.has(feature)) ? [...top, ANALYTICS_OTHER_FEATURE] : top;
+
+  const days: UsageDay[] = rangeDays.map(day => {
+    const values = valuesFor(day);
+    if (!values) return { day, partial: day === partialDay, byFeature: null, credits: null };
+    const byFeature: Record<string, number> = Object.fromEntries(features.map(feature => [feature, 0]));
+    for (const [feature, count] of Object.entries(values.requestsByFeature ?? {})) {
+      const key = topSet.has(feature) ? feature : ANALYTICS_OTHER_FEATURE;
+      byFeature[key] = (byFeature[key] ?? 0) + count;
+    }
+    return { day, partial: day === partialDay, byFeature, credits: values.creditsConsumed ?? 0 };
+  });
+
+  // Share of every request, not of the model breakdown: a day's map is capped at ANALYTICS_BY_MODEL_LIMIT.
+  const share = (count: number) => (requests > 0 ? (count / requests) * 100 : 0);
+  const models: ModelUsage[] = ranked(modelTotals)
+    .slice(0, ANALYTICS_TOP_MODELS)
+    .map(([model, count]) => ({ model, requests: count, share: share(count) }));
+  return {
+    features,
+    days,
+    models,
+    otherModelRequests: Math.max(0, requests - sum(models.map(model => model.requests))),
+    totals: { requests, credits },
+    summaryDays: coveredDays,
+  };
+}
 
 export const mondayOf = (day: string) => shiftDay(day, -((new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7));
 const bucketStart = (day: string, bucket: AnalyticsBucket) =>
@@ -303,6 +377,12 @@ export function buildOverview({
       },
     },
     activeUsers: { days, bySource, sources },
+    usage: buildUsage(
+      rangeDays,
+      completeDays.some(day => byDay.has(day)) ? completeDays : rangeDays,
+      window.partialDay,
+      valuesFor
+    ),
     signups: {
       buckets,
       totals: {
@@ -363,6 +443,9 @@ export async function loadLiveDay(today: string, now: Date): Promise<LiveDay> {
     mau: unionSize(monthIds, yesterdayIds.external, todayIds),
     signups: cohort.signups,
     requestsBySource: Object.fromEntries(usage.bySource),
+    requestsByFeature: Object.fromEntries(usage.byFeature),
+    requestsByModel: Object.fromEntries(usage.byModel),
+    creditsConsumed: usage.creditsConsumed,
     internal: {
       dau: usage.internal.userIds.length,
       wau: internal.week.size,
@@ -384,7 +467,7 @@ export async function getAnalyticsOverview(
   const [rows, live] = await Promise.all([
     AnalyticsDaily.find({ day: { $gte: earliest, $lte: window.to } })
       .select(
-        'day dau wau mau signups requestsBySource internal.dau internal.wau internal.mau internal.allWau internal.allMau internal.windowComplete internal.requestsBySource computedAt'
+        'day dau wau mau signups requestsBySource requestsByFeature requestsByModel creditsConsumed internal.dau internal.wau internal.mau internal.allWau internal.allMau internal.windowComplete internal.requestsBySource computedAt'
       )
       .maxTimeMS(QUERY_DEADLINE_MS)
       .lean<OverviewDailyRow[]>(),

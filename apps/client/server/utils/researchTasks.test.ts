@@ -44,4 +44,10 @@ describe('researchTaskJobs enqueue', () => {
       payload: { id: 'r1', userId: 'u1' },
     });
   });
+
+  it('deepResearchIntoQuest() enqueues the job under its own action', async () => {
+    const job = { questId: 'q1', sessionId: 's1', userId: 'u1', topic: 'topic' };
+    await researchTaskJobs.deepResearchIntoQuest(job);
+    expect(sendToQueueMock).toHaveBeenCalledWith(QUEUE, { action: 'deepResearchIntoQuest', payload: job });
+  });
 });

@@ -171,9 +171,10 @@ export function signupGrantDripOpen(grant: Pick<SignupGrant, 'stage' | 'unlocked
 }
 
 /**
- * Resolves the schedule from stored values. Must stay in sync with the client mirror in
- * apps/client/app/hooks/useSignupGrantSchedule.ts and the seed in
- * packages/scripts/migrate/migrations/20260921237400_seed-signup-grant-schedule.ts.
+ * Resolves the schedule from stored values, including the retired toggles. Only the migrations in
+ * packages/scripts/migrate/migrations (20260921237400_seed-signup-grant-schedule.ts and
+ * 20260921237450_pin-signup-grant-initial-and-cap.ts) read it directly; runtime goes through
+ * runtimeSignupGrantSchedule below.
  */
 export function signupGrantScheduleFromValues(
   read: (key: SignupGrantCreditKey) => number | undefined,
@@ -208,13 +209,27 @@ export function signupGrantScheduleFromValues(
   };
 }
 
+/**
+ * The schedule as runtime reads it. defaultFreeCredits and stagedSignupGrantEnabled are retired: the seed
+ * migration above pinned their effect into the schedule keys, so they never size a payout here. Shared by
+ * resolveSignupGrantSchedule and the client mirror (useSignupGrantSchedule.ts) so both read the same keys.
+ */
+export function runtimeSignupGrantSchedule(
+  read: (key: SignupGrantCreditKey) => number | undefined,
+  activity: boolean
+): SignupGrantSchedule {
+  return signupGrantScheduleFromValues(key => (key === 'defaultFreeCredits' ? undefined : read(key)), {
+    staged: true,
+    activity,
+  });
+}
+
 const SCHEDULE_KEYS: SignupGrantCreditKey[] = [
   'signupGrantInitialCredits',
   'signupGrantDailyCredits',
   'signupGrantDripCap',
   'signupGrantInviteBonusCredits',
   'signupGrantCredits',
-  'defaultFreeCredits',
   'signupGrantActivityDailyCredits',
   'signupGrantActivityMaxCredits',
   'verifiedUnlockCredits',
@@ -225,7 +240,7 @@ type ScheduleSettingsReader = Pick<IAdminSettingsRepository, 'findBySettingName'
 
 /** The new schedule keys win; while one is unset its pre-schedule key still applies. One batched read when available. */
 export async function resolveSignupGrantSchedule(adminSettings: ScheduleSettingsReader): Promise<SignupGrantSchedule> {
-  const toggleKeys = ['stagedSignupGrantEnabled', 'signupGrantActivityEnabled'] as const;
+  const toggleKeys = ['signupGrantActivityEnabled'] as const;
   const values = new Map<string, unknown>();
   if (adminSettings.findBySettingNames) {
     for (const row of await adminSettings.findBySettingNames([...SCHEDULE_KEYS, ...toggleKeys])) {
@@ -236,10 +251,10 @@ export async function resolveSignupGrantSchedule(adminSettings: ScheduleSettings
       values.set(key, (await adminSettings.findBySettingName(key))?.settingValue);
     }
   }
-  return signupGrantScheduleFromValues(key => storedGrantCredits(key, values.get(key)), {
-    staged: isStoredToggleOn(values.get('stagedSignupGrantEnabled')),
-    activity: isStoredToggleOn(values.get('signupGrantActivityEnabled')),
-  });
+  return runtimeSignupGrantSchedule(
+    key => storedGrantCredits(key, values.get(key)),
+    isStoredToggleOn(values.get('signupGrantActivityEnabled'))
+  );
 }
 
 export async function resolveSignupGrantSettings(adminSettings: ScheduleSettingsReader) {

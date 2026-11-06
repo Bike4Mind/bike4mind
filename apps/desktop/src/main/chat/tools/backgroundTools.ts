@@ -21,6 +21,8 @@ const SETTLE_MS = 2_000;
 
 const DEFAULT_READ_CHARS = 8_000;
 const MAX_READ_CHARS = 20_000;
+/** Ceiling on `bash_output`'s wait_seconds: long enough for a cold monorepo install. */
+export const MAX_WAIT_SECONDS = 600;
 
 function requireRegistry(context: ToolContext) {
   if (!context.background) throw new Error('Background commands are not available in this build.');
@@ -43,6 +45,26 @@ export function describeStatus(info: BackgroundProcessInfo): string {
     default:
       if (info.exitCode !== null && info.exitCode !== undefined) return `exited ${info.exitCode}`;
       return `killed by ${info.signal ?? 'a signal'}`;
+  }
+}
+
+/** Resolves once the process ends, `ms` passes, or the turn is stopped - whichever is first. */
+async function waitForExit(
+  registry: NonNullable<ToolContext['background']>,
+  id: string,
+  ms: number,
+  signal: AbortSignal
+): Promise<void> {
+  if (signal.aborted) return;
+  let onAbort = (): void => undefined;
+  const aborted = new Promise<void>(resolve => {
+    onAbort = resolve;
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    await Promise.race([registry.settle(id, ms), aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
   }
 }
 
@@ -76,8 +98,9 @@ export const bashBackground: ToolDefinition = {
       '',
       'When a background command exits on its own you are told automatically - its handle, exit',
       'code and last output arrive as a message, waking this conversation if it is idle. So to wait',
-      'for a build, install or test run you started here, end your turn and say what you are',
-      'waiting for. Do not sleep, or call bash_output in a loop, until it finishes: every check',
+      'for a build, install or test run you started here, either end your turn and say what you are',
+      'waiting for, or, when you cannot go on without its result, call bash_output once with',
+      'wait_seconds. Do not sleep, or call bash_output in a loop, until it finishes: every check',
       'costs a full round trip and keeps the user waiting on your turn.',
       '',
       'Every background process is killed when the app quits. None of them survive a restart, so',
@@ -170,6 +193,11 @@ export const bashOutput: ToolDefinition = {
       '',
       'Do not poll this to find out when a command finishes: you are told automatically when one',
       'exits. Use it for what a still-running process has printed.',
+      '',
+      'To block on a process inside your turn - an install or build whose result your next step',
+      `needs - pass wait_seconds (up to ${MAX_WAIT_SECONDS}). The call returns as soon as the process`,
+      'exits, or when the time is up with it still running, and then reads output as usual. This is',
+      'how a session that must not end its turn yet waits; one call, not a loop.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -182,6 +210,10 @@ export const bashOutput: ToolDefinition = {
         max_chars: {
           type: 'number',
           description: `Ceiling on returned characters, newest kept. Default ${DEFAULT_READ_CHARS}, max ${MAX_READ_CHARS}.`,
+        },
+        wait_seconds: {
+          type: 'number',
+          description: `Wait up to this many seconds for the process to exit before reading. Default 0, max ${MAX_WAIT_SECONDS}.`,
         },
       },
       required: ['id'],
@@ -196,18 +228,27 @@ export const bashOutput: ToolDefinition = {
 
     const requested = optionalNumber(input, 'max_chars');
     const maxChars = Math.min(Math.max(requested ?? DEFAULT_READ_CHARS, 200), MAX_READ_CHARS);
+    const waitSeconds = Math.min(Math.max(optionalNumber(input, 'wait_seconds') ?? 0, 0), MAX_WAIT_SECONDS);
 
-    const read = registry.readForModel(id, sessionId, maxChars, input.from_start === true);
-    if (!read) {
+    const before = registry.get(id, sessionId);
+    if (!before) {
       throw new Error(
         `No background process ${id} in this conversation. Use bash_list to see what is running. ` +
           'Processes do not survive the app restarting.'
       );
     }
+    const waited = waitSeconds > 0 && before.status === 'running';
+    if (waited) await waitForExit(registry, id, waitSeconds * 1000, context.signal);
+
+    const read = registry.readForModel(id, sessionId, maxChars, input.from_start === true);
+    if (!read) throw new Error(`Background process ${id} is gone: its conversation was cleared.`);
 
     const sections = [header(read.info)];
     if (read.missed > 0) sections.push(`[${read.missed} earlier characters were dropped by the output cap]`);
     sections.push('', read.text.trim() ? read.text.trimEnd() : '[no new output]');
+    if (waited && read.info.status === 'running') {
+      sections.push('', `[still running after waiting ${waitSeconds}s]`);
+    }
 
     return capOutput(sections.join('\n'));
   },

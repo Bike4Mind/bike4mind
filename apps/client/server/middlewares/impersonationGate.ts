@@ -58,6 +58,8 @@ export function impersonationDecision(
     return 'sensitive';
   if (/^\/api\/agents(?:\/|$)/.test(path) && !['GET', 'HEAD'].includes(method)) return 'sensitive';
   if (method === 'POST' && path === '/api/briefcase/catalog') return 'allow';
+  // POST only: bulk DELETE stays readonly, and the route itself refuses its AI generateTags action.
+  if (writeEnabled && method === 'POST' && path === '/api/sessions/bulk') return 'allow';
   if (writeEnabled && CONTENT_WRITES.some(pattern => pattern.test(path))) return 'allow';
   return ['GET', 'HEAD'].includes(method) && READS.some(pattern => pattern.test(path)) ? 'allow' : 'readonly';
 }

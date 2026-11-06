@@ -66,6 +66,7 @@ import {
   type CompletionQuotaGrant,
 } from '@server/utils/untrustedCompletionQuota';
 import { resolveThinkingVisibility } from '@server/utils/thinkingVisibility';
+import { recordUserLimitEvent } from '@server/billing/userLimitEvents';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
 
 /**
@@ -381,6 +382,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           // Required to reserve/settle against an org pool for org-billed API keys.
           organizations: organizationRepository,
           cache: cacheRepository,
+          recordLimitEvent: recordUserLimitEvent,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
         scopeActor: actorScopeForKey(apiKeyInfo),

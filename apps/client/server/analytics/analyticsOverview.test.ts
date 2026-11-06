@@ -25,6 +25,9 @@ const row = (day: string, patch: Partial<OverviewDailyRow> = {}): OverviewDailyR
   mau: 40,
   signups: { legit: 2, suspected: 1, unclassified: 0, bySignal: { domainBurst: 1 } },
   requestsBySource: { web: 5, cli: 1, system: 9 },
+  requestsByFeature: { chat: 5, image_generation: 1 },
+  requestsByModel: { 'gpt-4.1': 4, 'claude-sonnet': 2 },
+  creditsConsumed: 30,
   // One internal user was external earlier in the window, so the union is one less than the sum.
   internal: {
     dau: 2,
@@ -45,6 +48,9 @@ const live: LiveDay = {
   mau: 45,
   signups: { legit: 0, suspected: 0, unclassified: 4, bySignal: {} },
   requestsBySource: { web: 2 },
+  requestsByFeature: { chat: 2 },
+  requestsByModel: { 'gpt-4.1': 2 },
+  creditsConsumed: 7,
   internal: { dau: 1, wau: 3, mau: 5, allWau: 27, allMau: 49, windowComplete: true, requestsBySource: { cli: 1 } },
 };
 
@@ -361,5 +367,72 @@ describe('buildOverview', () => {
       rowsFor('2026-01-01', '2026-01-31', () => ({ computedAt: new Date('2026-02-01T04:00:00Z') }))
     );
     expect(past.stale).toBe(false);
+  });
+});
+
+describe('buildOverview usage', () => {
+  const window7d = resolveOverviewWindow(query(), NOW);
+  const build = (rows: OverviewDailyRow[], liveDay: LiveDay | null = live) =>
+    buildOverview({ window: window7d, signupsMode: 'legit', rows, live: liveDay, now: NOW }).usage;
+
+  it('totals the complete days only, so they equal a sum over the rollup rows', () => {
+    const usage = build(rowsFor('2026-06-09', '2026-06-14'));
+    expect(usage.totals).toEqual({ requests: 36, credits: 180 });
+    expect(usage.summaryDays).toBe(6);
+    expect(usage.days.at(-1)).toEqual({
+      day: '2026-06-15',
+      partial: true,
+      byFeature: { chat: 2, image_generation: 0 },
+      credits: 7,
+    });
+  });
+
+  it('keeps the top six features and folds the rest into Other', () => {
+    const many = Object.fromEntries(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((f, i) => [f, 10 - i]));
+    const usage = build(
+      rowsFor('2026-06-09', '2026-06-14', () => ({ requestsByFeature: many })),
+      null
+    );
+    expect(usage.features).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'other']);
+    expect(usage.days[0].byFeature).toMatchObject({ a: 10, f: 5, other: 3 + 4 });
+  });
+
+  it('adds Other when a feature appears only on the partial day', () => {
+    const usage = build(
+      rowsFor('2026-06-09', '2026-06-14', () => ({ requestsByFeature: { chat: 1 } })),
+      {
+        ...live,
+        requestsByFeature: { chat: 1, voice: 2 },
+      }
+    );
+    expect(usage.features).toEqual(['chat', 'other']);
+    expect(usage.days.at(-1)?.byFeature).toEqual({ chat: 1, other: 2 });
+  });
+
+  it('draws a missing rollup day as a gap, not zero', () => {
+    const usage = build(rowsFor('2026-06-09', '2026-06-14').filter(r => r.day !== '2026-06-12'));
+    expect(usage.days.find(d => d.day === '2026-06-12')).toEqual({
+      day: '2026-06-12',
+      partial: false,
+      byFeature: null,
+      credits: null,
+    });
+    expect(usage.summaryDays).toBe(5);
+  });
+
+  it('ranks today alone when no complete day has a rollup, as on a fresh environment', () => {
+    const usage = build([]);
+    expect(usage.summaryDays).toBe(0);
+    expect(usage.features).toEqual(['chat']);
+    expect(usage.models).toEqual([{ model: 'gpt-4.1', requests: 2, share: 100 }]);
+    expect(usage.totals).toEqual({ requests: 2, credits: 7 });
+  });
+
+  it('ranks the top ten models with their share of every request', () => {
+    const models = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`m${String(i).padStart(2, '0')}`, 12 - i]));
+    const usage = build([row('2026-06-14', { requestsByModel: models, requestsByFeature: { chat: 78 } })], null);
+    expect(usage.models).toHaveLength(10);
+    expect(usage.models[0]).toEqual({ model: 'm00', requests: 12, share: (12 / 78) * 100 });
+    expect(usage.otherModelRequests).toBe(78 - (12 + 11 + 10 + 9 + 8 + 7 + 6 + 5 + 4 + 3));
   });
 });

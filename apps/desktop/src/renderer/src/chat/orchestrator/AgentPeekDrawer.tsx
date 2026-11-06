@@ -8,12 +8,12 @@ import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall }
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ToolCallList } from '../ToolCallList';
 import { groupToolCalls } from '../toolRows';
-import { pendingCallsIn } from './needsYou';
+import { pendingCallsIn } from '@shared/needsYou';
 import { activityLabel } from './activity';
 import { AgentStateChip } from './AgentStateChip';
 import type { AgentActions } from './OrchestratorStage';
 import type { AgentView } from './roster';
-import type { AgentPersona } from './tavern/agentPersona';
+import type { AgentPersona } from '@shared/agentPersona';
 
 const RECENT_MESSAGES = 3;
 const MESSAGE_SNIPPET_MAX = 280;
@@ -301,7 +301,7 @@ export function AgentPeekDrawer({ agent, persona, onClose, actions }: AgentPeekD
             </Typography>
           )}
         </Box>
-        <AgentStateChip state={agent.state} preparing={agent.preparing} />
+        <AgentStateChip state={agent.state} preparing={agent.preparing !== undefined} />
         <IconButton
           size="sm"
           variant="plain"

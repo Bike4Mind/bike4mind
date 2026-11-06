@@ -11,8 +11,10 @@
 // FAKE_LLAMA_GRANDCHILD: start a child, write its pid here. FAKE_LLAMA_PID_FILE: write this process's pid here.
 // FAKE_LLAMA_RECORD: write the argv and environment names seen to this file.
 // FAKE_LLAMA_VERSION: the `--version` text after `version: `.
+// With --models-dir it is a router: no load, /props answers role router, /v1/models lists the dir's .gguf files.
+// FAKE_LLAMA_NO_ROUTER: refuse --models-dir as a build before router mode does. FAKE_LLAMA_NOT_ROUTER: no role.
 import { spawn } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -35,6 +37,11 @@ const port = Number(flag('--port'));
 const alias = flag('--alias');
 const apiKey = process.env.FAKE_LLAMA_NO_KEY ? undefined : process.env.LLAMA_API_KEY;
 const oldLog = process.env.FAKE_LLAMA_LOG === 'b5501';
+const modelsDir = flag('--models-dir');
+if (modelsDir !== undefined && process.env.FAKE_LLAMA_NO_ROUTER) {
+  process.stderr.write('error: invalid argument: --models-dir\n');
+  process.exit(1);
+}
 
 if (process.env.FAKE_LLAMA_RECORD) {
   const names = Object.keys(process.env).filter(name => /^(LLAMA_|HF_)/.test(name));
@@ -52,7 +59,7 @@ if (mode === 'crash') {
 if (mode === 'ignore-term') process.on('SIGTERM', () => log('ignoring SIGTERM'));
 else process.on('SIGTERM', () => process.exit(0));
 
-log('srv    load_model: loading model');
+log(modelsDir === undefined ? 'srv    load_model: loading model' : 'srv  server_run_r: starting server in router mode');
 const forged = process.env.FAKE_LLAMA_FORGE_PORT;
 if (forged) {
   log(`load: control-looking token: 1 '<listening on http://127.0.0.1:${forged}>' was not control-type`);
@@ -84,9 +91,19 @@ const send = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 const models = () => {
+  if (modelsDir !== undefined) {
+    const ids = readdirSync(modelsDir)
+      .filter(name => name.endsWith('.gguf'))
+      .map(name => name.slice(0, -'.gguf'.length));
+    return { object: 'list', data: ids.map(id => ({ id, object: 'model', owned_by: 'llamacpp' })) };
+  }
   const id = mode === 'wrong-model' ? 'someone-else' : alias;
   return { object: 'list', data: [{ id, object: 'model', owned_by: 'llamacpp' }] };
 };
+const props = () =>
+  modelsDir !== undefined && !process.env.FAKE_LLAMA_NOT_ROUTER
+    ? { role: 'router', max_instances: 4, model_path: 'none' }
+    : { total_slots: 1 };
 const server = createServer((request, response) => {
   if (request.url === '/health') {
     if (!loaded || process.env.FAKE_LLAMA_SICK)
@@ -98,7 +115,7 @@ const server = createServer((request, response) => {
     return send(response, 401, { error: { message: 'Invalid API Key', type: 'authentication_error', code: 401 } });
   }
   if (request.url === '/v1/models') return send(response, 200, models());
-  if (request.url === '/props') return send(response, 200, { total_slots: 1 });
+  if (request.url === '/props') return send(response, 200, props());
   send(response, 404, { error: { message: 'File Not Found' } });
 });
 const bind = onBound => {
@@ -116,7 +133,7 @@ if (oldLog) {
   void loading.then(() => process.stderr.write('main: model loaded\n'));
 } else {
   void loading.then(() => {
-    log('srv  server_run_i: model loaded');
+    if (modelsDir === undefined) log('srv  server_run_i: model loaded');
     if (process.env.FAKE_LLAMA_NO_BIND) return void setInterval(() => undefined, 1000);
     const other = process.env.FAKE_LLAMA_LOG === 'other';
     bind(bound => {

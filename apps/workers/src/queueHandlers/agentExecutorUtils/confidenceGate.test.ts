@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import type { AgentStep } from '@bike4mind/agents';
 import {
   decideIterationConfidencePause,
+  DEFAULT_LOW_CONFIDENCE_COMPLETION,
   evaluateConfidenceGate,
+  evaluateLowConfidenceCompletion,
   formatConfidenceGateReason,
   gateThresholdFor,
   isPausingLowConfidenceStreak,
@@ -318,5 +320,33 @@ describe('gateThresholdFor', () => {
   it('uses a non-zero profile threshold as is, and the default without one', () => {
     expect(gateThresholdFor({ confidenceGateThreshold: 0.4 }, { loopId: 'loop-1' })).toBe(0.4);
     expect(gateThresholdFor(undefined, {})).toBe(0.6);
+  });
+});
+
+describe('evaluateLowConfidenceCompletion', () => {
+  const low = { lowConfidenceStreak: 1, lastConfidence: 0.42, threshold: 0.6 };
+
+  it('defaults to annotate', () => {
+    expect(DEFAULT_LOW_CONFIDENCE_COMPLETION).toBe('annotate');
+  });
+
+  it.each(['annotate', 'block'] as const)('flags the answer in %s mode with the last confidence and a reason', mode => {
+    expect(evaluateLowConfidenceCompletion({ mode, ...low })).toEqual({
+      mode,
+      confidence: 0.42,
+      reason: 'Answered after an iteration below the 60% confidence threshold (latest 42%)',
+    });
+  });
+
+  it('returns null in off mode', () => {
+    expect(evaluateLowConfidenceCompletion({ mode: 'off', ...low })).toBeNull();
+  });
+
+  it.each([undefined, 0])('returns null when the streak is %s', lowConfidenceStreak => {
+    expect(evaluateLowConfidenceCompletion({ mode: 'annotate', ...low, lowConfidenceStreak })).toBeNull();
+  });
+
+  it('returns null when no confidence was ever recorded', () => {
+    expect(evaluateLowConfidenceCompletion({ mode: 'annotate', ...low, lastConfidence: undefined })).toBeNull();
   });
 });

@@ -148,6 +148,8 @@ vi.mock('@bike4mind/server-utils/utils/config', () => ({
 
 const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
+const mockRecordUserLimitEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/billing/userLimitEvents', () => ({ recordUserLimitEvent: mockRecordUserLimitEvent }));
 
 import { registerEmbedRoutes } from './embedRoute';
 import { spendCapExceededError } from '@bike4mind/common';
@@ -471,6 +473,7 @@ describe('POST /api/embed/chat', () => {
       error_description: 'This embed key has reached its spend cap',
       code: 'spend_cap_exceeded',
     });
+    expect(mockRecordUserLimitEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'api_key_spend_cap' }));
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 

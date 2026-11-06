@@ -11,8 +11,8 @@ import SignupGrantStatus from './SignupGrantStatus';
 const CreditsExplanation = () => {
   const model = useLLM(state => state.model);
   const organizationId = useLLM(state => state.organizationId);
-  const defaultFreeCredits = useSignupGrantCredits();
-  const showFreeCreditsNote = defaultFreeCredits > 0 && !organizationId;
+  const signupGrantCredits = useSignupGrantCredits();
+  const showFreeCreditsNote = signupGrantCredits > 0 && !organizationId;
   const credits = useEffectiveCredits();
   const { data: models } = useModelInfo();
   const selected = useMemo(() => models?.find(candidate => candidate.id === model), [models, model]);

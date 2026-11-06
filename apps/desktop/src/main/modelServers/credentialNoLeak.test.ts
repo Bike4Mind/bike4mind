@@ -18,6 +18,7 @@ import { registerModelServersIpc } from './ipc';
 import { LocalModels } from './LocalModels';
 import { ModelServerRegistry } from './ModelServerRegistry';
 import { ModelServerStore } from './ModelServerStore';
+import { inertLaunchers } from './testLaunchers';
 
 // The `/` and `"` reach the echoing server's JSON escaped, as `\/` and `\"`.
 const BEARER = 'sentinel-bearer/7f3a9c2e41d8';
@@ -227,6 +228,7 @@ function desktopMain(cipher: SecretCipher, out = new Outbound(), saved: string |
   const registry = new ModelServerRegistry({
     store,
     logger,
+    launchers: inertLaunchers(),
     changed: views => out.ipc(`push ${IPC_CHANNELS.modelServersChanged}`, views),
   });
   const local = new LocalModels(new OllamaLocal(), registry);
