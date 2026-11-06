@@ -202,3 +202,33 @@ describe('SelfReportStreamFilter with whitespace inside the empty think block', 
     expect(all).toBe('<think>\nthinking</think>Hi');
   });
 });
+
+describe('SelfReportStreamFilter after giving up on an oversized unclosed tag', () => {
+  const OVERSIZED = '<confidence score="0.5">' + 'x'.repeat(700);
+  const run = (deltas: string[]) => {
+    const filter = new SelfReportStreamFilter();
+    const out = deltas.map(d => filter.push(d));
+    return { out, all: out.join('') + filter.flush() };
+  };
+
+  it('still strips the closing tag when it arrives in a later delta', () => {
+    const { all } = run([OVERSIZED, 'tail</confidence>done']);
+    expect(all).not.toMatch(/<\/confidence/i);
+    expect(all).toBe('x'.repeat(700) + 'taildone');
+  });
+
+  it('strips a closing tag split across deltas', () => {
+    const { all } = run([OVERSIZED, 'tail</conf', 'idence>done']);
+    expect(all).toBe('x'.repeat(700) + 'taildone');
+  });
+
+  it('releases a partial closing tag that never completes at flush', () => {
+    const { all } = run([OVERSIZED, 'a</conf']);
+    expect(all).toBe('x'.repeat(700) + 'a</conf');
+  });
+
+  it('leaves text without a closing tag untouched', () => {
+    const { all } = run([OVERSIZED, ' more text', ' and more']);
+    expect(all).toBe('x'.repeat(700) + ' more text and more');
+  });
+});
