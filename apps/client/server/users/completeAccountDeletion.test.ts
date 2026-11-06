@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   purgeContent: vi.fn(),
   endRealtimeConnections: vi.fn(),
   sendComplete: vi.fn(),
+  recordAdminAction: vi.fn(),
   order: [] as string[],
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -21,12 +22,19 @@ vi.mock('@bike4mind/database', () => ({
   },
   Organization: { exists: h.organizationExists, deleteMany: h.deletePersonalOrganizations },
   realtimeConnectionRepository: {},
+  adminAuditLogRepository: { append: vi.fn() },
 }));
-vi.mock('@bike4mind/services', () => ({ authSessionService: { endRealtimeConnections: h.endRealtimeConnections } }));
+vi.mock('@bike4mind/services', () => ({
+  authSessionService: { endRealtimeConnections: h.endRealtimeConnections },
+  adminAuditService: { recordAdminAction: h.recordAdminAction },
+}));
 vi.mock('@server/services/hardDeleteUser', () => ({ hardDeleteUser: h.hardDeleteUser }));
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
+vi.mock('@server/utils/adminAudit', () => ({
+  systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
+}));
 
 import { completeAccountDeletion } from './completeAccountDeletion';
 
@@ -39,7 +47,11 @@ const users = {
   }),
 };
 const complete = () => completeAccountDeletion(USER_ID, { logger: logger as never, now: NOW });
-type HardDeleteContext = { assertInTransaction?: () => Promise<void>; recordInTransaction?: () => Promise<void> };
+type HardDeleteContext = {
+  assertInTransaction?: () => Promise<void>;
+  recordInTransaction?: (target: unknown) => Promise<void>;
+};
+const deletedTarget = { name: 'Leaving User', username: 'leaving', email: 'leaving@example.com' };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -62,11 +74,14 @@ beforeEach(() => {
   h.sendComplete.mockImplementation(async () => {
     h.order.push('email');
   });
+  h.recordAdminAction.mockImplementation(async () => {
+    h.order.push('audit');
+  });
   h.hardDeleteUser.mockImplementation(
     async (_id: string, context: HardDeleteContext, commitDelete: (repository: typeof users) => Promise<unknown>) => {
       await context.assertInTransaction?.();
       const result = await commitDelete(users);
-      await context.recordInTransaction?.();
+      await context.recordInTransaction?.(deletedTarget);
       return { result, subscriptionCancellation: null };
     }
   );
@@ -107,7 +122,7 @@ describe('completeAccountDeletion', () => {
       },
       { new: true, projection: { email: 1 } }
     );
-    expect(h.order).toEqual(['files', 'content', 'realtime', 'delete', 'email']);
+    expect(h.order).toEqual(['files', 'content', 'realtime', 'delete', 'audit', 'email']);
     expect(h.deletePersonalOrganizations).toHaveBeenCalledWith(
       { userId: USER_ID, personal: true },
       { hardDelete: true }
@@ -213,5 +228,50 @@ describe('completeAccountDeletion', () => {
     h.claimUser.mockResolvedValue({ email: null });
     await expect(complete()).resolves.toEqual({ deleted: true });
     expect(h.sendComplete).not.toHaveBeenCalled();
+  });
+
+  it('records the completed deletion in the admin audit log inside the delete transaction', async () => {
+    await expect(complete()).resolves.toEqual({ deleted: true });
+    expect(h.recordAdminAction).toHaveBeenCalledWith(
+      {
+        action: 'user.deletion.completed',
+        actor: { kind: 'system', scope: 'platform', name: 'account-deletion-sweep', wasAdmin: false },
+        target: { kind: 'user', id: USER_ID, displayName: 'Leaving User' },
+        summary: expect.any(String),
+        details: { initiatedBy: 'self' },
+        context: { source: 'worker' },
+      },
+      expect.objectContaining({ logger })
+    );
+    expect(JSON.stringify(h.recordAdminAction.mock.calls[0][0])).not.toContain('leaving@example.com');
+    expect(h.order.slice(-3)).toEqual(['delete', 'audit', 'email']);
+  });
+
+  it('falls back to the user id when the deleted row is unreadable', async () => {
+    h.hardDeleteUser.mockImplementation(
+      async (_id: string, context: HardDeleteContext, commitDelete: (repository: typeof users) => Promise<unknown>) => {
+        const result = await commitDelete(users);
+        await context.recordInTransaction?.(null);
+        return { result, subscriptionCancellation: null };
+      }
+    );
+    await expect(complete()).resolves.toEqual({ deleted: true });
+    expect(h.recordAdminAction.mock.calls[0][0].target).toEqual({ kind: 'user', id: USER_ID, displayName: USER_ID });
+  });
+
+  it('fails the delete transaction when the strict audit write fails, keeping the account for a retry', async () => {
+    h.recordAdminAction.mockRejectedValue(new Error('audit store down'));
+    await expect(complete()).rejects.toThrow('audit store down');
+    expect(h.sendComplete).not.toHaveBeenCalled();
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: USER_ID, 'deletion.purgeLeaseId': expect.any(String) },
+      { $unset: { 'deletion.purgeLeaseId': 1, 'deletion.purgeLeaseExpiresAt': 1 } }
+    );
+  });
+
+  it('writes no audit entry when the delete fails', async () => {
+    h.purgeContent.mockRejectedValue(new Error('purge unavailable'));
+    await expect(complete()).rejects.toThrow('purge unavailable');
+    expect(h.recordAdminAction).not.toHaveBeenCalled();
   });
 });

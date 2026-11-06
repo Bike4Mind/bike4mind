@@ -16,6 +16,7 @@ import {
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { generateAgentAvatar } from '@server/agents/authoring/generateAgentAvatar';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 interface AgentAvatarRequest {
   imageModel?: string;
@@ -53,7 +54,16 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     await checkStorageLimit(req.user!, 0);
 
     try {
-      res.json(await generateAgentAvatar(agent, req.user!, userImageModel, req.logger, req));
+      res.json(
+        await generateAgentAvatar(
+          agent,
+          req.user!,
+          userImageModel,
+          req.logger,
+          req,
+          createRequestCompletionMeter(req, 'agent avatar prompt', { systemModel: true })
+        )
+      );
     } catch (error) {
       logImageGenerationFailure(imageLogger, 'Error generating agent avatar:', error, { agentId: agent.id, userId });
 

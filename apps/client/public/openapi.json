@@ -12771,6 +12771,32 @@
           "generation_prompt"
         ]
       },
+      "generateAgentAvatarResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "generateAgentAvatarRequest": {
         "type": "object",
         "properties": {
@@ -12796,6 +12822,32 @@
           "description"
         ]
       },
+      "generateAgentDescriptionResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "generateAgentSystemPromptResponse200": {
         "type": "object",
         "properties": {
@@ -12808,6 +12860,32 @@
           "system_prompt"
         ]
       },
+      "generateAgentSystemPromptResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
       "enhanceAgentFieldResponse200": {
         "type": "object",
         "properties": {
@@ -12818,6 +12896,32 @@
         },
         "required": [
           "enhanced_value"
+        ]
+      },
+      "enhanceAgentFieldResponse422": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded"
+            ]
+          }
+        },
+        "required": [
+          "error"
         ]
       },
       "enhanceAgentFieldRequest": {
@@ -44469,7 +44573,7 @@
             }
           },
           "400": {
-            "description": "`image_model` is not an available image model (`errorCode: unknown_model`), no image model is configured, or the generated image would exceed the caller storage quota (`errorCode: storage_limit_exceeded`). Nothing is written.",
+            "description": "`image_model` is not an available image model (`errorCode: unknown_model`), no image model is configured, or the generated image would exceed the caller storage quota (`errorCode: storage_limit_exceeded`). The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
@@ -44673,11 +44777,11 @@
             }
           },
           "422": {
-            "description": "Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list.",
+            "description": "Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. The caller cannot afford the model call, tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted). Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/generateAgentAvatarResponse422"
                 }
               }
             },
@@ -44945,6 +45049,60 @@
               }
             }
           },
+          "400": {
+            "description": "The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid credentials.",
             "content": {
@@ -45096,11 +45254,11 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "The caller cannot afford the model call, tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted). Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/generateAgentDescriptionResponse422"
                 }
               }
             },
@@ -45369,7 +45527,7 @@
             }
           },
           "400": {
-            "description": "The assistant cannot run: the feature is disabled or not configured on this deployment. Nothing is written.",
+            "description": "The assistant cannot run: the feature is disabled or not configured on this deployment. The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of. Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
@@ -45573,11 +45731,11 @@
             }
           },
           "422": {
-            "description": "Request failed validation.",
+            "description": "The caller cannot afford the model call, tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted). Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/generateAgentSystemPromptResponse422"
                 }
               }
             },
@@ -45856,7 +46014,7 @@
             }
           },
           "400": {
-            "description": "No model is available to run the enhancement on this deployment.",
+            "description": "No model is available to run the enhancement on this deployment. The billing user or organization could not be resolved, or the API key bills an organization its owner is no longer a member of.",
             "content": {
               "application/json": {
                 "schema": {
@@ -46060,11 +46218,11 @@
             }
           },
           "422": {
-            "description": "Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list.",
+            "description": "Request body failed validation: an unknown field, an out-of-range value, an unknown `preferred_model`, or a malformed `trigger_words`/tool list. The caller cannot afford the model call, tagged `errorCode: \"insufficient_credits\"` (the balance is short, or the org member credit cap is exhausted). Nothing is written.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/enhanceAgentFieldResponse422"
                 }
               }
             },

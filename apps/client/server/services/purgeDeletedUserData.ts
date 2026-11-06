@@ -38,6 +38,7 @@ export const PURGED_USER_DATA: readonly string[] = [
   'Personal files and generated media (except moderation-held content or copies still owned by others)',
   'Personal projects, artifacts, skills and memories',
   'Personal data lakes, agent records and connected-device credentials',
+  'API keys, including the AI provider keys you saved',
   'Sign-in sessions and sign-in history',
   'Google Drive and Atlassian connections',
   'Published pages',

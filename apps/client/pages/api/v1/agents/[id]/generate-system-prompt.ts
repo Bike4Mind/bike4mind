@@ -6,6 +6,7 @@
  */
 import { generateAgentSystemPromptContract } from '@bike4mind/common';
 import { generateAgentSystemPrompt } from '@server/agents/authoring/generateAgentSystemPrompt';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
@@ -24,7 +25,14 @@ const handler = nextRouteForContract(generateAgentSystemPromptContract, {
     const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
 
     try {
-      return res.json({ system_prompt: await generateAgentSystemPrompt(agent, req.user.id, req.logger) });
+      return res.json({
+        system_prompt: await generateAgentSystemPrompt(
+          agent,
+          req.user.id,
+          req.logger,
+          createRequestCompletionMeter(req, 'agent system prompt', { systemModel: true })
+        ),
+      });
     } catch (error) {
       logSystemPromptGenerationFailure(req.logger, 'Error generating agent system prompt:', error);
       throw toV1AuthoringError(error);

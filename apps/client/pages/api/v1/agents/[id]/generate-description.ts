@@ -5,6 +5,7 @@
  */
 import { generateAgentDescriptionContract } from '@bike4mind/common';
 import { generateAgentDescription } from '@server/agents/authoring/generateAgentDescription';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
@@ -22,7 +23,13 @@ const handler = nextRouteForContract(generateAgentDescriptionContract, {
     const agent = await findOwnedAgent(req.validatedParams.id, req.user.id);
 
     try {
-      return res.json({ description: await generateAgentDescription(agent, req.logger) });
+      return res.json({
+        description: await generateAgentDescription(
+          agent,
+          req.logger,
+          createRequestCompletionMeter(req, 'agent description', { systemModel: true })
+        ),
+      });
     } catch (error) {
       req.logger.error('Error generating agent description:', error);
       throw toV1AuthoringError(error);
