@@ -12,7 +12,6 @@ const h = vi.hoisted(() => ({
   requireStepUp: vi.fn(),
   findTarget: vi.fn(),
   readState: vi.fn(),
-  findOwned: vi.fn(),
   requestErasure: vi.fn(),
 }));
 
@@ -43,7 +42,6 @@ vi.mock('@server/dataSubject/adminErasure', () => ({
   readAdminErasureState: h.readState,
 }));
 vi.mock('@server/users/accountDeletion', () => ({
-  findOwnedOrganizations: h.findOwned,
   requestAdminErasure: h.requestErasure,
 }));
 vi.mock('@server/utils/adminAudit', () => ({
@@ -63,7 +61,7 @@ import '../index';
 
 const ADMIN_ID = 'admin-1';
 const USER_ID = '665f1c2e8b3a4d0012345678';
-const TARGET = { kind: 'user', id: USER_ID, displayName: 'ada@example.com' };
+const TARGET = { kind: 'user', id: USER_ID, displayName: USER_ID };
 
 function mocks(method: 'GET' | 'POST', body?: unknown) {
   const { req, res } = createMocks({ method, query: { userId: USER_ID }, body });
@@ -75,8 +73,7 @@ beforeEach(() => {
   h.calls = [];
   h.requireStepUp.mockReset().mockImplementation(async () => void h.calls.push('stepUp'));
   h.findTarget.mockReset().mockResolvedValue({ user: { id: USER_ID }, auditTarget: TARGET });
-  h.readState.mockReset().mockResolvedValue({ state: 'none' });
-  h.findOwned.mockReset().mockResolvedValue([]);
+  h.readState.mockReset().mockResolvedValue({ state: 'none', ownedOrganizations: [] });
   h.record.mockReset().mockImplementation(async () => void h.calls.push('audit'));
   h.requestErasure.mockReset().mockImplementation(async () => void h.calls.push('request'));
   h.send.mockReset().mockImplementation(async () => void h.calls.push('enqueue'));
@@ -164,7 +161,7 @@ describe('admin data subject erasure request', () => {
   });
 
   it('refuses with the owner code and no audit when the user owns an organization', async () => {
-    h.findOwned.mockResolvedValue([{ id: 'org-1', name: 'Acme' }]);
+    h.readState.mockResolvedValue({ state: 'none', ownedOrganizations: [{ id: 'org-1', name: 'Acme' }] });
     const { req, res } = mocks('POST', { reason: 'Art. 17 request' });
 
     const error = await h.post!(req, res).catch((caught: unknown) => caught);

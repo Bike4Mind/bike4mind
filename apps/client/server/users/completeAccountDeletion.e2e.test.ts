@@ -70,7 +70,7 @@ describe('account deletion purge claims with Mongo', () => {
         },
       }
     );
-    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).not.toHaveBeenCalled();
     expect(h.purgeContent).not.toHaveBeenCalled();
     expect(h.sendComplete).not.toHaveBeenCalled();
@@ -120,7 +120,7 @@ describe('account deletion purge claims with Mongo', () => {
     });
     const first = complete(userId);
     await claimed;
-    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete(userId)).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).toHaveBeenCalledTimes(1);
     unblock?.();
     await expect(first).resolves.toEqual({ deleted: true });

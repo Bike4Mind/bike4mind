@@ -238,7 +238,8 @@ export async function clearAccountDeletion(
   const cancelled = await withTransaction(async () => {
     // Reads the address and the cleared stamp in the same query that clears the deletion.
     const cleared = await User.findOneAndUpdate(
-      { _id: userId, deletion: { $ne: null }, 'deletion.purgeStartedAt': null },
+      // An admin's erasure is not the person's request, so neither they nor support can call it off.
+      { _id: userId, deletion: { $ne: null }, 'deletion.purgeStartedAt': null, 'deletion.source': { $ne: 'admin' } },
       { $unset: { deletion: 1 } },
       { projection: { email: 1, deletion: 1 } }
     ).lean<{ email?: string | null; deletion?: IUserDeletion }>();
@@ -248,6 +249,9 @@ export async function clearAccountDeletion(
   if (!cancelled) {
     if (await User.exists({ _id: userId, 'deletion.purgeStartedAt': { $type: 'date' } })) {
       throw new ConflictError('Account deletion has started and can no longer be cancelled.');
+    }
+    if (await User.exists({ _id: userId, 'deletion.source': 'admin' })) {
+      throw new ConflictError("This account is being erased at an administrator's request and cannot be cancelled.");
     }
     throw new NotFoundError('This account is not scheduled for deletion.');
   }

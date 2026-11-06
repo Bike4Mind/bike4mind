@@ -1,4 +1,7 @@
 import type { AdminErasureCollection } from '@bike4mind/common';
+// The walk reads every registry model; these register outside the `@bike4mind/database` barrel.
+import '@bike4mind/server-utils/models/Subscription';
+import '@server/models/UserSubscription';
 import { DATA_HOLDER_REGISTRY } from './registry';
 import { valuesAt } from './documentPaths';
 import {
@@ -7,6 +10,7 @@ import {
   orderParentsFirst,
   parentKeyPaths,
   readDocuments,
+  referencePathsOf,
   type DataSubject,
   type LeanDocument,
 } from './subjectMatcher';
@@ -18,9 +22,9 @@ import type { DataHolder, DataHolderRegistry, UserReference } from './types';
  * the reason. Read only: it is the admin dry run, and the check after the account purge that records
  * what still names the person. The purge (completeAccountDeletion.ts) does the erasing.
  *
- * Reads include soft-deleted rows, since erasure must reach tombstones too. Decisions are made parents
- * first, so each `viaParent` child knows what happens to its parent. The subject's own `User` row is
- * counted as deleted.
+ * Decisions are made parents first, so each `viaParent` child knows what happens to its parent. The
+ * subject's own `User` row is counted as deleted. Reads are projected to the paths a decision needs,
+ * and children are read only under parents whose outcome decides theirs.
  */
 
 type Outcome = 'deleted' | 'anonymized' | 'retained';
@@ -28,6 +32,12 @@ type Outcome = 'deleted' | 'anonymized' | 'retained';
 type Decision = {
   outcome: Outcome;
   reasons: readonly string[];
+  /**
+   * How `viaParent` children treat this parent, or null when it is not about the person (they were
+   * only pulled from an array) and children ignore it. Must stay in step with the parent buckets in
+   * subjectRecordExport.ts: a reference-only retain counts as anonymized there too.
+   */
+  childBucket: Outcome | null;
   /** The values `viaParent` children match on, by parent key path; only on a parent model. */
   keys?: ReadonlyMap<string, readonly unknown[]>;
 };
@@ -35,6 +45,8 @@ type Decision = {
 // Parent key values by path, keyed by their string form; the stored form is kept for the `$in`.
 type KeysByPath = Map<string, Map<string, unknown>>;
 type ParentKeys = Record<Outcome, KeysByPath>;
+
+const DELETED: Decision = { outcome: 'deleted', reasons: [], childBucket: 'deleted' };
 
 /** Called before each model; throw to stop (a lost purge lease). */
 export type ErasureCheckpoint = () => Promise<void>;
@@ -82,8 +94,8 @@ export class SubjectErasurePlan {
   private async decideSubject(model: string, references: readonly UserReference[]): Promise<Decision[]> {
     const { userId } = this.matcher.subject;
     const decisions: Decision[] = [];
-    for await (const document of readDocuments(model, { _id: userId }, { includeDeleted: true })) {
-      decisions.push(this.keyed(model, document, { outcome: 'deleted', reasons: [] }));
+    for await (const document of readDocuments(model, { _id: userId }, this.parentKeyPathsOf(model))) {
+      decisions.push(this.keyed(model, document, DELETED));
     }
     // Their references on other people's User rows (who invited whom).
     const others = await this.decideHolder(model, references, document => String(document._id) !== userId);
@@ -98,7 +110,8 @@ export class SubjectErasurePlan {
     const clauses = references.flatMap(reference => this.matcher.filterFor(reference) ?? []);
     if (clauses.length === 0) return [];
     const decisions: Decision[] = [];
-    for await (const document of readDocuments(model, { $or: clauses }, { includeDeleted: true })) {
+    const projection = [...references.flatMap(referencePathsOf), ...this.parentKeyPathsOf(model)];
+    for await (const document of readDocuments(model, { $or: clauses }, projection)) {
       if (!include(document)) continue;
       const decision = this.decideDocument(document, references);
       if (decision) decisions.push(this.keyed(model, document, decision));
@@ -110,12 +123,15 @@ export class SubjectErasurePlan {
   private decideDocument(document: LeanDocument, references: readonly UserReference[]): Decision | null {
     const matched = references.filter(reference => this.matcher.matches(document, reference));
     if (matched.length === 0) return null;
-    const reasons = [
-      ...new Set(matched.flatMap(reference => (reference.action === 'retain' ? [reference.reason] : []))),
-    ];
-    if (reasons.length > 0) return { outcome: 'retained', reasons };
-    if (matched.some(({ action }) => action === 'deleteDocument')) return { outcome: 'deleted', reasons: [] };
-    return { outcome: 'anonymized', reasons: [] };
+    const retains = matched.flatMap(reference => (reference.action === 'retain' ? [reference] : []));
+    if (retains.length > 0) {
+      const party = retains.some(reference => reference.exportScope !== 'reference');
+      const reasons = [...new Set(retains.map(reference => reference.reason))];
+      return { outcome: 'retained', reasons, childBucket: party ? 'retained' : 'anonymized' };
+    }
+    if (matched.some(({ action }) => action === 'deleteDocument')) return DELETED;
+    const anonymized = matched.some(({ action }) => action === 'anonymize');
+    return { outcome: 'anonymized', reasons: [], childBucket: anonymized ? 'anonymized' : null };
   }
 
   private async decideChildren(
@@ -131,17 +147,23 @@ export class SubjectErasurePlan {
     const retainedParents = keysFor('retained');
     const attribution = holder.attribution ?? [];
 
+    // Children of anonymized parents belong to the parent's other owner unless the registry says
+    // otherwise; those naming the person are found through `attribution` below.
+    const followedParents = [deletedParents, retainedParents];
+    if (holder.deleteWhenParentAnonymized) followedParents.push(anonymizedParents);
+    const projection = [holder.foreignKey, ...attribution.flatMap(referencePathsOf), ...this.parentKeyPathsOf(model)];
+
     const byId = new Map<string, LeanDocument>();
-    const parentValues = [deletedParents, anonymizedParents, retainedParents].flatMap(map => [...map.values()]);
+    const parentValues = followedParents.flatMap(map => [...map.values()]);
     for (let start = 0; start < parentValues.length; start += PARENT_KEY_BATCH) {
       const filter = { [holder.foreignKey]: { $in: parentValues.slice(start, start + PARENT_KEY_BATCH) } };
-      for await (const document of readDocuments(model, filter, { includeDeleted: true })) {
+      for await (const document of readDocuments(model, filter, projection)) {
         byId.set(String(document._id), document);
       }
     }
     const clauses = attribution.flatMap(reference => this.matcher.filterFor(reference) ?? []);
     if (clauses.length > 0) {
-      for await (const document of readDocuments(model, { $or: clauses }, { includeDeleted: true })) {
+      for await (const document of readDocuments(model, { $or: clauses }, projection)) {
         byId.set(String(document._id), document);
       }
     }
@@ -151,7 +173,7 @@ export class SubjectErasurePlan {
       const parents = valuesAt(document, holder.foreignKey).map(String);
       const under = (map: Map<string, unknown>) => parents.some(parent => map.has(parent));
       if (under(deletedParents) || (holder.deleteWhenParentAnonymized && under(anonymizedParents))) {
-        decisions.push(this.keyed(model, document, { outcome: 'deleted', reasons: [] }));
+        decisions.push(this.keyed(model, document, DELETED));
         continue;
       }
       const attributed = this.decideDocument(document, attribution);
@@ -161,13 +183,17 @@ export class SubjectErasurePlan {
       }
       if (under(retainedParents)) {
         const reasons = [keptWithParentReason(holder.parent)];
-        decisions.push(this.keyed(model, document, { outcome: 'retained', reasons }));
+        decisions.push(this.keyed(model, document, { outcome: 'retained', reasons, childBucket: 'retained' }));
       }
     }
     return decisions;
   }
 
   /** Records, on a parent model's decision, the values its children will be matched by. */
+  private parentKeyPathsOf(model: string): string[] {
+    return [...(this.keyPathsByParent.get(model) ?? [])];
+  }
+
   private keyed(model: string, document: LeanDocument, decision: Decision): Decision {
     const keyPaths = this.keyPathsByParent.get(model);
     if (!keyPaths) return decision;
@@ -185,10 +211,11 @@ export class SubjectErasurePlan {
     const keys: ParentKeys = { deleted: new Map(), anonymized: new Map(), retained: new Map() };
     parentKeys.set(model, keys);
     for (const decision of decisions) {
+      if (!decision.childBucket) continue;
       for (const [keyPath, values] of decision.keys ?? []) {
-        const bucket = keys[decision.outcome].get(keyPath) ?? new Map<string, unknown>();
+        const bucket = keys[decision.childBucket].get(keyPath) ?? new Map<string, unknown>();
         for (const value of values) bucket.set(String(value), value);
-        keys[decision.outcome].set(keyPath, bucket);
+        keys[decision.childBucket].set(keyPath, bucket);
       }
     }
   }

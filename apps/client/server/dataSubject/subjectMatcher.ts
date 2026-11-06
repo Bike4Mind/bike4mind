@@ -61,21 +61,36 @@ export class SubjectMatcher {
 /**
  * Lean read through the model, so values are cast to the schema. `strictQuery: 'throw'` makes a path
  * the schema does not declare fail the read instead of being dropped from the filter, which would
- * match every document in the collection. `includeDeleted` reaches rows the soft-delete plugin hides.
+ * match every document in the collection. Soft-deleted rows are read too: they are still stored, so
+ * an export must include them and an erasure must reach them. `projection` (paths) keeps a walk
+ * from holding whole documents it only needs to classify.
  */
 export function readDocuments(
   model: string,
   filter: Record<string, unknown>,
-  { includeDeleted = false }: { includeDeleted?: boolean } = {}
+  projection?: readonly string[]
 ): AsyncIterable<LeanDocument> {
   return mongoose
     .model(model)
-    .find(filter)
-    .setOptions({ strictQuery: 'throw', ...(includeDeleted ? { includeDeleted: true } : {}) })
+    .find(filter, projection ? projectionOf(projection) : undefined)
+    .setOptions({ strictQuery: 'throw', includeDeleted: true })
     .maxTimeMS(QUERY_MAX_TIME_MS)
     .lean<LeanDocument[]>()
     .cursor();
 }
+
+/** An inclusion projection; a path under another listed path is dropped, since Mongo refuses the pair. */
+function projectionOf(paths: readonly string[]): Record<string, 1> {
+  const unique = [...new Set(paths)];
+  const kept = unique.filter(path => !unique.some(other => other !== path && path.startsWith(`${other}.`)));
+  return Object.fromEntries(kept.map(path => [path, 1]));
+}
+
+/** The paths a reference is matched by: its own and those its `where` reads. */
+export const referencePathsOf = (reference: UserReference): string[] => [
+  reference.path,
+  ...Object.keys(reference.where ?? {}),
+];
 
 const isWalked = (holder: DataHolder): boolean =>
   holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';

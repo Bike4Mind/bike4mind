@@ -32,7 +32,12 @@ export const useRequestAdminErasure = (userId: string) => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (reason: string) => (await api.post<{ queued: boolean }>(erasurePath(userId), { reason })).data,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: adminErasureQueryKey(userId) }),
+    // The account is locked down at once, so its profile and the user list change too.
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId] }),
+        queryClient.invalidateQueries({ queryKey: ['users'] }),
+      ]),
     onError: error => toastFailure(error, 'Could not start the erasure.'),
   });
 };

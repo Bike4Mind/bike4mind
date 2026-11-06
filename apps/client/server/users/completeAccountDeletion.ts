@@ -1,21 +1,32 @@
 import { randomUUID } from 'node:crypto';
 import { ADMIN_ERASURE_COMPLETED_ACTION, type AdminErasureCollection, type IUserDeletion } from '@bike4mind/common';
-import { Organization, User, adminAuditLogRepository, realtimeConnectionRepository } from '@bike4mind/database';
+import {
+  Organization,
+  User,
+  adminAuditLogRepository,
+  mongoose,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { adminAuditService, authSessionService } from '@bike4mind/services';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
 import { systemAuditActor } from '@server/utils/adminAudit';
 import { SubjectErasurePlan, unerased } from '@server/dataSubject/subjectErasurePlan';
+import { findUnclassifiedModels } from '@server/dataSubject/registry';
+import { assertEveryModelClassified } from '@server/dataSubject/subjectMatcher';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
 
 type DeletionLogger = Pick<Logger, 'info' | 'warn' | 'error'>;
-export type AccountDeletionSkipReason = 'not_due' | 'not_found';
+/** `busy`: due, but another purge or a data export holds the account's lease; retry later. */
+export type AccountDeletionSkipReason = 'not_due' | 'not_found' | 'busy';
 export type AccountDeletionCompletion = { deleted: true } | { deleted: false; reason: AccountDeletionSkipReason };
 
-// Longer than the hosted sweep's ten-minute timeout. An abandoned invocation becomes resumable,
-// while the permanent purgeStartedAt marker keeps cancellation closed after any data was removed.
+// Longer than the hosted sweep's ten-minute timeout and no shorter than the erasure queue consumer's
+// fifteen (infra/queues.ts), whose redelivery after sixteen can then reclaim it. An abandoned
+// invocation becomes resumable, while the permanent purgeStartedAt marker keeps cancellation closed
+// after any data was removed.
 const PURGE_LEASE_MS = 15 * 60 * 1000;
 type ClaimedUser = {
   email?: string | null;
@@ -82,7 +93,7 @@ export async function completeAccountDeletion(
   await assertNoOwnedOrganizations(userId);
   const leaseId = randomUUID();
   const user = await claimPurge(userId, now, leaseId);
-  if (!user) return { deleted: false, reason: 'not_due' };
+  if (!user) return { deleted: false, reason: 'busy' };
 
   const leaseFilter = { ...dueFilter(userId, now), 'deletion.purgeLeaseId': leaseId };
   const assertLease = async () => {
@@ -98,8 +109,10 @@ export async function completeAccountDeletion(
     // Snapshot once: a retry after a partial purge would count less, and the record must describe it all.
     let scope = user.deletion?.erasureScope;
     if (erasure && !scope) {
+      assertEveryModelClassified(mongoose.modelNames());
       scope = await new SubjectErasurePlan(subject).collections(assertLease);
-      await User.updateOne(leaseFilter, { $set: { 'deletion.erasureScope': scope } });
+      const stored = await User.updateOne(leaseFilter, { $set: { 'deletion.erasureScope': scope } });
+      if (stored.matchedCount === 0) throw new Error(`Account deletion purge lease lost for user ${userId}`);
     }
     await purgeAccountFiles(userId, { logger, assertLease });
     await purgeAccountContent(userId, { logger, assertLease });
@@ -127,7 +140,12 @@ export async function completeAccountDeletion(
             {
               action: 'user.deletion.completed',
               actor: systemAuditActor('account-deletion-sweep'),
-              target: { kind: 'user', id: userId, displayName: target?.name || target?.username || userId },
+              // An erasure's record outlives the person, so it names them by id only.
+              target: {
+                kind: 'user',
+                id: userId,
+                displayName: erasure ? userId : target?.name || target?.username || userId,
+              },
               summary: erasure
                 ? 'deleted the user for a data subject erasure an admin requested'
                 : 'deleted the user at their own request once the deletion grace period ended',
@@ -183,17 +201,20 @@ async function recordErasureCompleted(
   logger: DeletionLogger
 ): Promise<void> {
   try {
+    // A model the registry does not classify was not checked, so it is listed rather than passed over.
+    const unclassified = findUnclassifiedModels(mongoose.modelNames());
     const remaining: AdminErasureCollection[] = unerased(await new SubjectErasurePlan(subject).collections());
+    const clean = remaining.length === 0 && unclassified.length === 0;
     await adminAuditService.recordAdminAction(
       {
         action: ADMIN_ERASURE_COMPLETED_ACTION,
         actor: systemAuditActor('account-deletion-sweep'),
         target: { kind: 'user', id: subject.userId, displayName: subject.userId },
-        summary:
-          remaining.length === 0
-            ? 'completed a data subject erasure; nothing outside the stated retentions still names the user'
-            : `completed a data subject erasure; ${remaining.length} collection(s) still name the user`,
-        details: { requestedBy, remaining },
+        summary: clean
+          ? 'completed a data subject erasure; nothing outside the stated retentions still names the user'
+          : `completed a data subject erasure; ${remaining.length} collection(s) still name the user and ` +
+            `${unclassified.length} unclassified model(s) were not checked`,
+        details: { requestedBy, remaining, unclassified },
         context: { source: 'worker' },
       },
       { db: { adminAuditLog: adminAuditLogRepository }, logger }

@@ -38,7 +38,7 @@ const runDryRun = async () => {
 describe('EraseUserDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.get.mockResolvedValue({ data: { state: 'none' } });
+    mocks.get.mockResolvedValue({ data: { state: 'none', ownedOrganizations: [] } });
     mocks.post.mockImplementation(async (url: string) =>
       url.endsWith('/preview') ? { data: PREVIEW } : { data: { queued: true } }
     );
@@ -58,6 +58,47 @@ describe('EraseUserDialog', () => {
     fireEvent.click(screen.getByTestId('erase-user-preview-dialog-reason-input-preset-0'));
     expect(screen.getByTestId('erase-user-preview-dialog-confirm-btn')).toBeDisabled();
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('blocks the dry run and names the organizations the user owns', async () => {
+    mocks.get.mockResolvedValue({
+      data: {
+        state: 'none',
+        ownedOrganizations: [
+          { id: 'org-1', name: 'Acme' },
+          { id: 'org-2', name: 'Globex' },
+        ],
+      },
+    });
+    setup();
+
+    expect(await screen.findByTestId('erase-user-pending')).toHaveTextContent('Acme, Globex');
+    fireEvent.click(screen.getByTestId('erase-user-preview-dialog-reason-input-preset-0'));
+    expect(screen.getByTestId('erase-user-preview-dialog-confirm-btn')).toBeDisabled();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('blocks the dry run with an error message when the state cannot be read', async () => {
+    mocks.get.mockRejectedValue(new Error('network down'));
+    setup();
+
+    expect(await screen.findByTestId('erase-user-pending')).toHaveTextContent('Could not check whether this account');
+    fireEvent.click(screen.getByTestId('erase-user-preview-dialog-reason-input-preset-0'));
+    expect(screen.getByTestId('erase-user-preview-dialog-confirm-btn')).toBeDisabled();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('stays on the dry-run step when the preview request fails', async () => {
+    mocks.post.mockRejectedValue(new Error('preview failed'));
+    setup();
+
+    fireEvent.click(await screen.findByTestId('erase-user-preview-dialog-reason-input-preset-0'));
+    await waitFor(() => expect(screen.getByTestId('erase-user-preview-dialog-confirm-btn')).not.toBeDisabled());
+    fireEvent.click(screen.getByTestId('erase-user-preview-dialog-confirm-btn'));
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalled());
+    expect(screen.queryByTestId('erase-user-dialog')).not.toBeInTheDocument();
+    expect(screen.getByTestId('erase-user-preview-dialog-confirm-btn')).toBeInTheDocument();
   });
 
   it('posts the dry run with the reason, then shows the preview rows in the danger step', async () => {

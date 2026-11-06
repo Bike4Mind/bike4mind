@@ -18,7 +18,8 @@ export type AdminErasurePreview = { generatedAt: string; collections: AdminErasu
 
 /** Where an admin erasure stands, as the admin profile shows it. The user is gone once it completes. */
 export type AdminErasureState =
-  | { state: 'none' }
+  /** None pending. An erasure is refused while `ownedOrganizations` is non-empty. */
+  | { state: 'none'; ownedOrganizations: Array<{ id: string; name: string }> }
   /** A self-serve deletion is pending; an admin erasure cannot be requested over it. */
   | { state: 'selfDeletionPending'; scheduledFor: string }
   | { state: 'requested'; requestedAt: string; requestedBy: string | null; purgeStartedAt: string | null };

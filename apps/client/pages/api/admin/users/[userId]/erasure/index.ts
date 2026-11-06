@@ -11,7 +11,7 @@ import { requireStepUp } from '@server/auth/stepUp';
 import { findErasureTarget, readAdminErasureState } from '@server/dataSubject/adminErasure';
 import { adminApi } from '@server/middlewares/adminApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
-import { findOwnedOrganizations, requestAdminErasure } from '@server/users/accountDeletion';
+import { requestAdminErasure } from '@server/users/accountDeletion';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@server/utils/adminAudit';
 
 /**
@@ -38,14 +38,12 @@ const handler = adminApi({
     if (user.id === req.user.id) throw new ForbiddenError('You cannot erase your own account.');
 
     // Refused requests are not audited as requested; requestAdminErasure re-checks both atomically.
-    if ((await readAdminErasureState(user.id)).state !== 'none') {
-      throw new ConflictError('This account already has a deletion pending.');
-    }
-    const ownedOrganizations = await findOwnedOrganizations(user.id);
-    if (ownedOrganizations.length > 0) {
+    const current = await readAdminErasureState(user.id);
+    if (current.state !== 'none') throw new ConflictError('This account already has a deletion pending.');
+    if (current.ownedOrganizations.length > 0) {
       throw new ConflictError('Transfer or delete the organizations this user owns before erasing their data.', {
         code: ACCOUNT_DELETION_ORG_OWNER_CODE,
-        organizations: ownedOrganizations,
+        organizations: current.ownedOrganizations,
       });
     }
 

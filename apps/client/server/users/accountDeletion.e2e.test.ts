@@ -424,6 +424,25 @@ describe('cancelAccountDeletion', () => {
     expect(await AuthSessionModel.countDocuments({ userId })).toBe(before);
   });
 
+  it('refuses self-cancellation of an admin erasure and keeps the deletion', async () => {
+    const userId = await seedAccount();
+    await User.updateOne(
+      { _id: userId },
+      {
+        $set: {
+          deletion: { requestedAt: new Date(), scheduledFor: new Date(), source: 'admin', requestedBy: 'admin-1' },
+        },
+      }
+    );
+    h.sendCancelledEmail.mockClear();
+
+    await expect(cancelAccountDeletion(requestFor(userId))).rejects.toMatchObject({ statusCode: 409 });
+    const kept = await User.findById(userId).lean<{ deletion?: { source: string } }>();
+    expect(kept!.deletion?.source).toBe('admin');
+    expect(h.sendCancelledEmail).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalledWith(expect.anything(), { userId, event: 'account_deletion_cancelled' });
+  });
+
   it('answers 404 when nothing is pending, and sends no email', async () => {
     const userId = await seedAccount();
     h.sendCancelledEmail.mockClear();

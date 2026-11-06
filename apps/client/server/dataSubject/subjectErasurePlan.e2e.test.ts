@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import mongoose, { Schema } from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
+import { softDeletePlugin } from '../../../../packages/database/src/utils/mongo';
 import { SubjectErasurePlan, unerased } from './subjectErasurePlan';
 import type { DataHolderRegistry } from './types';
 
@@ -16,6 +17,14 @@ const Access = mongoose.model('DsEraseAccess', new Schema({ viewerId: ObjectId }
 const AccessQuery = mongoose.model('DsEraseAccessQuery', new Schema({ text: String }));
 const Ledger = mongoose.model('DsEraseLedger', new Schema({ ownerId: ObjectId, amount: Number }));
 const LedgerLine = mongoose.model('DsEraseLedgerLine', new Schema({ ledgerId: ObjectId }));
+
+const softSchema = new Schema({ ownerId: ObjectId });
+softSchema.plugin(softDeletePlugin);
+const Soft = mongoose.model('DsEraseSoft', softSchema);
+const TeamTask = mongoose.model('DsEraseTeamTask', new Schema({ teamId: ObjectId }));
+const Receipt = mongoose.model('DsEraseReceipt', new Schema({ ownerId: ObjectId }));
+const ReceiptLine = mongoose.model('DsEraseReceiptLine', new Schema({ receiptId: ObjectId }));
+const ReceiptNote = mongoose.model('DsEraseReceiptNote', new Schema({ receiptId: ObjectId }));
 
 const registry: DataHolderRegistry = {
   DsErasePerson: {
@@ -46,6 +55,21 @@ const registry: DataHolderRegistry = {
     references: [{ path: 'ownerId', matchBy: 'userId', action: 'retain', reason: 'Bookkeeping law' }],
   },
   DsEraseLedgerLine: { kind: 'viaParent', parent: 'DsEraseLedger', foreignKey: 'ledgerId' },
+  DsEraseSoft: { kind: 'holder', references: [{ path: 'ownerId', matchBy: 'userId', action: 'deleteDocument' }] },
+  DsEraseTeamTask: { kind: 'viaParent', parent: 'DsEraseTeam', foreignKey: 'teamId' },
+  DsEraseReceipt: {
+    kind: 'holder',
+    references: [
+      { path: 'ownerId', matchBy: 'userId', action: 'retain', reason: 'Counterparty record', exportScope: 'reference' },
+    ],
+  },
+  DsEraseReceiptLine: { kind: 'viaParent', parent: 'DsEraseReceipt', foreignKey: 'receiptId' },
+  DsEraseReceiptNote: {
+    kind: 'viaParent',
+    parent: 'DsEraseReceipt',
+    foreignKey: 'receiptId',
+    deleteWhenParentAnonymized: true,
+  },
   DsEraseRelease: { kind: 'noUserData', note: 'test' },
 };
 
@@ -106,6 +130,58 @@ describe('SubjectErasurePlan', () => {
       DsEraseLedger: { ...none, retained: 1, retainReasons: ['Bookkeeping law'] },
       DsEraseLedgerLine: { ...none, retained: 1, retainReasons: ['Kept with its DsEraseLedger record'] },
     });
+  });
+
+  it('counts soft-deleted rows, which are still stored', async () => {
+    const me = new mongoose.Types.ObjectId();
+    await Soft.create({ ownerId: me });
+    const tombstone = await Soft.create({ ownerId: me });
+    await tombstone.softDelete();
+    expect(await Soft.find({ ownerId: me })).toHaveLength(1);
+
+    const counts = await byModel(new SubjectErasurePlan({ userId: me.toString(), email: null }, registry));
+
+    expect(counts.DsEraseSoft).toEqual({ deleted: 2, anonymized: 0, retained: 0, retainReasons: [] });
+  });
+
+  it('does not pull the children of a parent that is only pulled from an array', async () => {
+    const me = new mongoose.Types.ObjectId();
+    const team = await Team.create({ users: [{ userId: me }] });
+    await TeamTask.create({ teamId: team._id });
+
+    const counts = await byModel(new SubjectErasurePlan({ userId: me.toString(), email: null }, registry));
+
+    expect(counts.DsEraseTeam).toEqual({ deleted: 0, anonymized: 1, retained: 0, retainReasons: [] });
+    expect(counts.DsEraseTeamTask).toBeUndefined();
+  });
+
+  it('treats a reference-only retain parent as anonymized for its children', async () => {
+    const me = new mongoose.Types.ObjectId();
+    const receipt = await Receipt.create({ ownerId: me });
+    await ReceiptLine.create({ receiptId: receipt._id });
+    await ReceiptNote.create({ receiptId: receipt._id });
+
+    const counts = await byModel(new SubjectErasurePlan({ userId: me.toString(), email: null }, registry));
+
+    expect(counts.DsEraseReceipt).toEqual({
+      deleted: 0,
+      anonymized: 0,
+      retained: 1,
+      retainReasons: ['Counterparty record'],
+    });
+    // Children belong to the other party unless the registry says they go when the parent is anonymized.
+    expect(counts.DsEraseReceiptLine).toBeUndefined();
+    expect(counts.DsEraseReceiptNote).toEqual({ deleted: 1, anonymized: 0, retained: 0, retainReasons: [] });
+  });
+
+  it('keeps the children of a party-scope retain with their parent', async () => {
+    const me = new mongoose.Types.ObjectId();
+    const ledger = await Ledger.create({ ownerId: me });
+    await LedgerLine.create({ ledgerId: ledger._id });
+
+    const counts = await byModel(new SubjectErasurePlan({ userId: me.toString(), email: null }, registry));
+
+    expect(counts.DsEraseLedgerLine?.retained).toBe(1);
   });
 
   it('reports nothing for a person no record names', async () => {

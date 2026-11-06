@@ -37,6 +37,11 @@ describe('accountErasure dispatch', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it('throws on a busy account so SQS redelivers', async () => {
+    h.completeAccountDeletion.mockResolvedValue({ deleted: false, reason: 'busy' });
+    await expect(run(JSON.stringify({ userId: 'user-1' }))).rejects.toThrow('busy');
+  });
+
   it('rethrows a purge error so SQS retries', async () => {
     h.completeAccountDeletion.mockRejectedValue(new Error('boom'));
     await expect(run(JSON.stringify({ userId: 'user-1' }))).rejects.toThrow('boom');

@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   sendComplete: vi.fn(),
   recordAdminAction: vi.fn(),
   collections: vi.fn(),
+  assertClassified: vi.fn(),
+  findUnclassified: vi.fn(),
   order: [] as string[],
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -23,6 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   Organization: { exists: h.organizationExists, deleteMany: h.deletePersonalOrganizations },
   realtimeConnectionRepository: {},
+  mongoose: { modelNames: () => ['Alpha', 'Beta'] },
   adminAuditLogRepository: { append: vi.fn() },
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -40,6 +43,8 @@ vi.mock('@server/dataSubject/subjectErasurePlan', () => ({
   unerased: (collections: { deleted: number; anonymized: number }[]) =>
     collections.filter(collection => collection.deleted + collection.anonymized > 0),
 }));
+vi.mock('@server/dataSubject/subjectMatcher', () => ({ assertEveryModelClassified: h.assertClassified }));
+vi.mock('@server/dataSubject/registry', () => ({ findUnclassifiedModels: h.findUnclassified }));
 vi.mock('@server/utils/adminAudit', () => ({
   systemAuditActor: (name: string) => ({ kind: 'system', scope: 'platform', name, wasAdmin: false }),
 }));
@@ -74,6 +79,8 @@ beforeEach(() => {
     h.order.push('content');
   });
   h.collections.mockResolvedValue([]);
+  h.updateOne.mockResolvedValue({ matchedCount: 1 });
+  h.findUnclassified.mockReturnValue([]);
   h.endRealtimeConnections.mockImplementation(async () => {
     h.order.push('realtime');
   });
@@ -146,9 +153,9 @@ describe('completeAccountDeletion', () => {
     );
   });
 
-  it('does no purge when cancellation or another worker wins the atomic claim', async () => {
+  it('reports busy, not not_due, and does no purge when the atomic claim is lost to a lease or export', async () => {
     h.claimUser.mockResolvedValue(null);
-    await expect(complete()).resolves.toEqual({ deleted: false, reason: 'not_due' });
+    await expect(complete()).resolves.toEqual({ deleted: false, reason: 'busy' });
     expect(h.purgeFiles).not.toHaveBeenCalled();
     expect(h.purgeContent).not.toHaveBeenCalled();
     expect(h.hardDeleteUser).not.toHaveBeenCalled();
@@ -384,6 +391,62 @@ describe('completeAccountDeletion for an admin data subject erasure', () => {
     await expect(complete()).resolves.toEqual({ deleted: true });
 
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining(USER_ID));
+  });
+
+  const nothingRemainsAfterDelete = () =>
+    h.collections.mockImplementation(async (...args: unknown[]) => (args.length > 0 ? SCOPE : []));
+
+  it('lists unclassified models in the completion record and says so in its summary', async () => {
+    nothingRemainsAfterDelete();
+    h.findUnclassified.mockReturnValue(['Mystery']);
+
+    await complete();
+
+    const completed = h.recordAdminAction.mock.calls.find(([entry]) => entry.action === 'user.erasure.completed');
+    expect(completed?.[0].details).toMatchObject({ remaining: [], unclassified: ['Mystery'] });
+    expect(completed?.[0].summary).toContain('1 unclassified model(s) were not checked');
+  });
+
+  it('records a clean completion with no unclassified models', async () => {
+    nothingRemainsAfterDelete();
+    await complete();
+
+    const completed = h.recordAdminAction.mock.calls.find(([entry]) => entry.action === 'user.erasure.completed');
+    expect(completed?.[0].details).toMatchObject({ unclassified: [] });
+    expect(completed?.[0].summary).toContain('nothing outside the stated retentions');
+  });
+
+  it('names the erased person by id only in the in-transaction completion entry', async () => {
+    await complete();
+
+    const entry = h.recordAdminAction.mock.calls.find(([call]) => call.action === 'user.deletion.completed');
+    expect(entry?.[0].target).toEqual({ kind: 'user', id: USER_ID, displayName: USER_ID });
+  });
+
+  it('asserts every model is classified before snapshotting the scope', async () => {
+    await complete();
+
+    expect(h.assertClassified).toHaveBeenCalledWith(['Alpha', 'Beta']);
+    expect(h.assertClassified.mock.invocationCallOrder[0]).toBeLessThan(h.collections.mock.invocationCallOrder[0]);
+  });
+
+  it('purges nothing when a model is unclassified', async () => {
+    h.assertClassified.mockImplementation(() => {
+      throw new Error('unclassified model');
+    });
+
+    await expect(complete()).rejects.toThrow('unclassified model');
+    expect(h.collections).not.toHaveBeenCalled();
+    expect(h.purgeFiles).not.toHaveBeenCalled();
+    expect(h.hardDeleteUser).not.toHaveBeenCalled();
+  });
+
+  it('throws before purging when the lease was lost while storing the scope snapshot', async () => {
+    h.updateOne.mockResolvedValue({ matchedCount: 0 });
+
+    await expect(complete()).rejects.toThrow('purge lease lost');
+    expect(h.purgeFiles).not.toHaveBeenCalled();
+    expect(h.hardDeleteUser).not.toHaveBeenCalled();
   });
 
   it('sends no completion email', async () => {
