@@ -66,8 +66,12 @@ const {
 // Strip the middleware chain but keep next-connect's registrar shape, so
 // nextRouteForContract's prelude (validation + drift check) still composes and runs.
 vi.mock('@server/middlewares/baseApi', () => ({
-  methodNotAllowedHandler: () => (_req: unknown, res: { status: (n: number) => { end: () => void } }) =>
-    res.status(405).end(),
+  methodNotAllowedHandler:
+    (allowed: readonly string[]) =>
+    (_req: unknown, res: { setHeader: (k: string, v: string) => void; status: (n: number) => { end: () => void } }) => {
+      res.setHeader('Allow', allowed.join(', '));
+      res.status(405).end();
+    },
   baseApi: (options: (typeof baseApiOptions)[number]) => {
     baseApiOptions.push(options);
     const compose =
@@ -126,7 +130,7 @@ const MONGO_ID = '65a000000000000000000001';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
 function fire(
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   { query = {}, body }: { query?: Record<string, string>; body?: Record<string, unknown> } = {}
 ) {
   const { req, res } = createMocks({ method, query, body });
@@ -607,6 +611,25 @@ describe('POST /api/v1/artifacts/{id}/versions', () => {
     mockUpdate.mockRejectedValue(new UnauthorizedError('no'));
     const { req, res } = fire('POST', { query: { id: ARTIFACT_ID }, body: BODY });
     expect(await statusOf(call(listVersions, req, res))).toBe(404);
+  });
+
+  it.each([
+    ['a read-only sharee', 'Write access denied'],
+    ['a public artifact the caller does not own', 'Only the owner or a writer can edit this artifact'],
+  ])('answers 404 for %s', async (_label, message) => {
+    mockUpdate.mockRejectedValue(new UnauthorizedError(message));
+    const { req, res } = fire('POST', { query: { id: ARTIFACT_ID }, body: BODY });
+    expect(await statusOf(call(listVersions, req, res))).toBe(404);
+  });
+
+  it('answers 405 with an Allow header for an unsupported method', async () => {
+    const { req, res } = fire('PUT', { query: { id: ARTIFACT_ID }, body: BODY });
+
+    await call(listVersions, req, res);
+
+    expect(res._getStatusCode()).toBe(405);
+    expect(res.getHeader('Allow')).toBe('GET, POST');
+    expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
 
