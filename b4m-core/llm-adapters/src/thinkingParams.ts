@@ -450,22 +450,65 @@ const isLegacyThinking = (thinking: unknown): thinking is { type: 'enabled'; bud
   (thinking as { type?: unknown }).type === 'enabled' &&
   typeof (thinking as { budget_tokens?: unknown }).budget_tokens === 'number';
 
+const isAdaptiveThinking = (thinking: unknown): thinking is { type: 'adaptive' } =>
+  typeof thinking === 'object' && thinking !== null && (thinking as { type?: unknown }).type === 'adaptive';
+
+const isForcedToolChoice = (toolChoice: unknown): boolean => {
+  const type =
+    typeof toolChoice === 'object' && toolChoice !== null ? (toolChoice as { type?: unknown }).type : undefined;
+  return type === 'any' || type === 'tool';
+};
+
+type CeilingRequestBody = {
+  max_tokens?: unknown;
+  thinking?: unknown;
+  output_config?: unknown;
+  tool_choice?: unknown;
+};
+
 /**
  * Lowers an Anthropic request body's max_tokens to `ceiling` (ICompletionOptions.outputTokenCeiling),
- * after buildThinkingParams may have raised it. A legacy thinking budget comes down with it under the
- * same answer headroom; one that no longer fits the API minimum turns thinking off rather than lifting
- * the ceiling, since the ceiling is what the caller can pay for. Shared by the direct and Bedrock paths.
+ * after buildThinkingParams may have raised it. Shared by the direct and Bedrock paths.
+ *
+ * Thinking is spent inside max_tokens, so it has to fit under the ceiling too:
+ * - A legacy thinking budget comes down under the same answer headroom; one that no longer fits the
+ *   API minimum turns thinking off rather than lifting the ceiling, since the ceiling is what the
+ *   caller can pay for.
+ * - Adaptive thinking has no budget to shrink, only an effort. Below ADAPTIVE_THINKING_MAX_TOKENS_FLOOR
+ *   the default effort can spend the whole ceiling thinking and leave no visible answer, so it drops
+ *   to `low`. That includes a model that thinks unasked (`thinksByDefault`, see
+ *   isAdaptiveThinkingByDefault) on a body that names no thinking, unless a forced tool_choice rules
+ *   thinking out.
+ *
+ * Returns true when the body now carries adaptive thinking it did not carry before.
  */
 export function applyAnthropicOutputCeiling(
-  body: { max_tokens?: unknown; thinking?: unknown },
-  ceiling: number | undefined
-): void {
-  if (ceiling === undefined || typeof body.max_tokens !== 'number' || body.max_tokens <= ceiling) return;
+  body: CeilingRequestBody,
+  ceiling: number | undefined,
+  thinksByDefault = false
+): boolean {
+  // Equal counts as binding: capRoundOutput already min'd the caller's maxTokens down to the ceiling.
+  if (ceiling === undefined || typeof body.max_tokens !== 'number' || body.max_tokens < ceiling) return false;
   body.max_tokens = ceiling;
-  if (!isLegacyThinking(body.thinking)) return;
-  const budget = Math.min(body.thinking.budget_tokens, ceiling - THINKING_ANSWER_HEADROOM_TOKENS);
-  if (budget >= LEGACY_THINKING_MIN_BUDGET_TOKENS) body.thinking.budget_tokens = budget;
-  else delete body.thinking;
+
+  if (isLegacyThinking(body.thinking)) {
+    const budget = Math.min(body.thinking.budget_tokens, ceiling - THINKING_ANSWER_HEADROOM_TOKENS);
+    if (budget >= LEGACY_THINKING_MIN_BUDGET_TOKENS) body.thinking.budget_tokens = budget;
+    else delete body.thinking;
+    return false;
+  }
+
+  if (ceiling >= ADAPTIVE_THINKING_MAX_TOKENS_FLOOR) return false;
+  const thinksUnasked = thinksByDefault && body.thinking === undefined && !isForcedToolChoice(body.tool_choice);
+  if (!isAdaptiveThinking(body.thinking) && !thinksUnasked) return false;
+
+  // `low` is the floor of every adaptive model, so this never raises a caller's effort.
+  // Merged, not assigned: output_config may already carry the structured-output format.
+  const outputConfig = typeof body.output_config === 'object' && body.output_config !== null ? body.output_config : {};
+  body.output_config = { ...outputConfig, effort: 'low' };
+  if (!thinksUnasked) return false;
+  body.thinking = { type: 'adaptive' };
+  return true;
 }
 
 /**

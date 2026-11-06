@@ -1524,7 +1524,14 @@ export class AnthropicBackend implements ICompletionBackend {
         thinking.budget_tokens = maxThinkingBudget;
       }
     }
-    applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling);
+    // A foreign tool turn has no thinking block to resume, so thinking must stay off there.
+    const thinksByDefault =
+      currentModelInfo !== undefined &&
+      !continuesForeignToolTurn &&
+      isAdaptiveThinkingByDefault(model, currentModelInfo);
+    if (applyAnthropicOutputCeiling(apiParams, options.outputTokenCeiling, thinksByDefault)) {
+      this.isThinkingEnabled = true;
+    }
 
     // Set once the provider accepts this round's request; only an error before that can be a schema rejection.
     let requestAccepted = false;

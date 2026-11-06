@@ -137,10 +137,67 @@ describe('buildThinkingParams', () => {
 });
 
 describe('applyAnthropicOutputCeiling', () => {
-  it('lowers an adaptive request raised to the thinking floor', () => {
-    const body = { max_tokens: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, thinking: { type: 'adaptive' } };
-    applyAnthropicOutputCeiling(body, 5000);
-    expect(body).toEqual({ max_tokens: 5000, thinking: { type: 'adaptive' } });
+  it('lowers an adaptive request raised to the thinking floor, and its effort with it', () => {
+    const body = {
+      max_tokens: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    };
+    expect(applyAnthropicOutputCeiling(body, 5000)).toBe(false);
+    expect(body).toEqual({ max_tokens: 5000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+  });
+
+  it('keeps the structured-output format when it lowers the effort', () => {
+    const format = { type: 'json_schema', schema: {} };
+    const body = { max_tokens: 45_000, thinking: { type: 'adaptive' }, output_config: { effort: 'xhigh', format } };
+    applyAnthropicOutputCeiling(body, 45_000);
+    expect(body.output_config).toEqual({ effort: 'low', format });
+  });
+
+  it('treats a maxTokens already capped down to the ceiling as binding', () => {
+    const body = { max_tokens: 45_000, thinking: { type: 'adaptive' } };
+    applyAnthropicOutputCeiling(body, 45_000);
+    expect(body).toEqual({ max_tokens: 45_000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+  });
+
+  it('leaves the adaptive effort alone when the ceiling still clears the thinking floor', () => {
+    const body = { max_tokens: 128_000, thinking: { type: 'adaptive' }, output_config: { effort: 'high' } };
+    applyAnthropicOutputCeiling(body, ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    expect(body).toEqual({
+      max_tokens: ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    });
+  });
+
+  it('leaves the adaptive effort alone when the ceiling does not bind', () => {
+    const body = { max_tokens: 4096, thinking: { type: 'adaptive' }, output_config: { effort: 'high' } };
+    applyAnthropicOutputCeiling(body, 20_000);
+    expect(body).toEqual({ max_tokens: 4096, thinking: { type: 'adaptive' }, output_config: { effort: 'high' } });
+  });
+
+  it('names a low effort for a model that would otherwise think unasked at the default', () => {
+    const body = { max_tokens: 45_000 };
+    expect(applyAnthropicOutputCeiling(body, 45_000, true)).toBe(true);
+    expect(body).toEqual({ max_tokens: 45_000, thinking: { type: 'adaptive' }, output_config: { effort: 'low' } });
+  });
+
+  it('adds no thinking to a model that only thinks when asked', () => {
+    const body = { max_tokens: 45_000 };
+    expect(applyAnthropicOutputCeiling(body, 45_000, false)).toBe(false);
+    expect(body).toEqual({ max_tokens: 45_000 });
+  });
+
+  it('adds no thinking alongside a forced tool_choice', () => {
+    const body = { max_tokens: 45_000, tool_choice: { type: 'tool', name: 'respond' } };
+    expect(applyAnthropicOutputCeiling(body, 45_000, true)).toBe(false);
+    expect(body).toEqual({ max_tokens: 45_000, tool_choice: { type: 'tool', name: 'respond' } });
+  });
+
+  it('keeps an explicit off switch off', () => {
+    const body = { max_tokens: 45_000, thinking: { type: 'disabled' } };
+    expect(applyAnthropicOutputCeiling(body, 45_000, true)).toBe(false);
+    expect(body).toEqual({ max_tokens: 45_000, thinking: { type: 'disabled' } });
   });
 
   it('brings a legacy thinking budget down under the answer headroom', () => {
