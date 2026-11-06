@@ -70,6 +70,18 @@ describe('SpendTabView', () => {
     expect(within(calmRow).queryByTestId(/^spend-account-flag-/)).not.toBeInTheDocument();
   });
 
+  it('shows a dash for p95 when the account has no recorded latency', () => {
+    const [timed, untimed, ...rest] = spendMockData.byAccount;
+    const data: SpendData = {
+      ...spendMockData,
+      byAccount: [{ ...timed, p95LatencyMs: 4000 }, { ...untimed, p95LatencyMs: 0 }, ...rest],
+    };
+    render(<SpendTabView data={data} />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId(`spend-account-p95-${timed.accountId}`)).toHaveTextContent('4,000ms');
+    expect(screen.getByTestId(`spend-account-p95-${untimed.accountId}`)).toHaveTextContent('--');
+  });
+
   it('shows no flag banner when no account is flagged', () => {
     render(<SpendTabView data={spendMockData} />, { wrapper: TestWrapper });
     expect(screen.queryByTestId('spend-account-flag-banner')).not.toBeInTheDocument();

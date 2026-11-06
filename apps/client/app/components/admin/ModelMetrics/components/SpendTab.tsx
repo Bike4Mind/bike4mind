@@ -235,7 +235,10 @@ export const SpendTabView: React.FC<SpendTabViewProps> = ({ data }) => {
                   <td style={{ textAlign: 'right' }}>{row.creditsUsed.toLocaleString('en-US')}</td>
                   <td style={{ textAlign: 'right' }}>${row.costPerRequest.toFixed(4)}</td>
                   <td style={{ textAlign: 'right' }}>{formatKpiValue(row.errorRate, 'percent')}</td>
-                  <td style={{ textAlign: 'right' }}>{formatKpiValue(row.p95LatencyMs, 'ms')}</td>
+                  {/* 0 means no event carried latencyMs, not an instant response. */}
+                  <td style={{ textAlign: 'right' }} data-testid={`spend-account-p95-${row.accountId}`}>
+                    {row.p95LatencyMs > 0 ? formatKpiValue(row.p95LatencyMs, 'ms') : '--'}
+                  </td>
                 </tr>
               ))}
             </tbody>
