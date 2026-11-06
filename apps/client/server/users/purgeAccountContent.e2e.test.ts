@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { Session } from '@bike4mind/database';
+import { Session, adminAuditLogRepository, fabFileRepository, sessionRepository } from '@bike4mind/database';
+import { ConcurrencyConflictError } from '@bike4mind/common';
 import {
   createMongoReplSet,
   settleAutoIndexBuilds,
@@ -55,6 +56,9 @@ beforeAll(async () => {
   database = await createMongoReplSet();
   await mongoose.connect(database.getUri(), { autoIndex: false });
   await settleAutoIndexBuilds(mongoose);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -248,6 +252,120 @@ describe('permanent personal-content purge', () => {
         dek: { $exists: true },
       })
     ).toBeNull();
+  });
+
+  it('rejects stale grant writes after removing a deleted project from surviving documents', async () => {
+    const projectId = new mongoose.Types.ObjectId();
+    const fileId = new mongoose.Types.ObjectId();
+    const notebookId = new mongoose.Types.ObjectId();
+    const users = [{ userId: otherOwnerId, projectId: String(projectId), accessType: ['read'] }];
+    await collection('Project').insertOne({ _id: projectId, userId: ownerId });
+    await collection('FabFile').insertOne({ _id: fileId, userId: otherOwnerId, users, __v: 0 });
+    await collection(Session.modelName).insertOne({ _id: notebookId, userId: otherOwnerId, users, __v: 0 });
+    const staleFile = await fabFileRepository.findById(String(fileId));
+    const staleNotebook = await sessionRepository.findById(String(notebookId));
+    if (!staleFile || !staleNotebook) throw new Error('Expected surviving document fixtures');
+
+    await purgeAccountContent(ownerId, { logger, assertLease });
+
+    const staleFileWrite = { id: staleFile.id, users: staleFile.users, __v: 0 };
+    await expect(fabFileRepository.updateGuarded(staleFileWrite, { includeDeleted: true })).rejects.toBeInstanceOf(
+      ConcurrencyConflictError
+    );
+    const staleNotebookWrite = { id: staleNotebook.id, users: staleNotebook.users, __v: 0 };
+    await expect(sessionRepository.updateGuarded(staleNotebookWrite, { includeDeleted: true })).rejects.toBeInstanceOf(
+      ConcurrencyConflictError
+    );
+    expect(await collection('FabFile').findOne({ _id: fileId })).toMatchObject({ users: [], __v: 1 });
+    expect(await collection(Session.modelName).findOne({ _id: notebookId })).toMatchObject({ users: [], __v: 1 });
+  });
+
+  it('rolls back account and personal workspace deletion after an audit failure, then retries once', async () => {
+    const personalOrganizationId = new mongoose.Types.ObjectId();
+    await collection('User').insertOne({
+      _id: new mongoose.Types.ObjectId(ownerId),
+      email: 'audit-retry@example.test',
+      createdAt: new Date('2025-01-01'),
+      deletion: { requestedAt: new Date('2026-01-01'), scheduledFor: new Date('2026-01-15'), source: 'self' },
+    });
+    await collection('Organization').insertOne({ _id: personalOrganizationId, userId: ownerId, personal: true });
+    const append = vi.spyOn(adminAuditLogRepository, 'append').mockRejectedValueOnce(new Error('audit unavailable'));
+
+    await expect(completeAccountDeletion(ownerId, { logger })).rejects.toThrow('audit unavailable');
+    expect(await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) })).toMatchObject({
+      deletion: { purgeStartedAt: expect.any(Date) },
+    });
+    expect(await collection('Organization').findOne({ _id: personalOrganizationId })).not.toBeNull();
+    expect(await collection('AdminAuditLog').countDocuments({ 'target.id': ownerId })).toBe(0);
+    expect(effects.sendCompleteEmail).not.toHaveBeenCalled();
+
+    await expect(completeAccountDeletion(ownerId, { logger })).resolves.toEqual({ deleted: true });
+    expect(await collection('User').findOne({ _id: new mongoose.Types.ObjectId(ownerId) })).toBeNull();
+    expect(await collection('Organization').findOne({ _id: personalOrganizationId })).toBeNull();
+    expect(await collection('AdminAuditLog').countDocuments({ 'target.id': ownerId })).toBe(1);
+    expect(append).toHaveBeenCalledTimes(2);
+    expect(effects.sendCompleteEmail).toHaveBeenCalledExactlyOnceWith('audit-retry@example.test');
+  });
+
+  it('removes provider keys, project-minted grants and Slack selections of removed agents', async () => {
+    const projectId = new mongoose.Types.ObjectId();
+    const otherProjectId = new mongoose.Types.ObjectId();
+    const orgFileId = new mongoose.Types.ObjectId();
+    const orgNotebookId = new mongoose.Types.ObjectId();
+    const agentId = new mongoose.Types.ObjectId();
+    const orgAgentId = new mongoose.Types.ObjectId();
+    const memberId = new mongoose.Types.ObjectId().toString();
+    await collection('ApiKey').insertMany([
+      { userId: ownerId, type: 'openai', apiKey: 'ciphertext', deletedAt: new Date() },
+      { userId: otherOwnerId, type: 'openai', apiKey: 'other ciphertext' },
+    ]);
+    await collection('Project').insertMany([
+      { _id: projectId, userId: ownerId, name: 'shared project', users: [{ userId: memberId }] },
+      { _id: otherProjectId, userId: otherOwnerId, name: 'other project' },
+    ]);
+    const grants = [
+      { userId: memberId, projectId: String(projectId) },
+      { userId: memberId, projectId: String(otherProjectId) },
+      { userId: memberId },
+    ];
+    await collection('FabFile').insertOne({
+      _id: orgFileId,
+      userId: otherOwnerId,
+      organizationId: 'org-1',
+      users: grants,
+    });
+    await collection(Session.modelName).insertOne({
+      _id: orgNotebookId,
+      userId: otherOwnerId,
+      organizationId: 'org-1',
+      users: grants,
+    });
+    await collection('Agent').insertMany([
+      { _id: agentId, userId: ownerId, name: 'personal agent', deletedAt: new Date() },
+      { _id: orgAgentId, userId: ownerId, organizationId: 'org-1', name: 'org agent' },
+    ]);
+    await collection('User').insertMany([
+      { email: 'a@example.test', slackSettings: { customAgentId: String(agentId) } },
+      { email: 'b@example.test', slackSettings: { customAgentId: String(orgAgentId) } },
+    ]);
+
+    await purgeAccountContent(ownerId, { logger, assertLease });
+    await purgeAccountContent(ownerId, { logger, assertLease });
+
+    expect(await collection('ApiKey').countDocuments({ userId: ownerId })).toBe(0);
+    expect(await collection('ApiKey').countDocuments({ userId: otherOwnerId })).toBe(1);
+    expect(await collection('Project').findOne({ _id: projectId })).toBeNull();
+    const survivingGrants = [{ userId: memberId, projectId: String(otherProjectId) }, { userId: memberId }];
+    expect(await collection('FabFile').findOne({ _id: orgFileId })).toMatchObject({ users: survivingGrants });
+    expect(await collection(Session.modelName).findOne({ _id: orgNotebookId })).toMatchObject({
+      users: survivingGrants,
+    });
+    expect(await collection('Agent').findOne({ _id: agentId })).toBeNull();
+    expect(await collection('Agent').findOne({ _id: orgAgentId })).not.toBeNull();
+    expect(await collection('User').findOne({ email: 'a@example.test' })).toMatchObject({ slackSettings: {} });
+    expect(await collection('User').findOne({ email: 'b@example.test' })).toMatchObject({
+      slackSettings: { customAgentId: String(orgAgentId) },
+    });
   });
 
   it('keeps the notebook and messages discoverable after storage failure, then resumes idempotently', async () => {
