@@ -1899,6 +1899,8 @@ describe('ImageGenerationService quest partial writes', () => {
         sessionId: 'session1',
         questId: 'quest1',
         contentType: 'image/png',
+        // The chat image's key, so a later "save to Files" of it finds this generation.
+        generatedOutputKey: 'generated/output.png',
         generation: {
           generator: 'image',
           provider: ModelBackend.Gemini,

@@ -160,6 +160,7 @@ describe('image_generation processAndStoreImages moderation gate (agent-tool ser
         jobId: expect.any(String),
         request: RENDER.request,
       },
+      generatedOutputKey: 'generated/stored-key.png',
     });
   });
 

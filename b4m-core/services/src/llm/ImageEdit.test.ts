@@ -1561,6 +1561,7 @@ describe('ImageEditService quest partial writes', () => {
 
       const saved = save.mock.calls[0][0];
       expect(saved.derivedFrom).toEqual([{ fileId: 'r1', role: 'reference' }]);
+      expect(saved.generatedOutputKey).toBe('stored/out.png');
       expect(saved.generation.request).toMatchObject({ model: ImageModels.GPT_IMAGE_1_5, prompt: 'make it blue' });
       expect(JSON.stringify(saved.generation.request)).not.toMatch(/source\.png|mask1/);
     });

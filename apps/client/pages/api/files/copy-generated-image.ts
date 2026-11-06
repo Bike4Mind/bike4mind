@@ -1,27 +1,33 @@
 import {
+  FabFileSourceType,
   FileEvents,
-  KnowledgeType,
+  GeneratedAssetLineageEntrySchema,
+  GeneratedAssetMetadataSchema,
   Permission,
   SupportedFabFileMimeTypes,
-  extensionFromMimeType,
   isImageServeable,
   fabFileResponseSchema,
+  type GeneratedAssetLineageEntry,
+  type GeneratedAssetMetadata,
+  type IFabFileDocument,
 } from '@bike4mind/common';
 import {
   FabFile,
   User,
+  fabFileRepository,
   organizationRepository,
+  questRepository,
   withTransaction,
   adminSettingsRepository,
   dataLakeRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
-import { fabFilesService } from '@bike4mind/services';
+import { saveGeneratedAsset } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { respond } from '@server/utils/respond';
-import { BadRequestError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, InternalServerError } from '@bike4mind/server-utils/utils/errors';
 import { getFilesStorage, getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { userCanAccessGeneratedImage } from '@bike4mind/server-utils/utils/generatedImageAccess';
 import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
@@ -45,7 +51,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   })
   .post(
     asyncHandler<unknown, unknown, CopyGeneratedImageInput>(async (req, res) => {
-      const { user } = req;
+      const { user, logger } = req;
       const { imageS3Key, fileName } = copyGeneratedImageSchema.parse(req.body);
 
       // Object-level authz: generated-image keys are owner-less, so a caller could otherwise copy
@@ -70,60 +76,50 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
           ? SupportedFabFileMimeTypes.PNG
           : storedType;
 
-      // Derive the extension via the shared reverse lookup so structured types (e.g. Excel's
-      // spreadsheetml) map to ".xlsx" instead of a bogus ".sheet".
-      const extension = extensionFromMimeType(contentType) || 'png';
-      const finalFileName = fileName || `image_${Date.now()}.${extension}`;
-
       await consumeFileUploadBudget(req, 1);
 
-      const result = await withTransaction(async () => {
-        return fabFilesService.createFabFile(
-          user.id,
+      const original = await findOriginalGeneration(imageS3Key, user.id);
+      const fileId = await withTransaction(async () => {
+        const saved = await saveGeneratedAsset(
           {
-            type: KnowledgeType.FILE,
-            fileName: finalFileName,
-            mimeType: contentType,
-            fileSize: imageBuffer.length,
-            content: imageBuffer, // Pass the buffer as content to trigger upload
+            userId: user.id,
+            bytes: imageBuffer,
+            // Off the stored S3 object, never the request body, so it outranks a caller-supplied fileName.
+            contentType,
+            generation: original?.generation ?? UNRECORDED_IMAGE_GENERATION,
+            ...(original?.derivedFrom && { derivedFrom: original.derivedFrom }),
+            generatedOutputKey: imageS3Key,
+            ...(fileName && { fileName }),
           },
           {
-            // The contentType comes off the stored S3 object, not the request body, so it outranks
-            // a caller-supplied fileName (an "image.txt" carrying image/png bytes stays image/png).
-            mimeTypePrecedence: 'claim-first',
             db: {
               adminSettings: adminSettingsRepository,
               // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake
               // enforcement override would silently not apply on this door.
               scopedSettings: scopedSettingsRepository,
-              fabFiles: FabFile,
+              fabFiles: fabFileRepository,
               users: requesterScopedUsers(req, User),
               organizations: organizationRepository,
               dataLakes: dataLakeRepository,
             },
             storage: {
-              upload: async (filepath, _content, option) => {
-                try {
-                  console.log(`[copy-generated-image] Uploading to S3: ${filepath}, size: ${imageBuffer.length}`);
-                  // S3Storage.upload signature: (content, destination, options)
-                  await getFilesStorage().upload(imageBuffer, filepath, {
-                    ContentType: option?.ContentType || contentType,
-                  });
-                  console.log(`[copy-generated-image] Upload successful: ${filepath}`);
-                  return filepath;
-                } catch (error) {
-                  console.error('[copy-generated-image] Upload failed:', error);
-                  throw error;
-                }
-              },
+              upload: (filepath, content, option) =>
+                getFilesStorage().upload(content, filepath, { ContentType: option?.ContentType || contentType }),
               generateSignedUrl: (filepath: string, expireInSeconds: number, mode?: 'get' | 'put') =>
                 getFilesStorage().getSignedUrl(filepath, mode ?? 'get', {
                   expiresIn: expireInSeconds,
                 }),
             },
+            logger,
           }
         );
+        // The caller is waiting on this file, so a refused save fails the request and rolls the transaction
+        // back; a storage-limit refusal keeps its 400 and byte counts.
+        if (!saved.saved) throw saved.cause ?? new InternalServerError('Failed to save the image to your files');
+        return saved.fileId;
       });
+      const result = await fabFileRepository.findById(fileId);
+      if (!result) throw new InternalServerError('Failed to save the image to your files');
 
       await logEvent(
         { userId: user.id, type: FileEvents.CREATE_FILE, metadata: { fileId: result.id } },
@@ -135,7 +131,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       // otherwise return the record with no fileUrl so the client can show a placeholder.
       const responseFile =
         typeof (result as { toJSON?: unknown }).toJSON === 'function'
-          ? (result as unknown as { toJSON: () => typeof result }).toJSON()
+          ? (result as unknown as { toJSON: () => IFabFileDocument }).toJSON()
           : result;
       if (responseFile.filePath && isImageServeable(responseFile)) {
         const presignedUrl = await getFilesStorage().getSignedUrl(responseFile.filePath, 'get', {
@@ -153,6 +149,38 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
       return respond(res, fabFileResponseSchema, responseFile);
     })
   );
+
+// A chat image from before generations were recorded: kept as a generated image with no request or lineage.
+const UNRECORDED_IMAGE_GENERATION: GeneratedAssetMetadata = { generator: 'image', provider: 'unknown', prompt: '' };
+
+/**
+ * The generation record of the file the image producers saved alongside this chat image (ImageGeneration /
+ * ImageEdit stamp `sourceMetadata.generatedOutputKey`), so the copy carries the same request. Searched within the
+ * chats whose turns reference the key, which the partial sessionId index serves. Lineage is reused only for the
+ * original's owner: a share recipient's copy must not point at files they cannot open.
+ */
+async function findOriginalGeneration(
+  imageKey: string,
+  userId: string
+): Promise<{ generation: GeneratedAssetMetadata; derivedFrom?: GeneratedAssetLineageEntry[] } | undefined> {
+  const sessionIds = await questRepository.findSessionIdsByImage(imageKey);
+  if (sessionIds.length === 0) return undefined;
+  const file = await fabFileRepository.findOne({
+    sourceType: FabFileSourceType.TOOL_GENERATED,
+    'sourceMetadata.sessionId': { $in: sessionIds },
+    'sourceMetadata.generatedOutputKey': imageKey,
+    deletedAt: null,
+  });
+  const generation = GeneratedAssetMetadataSchema.safeParse(file?.sourceMetadata?.generation);
+  if (!file || !generation.success) return undefined;
+  // A fresh save, not the original's job: reusing jobId would dedupe straight back to the original file.
+  const { jobId: _jobId, ...rest } = generation.data;
+  const derivedFrom = GeneratedAssetLineageEntrySchema.array().safeParse(file.derivedFrom);
+  return {
+    generation: rest,
+    ...(file.userId === userId && derivedFrom.success && { derivedFrom: derivedFrom.data }),
+  };
+}
 
 export const config = {
   api: {

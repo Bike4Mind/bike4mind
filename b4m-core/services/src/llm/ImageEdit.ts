@@ -977,6 +977,7 @@ export class ImageEditService {
           ...(derivedFrom.length > 0 && { derivedFrom }),
           sessionId,
           questId,
+          generatedOutputKey: path,
         },
         logger
       );
