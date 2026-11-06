@@ -1,5 +1,6 @@
 import {
   getEmbeddingModelCapabilities,
+  hasPublishedEmbeddingRate,
   listEmbeddingModelsContract,
   type ListEmbeddingModelsResponse,
 } from '@bike4mind/common';
@@ -24,6 +25,8 @@ const handler = nextRouteForContract(listEmbeddingModelsContract, {
     models: registry
       .ids()
       .flatMap(provider => registry.get(provider)?.models ?? [])
+      // POST /api/v1/embeddings refuses an unpriced model, so discovery must not offer one.
+      .filter(hasPublishedEmbeddingRate)
       .map(id => {
         const capabilities = getEmbeddingModelCapabilities(id);
         const dimensions = capabilities.dimensions;

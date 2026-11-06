@@ -16,7 +16,7 @@ import { join } from 'path';
  *     test (running the real batch executor against the real materialized toolFns),
  *     then answers with `ANSWER:: <tool result>` so assertions inspect the actual
  *     bytes that flowed back through the loop;
- *   - the query embedding: EmbeddingFactory returns a fixed vector (cosine ranking
+ *   - the query embedding: the stubbed embedding registry returns a fixed vector (cosine ranking
  *     itself stays real).
  * NOTE: the no-op tool callbacks are NOT the leak boundary here - KB confinement is
  * enforced inside the tools (kbScope); these tests prove that end to end.

@@ -2325,7 +2325,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
 
     it('does NOT override for an expired CALLER key on a keyed stage', async () => {
       // The regression this pins: `resolveEmbeddingConfig` returns an empty config for an expired
-      // personal key too, and an empty config makes EmbeddingFactory report Titan - so deriving
+      // personal key too, and an empty config makes the embedding registry report Titan - so deriving
       // keylessness from the factory embedded this one caller's query in Titan space against a
       // production ada-002 corpus. Silently zero results, and the expired-key error that would have
       // told them to rotate it never surfaces. The deployment's own key state is unchanged by one

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 import { ModelBackend } from '@bike4mind/common';
 import { resolveEmbeddingCredentials, resolveEmbeddingWithKeylessFallback, type EmbeddingKeyTable } from './runtime';
-import { embeddingBackendForModel } from './runtime';
+import { embeddingBackendForModel, getEmbeddingProviderRegistry } from './runtime';
 import {
   BedrockEmbeddingModel,
   OllamaEmbeddingModel,
@@ -228,4 +228,31 @@ describe('catalog-backed runtime routing', () => {
       expect(() => embeddingBackendForModel(model)).toThrow(`Unknown embedding model: ${model}`);
     }
   );
+});
+
+describe('getEmbeddingProviderRegistry', () => {
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    AWS_LAMBDA_FUNCTION_NAME: process.env.AWS_LAMBDA_FUNCTION_NAME,
+  };
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('offers Bedrock on a hosted stage that has a keyless cloud embedder', () => {
+    delete process.env.B4M_SELF_HOST;
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-web';
+    expect(getEmbeddingProviderRegistry({}).ids()).toContain('bedrock');
+  });
+
+  it('leaves Bedrock out on self-host, where no keyless embedder exists', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'some-stage-web';
+    const registry = getEmbeddingProviderRegistry({ openai: 'sk-test' });
+    expect(registry.ids()).not.toContain('bedrock');
+    expect(registry.ids()).toContain('openai');
+  });
 });

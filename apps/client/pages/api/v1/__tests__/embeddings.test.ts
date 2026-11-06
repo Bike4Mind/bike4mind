@@ -1,7 +1,7 @@
 import { CreditHolderType, isZodError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { Logger } from '@bike4mind/observability';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   getEffectiveLLMApiKeys,
@@ -126,6 +126,9 @@ const vectorOf = (width: number) => Array.from({ length: width }, (_, i) => (i =
 describe('POST /api/v1/embeddings', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Bedrock is offered only on a hosted stage (hasKeylessCloudEmbedder); the runner has no execution role.
+    vi.stubEnv('B4M_SELF_HOST', '');
+    vi.stubEnv('AWS_LAMBDA_FUNCTION_NAME', 'test-stage-web');
     getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-real', voyageai: 'pa-real' });
     countTokens.mockResolvedValue(5);
     generateEmbeddingBatch.mockImplementation(async (texts: string[]) => texts.map(() => vectorOf(1536)));
@@ -147,6 +150,8 @@ describe('POST /api/v1/embeddings', () => {
       settle,
     });
   });
+
+  afterEach(() => vi.unstubAllEnvs());
 
   it('builds the cached tokenizer with a neutral logger, not the request logger it would pin', async () => {
     const { status } = await run({ model: 'text-embedding-3-small', input: 'hello' });
@@ -266,6 +271,17 @@ describe('POST /api/v1/embeddings', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it('503s provider_not_configured for Bedrock on self-host, which has no keyless embedder', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+
+    const { status, body } = await run({ model: 'amazon.titan-embed-text-v2:0', input: 'a' });
+
+    expect(status).toBe(503);
+    expect(body.errorCode).toBe('provider_not_configured');
+    expect(reserve).not.toHaveBeenCalled();
+    expect(embedProvider).not.toHaveBeenCalled();
   });
 
   it('serves configured Cohere models with a document hint', async () => {

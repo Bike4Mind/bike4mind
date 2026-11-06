@@ -36,7 +36,7 @@ const headerOrNull = (httpResponse: Response, name: string): string | null => {
 };
 
 /**
- * Embeds through the OpenAI SDK. Splits on the same ceilings as fab-pipeline's OpenAIEmbeddingService (imported, so
+ * Embeds through the OpenAI SDK. Splits on the same ceilings fab-pipeline exports for OpenAI embeddings (imported, so
  * they cannot drift): input count, effective token budget, then a tiktoken re-count with recursive halving when the
  * API still rejects a batch as too large. Width-reduced `range` models embed at full width and are truncated
  * client-side, matching `embedTexts`; the API `dimensions` parameter is never sent.

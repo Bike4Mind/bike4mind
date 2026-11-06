@@ -64,6 +64,15 @@ describe('GET /api/v1/embedding-models', () => {
     expect(getKeys).toHaveBeenCalledTimes(1);
   });
 
+  it('omits models with no published rate, which the embed route would refuse', async () => {
+    registered.value = ['voyage'];
+    getKeys.mockResolvedValue({ voyageai: 'pa-real' });
+    const ids = (await run()).models.map(model => model.id);
+    expect(ids).toContain('voyage-3');
+    expect(ids).not.toContain('voyage-finance-3');
+    expect(ids).not.toContain('voyage-law-3');
+  });
+
   it('returns an empty list when no providers are registered', async () => {
     registered.value = [];
     expect((await run()).models).toEqual([]);

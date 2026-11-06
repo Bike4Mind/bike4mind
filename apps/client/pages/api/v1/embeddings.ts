@@ -11,7 +11,6 @@
 
 import {
   createEmbeddingsContract,
-  ApiBedrockEmbeddingModel,
   getEmbeddingModelCapabilities,
   getEmbeddingModelCost,
   hasPublishedEmbeddingRate,
@@ -112,7 +111,9 @@ const handler = nextRouteForContract(createEmbeddingsContract, { maxBodySize: 4 
       { adminSettings: adminSettingsRepository },
       { names: ['enforceCredits'], skipCache: true }
     );
-    const approximateTokenizer = provider === 'gemini' || model === ApiBedrockEmbeddingModel.COHERE_EMBED_V4;
+    // Only OpenAI models are counted with their own tokenizer; every other model falls back to cl100k_base,
+    // and settlement trusts the provider's count, which the hold caps (see tokenCounting.ts).
+    const approximateTokenizer = provider !== 'openai';
     const reservationTokens = approximateTokenizer
       ? Math.ceil(promptTokens * APPROXIMATE_TOKEN_RESERVATION_MARGIN)
       : promptTokens;

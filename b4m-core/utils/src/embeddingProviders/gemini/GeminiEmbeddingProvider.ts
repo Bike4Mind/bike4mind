@@ -6,6 +6,21 @@ import { assertOneVectorPerInput, preflightEmbeddingRequest, sumReportedTokens }
 import type { EmbeddingContext, EmbeddingProvider, EmbeddingRequest, EmbeddingResult } from '../types';
 
 const GEMINI_BATCH_SIZE = 100;
+const errorBodySchema = z.object({
+  error: z.object({ details: z.array(z.object({ reason: z.string().optional() }).passthrough()).optional() }),
+});
+
+/** Gemini answers a bad key with 400 INVALID_ARGUMENT, not 401; the ErrorInfo reason is what tells them apart. */
+const isInvalidApiKeyResponse = async (response: Response): Promise<boolean> => {
+  if (response.status !== 400) return false;
+  const body = errorBodySchema.safeParse(
+    await response
+      .clone()
+      .json()
+      .catch(() => null)
+  );
+  return body.success && (body.data.error.details ?? []).some(detail => detail.reason === 'API_KEY_INVALID');
+};
 const responseSchema = z.object({
   embeddings: z.array(z.object({ values: z.array(z.number()) })),
   usageMetadata: z.object({ promptTokenCount: z.number().int().nonnegative().optional() }).optional(),
@@ -63,7 +78,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
         ? AbortSignal.any([context.signal, AbortSignal.timeout(60_000)])
         : AbortSignal.timeout(60_000),
     });
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401 || response.status === 403 || (await isInvalidApiKeyResponse(response))) {
       throw new EmbeddingAuthError('gemini', 'Gemini rejected the embedding credential');
     }
     if (!response.ok) throw new Error(`Gemini embedding request failed (${response.status})`);

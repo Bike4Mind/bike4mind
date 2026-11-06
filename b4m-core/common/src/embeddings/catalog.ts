@@ -15,7 +15,7 @@ const VOYAGE_SHORTENABLE_DIMENSIONS = { kind: 'discrete', native: 1024, values: 
 const OLLAMA_PRICING = { usdPerMillionTokens: 0 } as const;
 
 // Ollama maxInputTokens is kept at a retrieval size (2048 for Qwen3, not its 32k): it sizes chunks and Ollama's
-// num_ctx (OllamaEmbeddingService), and a large window balloons embedder VRAM for no RAG gain.
+// num_ctx (OllamaEmbeddingProvider), and a large window balloons embedder VRAM for no RAG gain.
 const ollamaModel = (displayName: string, native: number, maxInputTokens: number): EmbeddingModelCapabilities => ({
   provider: 'ollama',
   inputType: false,
@@ -104,7 +104,7 @@ export const EMBEDDING_MODEL_CATALOG: Record<EmbeddingModelId, EmbeddingModelCap
     maxInputTokens: 16000,
     pricing: null,
   },
-  // Titan publishes 512 and 256 too, but BedrockEmbeddingService never forwards a width, so offering them would lie.
+  // Titan publishes 512 and 256 too, but BedrockEmbeddingProvider never forwards a width, so offering them would lie.
   [BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2]: {
     provider: 'bedrock',
     inputType: false,

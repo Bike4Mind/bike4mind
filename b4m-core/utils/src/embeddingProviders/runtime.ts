@@ -101,10 +101,17 @@ export const getDefaultEmbeddingModel = (config: EmbeddingConfig): SupportedEmbe
   return BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2;
 };
 
-export const buildEmbeddingRegistry = (config: EmbeddingConfig): EmbeddingRuntime => {
-  const providers: EmbeddingProvider[] = [
-    new BedrockEmbeddingProvider({ cohereModelId: config.cohereModelId ?? process.env.BEDROCK_COHERE_EMBED_MODEL_ID }),
-  ];
+export const buildEmbeddingRegistry = (
+  config: EmbeddingConfig,
+  { includeBedrock = true }: { includeBedrock?: boolean } = {}
+): EmbeddingRuntime => {
+  const providers: EmbeddingProvider[] = includeBedrock
+    ? [
+        new BedrockEmbeddingProvider({
+          cohereModelId: config.cohereModelId ?? process.env.BEDROCK_COHERE_EMBED_MODEL_ID,
+        }),
+      ]
+    : [];
   const openai = usableEmbeddingApiKey(config.openaiApiKey);
   const voyage = usableEmbeddingApiKey(config.voyageApiKey);
   const gemini = usableEmbeddingApiKey(config.geminiApiKey);
@@ -137,13 +144,20 @@ export const embedOne = async (bound: BoundEmbeddingModel, text: string, dimensi
   return vector;
 };
 
+/**
+ * The registry the public embedding routes list and call. Bedrock is offered only where a keyless cloud embedder
+ * exists (never on self-host), so discovery does not list a model whose call would fail upstream.
+ */
 export const getEmbeddingProviderRegistry = (keys: EmbeddingKeyTable): EmbeddingRuntime =>
-  buildEmbeddingRegistry({
-    openaiApiKey: usableEmbeddingApiKey(keys.openai),
-    voyageApiKey: usableEmbeddingApiKey(keys.voyageai),
-    ollamaBaseUrl: keys.ollama?.trim(),
-    geminiApiKey: usableEmbeddingApiKey(keys.gemini),
-  });
+  buildEmbeddingRegistry(
+    {
+      openaiApiKey: usableEmbeddingApiKey(keys.openai),
+      voyageApiKey: usableEmbeddingApiKey(keys.voyageai),
+      ollamaBaseUrl: keys.ollama?.trim(),
+      geminiApiKey: usableEmbeddingApiKey(keys.gemini),
+    },
+    { includeBedrock: hasKeylessCloudEmbedder() }
+  );
 
 export const resolveEmbeddingProvider = (
   model: EmbeddingModelId,
