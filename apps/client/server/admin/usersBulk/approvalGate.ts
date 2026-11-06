@@ -22,6 +22,7 @@ export const usersBulkApprovalPermission = (action: AdminUsersBulkAction): Admin
   action.type === 'adjustCredits' ? 'credits:adjust' : 'users:moderate';
 
 export type UsersBulkGate = { pending: ApprovalPendingBody } | { pending: null; release: ReleaseWindow };
+const RUN_BULK_NOW: UsersBulkGate = { pending: null, release: RUN_NOW.release };
 
 /**
  * Stores the execute for a second admin when approvals are on and it acts on more users (or adds more
@@ -34,9 +35,9 @@ export async function requestUsersBulkApprovalIfNeeded(
   request: AdminUsersBulkExecuteRequest,
   deps: ResolveDeps = usersBulkResolveDeps
 ): Promise<UsersBulkGate> {
-  if (!GATED_TYPES.has(request.action.type)) return RUN_NOW;
+  if (!GATED_TYPES.has(request.action.type)) return RUN_BULK_NOW;
   const policy = await getApprovalPolicy();
-  if (!policy.enabled) return RUN_NOW;
+  if (!policy.enabled) return RUN_BULK_NOW;
   if (!req.user) throw new ForbiddenError('Unauthorized. Admin access required.');
   const actorId = req.user.id;
 
