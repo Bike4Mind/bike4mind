@@ -189,6 +189,21 @@ describe('ModelLiveView', () => {
     expect(view.current().source).toBe('newer');
   });
 
+  it('rejects a pending build wait on dispose and leaves no timer', async () => {
+    await view.open(file);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = view.waitForBuild();
+      const outcome = expect(pending).rejects.toThrow('The model view closed.');
+      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1), { interval: 5 });
+      view.dispose();
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('waitForBuild times out when no window builds', async () => {
     await view.open(file);
     await expect(view.waitForBuild()).rejects.toThrow(/did not finish building/);

@@ -32,7 +32,12 @@ export type ModelLiveViewOptions = {
   captureTimeoutMs?: number;
 };
 
-type Waiter = { from?: number; resolve: (report: ModelBuildReport) => void };
+type Waiter = {
+  from?: number;
+  resolve: (report: ModelBuildReport) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+};
 type PendingCapture = { resolve: (bytes: Uint8Array) => void; reject: (error: Error) => void; timer: NodeJS.Timeout };
 
 /**
@@ -170,17 +175,19 @@ export class ModelLiveView {
 
   private nextReport(from?: number): Promise<ModelBuildReport> {
     return new Promise<ModelBuildReport>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.waiters = this.waiters.filter(entry => entry !== waiter);
+        reject(new Error('The model pane did not finish building. Is a Bike4Mind window open on this session?'));
+      }, this.buildTimeoutMs);
       const waiter: Waiter = {
         from,
+        timer,
+        reject,
         resolve: report => {
           clearTimeout(timer);
           resolve(report);
         },
       };
-      const timer = setTimeout(() => {
-        this.waiters = this.waiters.filter(entry => entry !== waiter);
-        reject(new Error('The model pane did not finish building. Is a Bike4Mind window open on this session?'));
-      }, this.buildTimeoutMs);
       this.waiters.push(waiter);
     });
   }
@@ -303,6 +310,12 @@ export class ModelLiveView {
 
   dispose(): void {
     this.stopWatching();
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error('The model view closed.'));
+    }
     for (const [id, pending] of this.captures) {
       clearTimeout(pending.timer);
       pending.reject(new Error('The model view closed.'));
