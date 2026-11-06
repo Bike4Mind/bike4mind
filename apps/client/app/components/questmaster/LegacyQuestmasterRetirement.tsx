@@ -51,7 +51,7 @@ export function LegacyQuestmasterBanner() {
       sx={{ mb: 2 }}
     >
       <Typography level="body-sm" data-testid="legacy-questmaster-banner-text">
-        {retirementMessage(shutdownDate)} Your plans have been saved as markdown files in the{' '}
+        {retirementMessage(shutdownDate)} Any plans converted from these views are saved as markdown files in the{' '}
         <strong>{QUESTMASTER_ARCHIVE_FOLDER}</strong> folder of your files.
       </Typography>
     </Alert>

@@ -3120,7 +3120,7 @@ export const settingsMap = {
       category: 'Experimental',
       group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
       order: 92,
-      // Read by the retirement banner on the legacy quest views (LegacyQuestmasterBanner.tsx).
+      // Read by the retirement banner on the legacy quest views (LegacyQuestmasterRetirement.tsx).
       userReadable: true,
     }),
     schema: z.string().refine(value => value === '' || isCalendarDate(value), {
