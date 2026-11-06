@@ -126,7 +126,8 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/agent-executions[/{id}]\`
 - Sessions: \`/api/v1/sessions\`, \`/api/sessions/{id}\`, \`/api/v1/sessions/{id}/clone\`
 - Artifacts: \`/api/v1/artifacts\` (list, create), \`/api/v1/artifacts/{id}\` (get, update, delete),
-  \`/api/v1/artifacts/{id}/versions[/{version}]\`
+  \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
+  \`/api/v1/artifacts/types\`
 - Agents: \`/api/v1/agents\`, \`/api/v1/agents/{id}\`
 - Projects: \`/api/v1/projects\`, \`/api/v1/projects/{id}\`, \`/api/v1/projects/{id}/files[/{file_id}]\`,
   \`/api/v1/projects/{id}/sessions[/{session_id}]\`
@@ -245,19 +246,6 @@ POST   /api/v1/agents/[id]/enhance-field
 | DELETE | /api/agents/[id] | Delete agent |
 | POST | /api/agents/[id]/transfer-credits | Transfer credits to agent |
 | POST | /api/agents/create-from-context | Create agent from conversation context |
-
----
-
-### Artifacts
-
-Artifact list, create, get, update, delete and version reads are covered by the generated docs (see above).
-The routes below are still hand-written.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | /api/artifacts/[id]/versions | Add an artifact version |
-| GET | /api/artifacts/search | Search artifacts |
-| GET | /api/artifacts/types | List artifact types |
 
 ---
 

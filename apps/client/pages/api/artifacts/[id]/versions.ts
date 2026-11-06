@@ -1,7 +1,9 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { z } from 'zod';
 
@@ -11,7 +13,7 @@ const CreateVersionSchema = z.object({
   content: z.string().min(1).optional(), // Optional because we might just be creating a version marker
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
   /**
    * GET /api/artifacts/[id]/versions
    * Get all versions for an artifact
@@ -48,6 +50,7 @@ const handler = baseApi()
 
       const versions = await artifactVersionRepository.findByArtifactId(artifactId);
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.json({
         success: true,
         data: versions,
@@ -61,6 +64,12 @@ const handler = baseApi()
    */
   .post(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
+      // Gated per verb: the route-level scopes above admit read keys for the GET.
+      assertApiKeyScope(
+        req,
+        [ApiKeyScope.WRITE_NOTEBOOKS],
+        'This API key is read-only for notebooks; notebooks:write is required'
+      );
       const userId = req.user?.id;
       const artifactId = req.query.id;
 
@@ -115,6 +124,7 @@ const handler = baseApi()
         }
       );
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.status(201).json({
         success: true,
         data: updatedArtifact,

@@ -173,6 +173,44 @@ describe('artifactService - update (write-time re-check)', () => {
     );
   });
 
+  it('stamps the version tag on the new version row when content changes', async () => {
+    await update(writerId, { id: 'artifact-1', content: 'new body', versionTag: 'v2' }, adapters);
+
+    expect(adapters.db.artifactVersions.createOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 2, versionTag: 'v2' })
+    );
+  });
+
+  it('stamps the version tag on a forced version with unchanged content', async () => {
+    await update(
+      writerId,
+      { id: 'artifact-1', content: 'same body', createNewVersion: true, versionTag: 'v2' },
+      adapters
+    );
+
+    expect(adapters.db.artifactVersions.createOrUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 2, versionTag: 'v2' })
+    );
+  });
+
+  it('leaves versionTag off the version row when none is given', async () => {
+    await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(adapters.db.artifactVersions.createOrUpdate.mock.calls[0][0]).not.toHaveProperty('versionTag');
+  });
+
+  it('clears the artifact version tag on a forced version created without one', async () => {
+    await update(writerId, { id: 'artifact-1', content: 'new body', createNewVersion: true }, adapters);
+
+    expect(gate()).toHaveBeenCalledWith(writerId, expect.objectContaining({ version: 2, versionTag: null }));
+  });
+
+  it('keeps the artifact version tag on a plain content edit without one', async () => {
+    await update(writerId, { id: 'artifact-1', content: 'new body' }, adapters);
+
+    expect(gate().mock.calls[0][1]).not.toHaveProperty('versionTag');
+  });
+
   it('makes a single gated write for a metadata-only update', async () => {
     await update(writerId, { id: 'artifact-1', title: 'Renamed' }, adapters);
 
