@@ -287,7 +287,7 @@ export async function loadPushRecipient(userId: string): Promise<PushRecipient |
 // Held across warm invocations: Apple asks providers to keep APNs connections open.
 let shared: { config: ApnsConfig; transport: ApnsTransport } | undefined;
 
-function transportFor(config: ApnsConfig, logger: Pick<Logger, 'warn'>): ApnsTransport {
+function transportFor(config: ApnsConfig): ApnsTransport {
   const held = shared;
   if (
     held &&
@@ -299,7 +299,10 @@ function transportFor(config: ApnsConfig, logger: Pick<Logger, 'warn'>): ApnsTra
     return held.transport;
   }
   held?.transport.close();
-  shared = { config, transport: createHttp2ApnsTransport(config, Date.now, logger) };
+  shared = {
+    config,
+    transport: createHttp2ApnsTransport(config, Date.now, new Logger({ metadata: { handler: 'sendPush' } })),
+  };
   return shared.transport;
 }
 
@@ -309,7 +312,7 @@ const handleWithContext = withEventContext(async (event, logger) => {
 
   const config = readApnsConfig();
   if (!config) return;
-  const transport = transportFor(config, logger);
+  const transport = transportFor(config);
   await deliverPush(
     payload,
     {

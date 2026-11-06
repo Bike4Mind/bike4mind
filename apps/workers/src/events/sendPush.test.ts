@@ -4,6 +4,7 @@ import type { EventBridgeEvent } from 'aws-lambda';
 import type { PushNotificationEvent } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
+  createTransport: vi.fn(),
   withEventContextInner: vi.fn(),
   findByUser: vi.fn(),
   removeByToken: vi.fn(),
@@ -38,6 +39,11 @@ vi.mock('@bike4mind/database', () => ({
   authSessionRepository: { findLiveSids: h.findLiveSids },
   userRepository: { findById: h.userFindById },
   organizationRepository: { findById: h.orgFindById },
+}));
+
+vi.mock('./sendPush.apns', async importOriginal => ({
+  ...(await importOriginal<typeof import('./sendPush.apns')>()),
+  createHttp2ApnsTransport: h.createTransport,
 }));
 
 import { deliverPush, handler, loadPushRecipient, REDACTED_PUSH_COPY, type SendPushDeps } from './sendPush';
@@ -348,7 +354,7 @@ describe('deliverPush', () => {
     });
 
     const done = deliverPush(EVENT, deps, logger);
-    for (let settled = 0; settled < 25; ) {
+    for (let settled = 0; settled < 25;) {
       await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
       const batch = pending.splice(0);
       batch.forEach(resolve => resolve());
@@ -452,6 +458,7 @@ describe('handler', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    h.createTransport.mockImplementation(() => ({ send: vi.fn(), close: vi.fn() }));
     for (const name of APNS_ENV) {
       saved[name] = process.env[name];
       delete process.env[name];
@@ -515,5 +522,39 @@ describe('handler', () => {
 
     expect(h.withEventContextInner).toHaveBeenCalledTimes(1);
     expect(h.findByUser).toHaveBeenCalledWith(EVENT.userId, 'device');
+  });
+
+  describe('shared transport', () => {
+    const OTHER_KEY_PEM = generateKeyPairSync('ec', { namedCurve: 'P-256' })
+      .privateKey.export({ type: 'pkcs8', format: 'pem' })
+      .toString();
+
+    const setConfig = (key: string, topic: string) =>
+      Object.assign(process.env, { APNS_KEY_ID: 'K', APNS_TEAM_ID: 'T', APNS_KEY: key, APNS_TOPIC: topic });
+
+    beforeEach(() => {
+      h.findByUser.mockResolvedValue([]);
+    });
+
+    it('creates the transport once for repeated invocations with the same config', async () => {
+      setConfig(VALID_KEY_PEM, 'com.example.reuse');
+
+      await handler(bridgeEvent);
+      await handler(bridgeEvent);
+
+      expect(h.createTransport).toHaveBeenCalledTimes(1);
+    });
+
+    it('rebuilds the transport, closing the old one, when a credential changes', async () => {
+      setConfig(VALID_KEY_PEM, 'com.example.rotate');
+      await handler(bridgeEvent);
+      const first = h.createTransport.mock.results[0].value as { close: ReturnType<typeof vi.fn> };
+
+      setConfig(OTHER_KEY_PEM, 'com.example.rotate');
+      await handler(bridgeEvent);
+
+      expect(h.createTransport).toHaveBeenCalledTimes(2);
+      expect(first.close).toHaveBeenCalledTimes(1);
+    });
   });
 });
