@@ -491,6 +491,12 @@ export const VIEW_DIRECTIONS: Record<ModelView, [number, number, number]> = {
   iso: [1, 0.8, 1],
 };
 
+/** Half the narrower of the camera's two fields of view (radians): what decides how much fits. */
+export function fitAngle(camera: THREE.PerspectiveCamera): number {
+  const vertical = THREE.MathUtils.degToRad(camera.fov / 2);
+  return Math.min(vertical, Math.atan(Math.tan(vertical) * camera.aspect));
+}
+
 export function frameCamera(
   camera: THREE.PerspectiveCamera,
   root: THREE.Object3D,
@@ -501,9 +507,7 @@ export function frameCamera(
   const sphere = box.isEmpty() ? new THREE.Sphere(new THREE.Vector3(), 1) : box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 1e-3);
   // The narrower of the two fields of view decides, or a tall pane crops the model's sides.
-  const vertical = THREE.MathUtils.degToRad(camera.fov / 2);
-  const horizontal = Math.atan(Math.tan(vertical) * camera.aspect);
-  const distance = (radius / Math.sin(Math.min(vertical, horizontal))) * 1.1;
+  const distance = (radius / Math.sin(fitAngle(camera))) * 1.1;
   const offset = new THREE.Vector3(...direction).normalize().multiplyScalar(distance);
   camera.position.copy(sphere.center).add(offset);
   camera.near = distance / 100;
