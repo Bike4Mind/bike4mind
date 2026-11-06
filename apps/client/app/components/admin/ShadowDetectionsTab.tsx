@@ -45,6 +45,7 @@ import {
   type ShadowDetectionRow,
 } from '@client/app/hooks/data/shadowDetections';
 import { ShadowDetectionAssessmentPanel } from './ShadowDetectionAssessmentPanel';
+import { VerdictEvalPanel } from './VerdictEvalPanel';
 import { DETECTOR_LABELS } from './shadowDetectorLabels';
 import { getErrorMessage } from '@client/app/utils/error';
 
@@ -638,6 +639,7 @@ export const ShadowDetectionsTab: React.FC = () => {
           </Typography>
         </Stack>
       )}
+      <VerdictEvalPanel />
       {detections.data?.truncated && (
         <Alert color="warning" data-testid="shadow-detection-truncated">
           Showing the {SHADOW_DETECTION_LIST_LIMIT.toLocaleString()} most recent detections. Narrow the filters to see

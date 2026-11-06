@@ -10,6 +10,7 @@ import {
   type ShadowDetectionVerdictRequest,
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { verdictEvalReportSchema, type VerdictEvalWindowDays } from '@client/app/utils/verdictEval';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { z } from 'zod';
@@ -102,5 +103,14 @@ export function useRequestAbuseAssessment() {
       (await api.post<AbuseAssessmentRunResult>(ASSESSMENTS_ENDPOINT, { detectionId })).data,
     onSuccess: (_result, detectionId) =>
       queryClient.invalidateQueries({ queryKey: [...ASSESSMENTS_QUERY_KEY, detectionId] }),
+  });
+}
+
+/** The labelled verdict eval for the last `days` (server/security/verdictEval). */
+export function useVerdictEval(days: VerdictEvalWindowDays) {
+  return useQuery({
+    queryKey: [...SHADOW_DETECTIONS_QUERY_KEY, 'verdict-eval', days],
+    queryFn: async () =>
+      verdictEvalReportSchema.parse((await api.get(`${ENDPOINT}/verdict-eval`, { params: { days } })).data),
   });
 }

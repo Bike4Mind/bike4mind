@@ -23,6 +23,7 @@ vi.mock('@client/app/hooks/data/shadowDetections', () => ({
   useShadowDetectionVerdict: () => ({ mutateAsync: m.mutateAsync, isPending: false, error: m.verdictError }),
   useAbuseAssessments: () => ({ data: [], isPending: false, error: null }),
   useRequestAbuseAssessment: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
+  useVerdictEval: () => ({ data: undefined, isPending: true, error: null, refetch: vi.fn() }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { isAdmin: true } }) }));
 vi.mock('@tanstack/react-router', () => ({
