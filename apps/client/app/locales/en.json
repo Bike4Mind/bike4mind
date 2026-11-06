@@ -240,6 +240,7 @@
     "verifyCode": "Verify Code",
     "verifying": "Verifying...",
     "resendCode": "Resend code",
+    "noCodeHint": "Didn't get a code? Check your spam folder or contact support.",
     "createAccount": "Create Account",
     "accountExists": "An account with this email already exists. Please sign in.",
     "registrationClosed": "Sign-ups are invite-only right now. Join the waitlist to request an invite.",

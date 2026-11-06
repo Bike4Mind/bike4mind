@@ -2,6 +2,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useSendOTC, useSignupBotFields, useStartOAuthSignIn, useVerifyOTC } from '@client/app/hooks/data/auth';
 import { formatCountdown, useOtcRateLimit } from '@client/app/hooks/useOtcRateLimit';
 import OtcRateLimitNotice from './OtcRateLimitNotice';
+import OtcNoCodeHint from './OtcNoCodeHint';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useMfaChallenge } from '@client/app/hooks/useMfaChallenge';
 import MFAModal from './common/MFAModal';
@@ -884,6 +885,7 @@ const Register: React.FC = () => {
                 capped={rateLimit.capped}
                 testId="register-otc-rate-limit-alert"
               />
+              <OtcNoCodeHint testId="register-otc-no-code-hint" />
 
               <Box sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
                 <Link

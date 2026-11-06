@@ -473,6 +473,8 @@ export const SettingKeySchema = z.enum([
   'otcLimitSendPerEmailPerIp',
   'otcLimitSendPerEmailPerIpDaily',
   'otcLimitSendPerEmail',
+  'otcLimitSendPerEmailDaily',
+  'otcLimitSendGlobalHourly',
   'otcLimitRegisterPerDomainHourly',
   'otcLimitRegisterPerDomainDaily',
   'otcLimitSendPerIpDistinctEmails',
@@ -2609,6 +2611,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'otcLimitVerifyPerEmailPerIp', order: 9 },
       { key: 'otcLimitVerifyPerIp', order: 10 },
       { key: 'otcLimitFormTokenPerIp', order: 11 },
+      { key: 'otcLimitSendPerEmailDaily', order: 12 },
+      { key: 'otcLimitSendGlobalHourly', order: 13 },
     ],
   },
   SUBSCRIBER_LIMITS: {
@@ -4685,6 +4689,34 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
     order: 3,
   }),
+  otcLimitSendPerEmailDaily: makeNumberSetting({
+    key: 'otcLimitSendPerEmailDaily',
+    name: 'Sign-in Codes: Send: Per Inbox Before Challenge (per day)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 20,
+    int: true,
+    description:
+      'Codes one inbox may receive in a day before further requests must pass a Turnstile challenge. Never refuses on its own: without a Turnstile secret and site key it only logs. Built-in: 20. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 12,
+  }),
+  otcLimitSendGlobalHourly: makeNumberSetting({
+    key: 'otcLimitSendGlobalHourly',
+    name: 'Sign-in Codes: Send: All Inboxes Before Challenge (per hour)',
+    defaultValue: 0,
+    min: 0,
+    // Must equal the built-in limit in OTC_LIMITS (apps/client/server/utils/otcLimits.ts).
+    max: 1000,
+    int: true,
+    description:
+      'Codes the whole deployment may send in an hour before every further request must pass a Turnstile challenge. Never refuses on its own: without a Turnstile secret and site key it only logs. Built-in: 1000. 0 keeps the built-in.',
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.SIGN_IN_CODE_LIMITS.id,
+    order: 13,
+  }),
   otcLimitRegisterPerDomainHourly: makeNumberSetting({
     key: 'otcLimitRegisterPerDomainHourly',
     name: 'Sign-in Codes: New Accounts per Domain (per hour)',
@@ -5491,17 +5523,15 @@ export const settingsMap = {
       'When Cloudflare verification cannot be reached, refuse the request instead of letting it through. Off keeps sign-in available during a Cloudflare outage.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
-    dependsOn: 'turnstileEnabled',
   }),
   turnstileSiteKey: makeStringSetting({
     key: 'turnstileSiteKey',
     name: 'Turnstile Site Key',
     defaultValue: '',
     description:
-      'The public Cloudflare Turnstile site key shown to the sign-in form. The secret key is never stored here.',
+      'The public Cloudflare Turnstile site key shown to the sign-in form. With the toggle above off, a set key still challenges sign-in code requests past the send budgets (see Sign-in Code Limits). The secret key is never stored here.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
-    dependsOn: 'turnstileEnabled',
   }),
   signupBurstThreshold: makeNumberSetting({
     key: 'signupBurstThreshold',

@@ -56,6 +56,12 @@ the same account do not combine their counts. Each alarm compares its `Sum` with
 the configured threshold using `GreaterThanOrEqualToThreshold`; missing data is
 not breaching.
 
+`otc-code-suppressed` is logged when a sign-in code is issued but not mailed
+because the address was refused (blocked domain or no mail host) and has no
+account. It carries `reason` and the address's `domain`, never the full address.
+It is counted as `SignupCodeSuppressed` in the same namespace, with no alarm, so
+a run of wrongly refused domains shows up on the metric.
+
 ALARM and OK transitions go to the DLQ alarm topic (Slack; its handler drops OK).
 The out-of-band email topic (`OPS_ALERT_EMAIL`) is reserved for the alarms that
 report the Slack relay itself failing. Each alarm notifies on an ALARM transition. A non-breaching evaluation returns it
