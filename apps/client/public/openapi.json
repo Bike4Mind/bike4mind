@@ -2206,6 +2206,25 @@
                                       "url"
                                     ],
                                     "additionalProperties": {}
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": [
+                                          "file"
+                                        ]
+                                      },
+                                      "file_id": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "file_id"
+                                    ],
+                                    "additionalProperties": {}
                                   }
                                 ]
                               }
