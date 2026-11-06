@@ -455,8 +455,8 @@ describe('ChatService untrusted content in a reply', () => {
       vi.waitUntil(() => calls(name, 'done')[0] ?? calls(name, 'error')[0], { timeout: 5000, interval: 10 });
 
     const reported = [
-      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts b.test.ts c.test.ts && VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/client exec vitest run --project node d.test.ts',
-      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts && pnpm --filter @bike4mind/llm-adapters typecheck && pnpm exec eslint --quiet a.ts b.ts',
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters run test a.test.ts b.test.ts c.test.ts && VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/client run test --project node d.test.ts',
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters run test a.test.ts && pnpm --filter @bike4mind/llm-adapters run typecheck && eslint --quiet a.ts b.ts',
     ];
 
     it.each(reported)('runs %s unasked in a reply that read nothing untrusted', async command => {
@@ -472,11 +472,11 @@ describe('ChatService untrusted content in a reply', () => {
       const replying = reply(id, [
         fetch,
         ['bash_execute', { command: reported[0], cwd: root }],
-        ['bash_execute', { command: 'VITEST_MAX_WORKERS=50% pnpm --filter @x/y exec vitest run e.test.ts', cwd: root }],
+        ['bash_execute', { command: 'VITEST_MAX_WORKERS=50% pnpm --filter @x/y run test e.test.ts', cwd: root }],
       ]);
       const first = await awaitCall('bash_execute', 'awaiting-approval');
       expect(first.approvalDetail).toContain('(web_fetch)');
-      expect(first.approvalRules).toEqual(['Bash(pnpm exec vitest:*)']);
+      expect(first.approvalRules).toEqual(['Bash(pnpm run test:*)']);
       approvals.resolve(first.approvalId!, { decision: 'always' });
       await replying;
 
@@ -547,19 +547,15 @@ describe('ChatService untrusted content in a reply', () => {
       await reply(id, [['bash_execute', { command: reported[1], cwd: root }]]);
 
       const asked = await awaitCall('bash_execute', 'awaiting-approval');
-      expect(asked.approvalRules).toEqual([
-        'Bash(pnpm exec vitest:*)',
-        'Bash(pnpm typecheck:*)',
-        'Bash(pnpm exec eslint:*)',
-      ]);
+      expect(asked.approvalRules).toEqual(['Bash(pnpm run test:*)', 'Bash(pnpm run typecheck:*)', 'Bash(eslint:*)']);
     });
 
     it('lets "Always allow" on a tainted card cover later commands with the same prefixes', async () => {
       const id = await session('auto');
       const replying = reply(id, [
         fetch,
-        ['bash_execute', { command: 'make test', cwd: root }],
-        ['bash_execute', { command: 'make test -j2 && make test -k', cwd: root }],
+        ['bash_execute', { command: 'pnpm run test a', cwd: root }],
+        ['bash_execute', { command: 'pnpm run test b && pnpm run test c', cwd: root }],
       ]);
       const first = await awaitCall('bash_execute', 'awaiting-approval');
       expect(first.approvalDetail).toContain('(web_fetch)');
@@ -576,13 +572,28 @@ describe('ChatService untrusted content in a reply', () => {
 
     const cases: [string, string, [string, Record<string, unknown>]][] = [
       ['Bash(gh pr create:*)', 'gh pr create', ['bash_execute', { command: 'gh pr create --fill', cwd: '' }]],
-      ['Bash(git rebase:*)', 'git rebase', ['bash_execute', { command: 'git rebase origin/main', cwd: '' }]],
+      ['Bash(git rebase:*)', 'git rebase', ['bash_execute', { command: 'git rebase main', cwd: '' }]],
       ['WebFetch(domain:example.com)', 'a fetch', ['web_fetch', { url: 'https://example.com/other' }]],
     ];
 
     it.each(cases)('%s runs %s unasked in a tainted reply', async (rule, _label, [name, input]) => {
-      // A whole-tree git write is left to the rules only in a repository that tracks no .claude folder.
-      if (rule.startsWith('Bash(git')) execFileSync('git', ['-C', root, 'init', '-q']);
+      // A git write from a target is left to the rules only when git can diff that target and it adds no .claude path.
+      if (rule.startsWith('Bash(git')) {
+        execFileSync('git', ['-C', root, 'init', '-q', '-b', 'main']);
+        execFileSync('git', [
+          '-C',
+          root,
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'commit',
+          '-q',
+          '--allow-empty',
+          '-m',
+          'x',
+        ]);
+      }
       rules = allowRules([rule]);
       const id = await session('auto');
       await reply(id, [fetch, [name, name === 'bash_execute' ? { ...input, cwd: root } : input]]);

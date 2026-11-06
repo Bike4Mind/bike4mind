@@ -231,12 +231,11 @@ describe('ChatService permission rules', () => {
     expect(asked.approvalRules).toBeUndefined();
   });
 
-  it('lets a rule naming the inline form cover it', async () => {
+  it('does not let a rule naming the inline form cover it, since the scan does not read the script', async () => {
     rules = ruleSet({ allow: ["Bash(node -e ' *)"] });
     await run('ask', 'bash_execute', { command: `node -e 'console.log(1)'`, cwd: root });
 
-    await awaitCall('bash_execute', 'running');
-    expect(calls('bash_execute', 'awaiting-approval')).toHaveLength(0);
+    await awaitCall('bash_execute', 'awaiting-approval');
   });
 
   // Not a temp folder: the shell scan counts those as shared already.

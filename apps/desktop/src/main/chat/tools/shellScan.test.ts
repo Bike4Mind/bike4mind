@@ -597,24 +597,35 @@ describe('scanShell', () => {
 
   describe('a tuning variable in front of a local test, typecheck, lint or build run', () => {
     it.each([
-      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts b.test.ts c.test.ts && VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/client exec vitest run --project node d.test.ts',
-      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters exec vitest run a.test.ts && pnpm --filter @bike4mind/llm-adapters typecheck && pnpm exec eslint --quiet a.ts b.ts',
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters run test a.test.ts b.test.ts c.test.ts && VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/client run test --project node d.test.ts',
+      'VITEST_MAX_WORKERS=25% pnpm --filter @bike4mind/llm-adapters run test a.test.ts && pnpm --filter @bike4mind/llm-adapters run typecheck && eslint --quiet a.ts b.ts',
       'CI=1 pnpm test',
-      'CI=1 pnpm --filter @x/y typecheck',
-      'CI=1 pnpm turbo:typecheck && CI=1 pnpm lint:check',
-      'NODE_ENV=test FORCE_COLOR=0 pnpm exec vitest run',
+      'CI=1 pnpm --filter @x/y run typecheck',
+      'CI=1 pnpm run turbo:typecheck && CI=1 pnpm run lint:check',
+      'NODE_ENV=test FORCE_COLOR=0 vitest run',
       'CI=1 npm run lint -- --fix',
-      'CI=1 yarn format:check',
-      'CI=1 npx tsc --noEmit -p tsconfig.json',
+      'CI=1 yarn run format:check',
+      'CI=1 tsc --noEmit -p tsconfig.json',
       'TZ=UTC vitest run src/x.test.ts',
       'CI=1 jest --ci',
       'CI=1 turbo run test lint --filter=@x/y',
       'NODE_ENV=test node scripts/check.js --flag',
-      'cd apps/desktop && CI=1 pnpm typecheck 2>&1 | tail -20',
+      'cd apps/desktop && CI=1 pnpm run typecheck 2>&1 | tail -20',
     ])('keeps %s coverable, but never contained', async command => {
       const result = await scan(command);
       expect(result.commands.every(entry => entry.coverable)).toBe(true);
       expect(result.contained).toBe(false);
+    });
+
+    it.each([
+      'NODE_ENV=test FORCE_COLOR=0 pnpm exec vitest run',
+      'CI=1 npx tsc --noEmit -p tsconfig.json',
+      'CI=1 pnpm --filter @x/y typecheck',
+      'CI=1 yarn format:check',
+    ])('reads %s, a runner or bare script name, as unread', async command => {
+      const result = await scan(command);
+      expect(result.unread).toBe(true);
+      expect(result.commands.some(entry => entry.coverable)).toBe(false);
     });
 
     it.each([
@@ -667,15 +678,15 @@ describe('scanShell', () => {
     });
 
     it('keeps the assignment in the words a rule matches, and out of the remembered prefix', async () => {
-      const [tuned] = (await scan('VITEST_MAX_WORKERS=25% pnpm --filter @x/y exec vitest run x')).commands;
+      const [tuned] = (await scan('VITEST_MAX_WORKERS=25% pnpm --filter @x/y run test x')).commands;
       expect(tuned).toEqual({
-        text: 'pnpm exec vitest run x',
-        always: 'pnpm exec vitest *',
+        text: 'pnpm run test x',
+        always: 'pnpm run test *',
         coverable: true,
-        words: 'VITEST_MAX_WORKERS=25% pnpm --filter @x/y exec vitest run x',
+        words: 'VITEST_MAX_WORKERS=25% pnpm --filter @x/y run test x',
       });
-      const [steered] = (await scan('NODE_OPTIONS=--require=./x.js pnpm exec vitest run x')).commands;
-      expect(steered.words).toBe('NODE_OPTIONS=--require=./x.js pnpm exec vitest run x');
+      const [steered] = (await scan('NODE_OPTIONS=--require=./x.js pnpm run test x')).commands;
+      expect(steered.words).toBe('NODE_OPTIONS=--require=./x.js pnpm run test x');
     });
   });
 
@@ -710,13 +721,13 @@ describe('scanShell', () => {
 
   describe('what always allow remembers', () => {
     it('skips options before the subcommand, for the prefix and for the text matched', async () => {
-      const result = await scan('pnpm --filter @x/y exec vitest run foo && git -C sub commit -m x');
+      const result = await scan('pnpm --filter @x/y run test foo && git -C sub commit -m x');
       expect(result.commands).toEqual([
         {
-          text: 'pnpm exec vitest run foo',
-          always: 'pnpm exec vitest *',
+          text: 'pnpm run test foo',
+          always: 'pnpm run test *',
           coverable: true,
-          words: 'pnpm --filter @x/y exec vitest run foo',
+          words: 'pnpm --filter @x/y run test foo',
         },
         { text: 'git commit -m x', always: 'git commit *', coverable: true, words: 'git -C sub commit -m x' },
       ]);

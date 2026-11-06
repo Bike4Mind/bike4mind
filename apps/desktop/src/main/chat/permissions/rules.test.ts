@@ -222,22 +222,22 @@ describe('PermissionRuleSet', () => {
   });
 
   it('matches a toolchain run past a tuning variable both with and without naming it', async () => {
-    const script = 'NODE_ENV=production pnpm build';
+    const script = 'NODE_ENV=production pnpm run build';
     const scan = await scanShell(script, PROJECT, [PROJECT]);
     if (!scan) throw new Error('Expected the script to parse');
     const subject = shell(script, scan.commands);
-    expect(decide(set({ allow: ['Bash(pnpm build:*)'] }), subject)).toBe('allow');
-    expect(decide(set({ allow: ['Bash(NODE_ENV=production pnpm build:*)'] }), subject)).toBe('allow');
-    expect(decide(set({ deny: ['Bash(NODE_ENV=production pnpm build:*)'] }), subject)).toBe('deny');
-    expect(decide(set({ ask: ['Bash(NODE_ENV=production pnpm build)'] }), subject)).toBe('ask');
+    expect(decide(set({ allow: ['Bash(pnpm run build:*)'] }), subject)).toBe('allow');
+    expect(decide(set({ allow: ['Bash(NODE_ENV=production pnpm run build:*)'] }), subject)).toBe('allow');
+    expect(decide(set({ deny: ['Bash(NODE_ENV=production pnpm run build:*)'] }), subject)).toBe('deny');
+    expect(decide(set({ ask: ['Bash(NODE_ENV=production pnpm run build)'] }), subject)).toBe('ask');
   });
 
-  it('requires an explicit eval form for Deno inline code', async () => {
+  it('lets no allow rule cover Deno inline code, even one naming the eval form', async () => {
     const script = 'deno eval "fetch(1)"';
     const scan = await scanShell(script, PROJECT, [PROJECT]);
     if (!scan) throw new Error('Expected the inline command to parse');
     expect(decide(set({ allow: ['Bash(deno:*)'] }), shell(script, scan.commands))).toBeNull();
-    expect(decide(set({ allow: ['Bash(deno eval:*)'] }), shell(script, scan.commands))).toBe('allow');
+    expect(decide(set({ allow: ['Bash(deno eval:*)'] }), shell(script, scan.commands))).toBeNull();
   });
 
   it.each([
