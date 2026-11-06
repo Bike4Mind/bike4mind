@@ -40,9 +40,9 @@ const publishedArtifactsBucketName =
       : undefined);
 
 // Bucket-wide rollback window for versioned buckets. Without it, on a stage with ENABLE_BUCKET_VERSIONING
-// every delete or overwrite keeps its bytes forever as a noncurrent version. A no-op on an unversioned
-// bucket. infra/__tests__/versionedBucketNoncurrentExpiry.test.ts requires it (or an equivalent) on every
-// versioned bucket.
+// every delete or overwrite keeps its bytes forever as a noncurrent version. The noncurrent and delete-marker
+// actions only matter on a versioned bucket; the 1-day multipart abort applies on every stage.
+// infra/__tests__/versionedBucketNoncurrentExpiry.test.ts requires it (or an equivalent) on every versioned bucket.
 const expireNoncurrentVersionsRule = {
   id: 'expire-noncurrent-versions',
   status: 'Enabled',
