@@ -4,6 +4,11 @@ import type { UserSignupLinkFacts } from '@bike4mind/database';
 vi.mock('@bike4mind/database', () => ({ usageEventRepository: {}, userRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ userService: {} }));
 vi.mock('@server/billing/linkedAccounts', () => ({ findLinkedAccounts: vi.fn() }));
+vi.mock('@server/security/autoContainment/deviceLinkEvaluation', () => ({
+  DEFAULT_DEVICE_LINK_CONFIG: {},
+  evaluateDeviceLinks: vi.fn(),
+  liveDeviceLinkReaders: {},
+}));
 
 import type { LinkedAccount } from '@server/billing/linkedAccounts';
 import { buildLinkedAccountEvidence, type LinkedAccountEvidenceDeps } from './linkedAccountEvidence';
@@ -56,6 +61,18 @@ function makeDeps(overrides: Partial<LinkedAccountEvidenceDeps> = {}): LinkedAcc
       u1: { reservedCredits: 100, settledCredits: 4_000, ratio: 40 },
       u2: { reservedCredits: 50, settledCredits: 60, ratio: 1.2 },
     }),
+    bannedDeviceLinks: async () =>
+      new Map([
+        [
+          'u1',
+          [
+            { blockedUserId: 'banned-1', hoursApart: 27 },
+            // A member banned since the detection is the detection, not extra evidence.
+            { blockedUserId: 'u2', hoursApart: 1 },
+          ],
+        ],
+        ['u2', [{ blockedUserId: 'banned-1', hoursApart: 30 }]],
+      ]),
     now: () => NOW,
     ...overrides,
   };
@@ -70,7 +87,7 @@ describe('buildLinkedAccountEvidence', () => {
     );
     expect(evidence).toMatchObject({
       source: 'linkedAccounts',
-      version: 1,
+      version: 2,
       memberCount: 2,
       memberRefs: ['acct_1', 'acct_2'],
     });
@@ -81,6 +98,8 @@ describe('buildLinkedAccountEvidence', () => {
       sameCardAccounts: 1,
       landedOnOtherAccountNotebook: true,
       landedOnBlockedAccountNotebook: true,
+      sameDeviceBannedAccounts: 1,
+      hoursToBannedSameDeviceAccount: 27,
       maxSettlementOverHoldRatio: 40,
       maxSettlementOverHoldCredits: 3_900,
       oauthSignups: 1,
@@ -97,10 +116,13 @@ describe('buildLinkedAccountEvidence', () => {
         findSignupLinkFacts: async () => [fact({})],
         findLinkedAccounts: async () => [],
         largestSettlementOverHold: async () => ({}),
+        bannedDeviceLinks: async () => new Map(),
       })
     );
     expect(signalsOf(evidence)).toMatchObject({
       maxSameSignupIpAccounts: 0,
+      sameDeviceBannedAccounts: 0,
+      hoursToBannedSameDeviceAccount: null,
       hoursToBlockedSignupIpAccount: null,
       landedOnOtherAccountNotebook: false,
       maxSettlementOverHoldRatio: null,

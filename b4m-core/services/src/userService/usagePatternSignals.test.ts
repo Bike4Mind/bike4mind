@@ -7,6 +7,8 @@ import {
   creditPollingSignal,
   quickApiKeySignal,
   regularCadenceSignal,
+  scriptedGrantDrainSignal,
+  type GrantDrainFacts,
   type UsagePatternFacts,
 } from './usagePatternSignals';
 
@@ -198,6 +200,7 @@ describe('computeUsagePatternSignals', () => {
       ['regularCadence', true],
       ['creditPolling', true],
       ['quickApiKey', true],
+      ['scriptedGrantDrain', false],
     ]);
     expect(result).toMatchObject({ score: 100, needsReview: true });
   });
@@ -225,10 +228,62 @@ describe('computeUsagePatternSignals', () => {
   });
 });
 
+describe('scriptedGrantDrainSignal', () => {
+  const signedUpAt = new Date(t0);
+  const at = (n: number) => new Date(t0 + minutes(n));
+  // The farm sequence: 2FA at 2 min, notebook unlock at 4, one turn spending the whole grant at 8, logout at 12.
+  const farm: GrantDrainFacts = {
+    signedUpAt,
+    mfaEnabledAt: at(2),
+    activityUnlockAt: at(4),
+    grantedCredits: 2000,
+    largestTurn: { at: at(8), credits: 1990 },
+    turns: 1,
+    loggedOutAt: at(12),
+  };
+  const run = (grantDrain: GrantDrainFacts | null) => scriptedGrantDrainSignal({ grantDrain }, config);
+
+  it('triggers on the farm sequence, valued in minutes from signup to logout', () => {
+    expect(run(farm)).toMatchObject({ id: 'scriptedGrantDrain', triggered: true, value: 12, weight: 50 });
+    expect(run(farm).explanation).toBe(
+      'Signup, 2FA on and activity grant unlocked, 1 turn (largest 100% of the 2000 signup credits), then logout 12m after signup'
+    );
+  });
+
+  it('is unmeasured for an older account or one that never logged out after a turn', () => {
+    expect(run(null)).toMatchObject({ triggered: false, value: null });
+    expect(run({ ...farm, loggedOutAt: null })).toMatchObject({ triggered: false, value: null });
+    expect(run({ ...farm, largestTurn: null })).toMatchObject({ triggered: false, value: null });
+  });
+
+  it.each([
+    ['no 2FA', { mfaEnabledAt: null }],
+    ['no activity unlock', { activityUnlockAt: null }],
+    ['2FA turned on after the turn', { mfaEnabledAt: at(9) }],
+    ['a small turn', { largestTurn: { at: at(8), credits: 600 } }],
+    ['varied use', { turns: 4 }],
+    ['slower than the window', { largestTurn: { at: at(55), credits: 1990 }, loggedOutAt: at(61) }],
+    ['logout before the turn', { loggedOutAt: at(7) }],
+  ] as const)('does not trigger with %s', (_name, change) => {
+    expect(run({ ...farm, ...change }).triggered).toBe(false);
+  });
+
+  it('can reach review on its own with the default weight', () => {
+    const facts: UsagePatternFacts = { ...typicalFacts, grantDrain: farm };
+    expect(computeUsagePatternSignals(facts, UsagePatternSignalsConfigSchema.parse({})).needsReview).toBe(true);
+  });
+});
+
 describe('UsagePatternSignalsConfigSchema', () => {
   it('fills generic defaults from an empty object', () => {
     const parsed = UsagePatternSignalsConfigSchema.parse({});
-    expect(parsed.weights).toEqual({ apiOnlyUsage: 25, regularCadence: 25, creditPolling: 25, quickApiKey: 25 });
+    expect(parsed.weights).toEqual({
+      apiOnlyUsage: 25,
+      regularCadence: 25,
+      creditPolling: 25,
+      quickApiKey: 25,
+      scriptedGrantDrain: 50,
+    });
     expect(parsed.reviewThreshold).toBe(50);
   });
 

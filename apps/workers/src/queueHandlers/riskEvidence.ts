@@ -22,6 +22,7 @@ import { userService } from '@bike4mind/services';
 import { emitMetrics } from '@bike4mind/server-utils/utils/cloudwatch';
 import { dispatchWithLogger } from '@bike4mind/server-utils/queueHandlers/utils';
 import { requestRiskEvidenceRefresh, riskEvidenceDb } from '@server/auth/riskEvidence';
+import { checkDeviceLink, liveDeviceLinkDeps } from '@server/security/autoContainment/deviceLink';
 import { checkStrongLink, liveStrongLinkDeps } from '@server/security/autoContainment/strongLink';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
@@ -109,6 +110,16 @@ async function checkStrongLinkSafely(userId: string, logger: Logger): Promise<vo
   }
 }
 
+/** The ban-evasion device rule (security/autoContainment/deviceLink.ts) for a new account. Never throws, as above. */
+async function checkDeviceLinkSafely(userId: string, logger: Logger): Promise<void> {
+  try {
+    const result = await checkDeviceLink(userId, liveDeviceLinkDeps(logger));
+    if (result.status === 'recorded') logger.info('Device-link rule recorded a detection', { userId, ...result });
+  } catch (error) {
+    logger.error('Device-link rule failed', { userId, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 /** Handle one record, appending its metrics to `metrics`; throws only for a failure SQS should retry. */
 export async function processRiskEvidenceRecord(
   record: Pick<SQSRecord, 'body'>,
@@ -144,7 +155,10 @@ export async function processRiskEvidenceRecord(
       outcome(RiskEvidenceMetrics.REFRESHES, result.status),
       ...(result.status === 'stored' ? summaryMetrics(result.summary, message.requestedAt) : [])
     );
-    if (message.trigger === 'signup') await checkStrongLinkSafely(message.userId, logger);
+    if (message.trigger === 'signup') {
+      await checkStrongLinkSafely(message.userId, logger);
+      await checkDeviceLinkSafely(message.userId, logger);
+    }
   } catch (error) {
     // userId and trigger only: the message carries nothing else, and no source payload is logged.
     logger.warn('Risk evidence refresh failed', {

@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 
-const { refreshRiskEvidence, requestRiskEvidenceRefresh, emitMetrics, checkStrongLink } = vi.hoisted(() => ({
-  checkStrongLink: vi.fn(),
-  refreshRiskEvidence: vi.fn(),
-  requestRiskEvidenceRefresh: vi.fn(),
-  emitMetrics: vi.fn(async () => undefined),
-}));
+const { refreshRiskEvidence, requestRiskEvidenceRefresh, emitMetrics, checkStrongLink, checkDeviceLink } = vi.hoisted(
+  () => ({
+    checkStrongLink: vi.fn(),
+    checkDeviceLink: vi.fn(),
+    refreshRiskEvidence: vi.fn(),
+    requestRiskEvidenceRefresh: vi.fn(),
+    emitMetrics: vi.fn(async () => undefined),
+  })
+);
 
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 vi.mock('@bike4mind/services', () => ({ userService: { refreshRiskEvidence } }));
@@ -15,6 +18,10 @@ vi.mock('@server/auth/riskEvidence', () => ({ requestRiskEvidenceRefresh, riskEv
 vi.mock('@server/security/autoContainment/strongLink', () => ({
   checkStrongLink,
   liveStrongLinkDeps: () => ({}),
+}));
+vi.mock('@server/security/autoContainment/deviceLink', () => ({
+  checkDeviceLink,
+  liveDeviceLinkDeps: () => ({}),
 }));
 vi.mock('@bike4mind/server-utils/queueHandlers/utils', () => ({ dispatchWithLogger: (fn: unknown) => fn }));
 
@@ -72,12 +79,26 @@ describe('processRiskEvidenceRecord', () => {
   it('runs the strong-link rule after a signup refresh, and only after a signup', async () => {
     refreshRiskEvidence.mockResolvedValue({ status: 'skipped' });
     checkStrongLink.mockResolvedValue({ status: 'no_link' });
+    checkDeviceLink.mockResolvedValue({ status: 'skipped', reason: 'no_device' });
 
     await processRiskEvidenceRecord(body(refreshMessage), logger);
     expect(checkStrongLink).not.toHaveBeenCalled();
+    expect(checkDeviceLink).not.toHaveBeenCalled();
 
     await processRiskEvidenceRecord(body({ ...refreshMessage, trigger: 'signup' }), logger);
     expect(checkStrongLink).toHaveBeenCalledWith(USER_ID, {});
+    expect(checkDeviceLink).toHaveBeenCalledWith(USER_ID, {});
+  });
+
+  it('still runs the device-link rule when the strong-link rule fails, and survives its failure', async () => {
+    refreshRiskEvidence.mockResolvedValue({ status: 'skipped' });
+    checkStrongLink.mockRejectedValue(new Error('decisions down'));
+    checkDeviceLink.mockRejectedValue(new Error('device read down'));
+    const log = { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as Logger;
+
+    await expect(processRiskEvidenceRecord(body({ ...refreshMessage, trigger: 'signup' }), log)).resolves.not.toThrow();
+    expect(checkDeviceLink).toHaveBeenCalledWith(USER_ID, {});
+    expect(log.error).toHaveBeenCalledWith('Device-link rule failed', { userId: USER_ID, error: 'device read down' });
   });
 
   it('keeps a signup refresh successful when the strong-link rule fails', async () => {

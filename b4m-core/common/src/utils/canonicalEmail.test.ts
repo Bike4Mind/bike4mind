@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizeEmail } from './canonicalEmail';
+import { canonicalizeEmail, isRandomLookingTag, plusAddressTagOf } from './canonicalEmail';
 
 describe('canonicalizeEmail', () => {
   it.each([
@@ -48,6 +48,40 @@ describe('canonicalizeEmail', () => {
     'returns null for the unusable address %j',
     input => {
       expect(canonicalizeEmail(input)).toBeNull();
+    }
+  );
+});
+
+describe('plusAddressTagOf', () => {
+  it.each([
+    ['someone+Shop@Hotmail.com', 'shop'],
+    ['someone+gk283e0g6w@outlook.com', 'gk283e0g6w'],
+    ['some.one+news@googlemail.com', 'news'],
+    ['someone+x@me.com', 'x'],
+  ])('reads the tag of %s', (email, tag) => {
+    expect(plusAddressTagOf(email)).toBe(tag);
+  });
+
+  it.each([
+    'someone@hotmail.com',
+    'someone+@outlook.com',
+    '+tag@outlook.com',
+    'someone+tag@example.test',
+    'not-an-email',
+  ])('is null for %s', email => {
+    expect(plusAddressTagOf(email)).toBeNull();
+  });
+});
+
+describe('isRandomLookingTag', () => {
+  it.each(['gk283e0g6w', 'usafnzdxsh', 'lxuby5k7np', 'f5o8smiltw'])('flags a generated tag (%s)', tag => {
+    expect(isRandomLookingTag(tag)).toBe(true);
+  });
+
+  it.each(['shopping', 'newsletters', 'work2024', 'amazon', 'netflix', 'github', 'receipts', 'job-hunt', 'a1b2c3'])(
+    'leaves a human tag alone (%s)',
+    tag => {
+      expect(isRandomLookingTag(tag)).toBe(false);
     }
   );
 });

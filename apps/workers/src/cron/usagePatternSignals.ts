@@ -2,11 +2,22 @@ import { randomUUID } from 'crypto';
 import type { Context } from 'aws-lambda';
 import mongoose from 'mongoose';
 import { Resource } from 'sst';
-import { CreditHolderType, settingsMap, type UsagePatternSignalsConfig } from '@bike4mind/common';
+import {
+  CREDIT_TRANSACTION_KIND,
+  CreditHolderType,
+  settingsMap,
+  type CreditTransactionType,
+  type UsagePatternSignalsConfig,
+  type UsagePatternSignalsResult,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   ApiKeyUsageLog,
+  cacheRepository,
   connectDB,
+  CreditTransaction,
+  type RecordShadowDetectionInput,
+  shadowDetectionRepository,
   UsageEvent,
   User,
   UserApiKey,
@@ -49,16 +60,19 @@ export interface UsagePatternSignalsRunResult {
   analyzed: number;
   needsReview: number;
   skippedPaid: number;
+  /** scriptedGrantDrain shadow detections recorded this run. */
+  scriptedDrainDetections: number;
   errors: number;
 }
 
 async function loadSettings() {
   const settings = await getSettingsMap(
     { adminSettings: adminSettingsRepository },
-    { names: ['usagePatternSignalsEnabled', 'usagePatternSignalsConfig'] }
+    { names: ['usagePatternSignalsEnabled', 'usagePatternSignalsConfig', 'shadowDetectionRecordingEnabled'] }
   );
   return {
     enabled: getSettingsValue('usagePatternSignalsEnabled', settings, false),
+    recordDetections: getSettingsValue('shadowDetectionRecordingEnabled', settings, true),
     config: getSettingsValue(
       'usagePatternSignalsConfig',
       settings,
@@ -99,6 +113,135 @@ async function findFreeTierCandidates(since: Date): Promise<Candidate[]> {
   const lastScored = new Map(scored.map(r => [r.userId, r.computedAt.getTime()]));
   const rank = (u: Candidate) => lastScored.get(String(u._id)) ?? -Infinity;
   return users.sort((a, b) => rank(a) - rank(b) || String(a._id).localeCompare(String(b._id)));
+}
+
+// Ledger rows read per fresh account; a farm account has a handful, a busy new user is cut here.
+const GRANT_DRAIN_LEDGER_LIMIT = 200;
+const SIGNUP_GRANT_REASON = /^signup_(tranche|unlock:)/;
+const ACTIVITY_UNLOCK_REASON = 'signup_unlock:activity';
+const isUsageType = (type: string) => {
+  const kind = CREDIT_TRANSACTION_KIND[type as CreditTransactionType];
+  return kind === 'usage' || kind === 'api';
+};
+
+type LeanFreshUser = {
+  createdAt?: Date;
+  mfa?: { totpEnabled?: boolean; setupAt?: Date } | null;
+  loginRecords?: { loginTime?: Date; logoutTime?: Date | null }[];
+};
+type LeanLedgerRow = { type: string; credits: number; reason?: string; source?: string; createdAt: Date };
+
+/**
+ * The fresh-account sequence for the scriptedGrantDrain signal, or null when the account is older
+ * than scriptedDrainFreshHours. Reads the user's 2FA and sign-in records and its first ledger rows
+ * (ownerId_ownerType_createdAt_id index).
+ */
+export async function gatherGrantDrainFacts(
+  userId: string,
+  now: Date,
+  config: UsagePatternSignalsConfig
+): Promise<userService.GrantDrainFacts | null> {
+  const user = await User.findById(userId, {
+    createdAt: 1,
+    'mfa.totpEnabled': 1,
+    'mfa.setupAt': 1,
+    'loginRecords.loginTime': 1,
+    'loginRecords.logoutTime': 1,
+  }).lean<LeanFreshUser>();
+  const signedUpAt = user?.createdAt;
+  if (!signedUpAt || now.getTime() - signedUpAt.getTime() > config.scriptedDrainFreshHours * MS_PER_HOUR) return null;
+
+  const rows = await CreditTransaction.find(
+    { ownerId: userId, ownerType: CreditHolderType.User, createdAt: { $gte: signedUpAt } },
+    { type: 1, credits: 1, reason: 1, source: 1, createdAt: 1 }
+  )
+    .sort({ createdAt: 1, _id: 1 })
+    .limit(GRANT_DRAIN_LEDGER_LIMIT)
+    .lean<LeanLedgerRow[]>();
+  const usage = rows.filter(row => isUsageType(row.type));
+  const largest = usage.reduce<LeanLedgerRow | null>(
+    (best, row) => (best === null || Math.abs(row.credits) > Math.abs(best.credits) ? row : best),
+    null
+  );
+  // The newest sign-in: the one a logout stamps (updateLogoutTime).
+  const latestSignIn = [...(user.loginRecords ?? [])]
+    .filter(record => record.loginTime)
+    .sort((a, b) => (b.loginTime?.getTime() ?? 0) - (a.loginTime?.getTime() ?? 0))[0];
+  return {
+    signedUpAt,
+    mfaEnabledAt: user.mfa?.totpEnabled ? (user.mfa.setupAt ?? null) : null,
+    activityUnlockAt: rows.find(row => row.reason === ACTIVITY_UNLOCK_REASON)?.createdAt ?? null,
+    grantedCredits: rows
+      .filter(row => row.type === 'generic_add' && SIGNUP_GRANT_REASON.test(row.reason ?? ''))
+      .reduce((sum, row) => sum + Math.abs(row.credits), 0),
+    largestTurn: largest ? { at: largest.createdAt, credits: Math.abs(largest.credits) } : null,
+    // Post-turn operational jobs (source system) are not turns the user ran.
+    turns: usage.filter(row => row.source !== 'system').length,
+    loggedOutAt: latestSignIn?.logoutTime ?? null,
+  };
+}
+
+export const SCRIPTED_GRANT_DRAIN_POLICY_VERSION = 1;
+const SCRIPTED_DRAIN_DEDUPE_PREFIX = 'shadow-detection:scripted-grant-drain';
+const SCRIPTED_DRAIN_DEDUPE_TTL_MS = 31 * 24 * MS_PER_HOUR;
+
+/** The shadow detection for a triggered scriptedGrantDrain signal; null when it did not trigger. */
+export function buildScriptedDrainDetection(
+  userId: string,
+  facts: userService.GrantDrainFacts,
+  result: UsagePatternSignalsResult,
+  config: UsagePatternSignalsConfig,
+  detectedAt: Date
+): RecordShadowDetectionInput | null {
+  const drain = result.signals.find(signal => signal.id === 'scriptedGrantDrain');
+  if (!drain?.triggered || !facts.largestTurn) return null;
+  const share = facts.grantedCredits > 0 ? facts.largestTurn.credits / facts.grantedCredits : 0;
+  return {
+    detector: 'scriptedGrantDrain',
+    policyVersion: SCRIPTED_GRANT_DRAIN_POLICY_VERSION,
+    wouldAction: 'contain',
+    summary: drain.explanation,
+    userIds: [userId],
+    network: null,
+    signals: [
+      {
+        key: 'minutesSignupToLogout',
+        label: 'Minutes from signup to logout',
+        observed: drain.value,
+        threshold: config.scriptedDrainMaxMinutes,
+      },
+      {
+        key: 'largestTurnGrantShare',
+        label: 'Largest turn as a share of the signup grants',
+        observed: Math.round(share * 100) / 100,
+        threshold: config.scriptedDrainMinShare,
+      },
+      { key: 'turns', label: 'Turns since signup', observed: facts.turns, threshold: config.scriptedDrainMaxTurns },
+      { key: 'grantedCredits', label: 'Signup grant credits', observed: facts.grantedCredits, threshold: null },
+      {
+        key: 'usagePatternScore',
+        label: 'Usage pattern score',
+        observed: result.score,
+        threshold: config.reviewThreshold,
+      },
+    ],
+    windowMinutes: config.scriptedDrainMaxMinutes,
+    group: null,
+    payment: null,
+    detectedAt,
+  };
+}
+
+async function recordScriptedDrainOnce(input: RecordShadowDetectionInput, userId: string): Promise<boolean> {
+  const key = `${SCRIPTED_DRAIN_DEDUPE_PREFIX}:${userId}`;
+  if (!(await cacheRepository.claimDedup(key, { userId }, SCRIPTED_DRAIN_DEDUPE_TTL_MS)).claimed) return false;
+  try {
+    await shadowDetectionRepository.record(input);
+    return true;
+  } catch (error) {
+    await cacheRepository.deleteByKey(key);
+    throw error;
+  }
 }
 
 async function gatherFacts(
@@ -167,6 +310,7 @@ async function gatherFacts(
     completions: windowRows.length,
     emailVerifiedAt,
     firstApiKeyAt: firstKey?.createdAt ?? null,
+    grantDrain: await gatherGrantDrainFacts(userId, now, config),
   };
 }
 
@@ -188,10 +332,11 @@ export async function runUsagePatternSignals(
     analyzed: 0,
     needsReview: 0,
     skippedPaid: 0,
+    scriptedDrainDetections: 0,
     errors: 0,
   };
 
-  const { enabled, config } = await loadSettings();
+  const { enabled, config, recordDetections } = await loadSettings();
   if (!enabled) return { ...result, status: 'disabled' };
 
   const candidates = await findFreeTierCandidates(new Date(now.getTime() - config.activeWindowHours * MS_PER_HOUR));
@@ -214,6 +359,11 @@ export async function runUsagePatternSignals(
       await userUsagePatternSignalsRepository.upsertLatest(userId, signals, now);
       result.analyzed++;
       if (signals.needsReview) result.needsReview++;
+      const detection =
+        recordDetections && facts.grantDrain
+          ? buildScriptedDrainDetection(userId, facts.grantDrain, signals, config, now)
+          : null;
+      if (detection && (await recordScriptedDrainOnce(detection, userId))) result.scriptedDrainDetections++;
     } catch (error) {
       result.errors++;
       logger.error('Usage pattern signals failed for user', {

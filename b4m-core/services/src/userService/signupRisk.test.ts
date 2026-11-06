@@ -50,18 +50,48 @@ describe('evaluateSignupRisk', () => {
     expect(evaluateSignupRisk(policy, { ipSignups: value }, 10).band).toBe('review');
   });
 
-  it.each(['datacenter', 'canonicalEmailCollision', 'disposableDomain', 'blockedDomain', 'challengeVerified'] as const)(
-    'accepts only boolean observations for %s',
-    signal => {
-      const booleanPolicy = {
-        ...policy,
-        rules: [{ ...policy.rules[0], signal, comparison: 'eq', threshold: 1 }],
-      };
-      expect(evaluateSignupRisk(booleanPolicy, { [signal]: false }, 10).band).toBe('full');
-      expect(evaluateSignupRisk(booleanPolicy, { [signal]: true }, 10).band).toBe('reduced');
-      expect(evaluateSignupRisk(booleanPolicy, { [signal]: 0 }, 10).band).toBe('review');
-    }
-  );
+  it.each([
+    'datacenter',
+    'canonicalEmailCollision',
+    'disposableDomain',
+    'blockedDomain',
+    'plusAddressTag',
+    'randomPlusAddressTag',
+    'challengeVerified',
+  ] as const)('accepts only boolean observations for %s', signal => {
+    const booleanPolicy = {
+      ...policy,
+      rules: [{ ...policy.rules[0], signal, comparison: 'eq', threshold: 1 }],
+    };
+    expect(evaluateSignupRisk(booleanPolicy, { [signal]: false }, 10).band).toBe('full');
+    expect(evaluateSignupRisk(booleanPolicy, { [signal]: true }, 10).band).toBe('reduced');
+    expect(evaluateSignupRisk(booleanPolicy, { [signal]: 0 }, 10).band).toBe('review');
+  });
+
+  it('can hold a grant for review on a generated plus tag alone while a plain tag keeps the full grant', () => {
+    const plusTagPolicy = {
+      ...policy,
+      rules: [
+        { ...policy.rules[0], signal: 'plusAddressTag' as const, comparison: 'eq' as const, threshold: 1, weight: 1 },
+        {
+          ...policy.rules[0],
+          signal: 'randomPlusAddressTag' as const,
+          comparison: 'eq' as const,
+          threshold: 1,
+          weight: 7,
+        },
+      ],
+    };
+    expect(evaluateSignupRisk(plusTagPolicy, { plusAddressTag: true, randomPlusAddressTag: false }, 10)).toMatchObject({
+      band: 'full',
+      credits: 10,
+    });
+    expect(evaluateSignupRisk(plusTagPolicy, { plusAddressTag: true, randomPlusAddressTag: true }, 10)).toMatchObject({
+      band: 'review',
+      credits: 0,
+      reasons: ['plusAddressTag', 'randomPlusAddressTag'],
+    });
+  });
 
   it('accumulates independent signals before choosing the review band', () => {
     const combinedPolicy = {

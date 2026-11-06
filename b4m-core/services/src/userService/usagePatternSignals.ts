@@ -21,6 +21,25 @@ export interface UsagePatternFacts {
   completions: number;
   emailVerifiedAt: Date | null;
   firstApiKeyAt: Date | null;
+  /** The fresh-account sequence; null when the account is older than scriptedDrainFreshHours. */
+  grantDrain?: GrantDrainFacts | null;
+}
+
+/** What a fresh account did between signup and logout, for the scriptedGrantDrain signal. */
+export interface GrantDrainFacts {
+  signedUpAt: Date;
+  /** When 2FA was set up, if it is on. */
+  mfaEnabledAt: Date | null;
+  /** The activity unlock of the signup grant (ledger reason signup_unlock:activity). */
+  activityUnlockAt: Date | null;
+  /** Credits the signup grants paid (the tranche and every unlock), positive. */
+  grantedCredits: number;
+  /** The single most expensive turn since signup; credits positive. */
+  largestTurn: { at: Date; credits: number } | null;
+  /** Usage-charged turns since signup. */
+  turns: number;
+  /** Explicit logout of the newest sign-in. */
+  loggedOutAt: Date | null;
 }
 
 const signal = (
@@ -131,6 +150,49 @@ export function quickApiKeySignal(
 }
 
 /**
+ * The scripted free-credit farm sequence on a fresh account: signup, 2FA on and the activity grant
+ * unlocked, one turn that spends most of the signup grants, then logout, all within minutes. Every
+ * step is required: an ordinary new user may run one large turn, but rarely turns on 2FA first and
+ * logs out straight after. The value is the minutes from signup to logout.
+ */
+export function scriptedGrantDrainSignal(
+  facts: Pick<UsagePatternFacts, 'grantDrain'>,
+  config: UsagePatternSignalsConfig
+): UsagePatternSignal {
+  const drain = facts.grantDrain;
+  if (!drain)
+    return signal(
+      'scriptedGrantDrain',
+      config,
+      null,
+      false,
+      `Account older than ${config.scriptedDrainFreshHours} hours`
+    );
+  const { signedUpAt, mfaEnabledAt, activityUnlockAt, largestTurn, loggedOutAt } = drain;
+  if (!largestTurn || !loggedOutAt) {
+    return signal('scriptedGrantDrain', config, null, false, 'No completed turn followed by a logout');
+  }
+  const minutes = (loggedOutAt.getTime() - signedUpAt.getTime()) / MS_PER_MINUTE;
+  const share = drain.grantedCredits > 0 ? largestTurn.credits / drain.grantedCredits : 0;
+  const setupDone = (at: Date | null) => at !== null && at >= signedUpAt && at <= largestTurn.at;
+  const steps = [
+    setupDone(mfaEnabledAt) ? '2FA on' : null,
+    setupDone(activityUnlockAt) ? 'activity grant unlocked' : null,
+  ].filter((step): step is string => step !== null);
+  const triggered =
+    steps.length === 2 &&
+    largestTurn.at <= loggedOutAt &&
+    minutes >= 0 &&
+    minutes <= config.scriptedDrainMaxMinutes &&
+    share >= config.scriptedDrainMinShare &&
+    drain.turns <= config.scriptedDrainMaxTurns;
+  const explanation =
+    `Signup, ${steps.length > 0 ? `${steps.join(' and ')}, ` : ''}${drain.turns} turn${drain.turns === 1 ? '' : 's'} ` +
+    `(largest ${percent(share)} of the ${drain.grantedCredits} signup credits), then logout ${formatDuration(minutes * MS_PER_MINUTE)} after signup`;
+  return signal('scriptedGrantDrain', config, Math.round(minutes * 10) / 10, triggered, explanation);
+}
+
+/**
  * All usage pattern signals for one user plus their weighted score. Pure and read-only: it
  * describes the account for a reviewer and decides nothing on its own.
  */
@@ -143,6 +205,7 @@ export function computeUsagePatternSignals(
     regularCadenceSignal(facts.requestTimes, config),
     creditPollingSignal(facts, config),
     quickApiKeySignal(facts, config),
+    scriptedGrantDrainSignal(facts, config),
   ];
   const score = Math.min(
     100,

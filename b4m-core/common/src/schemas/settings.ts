@@ -1431,6 +1431,7 @@ export const UsagePatternSignalsConfigSchema = z.object({
       regularCadence: z.number().min(0).max(100).prefault(25),
       creditPolling: z.number().min(0).max(100).prefault(25),
       quickApiKey: z.number().min(0).max(100).prefault(25),
+      scriptedGrantDrain: z.number().min(0).max(100).prefault(50),
     })
     .prefault({}),
   reviewThreshold: z.number().min(1).max(100).prefault(50),
@@ -1446,6 +1447,16 @@ export const UsagePatternSignalsConfigSchema = z.object({
   quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(30),
   /** A first key created up to this many days before verification also triggers quickApiKey. */
   quickApiKeyMaxDaysBeforeVerification: z.number().int().min(0).max(365).prefault(1),
+  /**
+   * scriptedGrantDrain: on an account younger than scriptedDrainFreshHours, 2FA turned on and the
+   * activity grant unlocked, then one turn spending at least scriptedDrainMinShare (0-1) of the signup
+   * grants, then a logout, all within scriptedDrainMaxMinutes of signup and in at most
+   * scriptedDrainMaxTurns turns.
+   */
+  scriptedDrainFreshHours: z.number().int().min(1).max(168).prefault(24),
+  scriptedDrainMaxMinutes: z.number().int().min(5).max(1440).prefault(60),
+  scriptedDrainMinShare: z.number().min(0.1).max(1).prefault(0.6),
+  scriptedDrainMaxTurns: z.number().int().min(1).max(50).prefault(3),
 });
 
 export type UsagePatternSignalsConfig = z.infer<typeof UsagePatternSignalsConfigSchema>;
@@ -1499,6 +1510,14 @@ export const AutoContainmentConfigSchema = z.object({
    * it, is assessed at once instead of at the next sweep. 0 turns the rule off.
    */
   strongLinkWindowHours: z.number().int().min(0).max(720).prefault(72),
+  /**
+   * Ban-evasion device linkage (security/autoContainment/deviceLink.ts): a new account used from the
+   * same device (screen, pixel ratio, user agent) as a banned account that signed up within this many
+   * hours of it is recorded and assessed at once. 0 turns the rule off.
+   */
+  deviceLinkWindowHours: z.number().int().min(0).max(720).prefault(168),
+  /** A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence. */
+  deviceLinkCommonNetworks: z.number().int().min(2).max(100).prefault(5),
 });
 export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
@@ -4604,7 +4623,7 @@ export const settingsMap = {
     name: 'Usage Pattern Signals',
     defaultValue: false,
     description:
-      'Runs an hourly job that computes usage pattern signals for recently active free-tier accounts and stores the latest result per account for review. Read-only: it never changes an account, its keys or its credits.',
+      'Runs an hourly job that computes usage pattern signals for recently active free-tier accounts and stores the latest result per account for review. A scripted grant drain is also recorded as a shadow detection (while shadow detection recording is on), which the advisory assessment and automated containment may then pick up as their own settings allow. The job itself never changes an account, its keys or its credits.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
     order: 1,
@@ -4614,7 +4633,7 @@ export const settingsMap = {
     name: 'Usage Pattern Signals: Thresholds and Weights',
     defaultValue: UsagePatternSignalsConfigSchema.parse({}),
     description:
-      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun, maxEventsPerUser), the windows for the API-only signal (apiOnlyLookbackDays) and for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. Unknown fields are ignored.',
+      'Which accounts are analyzed (activeWindowHours, maxUsersPerRun, maxEventsPerUser), the windows for the API-only signal (apiOnlyLookbackDays) and for cadence and polling (lookbackDays), the weight (0-100) of each signal, the score at which an account needs review, and the per-signal thresholds. scriptedGrantDrain triggers on an account younger than scriptedDrainFreshHours that turned on 2FA and unlocked the activity grant, then spent at least scriptedDrainMinShare of its signup grants in one turn and logged out, all within scriptedDrainMaxMinutes of signup and in at most scriptedDrainMaxTurns turns. Unknown fields are ignored.',
     category: 'SecOps',
     group: API_SERVICE_GROUPS.USAGE_PATTERN_SIGNALS.id,
     order: 2,
@@ -4648,7 +4667,7 @@ export const settingsMap = {
     name: 'Automated Containment from Abuse Assessments',
     defaultValue: AutoContainmentConfigSchema.parse({}),
     description:
-      "What happens when an abuse assessment judges a detection as abuse at or above minConfidence (0.5-1). mode: off (nothing), shadow (records the decision for grading against the detection's admin verdict and changes no account; the default) or enforce (contains the accounts through the bulk Contain path: suspended, Stripe subscriptions canceled, positive balance removed, API keys revoked, sessions ended, attributed to the system with the evidence as the reason). Unsuspend on the user profile reverses the suspension; revoked keys stay revoked and a removed balance is not restored. maxPerHour caps decisions per hour, counted per mode (over it, the decision is recorded as capped and re-evaluated after the hour); maxAccountsPerDetection sends larger detections to an admin; blockEmailDomains also blocks the accounts' owned email domains, which refuses every new signup on that domain, so one false positive on a shared corporate or campus network blocks the whole domain (leave it off until shadow precision is known); strongLinkWindowHours assesses a new account at once when it signed up from the same IP as a blocked account within that many hours (0 turns the rule off). Needs the advisory assessment on.",
+      "What happens when an abuse assessment judges a detection as abuse at or above minConfidence (0.5-1). mode: off (nothing), shadow (records the decision for grading against the detection's admin verdict and changes no account; the default) or enforce (contains the accounts through the bulk Contain path: suspended, Stripe subscriptions canceled, positive balance removed, API keys revoked, sessions ended, attributed to the system with the evidence as the reason). Unsuspend on the user profile reverses the suspension; revoked keys stay revoked and a removed balance is not restored. maxPerHour caps decisions per hour, counted per mode (over it, the decision is recorded as capped and re-evaluated after the hour); maxAccountsPerDetection sends larger detections to an admin; blockEmailDomains also blocks the accounts' owned email domains, which refuses every new signup on that domain, so one false positive on a shared corporate or campus network blocks the whole domain (leave it off until shadow precision is known); strongLinkWindowHours assesses a new account at once when it signed up from the same IP as a blocked account within that many hours (0 turns the rule off); deviceLinkWindowHours does the same for a new account used from the same device (screen size, pixel ratio and browser) as a banned account that signed up within that many hours, when the device is uncommon (seen on fewer than deviceLinkCommonNetworks networks in 30 days) and one more signal agrees (0 turns the rule off). Needs the advisory assessment on.",
     category: 'SecOps',
     group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
     order: 3,

@@ -1,21 +1,27 @@
 import { ABUSE_ASSESSMENT_MAX_ACCOUNTS, type AbuseAssessmentGroupEvidence } from '@bike4mind/common';
-import { usageEventRepository, userRepository } from '@bike4mind/database';
+import { loadDeviceLinkAccounts, usageEventRepository, userRepository } from '@bike4mind/database';
 import type { UserSignupLinkFacts } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { findLinkedAccounts, type LinkedAccount } from '@server/billing/linkedAccounts';
+import {
+  DEFAULT_DEVICE_LINK_CONFIG,
+  evaluateDeviceLinks,
+  liveDeviceLinkReaders,
+} from '@server/security/autoContainment/deviceLinkEvaluation';
 import type { AbuseAssessmentGroupEvidenceSource } from './abuseAssessment';
 
 /**
  * Group evidence for an abuse assessment from what the detection's accounts signed up and paid with:
  * the accounts sharing their signup IP or card (and whether any is already blocked), an OAuth signup
- * that landed on another account's notebook, the turn that settled furthest above its credit hold,
- * and how and from what network they signed up. Counts and flags only; members are referenced by
+ * that landed on another account's notebook, banned accounts used from the same uncommon device
+ * (the ban-evasion device rule, autoContainment/deviceLinkEvaluation.ts, at its default policy), the
+ * turn that settled furthest above its credit hold, and how and from what network they signed up. Counts and flags only; members are referenced by
  * the assessment's own refs, so no id, IP or email reaches the provider.
  */
 
 export const LINKED_ACCOUNT_EVIDENCE_SOURCE = 'linkedAccounts';
 /** Bump when a signal is added, removed or changes meaning. */
-export const LINKED_ACCOUNT_EVIDENCE_VERSION = 1;
+export const LINKED_ACCOUNT_EVIDENCE_VERSION = 2;
 
 const HOUR_MS = 60 * 60 * 1000;
 // How far back a settlement above its hold counts; young-account abuse lands within days.
@@ -28,6 +34,8 @@ export type LinkedAccountEvidenceDeps = {
   /** Whether each id is blocked (banned, dispute-locked or moderated); unknown ids are absent. */
   blockedStates: (ids: string[]) => Promise<Map<string, boolean>>;
   largestSettlementOverHold: typeof usageEventRepository.largestSettlementOverHold;
+  /** Per member, the banned accounts it shares an uncommon, corroborated device with. */
+  bannedDeviceLinks: (ids: string[]) => Promise<Map<string, { blockedUserId: string; hoursApart: number | null }[]>>;
   now: () => Date;
 };
 
@@ -39,6 +47,14 @@ const liveDeps: LinkedAccountEvidenceDeps = {
     return new Map(states.map(state => [state.id, userService.accountBlockReasons(state).length > 0]));
   },
   largestSettlementOverHold: (ids, since) => usageEventRepository.largestSettlementOverHold(ids, since),
+  bannedDeviceLinks: async ids => {
+    const results = await evaluateDeviceLinks(
+      await loadDeviceLinkAccounts(ids),
+      DEFAULT_DEVICE_LINK_CONFIG,
+      liveDeviceLinkReaders
+    );
+    return new Map([...results].map(([id, result]) => [id, result.linked ? result.matches : []]));
+  },
   now: () => new Date(),
 };
 
@@ -91,6 +107,11 @@ export async function buildLinkedAccountEvidence(
     await deps.largestSettlementOverHold(ids, new Date(deps.now().getTime() - SETTLEMENT_LOOKBACK_MS))
   );
 
+  // Members banned since the detection are the detection, not a separate banned account.
+  const deviceLinks = [...(await deps.bannedDeviceLinks(ids)).values()]
+    .flat()
+    .filter(match => !members.has(match.blockedUserId));
+
   const signals: Signal[] = [
     { key: 'maxSameSignupIpAccounts', value: Math.max(0, ...signupIpLinks.map(links => links.length)) },
     {
@@ -105,6 +126,9 @@ export async function buildLinkedAccountEvidence(
     },
     { key: 'landedOnOtherAccountNotebook', value: landingOwners.length > 0 },
     { key: 'landedOnBlockedAccountNotebook', value: landingOwners.some(owner => ownerBlocked.get(owner) === true) },
+    { key: 'sameDeviceBannedAccounts', value: new Set(deviceLinks.map(match => match.blockedUserId)).size },
+    // Hours between a member's signup and the closest banned account on the same device.
+    { key: 'hoursToBannedSameDeviceAccount', value: minOf(deviceLinks.map(match => match.hoursApart)) },
     {
       key: 'maxSettlementOverHoldRatio',
       value: settlements.length > 0 ? Math.round(Math.max(...settlements.map(s => s.ratio)) * 100) / 100 : null,

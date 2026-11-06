@@ -1,4 +1,11 @@
-import { canonicalizeEmail, emailDomainCandidates, type INetworkMeta, type IUserDocument } from '@bike4mind/common';
+import {
+  canonicalizeEmail,
+  emailDomainCandidates,
+  isRandomLookingTag,
+  plusAddressTagOf,
+  type INetworkMeta,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { adminSettingsRepository, disposableDomainRepository, User } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { createSignupRiskCollector } from './signupNetworkSignals';
@@ -17,9 +24,12 @@ export function createSignupGrantRiskCollector(network?: INetworkMeta) {
       adminSettings: adminSettingsRepository,
     });
     const sources = await disposableDomainRepository.disposableSources(emailDomainCandidates(email));
+    const plusTag = plusAddressTagOf(email);
     return {
       ...signals,
       canonicalEmailCollision: collision !== null,
+      plusAddressTag: plusTag !== null,
+      randomPlusAddressTag: plusTag !== null && isRandomLookingTag(plusTag),
       blockedDomain,
       disposableDomain: userService.isDisposableEmail(email) || sources.length > 0,
     };

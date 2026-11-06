@@ -36,7 +36,7 @@ export const ABUSE_ASSESSMENT_FAILURE_CODES = [
 ] as const;
 export type AbuseAssessmentFailureCode = (typeof ABUSE_ASSESSMENT_FAILURE_CODES)[number];
 
-/** strong_link: assessed at signup by the strong-link rule (autoContainment/strongLink.ts), not the sweep. */
+/** strong_link: assessed at once by a link rule (autoContainment/strongLink.ts, deviceLink.ts), not the sweep. */
 export const ABUSE_ASSESSMENT_TRIGGERS = ['admin', 'sweep', 'strong_link'] as const;
 export type AbuseAssessmentTrigger = (typeof ABUSE_ASSESSMENT_TRIGGERS)[number];
 

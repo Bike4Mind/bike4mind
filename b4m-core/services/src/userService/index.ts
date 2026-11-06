@@ -14,6 +14,7 @@ export * from './signupRiskScore';
 export * from './refreshSignupRiskScore';
 export * from './riskEvidence';
 export * from './accountCampaigns';
+export * from './deviceLinkage';
 export * from './sourceTag';
 export * from './recordPolicyAcceptance';
 export * from './adminDelete';
