@@ -49,7 +49,9 @@ import { readFile } from 'node:fs/promises';
 import { connectDB, erasureRecordRepository } from '@bike4mind/database';
 import {
   assertRecordsNotTarget,
+  assertUriDescribable,
   backfillErasureRecords,
+  describeFailure,
   describeMongoTarget,
   describeRecordsSource,
   exportErasureRecords,
@@ -79,6 +81,8 @@ async function main() {
   const source = exportFile || backfill ? undefined : parseRecordsSource(argv);
 
   const mongoURI = await targetUri();
+  assertUriDescribable(mongoURI, 'MONGODB_URI');
+  if (source?.kind === 'uri') assertUriDescribable(source.uri, '--records-uri');
   console.log(`Target: ${describeMongoTarget(mongoURI)} (must be the restored cluster)`);
   if (source) {
     assertRecordsNotTarget(source, mongoURI);
@@ -119,6 +123,6 @@ async function main() {
 }
 
 main().catch(error => {
-  console.error('[reapply-erasures] failed:', error instanceof Error ? error.message : error);
+  console.error('[reapply-erasures] failed:', describeFailure(error));
   process.exit(1);
 });

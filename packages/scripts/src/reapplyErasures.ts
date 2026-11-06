@@ -39,15 +39,17 @@ const flagValue = (argv: string[], name: string): string | undefined => {
 };
 
 /**
- * Splits a mongo uri into host and database, credentials dropped. The query goes first, then everything
- * through the last `@`, so neither a password holding a raw `/` (the driver only rejects it at connect)
- * nor an `@` in a query option skews what is printed or compared. A `?` in the userinfo cannot be told
- * from a query start: when the part before the first `?` has no `@` but the rest does, return undefined
- * (printed as an unparseable uri) rather than risk printing credentials.
+ * Splits a mongo uri into host and database, credentials dropped. Returns undefined unless the uri has
+ * at most one `@` and, if it has one, that `@` comes before any `?`: userinfo holding a raw `@` or `?`
+ * cannot be told from the host or the query, so nothing between the scheme and the credential `@` is
+ * ever returned. The cost is a legitimate `@` in a query option, which must be written `%40`. After
+ * that, the query goes first and the last `@` ends the userinfo, so a raw `/` in the password is
+ * dropped too.
  */
 const parseMongoUri = (uri: string): { host: string; db: string } | undefined => {
   const m = /^mongodb(?:\+srv)?:\/\/(.*)$/.exec(uri);
   if (!m) return undefined;
+  if (m[1].split('@').length > 2) return undefined;
   const [rest, ...query] = m[1].split('?');
   if (!rest.includes('@') && query.join('?').includes('@')) return undefined;
   const [host, ...path] = rest.slice(rest.lastIndexOf('@') + 1).split('/');
@@ -80,6 +82,25 @@ export const describeMongoTarget = (uri: string): string => {
   const parsed = parseMongoUri(uri);
   return parsed ? `${parsed.host}/${parsed.db || '(no database)'}` : '(unparseable uri)';
 };
+
+/**
+ * Refuse a uri this script cannot describe safely, before connecting and before the same-target guard
+ * (which cannot match what it cannot parse). The message names the variable, never the uri.
+ */
+export function assertUriDescribable(uri: string, name: string): void {
+  if (parseMongoUri(uri)) return;
+  throw new Error(
+    `${name} could not be parsed; percent-encode reserved characters in the username, password and options (@ as %40, ? as %3F)`
+  );
+}
+
+/** What the operator prints on failure; a driver parse error quotes pieces of the uri, so it is replaced. */
+export const describeFailure = (error: unknown): string =>
+  error instanceof Error && error.name === 'MongoParseError'
+    ? 'could not parse the mongo uri; percent-encode reserved characters in the username, password and options'
+    : error instanceof Error
+      ? error.message
+      : String(error);
 
 /** What the operator sees for the records source; the target line sits beside it. */
 export const describeRecordsSource = (source: RecordsSource): string =>

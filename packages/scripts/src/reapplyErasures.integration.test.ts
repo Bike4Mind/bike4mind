@@ -60,6 +60,8 @@ import {
   backfillErasureRecords,
   dbNameFromUri,
   assertRecordsNotTarget,
+  assertUriDescribable,
+  describeFailure,
   describeMongoTarget,
   describeRecordsSource,
   exportErasureRecords,
@@ -369,10 +371,40 @@ describe('records source flags', () => {
     expect(describeRecordsSource(source)).toBe('(unparseable uri)/prod');
   });
 
-  it('ignores an @ in a query option and refuses the same uri as records source and target', () => {
-    const uri = 'mongodb://user:secret@h1/prod?appName=ops@team';
-    expect(describeMongoTarget(uri)).toBe('h1/prod');
-    expect(() => assertRecordsNotTarget(parseRecordsSource(['--records-uri', uri]), uri)).toThrow(/--from-target/);
+  it('prints nothing for userinfo holding a raw @ or a second @', () => {
+    for (const uri of [
+      'mongodb://user:p@ss?w@h1/prod',
+      'mongodb://us@er:pa?ss@h1/prod',
+      'mongodb+srv://us@er:se?cret@cluster0.x.mongodb.net/prod',
+      'mongodb://user:p@ss@h1/prod',
+      'mongodb://user:pw@h1/prod?appName=ops@team',
+    ]) {
+      expect(describeMongoTarget(uri)).toBe('(unparseable uri)');
+    }
+    expect(() => parseRecordsSource(['--records-uri', 'mongodb://us@er:p/a?s@h1/prod'])).toThrow(/no database/);
+    expect(describeMongoTarget('mongodb://user:p%40ss@h1,h2:27018/prod?replicaSet=rs0')).toBe('h1,h2:27018/prod');
+  });
+
+  it('refuses an unparseable target or records uri without echoing it', () => {
+    const target = 'mongodb://h1/prod?appName=ops@team';
+    expect(() => assertUriDescribable(target, 'MONGODB_URI')).toThrow(/MONGODB_URI.*%40/);
+    expect(() => assertUriDescribable(target, 'MONGODB_URI')).not.toThrow(/ops|team/);
+    const records = 'mongodb://user:pw@h1/prod?appName=ops@team';
+    expect(() => assertUriDescribable(records, '--records-uri')).toThrow(/--records-uri/);
+    try {
+      assertUriDescribable(records, '--records-uri');
+    } catch (e) {
+      expect((e as Error).message).not.toMatch(/user:|pw|h1|prod|appName|team/);
+    }
+    expect(() => assertUriDescribable('mongodb://u:p@h1/prod', 'MONGODB_URI')).not.toThrow();
+  });
+
+  it('prints a fixed message for a driver parse error and the message for others', () => {
+    const parse = Object.assign(new Error('Username contains unescaped characters us?er'), { name: 'MongoParseError' });
+    const out = describeFailure(parse);
+    expect(out).not.toMatch(/us\?er|unescaped/);
+    expect(out).toMatch(/percent-encode/);
+    expect(describeFailure(new Error('boom'))).toBe('boom');
   });
 
   it('prints the records source and refuses one equal to the target', () => {
