@@ -98,6 +98,17 @@ function baseModelNameOf(modelName: string): string | undefined {
   return (mongoose.model(modelName) as { baseModelName?: string }).baseModelName;
 }
 
+// `where` targets whose schema declares no enum, so the value cannot be checked against it.
+const WHERE_WITHOUT_ENUM: readonly string[] = [
+  // Written as a Mongoose model name (`User.modelName`) by ActivityRepository callers.
+  'Activity.ownerType',
+  // Plain strings; every writer passes CreditHolderType, whose user member is 'User'.
+  'CreditTransaction.recipientType',
+  'CreditTransaction.senderType',
+  // No writer in the repo; typed string, mirrors CreditTransaction.ownerType (CreditHolderType).
+  'FailedRefund.ownerType',
+];
+
 describe('data holder registry', () => {
   it('sanity: the model barrels registered a realistic number of models', () => {
     // Guards the tests below against passing vacuously if the side-effect imports stop registering.
@@ -202,7 +213,13 @@ describe('data holder registry', () => {
   )('%s: where %s = %s is a value the schema allows', (modelName, key, value) => {
     const enumValues = (mongoose.model(modelName).schema.path(key) as { enumValues?: unknown[] } | undefined)
       ?.enumValues;
-    if (value === null || !enumValues?.length) return;
+    if (value === null) return;
+    if (!enumValues?.length) {
+      expect(WHERE_WITHOUT_ENUM, `${modelName}.${key} has no enum to check ${value} against`).toContain(
+        `${modelName}.${key}`
+      );
+      return;
+    }
     expect(enumValues).toContain(value);
   });
 
