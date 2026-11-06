@@ -211,6 +211,7 @@ import { SkillsPromptCache } from './skills/prompt';
 import { skillSource, type SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager, McpToolBinding } from './mcp/McpManager';
 import { desktopAppGuidance, mcpGuidance, mcpServerLines } from './mcp/prompt';
+import { GENERATED_IMAGE_TOOL } from './tools/mediaTools';
 import { describeFlags, modelSafeRequest, planMcpServerRequest } from './tools/mcpTools';
 import type { AccessStore } from './tools/AccessStore';
 import { forgetSessionWrites } from './tools/sessionScripts';
@@ -7660,14 +7661,13 @@ function describeRootChange(before: readonly string[], after: readonly string[])
   ];
 }
 
-const GENERATED_IMAGE_TOOL = 'generate_image';
-
 /**
  * Put blocks ahead of the new prompt's own content, the way an attachment's images go. Inside the
  * prompt rather than a turn of their own, so roles still alternate and no tool_result turn is touched.
  */
 function prependToPrompt(wire: CompletionMessage[], blocks: unknown[]): void {
-  const prompt = wire.at(-1);
+  // A deferred-tools turn ends with a system tool-change message after the prompt.
+  const prompt = wire.findLast(message => message.role !== 'system');
   if (blocks.length === 0 || prompt?.role !== 'user') return;
   const own = typeof prompt.content === 'string' ? [{ type: 'text', text: prompt.content }] : prompt.content;
   if (!Array.isArray(own)) return;
