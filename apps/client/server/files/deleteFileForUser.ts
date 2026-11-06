@@ -122,7 +122,20 @@ export async function deleteFileForUser(req: Request, fabFileId: string) {
   // A published file snapshot outlives its source, so take the caller's own pages down with it, as the
   // bulk delete does. Only on 'deleted': an unshare leaves the owner's file, and their pages, in place.
   if (deleteAction === 'deleted') {
-    await unpublishUserArtifactsBySource(userId, { kind: 'fabfile', fabFileIds: [fabFileId] }, { logger: req.logger });
+    // The delete is already committed, so a failure is logged rather than failing the request.
+    try {
+      await unpublishUserArtifactsBySource(
+        userId,
+        { kind: 'fabfile', fabFileIds: [fabFileId] },
+        { logger: req.logger }
+      );
+    } catch (error) {
+      req.logger.error('Error unpublishing pages after single file delete:', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        fabFileId,
+        userId,
+      });
+    }
   }
 
   // After the transaction, so the aggregation sees the committed `deletedAt`. The shared helper

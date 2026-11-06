@@ -82,7 +82,16 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
 
   // Published replies are snapshots that outlive their notebook; take the owner's down with it, as
   // the bulk DELETE /api/sessions does. After the delete, so a refused or conflicting one keeps them.
-  await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds: [id] }, { logger: req.logger });
+  // The delete is already committed, so a failure is logged rather than failing the request.
+  try {
+    await unpublishUserArtifactsBySource(userId, { kind: 'reply', sessionIds: [id] }, { logger: req.logger });
+  } catch (error) {
+    req.logger.error('Error unpublishing replies after session delete:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      sessionId: id,
+      userId,
+    });
+  }
 
   await logEvent({ userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: id } }, { ability: req.ability });
 
