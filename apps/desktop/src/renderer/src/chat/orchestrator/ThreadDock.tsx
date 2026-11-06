@@ -1,4 +1,6 @@
 import Box from '@mui/joy/Box';
+import IconButton from '@mui/joy/IconButton';
+import Typography from '@mui/joy/Typography';
 import type { SxProps } from '@mui/joy/styles/types';
 import { useCallback, useEffect, useState, type ReactNode, type Ref } from 'react';
 import { ResizeHandle } from '../ResizeHandle';
@@ -48,6 +50,21 @@ export function useDockWidth() {
 }
 
 /**
+ * Whether an Escape that reached the window is the dock's to take. A menu, listbox, dialog or open select owns
+ * its own Escape, and the peek drawer claims one first by preventing its default (OrchestratorStage).
+ */
+export function escapeClosesDock(event: KeyboardEvent): boolean {
+  if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return false;
+  if (document.querySelector('[aria-modal="true"]')) return false;
+  const target = event.target instanceof Element ? event.target : null;
+  // A select keeps focus on its trigger while its listbox is open, and React may have flipped aria-expanded
+  // back to false before this runs, so any popup trigger is skipped too.
+  return !target?.closest(
+    '[role="menu"], [role="listbox"], [role="dialog"], [aria-expanded="true"], [aria-haspopup]:not([aria-haspopup="false"])'
+  );
+}
+
+/**
  * The box the conversation thread lives in, in every mode, so entering or leaving orchestrate, or
  * toggling the dock, never remounts the thread. Owning the dock width here keeps a drag's re-renders
  * to this box: `children` is the same element on every frame, so React skips the thread beneath it.
@@ -55,13 +72,30 @@ export function useDockWidth() {
 export function ThreadDock({
   mode,
   hostRef,
+  onClose,
   children,
 }: {
   mode: ThreadDockMode;
   hostRef: Ref<HTMLDivElement>;
+  /** Hides a docked thread: the dock's own close button and Escape, beside the stage header's toggle. */
+  onClose?(): void;
   children: ReactNode;
 }) {
   const dock = useDockWidth();
+  // The header stays mounted while hidden too, so reopening never shifts the thread under the reader.
+  const hasHeader = mode !== 'chat' && onClose !== undefined;
+
+  useEffect(() => {
+    if (mode !== 'docked' || !onClose) return;
+    const close = onClose;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!escapeClosesDock(event)) return;
+      event.preventDefault();
+      close();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [mode, onClose]);
 
   // A hidden dock stays laid out (visibility, not display), so the thread keeps its scroll offset.
   const sx: SxProps =
@@ -100,6 +134,37 @@ export function ThreadDock({
           onDraggingChange={dock.setDragging}
           sx={{ left: -3 }}
         />
+      )}
+      {hasHeader && (
+        <Box
+          data-testid="orchestrator-dock-header"
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            pl: 2,
+            pr: 1,
+            py: 0.5,
+            borderBottom: '1px solid',
+            borderColor: 'divider',
+            flexShrink: 0,
+          }}
+        >
+          <Typography level="title-sm" sx={{ flex: 1, minWidth: 0 }}>
+            Conversation
+          </Typography>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            aria-label="Hide the conversation"
+            title="Hide the conversation (Esc)"
+            data-testid="orchestrator-dock-close-btn"
+            onClick={onClose}
+          >
+            {'\u00D7'}
+          </IconButton>
+        </Box>
       )}
       {children}
     </Box>
