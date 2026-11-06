@@ -107,16 +107,37 @@ describe('looksLikeSecret', () => {
     'presignedUrl',
     'apiKey',
     'private_key',
+    'codeVerifierEnc',
+    'factCipher',
+    'factIv',
+    'embeddingTag',
+    'payload.authTag',
+    'dek',
+    'iv',
+    'oauthCredentials',
   ])('flags %s', path => {
     expect(looksLikeSecret(leaf(path))).toBe(true);
   });
 
-  it.each(['contentHash', 'apiKeyId', 'secretName', 'error.code', 'lastError.code', 'tokenEndpoint', 'credentialId'])(
-    'ignores %s',
-    path => {
-      expect(looksLikeSecret(leaf(path))).toBe(false);
-    }
-  );
+  it.each([
+    'contentHash',
+    'apiKeyId',
+    'secretName',
+    'error.code',
+    'lastError.code',
+    'tokenEndpoint',
+    'credentialId',
+    'archive',
+    'isActive',
+    'positive',
+    'receive',
+    'reference',
+    'sequence',
+    'hashTag',
+    'license',
+  ])('ignores %s', path => {
+    expect(looksLikeSecret(leaf(path))).toBe(false);
+  });
 
   it.each([
     ['hasAccessToken', 'Boolean'],

@@ -91,6 +91,14 @@ const SECRET_PATTERNS = [
   /(token|secret|code|key|password|passphrase|otc|nonce)hash(es)?$/i,
   /^(sid|code|ticket|challenge|apikey|presignedurl|signedurl|downloadurl|backupcodes)$/i,
 ];
+// Encrypted-at-rest naming (`codeVerifierEnc`, `factCipher`, `factIv`), matched against the raw leaf
+// as a camelCase suffix so `archive` or `active` do not match. `Tag` alone is too broad (`hashTag`).
+const CIPHERTEXT_PATTERNS = [
+  /(Enc|Cipher|Iv|[aA]uthTag)$/,
+  /^(iv|dek|cipher)$/,
+  /^(fact|embedding)Tag$/,
+  /credentials?$/i,
+];
 // A flag (`hasAccessToken`), counter or timestamp names a secret without holding one.
 const NON_SECRET_INSTANCES = new Set(['Boolean', 'Number', 'Date']);
 
@@ -100,5 +108,6 @@ export function looksLikeSecret(leaf: SchemaLeaf): boolean {
   // `error.code`, `lastError.code`: a provider's error code, not a one-time code.
   if (segments.length > 1 && /error$/i.test(segments[segments.length - 2])) return false;
   const name = segments[segments.length - 1].replace(/_/g, '');
+  if (CIPHERTEXT_PATTERNS.some(pattern => pattern.test(segments[segments.length - 1]))) return true;
   return SECRET_PATTERNS.some(pattern => pattern.test(name));
 }
