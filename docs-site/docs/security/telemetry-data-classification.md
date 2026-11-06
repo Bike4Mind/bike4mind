@@ -484,6 +484,20 @@ The ASN, country and hosting flag are also copied to Stripe as `signup_asn`, `si
 
 Signup grant assessments also emit one of the `signup-grant-assessed-full`, `signup-grant-assessed-reduced`, or `signup-grant-assessed-review` log markers after commit. These markers contain only the outcome band, without account identifiers, policy weights, network observations, or challenge tokens. CloudWatch metric filters count them for monitoring and an optional review-volume alarm. The markers follow the server log group's retention; metric counts follow CloudWatch retention. Emission is best effort, so counts are operational monitoring rather than an exact grant ledger.
 
+## Waitlist signup network metadata
+
+A waitlist request (the public subscribe form, or a sign-up attempt while registration is closed) stores a smaller copy of the same network capture on the `Subscriber` row as `signupNetwork`. These people have no account yet, so the full IP is never stored: only its /24 (IPv4) or /48 (IPv6) prefix is kept. The daily `signupIpRetention` job clears the whole `signupNetwork` object once it is 90 days old. The waitlist row itself stays until an admin deletes it. The data is shown only to admins, in the network column of the Invite Center waitlist.
+
+| Field              | Stored as                                                                         | Retention | Purpose                                           |
+| ------------------ | --------------------------------------------------------------------------------- | --------- | ------------------------------------------------- |
+| IP prefix          | `signupNetwork.ipPrefix`, /24 or /48 only                                         | 90 days   | Attribute probing and repeat signups to a network |
+| User agent         | `signupNetwork.userAgent`, first 512 characters                                   | 90 days   | Abuse investigation                               |
+| Network and region | `asn`, operator for hosting ASNs, ISO country code, `isDatacenter`                | 90 days   | Spot signups from one network or a host           |
+| Edge signals       | `ja4` TLS fingerprint, WAF anonymous-IP and bot labels (null when not forwarded)  | 90 days   | Tie waitlist probes to other traffic              |
+| Challenge outcome  | `challengeVerified`: `true` after a server-verified Turnstile pass, otherwise null | 90 days   | Tell challenged signups from unchallenged ones    |
+
+A waitlist name that contains HTML or script markup, starts with a spreadsheet-formula character (`=`, `+`, `-`, `@`), or contains control characters is stored with `suspicious.reasons` listing which. Such a row gets the same response as any other signup and no Slack alert. The flag stays for the life of the row.
+
 ## Account behavioral evidence
 
 Each account carries one summary of what the server recorded about it over the trailing 30 days, kept on the user document and replaced whole on every refresh. It holds counts, booleans and timestamps only: sign-in and signup counts, distinct IP and network counts (never the addresses), API key counts, completed and failed request counts, credits spent, active agent executions, and counts of sensitive account actions such as failed step-up checks. Each fact records its source, how many records backed it and when the newest one was written. It never holds IP addresses, fingerprints, prompt or document text, or client-reported data. The summary is visible only to admins, is removed with the account, and does not change the account's review state or access.

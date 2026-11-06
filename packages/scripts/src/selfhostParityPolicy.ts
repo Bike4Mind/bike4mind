@@ -1112,7 +1112,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     {
       source: 'apps/workers/src/selfhost/signupIpRetention.ts',
       symbol: 'registerSignupIpRetention',
-      fingerprint: '0c313edef4ce27ecfa5a27f06f3eb3765dd6b22efd7cbe2d17278623b20deef4',
+      fingerprint: '969bed6cde6dafb23b320883c779caff4c30686bce073f671c27da06190f92a6',
     }
   ),
   wired(
