@@ -8,6 +8,7 @@ import {
   exportGlb,
   loadAsset,
   openPose,
+  partMaterial,
   partsToStl,
   poseJoints,
   summarizeObject,
@@ -118,6 +119,54 @@ describe('loadAsset (stl)', () => {
       const material = mesh.material as THREE.MeshStandardMaterial;
       expect(material.metalness).toBeCloseTo(1);
       expect(material.roughness).toBeCloseTo(0.4);
+    });
+
+    it('exports glass, varnish, cloth and glow as KHR material extensions, thickness in metres', async () => {
+      const { mesh } = await normalsOf(
+        ball({
+          clearcoat: 0.6,
+          sheen: 0.5,
+          transmission: 1,
+          ior: 1.45,
+          thickness: 4,
+          emissive: '#ff8000',
+          emissiveIntensity: 3,
+        })
+      );
+      const material = mesh.material as THREE.MeshPhysicalMaterial;
+      expect(material.clearcoat).toBeCloseTo(0.6);
+      expect(material.transmission).toBeCloseTo(1);
+      expect(material.ior).toBeCloseTo(1.45);
+      // 4 mm, in the GLB's metres.
+      expect(material.thickness).toBeCloseTo(0.004);
+      expect(material.sheen).toBeGreaterThan(0);
+      const sheenColor = material.sheenColor.clone().convertLinearToSRGB();
+      // The part's own colour at half strength.
+      expect(sheenColor.r).toBeGreaterThan(sheenColor.b);
+      expect(material.emissive.getHexString()).toBe('ff8000');
+      expect(material.emissiveIntensity).toBeCloseTo(3);
+    });
+
+    it('leaves the viewer object at model units when the GLB scales thickness', async () => {
+      const root = buildModelObject([ball({ transmission: 1, thickness: 4 })], 'mm');
+      await exportGlb(root);
+      const mesh = root.getObjectByName('knob') as THREE.Mesh;
+      expect((mesh.material as THREE.MeshPhysicalMaterial).thickness).toBe(4);
+    });
+  });
+
+  describe('partMaterial', () => {
+    it('reads the colour as sRGB hex and keeps a plain part free of extension features', () => {
+      const material = partMaterial(box('body', 1, 1, 1));
+      expect(material).toBeInstanceOf(THREE.MeshPhysicalMaterial);
+      expect(material.color.getHexString(THREE.SRGBColorSpace)).toBe('8b5a2b');
+      expect([material.clearcoat, material.sheen, material.transmission]).toEqual([0, 0, 0]);
+      expect(material.emissive.getHex()).toBe(0);
+    });
+
+    it('records the part glow, so a pick highlight can put it back', () => {
+      const material = partMaterial({ ...box('lamp', 1, 1, 1), emissive: '#ffffff', emissiveIntensity: 2 });
+      expect(material.userData).toMatchObject({ emissive: 0xffffff, emissiveIntensity: 2 });
     });
   });
 

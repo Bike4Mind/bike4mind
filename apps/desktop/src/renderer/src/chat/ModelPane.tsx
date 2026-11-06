@@ -82,6 +82,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
 
   const { state, status, error, object, summary, params, unsaved, joints, jointAngles, clips } = engine;
   const [wireframe, setWireframe] = useState(false);
+  const [grid, setGrid] = useState(false);
   // Keyed to the file, so opening another model never keeps a stale highlight.
   const [picked, setPicked] = useState<{ path: string | null; name: string } | null>(null);
   const pickedName = picked && picked.path === state.path ? picked.name : null;
@@ -209,6 +210,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
             <ModelViewport
               object={object}
               wireframe={wireframe}
+              grid={grid}
               dark={dark}
               dimmed={status === 'error'}
               frameKey={state.path}
@@ -333,6 +335,17 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           data-testid="model-pane-wireframe-btn"
         >
           Wireframe
+        </Button>
+        <Button
+          size="sm"
+          variant={grid ? 'soft' : 'plain'}
+          color="neutral"
+          disabled={!object}
+          onClick={() => setGrid(value => !value)}
+          aria-pressed={grid}
+          data-testid="model-pane-grid-btn"
+        >
+          Grid
         </Button>
         <Button
           size="sm"
