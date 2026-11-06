@@ -5,7 +5,10 @@ The hosted router forwards CloudFront-generated JA4 on the paths listed in
 `/api/otc/*` and `/api/oauth/*` cover OAuth callbacks, email-code verification
 and OAuth token/device sign-ins; `/api/subscriptions/*`,
 `/api/organizations/subscriptions/*` and `/api/stripe/*` cover the checkout
-routes, whose risk checks and Stripe risk metadata read the same network fields.
+routes. Credit payment attempts use the viewer ASN to derive their hosting-network
+status; checkout gates use the current IP. Stripe risk metadata still comes from
+the account's saved signup network. Checkout JA4 is forwarded but is not persisted
+or sent to Stripe by the current handlers.
 `infra/__tests__/authNetworkPathCoverage.test.ts` fails when a route starts
 reading network meta outside those patterns.
 Existing signup and login capture stores the value; no new blocking rule is added.
@@ -100,6 +103,13 @@ stage and verify all of the following before promoting:
 5. Check a static asset and a user-uploaded file still load, with their existing
    content security headers. Check another API path still uses its existing behavior.
 6. Request the function URL directly without the origin secret and confirm refusal.
+7. Start a credit purchase through `/api/stripe/start-payment` using Stripe test
+   mode. Check that the resulting PaymentAttempt has an IP hash and that
+   `hostingNetwork` matches the request's trusted viewer ASN (or the WAF anonymous-IP
+   signal). Repeat from a known non-hosting network. Complete individual and team
+   subscription checkouts and confirm redirects and cookies still work. Stripe's
+   `signup_*` metadata should continue to reflect the saved signup network;
+   a checkout request does not populate JA4 in Stripe metadata.
 
 AWS's CloudFront Function test API does not exercise origin modification, so a
 passing function test does not replace this deployed verification. Roll back the

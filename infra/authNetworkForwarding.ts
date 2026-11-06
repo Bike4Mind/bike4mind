@@ -1,8 +1,8 @@
 import { CLOUDFRONT_VIEWER_JA4_HEADER } from '../packages/server-utils/src/utils/trustedClientIpHeaders';
 
 // Every route that reads the request network (readNetworkMeta in apps/client/server/auth/networkMeta.ts):
-// sign-in and signup capture under /api/auth, /api/otc and /api/oauth, and the checkout routes, whose
-// risk checks and Stripe risk metadata read the same fields. Each pattern must end in `*`: the request
+// sign-in and signup capture under /api/auth, /api/otc and /api/oauth, and checkout routes, where credit
+// payment attempts derive hosting-network status from viewer ASN. Each pattern must end in `*`: the request
 // function derives its path prefixes by dropping that character. authNetworkPathCoverage.test.ts fails
 // when a route starts reading network meta outside these patterns.
 export const AUTH_NETWORK_PATHS = [
