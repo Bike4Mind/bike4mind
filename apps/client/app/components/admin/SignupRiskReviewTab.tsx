@@ -29,7 +29,7 @@ import { SIGNUP_RISK_REVIEW_SEARCH_KEYS } from './signupRiskReviewSearch';
 import BulkAbuseResponseModal from './Users/BulkAbuseResponseModal';
 import { SignupRiskAutoApprovals } from './SignupRiskAutoApprovals';
 import { useOpenUserProfile } from './Users/Profile/useOpenUserProfile';
-import { DETECTOR_LABELS } from './ShadowDetectionsTab';
+import { DETECTOR_LABELS } from './shadowDetectorLabels';
 import {
   useSignupRiskReviewDecision,
   useSignupRiskReviews,
