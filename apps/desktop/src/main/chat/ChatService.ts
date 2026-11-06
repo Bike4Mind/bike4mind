@@ -541,8 +541,11 @@ export interface ChatServiceDeps {
    * The iOS Simulator and the user's live view of it. Wired on macOS only, so on any other
    * platform (and in tests that do not exercise it) the simulator tools are not declared.
    */
-  /** The 3D model pane's open file (main/chat/model3d/ModelLiveView.ts). Absent in tests that do not exercise it. */
-  model?: ModelViewPort;
+  /**
+   * Each conversation's 3D model pane (main/chat/model3d/ModelLiveViews.ts): a turn's model tools get
+   * only their own session's view. Absent in tests that do not exercise it.
+   */
+  model?: { for(sessionId: string): ModelViewPort };
   simulator?: {
     driver: SimulatorDriver;
     view: { attach(udid: string): Promise<unknown>; detach(): void; attachedUdid(): string | undefined };
@@ -2951,7 +2954,10 @@ export class ChatService {
       const modelDeps = this.deps.model;
       const model: ModelContext | undefined =
         modelDeps && workingDirectory
-          ? { view: modelDeps, keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption) }
+          ? {
+              view: modelDeps.for(sessionId),
+              keepScreenshot: (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption),
+            }
           : undefined;
       const offerExplore = shouldOfferExplore(catalog?.models ?? [], session.model);
       const exploreFor = (granted: readonly string[]): ExploreContext | undefined =>
