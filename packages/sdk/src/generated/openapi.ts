@@ -2322,6 +2322,13 @@ export interface components {
                         url: string;
                       } & {
                         [key: string]: unknown;
+                      })
+                    | ({
+                        /** @enum {string} */
+                        type: 'file';
+                        file_id: string;
+                      } & {
+                        [key: string]: unknown;
                       });
                 } & {
                   [key: string]: unknown;
