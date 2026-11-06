@@ -334,7 +334,9 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
 
   /**
    * One newest-first page of the live artifacts a user owns that match a text search, for the public
-   * search. Keyset on `_id` like listOwnedBeforeId, so paging never re-reads earlier pages.
+   * search. Pages are keyset on `_id` like listOwnedBeforeId, so they never overlap. Unlike
+   * listOwnedBeforeId, a `$text` query cannot use the {userId, deletedAt, _id} index for the sort, so each
+   * page re-matches the owner's text hits and the `_id` bound only trims the output.
    */
   async searchOwnedBeforeId(
     userId: string,
