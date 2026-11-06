@@ -146,10 +146,42 @@ export const shadowDetectionSummaryRowSchema = z.object({
 });
 export type ShadowDetectionSummaryRow = z.infer<typeof shadowDetectionSummaryRowSchema>;
 
+export const SHADOW_DETECTION_ACCOUNT_STATUSES = ['active', 'suspended', 'deleted', 'missing'] as const;
+export type ShadowDetectionAccountStatus = (typeof SHADOW_DETECTION_ACCOUNT_STATUSES)[number];
+
+/**
+ * An account a listed detection names, as it is now, so a reviewer sees a suspended or drained account
+ * without opening its profile. `missing` is an id with no user record.
+ */
+export const shadowDetectionAccountSchema = z.object({
+  userId: z.string(),
+  status: z.enum(SHADOW_DETECTION_ACCOUNT_STATUSES),
+  signupMethod: z.string().nullable(),
+  currentCredits: z.number().nullable(),
+});
+export type ShadowDetectionAccount = z.infer<typeof shadowDetectionAccountSchema>;
+
+/** Burst peers listed per detection; `truncated` says more accounts signed up in the window. */
+export const SHADOW_DETECTION_BURST_PEER_LIMIT = 10;
+
+/**
+ * The other accounts that signed up from a signupNetworkBurst detection's IP inside its window. The
+ * detection names only the signup that tripped it; these are read from the users at list time.
+ */
+export const shadowDetectionBurstPeersSchema = z.object({
+  detectionId: z.string(),
+  userIds: z.array(z.string()),
+  truncated: z.boolean(),
+});
+export type ShadowDetectionBurstPeers = z.infer<typeof shadowDetectionBurstPeersSchema>;
+
 export const shadowDetectionListSchema = z.object({
   data: z.array(shadowDetectionItemSchema),
   truncated: z.boolean(),
   summary: z.array(shadowDetectionSummaryRowSchema),
+  /** Every account the listed detections and their burst peers name. */
+  accounts: z.array(shadowDetectionAccountSchema),
+  burstPeers: z.array(shadowDetectionBurstPeersSchema),
 });
 export type ShadowDetectionList = z.infer<typeof shadowDetectionListSchema>;
 
@@ -167,6 +199,28 @@ export const shadowDetectionVerdictRequestSchema = z.object({
   reason: z.unknown(),
 });
 export type ShadowDetectionVerdictRequest = z.infer<typeof shadowDetectionVerdictRequestSchema>;
+
+/** Detections one bulk verdict may grade. */
+export const SHADOW_DETECTION_BULK_VERDICT_LIMIT = 100;
+
+/** One verdict and reason for several detections, each named with the revision it was decided against. */
+export const shadowDetectionBulkVerdictRequestSchema = z.object({
+  items: z
+    .array(z.object({ id: ObjectIdStringSchema, expectedRevision: z.number().int().min(0) }))
+    .min(1)
+    .max(SHADOW_DETECTION_BULK_VERDICT_LIMIT),
+  verdict: z.enum(SHADOW_DETECTION_VERDICTS),
+  reason: z.unknown(),
+});
+export type ShadowDetectionBulkVerdictRequest = z.infer<typeof shadowDetectionBulkVerdictRequestSchema>;
+
+/** `conflicts` moved since the reviewer read them and were left alone; they come back as they are now. */
+export const shadowDetectionBulkVerdictResponseSchema = z.object({
+  updated: z.array(shadowDetectionItemSchema),
+  conflicts: z.array(shadowDetectionItemSchema),
+  notFound: z.array(z.string()),
+});
+export type ShadowDetectionBulkVerdictResponse = z.infer<typeof shadowDetectionBulkVerdictResponseSchema>;
 
 /**
  * Suspension reasons that mean the admin judged the account abusive, so its open detections are graded

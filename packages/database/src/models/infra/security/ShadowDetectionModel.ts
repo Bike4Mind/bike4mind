@@ -10,7 +10,10 @@ import {
   type AccountCampaignGroup,
   SHADOW_DETECTION_VERDICTS,
   SHADOW_DETECTORS,
+  SHADOW_DETECTION_BURST_PEER_LIMIT,
+  type ShadowDetectionAccount,
   type ShadowDetectionAction,
+  type ShadowDetectionBurstPeers,
   type ShadowDetectionItem,
   type ShadowDetectionNetwork,
   type ShadowDetectionPayment,
@@ -211,6 +214,21 @@ export type AccountStatusVerdictInput = {
   /** The admin who suspended or reinstated the account. */
   reviewerId: string;
 };
+
+/** Signups read per burst IP when listing peers; enough for every row sharing it to fill its limit. */
+const BURST_PEER_SCAN = 200;
+
+type AccountContextDoc = {
+  _id: Types.ObjectId;
+  isBanned?: boolean;
+  deletedAt?: Date | null;
+  currentCredits?: number;
+  acquisition?: { signupMethod?: string };
+  authProviders?: { strategy?: string }[];
+};
+
+const accountStatus = (doc: AccountContextDoc): ShadowDetectionAccount['status'] =>
+  doc.deletedAt ? 'deleted' : doc.isBanned ? 'suspended' : 'active';
 
 const VERDICT_COUNT_FIELDS = {
   confirmed_abuse: 'confirmedAbuse',
@@ -583,6 +601,100 @@ class ShadowDetectionRepository {
       if (updated) graded.push(toItem(updated));
     }
     return graded;
+  }
+
+  /**
+   * The context the Detections page shows beside listed detections: for every signupNetworkBurst
+   * detection with an IP, the other accounts that signed up from that IP in its window (one user read
+   * per distinct IP, served by user_signupMeta_ip); and the current status, signup method and balance
+   * of every account the detections and those peers name.
+   */
+  async listContext(
+    items: ShadowDetectionItem[]
+  ): Promise<{ accounts: ShadowDetectionAccount[]; burstPeers: ShadowDetectionBurstPeers[] }> {
+    const burstPeers = await this.findBurstPeers(items);
+    const ids = [...new Set([...items.flatMap(item => item.userIds), ...burstPeers.flatMap(peers => peers.userIds)])];
+    const validIds = ids.filter(id => Types.ObjectId.isValid(id));
+    const docs =
+      validIds.length === 0
+        ? []
+        : await User.find({ _id: { $in: validIds } })
+            .select('isBanned deletedAt currentCredits acquisition.signupMethod authProviders.strategy')
+            .lean<AccountContextDoc[]>();
+    const byId = new Map(docs.map(doc => [doc._id.toString(), doc]));
+    const accounts = ids.map((userId): ShadowDetectionAccount => {
+      const doc = byId.get(userId);
+      if (!doc) return { userId, status: 'missing', signupMethod: null, currentCredits: null };
+      return {
+        userId,
+        status: accountStatus(doc),
+        // acquisition is consent-gated; the first auth provider is the durable fallback (findSignupLinkFacts).
+        signupMethod: doc.acquisition?.signupMethod ?? doc.authProviders?.[0]?.strategy ?? 'email',
+        currentCredits: doc.currentCredits ?? null,
+      };
+    });
+    return { accounts, burstPeers };
+  }
+
+  private async findBurstPeers(items: ShadowDetectionItem[]): Promise<ShadowDetectionBurstPeers[]> {
+    const windowOf = (item: ShadowDetectionItem) => ({
+      from: new Date(item.detectedAt.getTime() - (item.windowMinutes ?? 0) * 60_000),
+      to: item.detectedAt,
+    });
+    const bursts = items.filter(
+      item => item.detector === 'signupNetworkBurst' && item.network?.ip && item.windowMinutes !== null
+    );
+    const byIp = new Map<string, ShadowDetectionItem[]>();
+    for (const item of bursts) {
+      const ip = item.network!.ip!;
+      byIp.set(ip, [...(byIp.get(ip) ?? []), item]);
+    }
+
+    const peers: ShadowDetectionBurstPeers[] = [];
+    for (const [ip, rows] of byIp) {
+      const windows = rows.map(windowOf);
+      const from = new Date(Math.min(...windows.map(window => window.from.getTime())));
+      const to = new Date(Math.max(...windows.map(window => window.to.getTime())));
+      const signups = await User.find({ 'signupMeta.ip': ip, createdAt: { $gte: from, $lte: to } }, { createdAt: 1 })
+        .sort({ createdAt: -1 })
+        .limit(BURST_PEER_SCAN)
+        .lean<{ _id: Types.ObjectId; createdAt: Date }[]>();
+      rows.forEach((row, index) => {
+        const window = windows[index];
+        const inWindow = signups
+          .filter(signup => signup.createdAt >= window.from && signup.createdAt <= window.to)
+          .map(signup => signup._id.toString())
+          .filter(userId => !row.userIds.includes(userId));
+        peers.push({
+          detectionId: row.id,
+          userIds: inWindow.slice(0, SHADOW_DETECTION_BURST_PEER_LIMIT),
+          // A full scan may have cut older signups in this row's window.
+          truncated: inWindow.length > SHADOW_DETECTION_BURST_PEER_LIMIT || signups.length === BURST_PEER_SCAN,
+        });
+      });
+    }
+    return peers;
+  }
+
+  /**
+   * Appends one verdict, decided once, to several detections, each conditional on its own revision
+   * like addVerdict; a record that moved is returned as a conflict and left alone.
+   */
+  async addVerdicts(input: {
+    items: { id: string; expectedRevision: number }[];
+    verdict: ShadowDetectionVerdict;
+    reason: string;
+    reviewerId: string;
+  }): Promise<{ updated: ShadowDetectionItem[]; conflicts: ShadowDetectionItem[]; notFound: string[] }> {
+    const result = { updated: [] as ShadowDetectionItem[], conflicts: [] as ShadowDetectionItem[], notFound: [] as string[] };
+    const unique = [...new Map(input.items.map(item => [item.id, item])).values()];
+    for (const { id, expectedRevision } of unique) {
+      const outcome = await this.addVerdict({ ...input, id, expectedRevision });
+      if (outcome.status === 'updated') result.updated.push(outcome.item);
+      else if (outcome.status === 'conflict') result.conflicts.push(outcome.item);
+      else result.notFound.push(id);
+    }
+    return result;
   }
 
   /**
