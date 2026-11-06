@@ -41,7 +41,7 @@ export type LinkedAccountEvidenceDeps = {
   now: () => Date;
 };
 
-const liveDeps: LinkedAccountEvidenceDeps = {
+export const liveLinkedAccountEvidenceDeps: LinkedAccountEvidenceDeps = {
   findSignupLinkFacts: ids => userRepository.findSignupLinkFacts(ids),
   findLinkedAccounts: user => findLinkedAccounts(user),
   blockedStates: async ids => {
@@ -79,7 +79,7 @@ const minOf = (values: (number | null)[]): number | null => {
 export async function buildLinkedAccountEvidence(
   userIds: readonly string[],
   refFor: (userId: string) => string | null,
-  deps: LinkedAccountEvidenceDeps = liveDeps
+  deps: LinkedAccountEvidenceDeps = liveLinkedAccountEvidenceDeps
 ): Promise<AbuseAssessmentGroupEvidence | null> {
   const ids = userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS);
   if (ids.length === 0) return null;
