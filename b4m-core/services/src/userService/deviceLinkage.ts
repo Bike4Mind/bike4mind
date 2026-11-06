@@ -131,8 +131,9 @@ function corroboratingAxes(
   ) {
     axes.push('fingerprint');
   }
-  const samePrefix = account.networkPrefix !== null && account.networkPrefix === blocked.networkPrefix;
-  // A shared hosting ASN is a VPN or cloud exit that strangers share; only a residential or mobile ASN counts.
+  // A shared hosting ASN or /24 is a VPN or cloud exit that strangers share; only a residential or mobile network counts.
+  const samePrefix =
+    account.networkPrefix !== null && account.networkPrefix === blocked.networkPrefix && account.hosting !== true;
   const sameAsn = account.asn !== null && account.asn === blocked.asn && account.hosting === false;
   if (samePrefix || sameAsn) axes.push('network');
   if (account.signedUpAt && blocked.signedUpAt) {
