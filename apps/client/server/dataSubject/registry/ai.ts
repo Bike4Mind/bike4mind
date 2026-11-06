@@ -228,7 +228,8 @@ export const aiHolders = {
     // The person's own GitHub handle and repo owner, removed with the document.
     unrelatedPaths: ['metadata.githubUserId', 'metadata.selectedRepositories.owner'],
   },
-  // Deleting the key (MemoryPrincipalKey) crypto-shreds these; the rows themselves go too.
+  // Deleting the key (MemoryPrincipalKey) crypto-shreds these; the rows themselves go too. The facts are
+  // the person's own data: an export decrypts them via MemoryPrincipalKey and omits only the cipher, iv and tag.
   MemoryLedgerEvent: {
     kind: 'holder',
     references: [
@@ -269,8 +270,6 @@ export const aiHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'anonymize', alsoRedact: ['userEmail', 'ipAddress', 'userAgent'] },
     ],
-    // Redacted through alsoRedact above; it is the actor's email, not a reference.
-    unrelatedPaths: ['userEmail'],
   },
   RapidReplyMapping: {
     kind: 'holder',
