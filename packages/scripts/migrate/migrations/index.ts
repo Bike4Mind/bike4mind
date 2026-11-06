@@ -298,6 +298,12 @@ import EnsureUserDeletionScheduledForIndex from './20260921239970_ensure-user-de
 import EnsureBillingMismatchIndexes from './20260921239985_ensure-billing-mismatch-indexes';
 import EnsureStripeDisputeIndexes from './20260921239980_ensure-stripe-dispute-indexes';
 import ConvertLegacyQuestPlansToFiles from './20260921239990_convert-legacy-quest-plans-to-files';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedule-keys';
+// Id stays below SeedSignupGrantPools, whose test orders every signup migration before it.
+import DropQuestSignupActivity from './20260921237490_drop-quest-signup-activity';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
+import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settings';
 import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import EnsureBillingEventIndexes from './20260921240030_ensure-billing-event-indexes';
@@ -506,6 +512,8 @@ const coreMigrations: MigrationFile[] = [
   QueueHeldSignupGrantsForRiskReview,
   SeedSignupGrantSchedule,
   PinSignupGrantInitialAndCap,
+  PinSignupGrantScheduleKeys,
+  DropQuestSignupActivity,
   SeedSignupGrantPools,
   EnsureHeldCreditRewardIndexes,
   EnsureQuestSessionKeysetIndex,
@@ -526,6 +534,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureBillingMismatchIndexes,
   EnsureStripeDisputeIndexes,
   ConvertLegacyQuestPlansToFiles,
+  DropRetiredGrantSettings,
   EnsureUserLimitEventIndexes,
   EnsureBillingEventIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

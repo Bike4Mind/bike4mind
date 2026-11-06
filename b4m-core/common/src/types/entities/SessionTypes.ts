@@ -201,7 +201,6 @@ export interface ITurnTiming {
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
-  signupActivity?: { userId: string; turnId: string; startedAt: Date };
   conversationItemId?: string;
   openaiMessageId?: string;
   claudeMessageId?: string;

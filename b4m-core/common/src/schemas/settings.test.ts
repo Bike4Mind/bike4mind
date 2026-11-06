@@ -1583,12 +1583,7 @@ describe('preference arena settings exposure', () => {
 
 describe('stageHiddenSettingKeys', () => {
   it('hides the deprecated drip settings and preview test mode on production stages', () => {
-    expect(stageHiddenSettingKeys(true).sort()).toEqual([
-      'signupGrantActivityMinDays',
-      'signupGrantActivityMinMessages',
-      'signupGrantActivityPreviewTestMode',
-      'signupGrantDailyBudget',
-    ]);
+    expect(stageHiddenSettingKeys(true).sort()).toEqual(['signupGrantActivityPreviewTestMode']);
   });
 
   it('hides nothing elsewhere', () => {
