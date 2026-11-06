@@ -6,6 +6,7 @@ import type { Node } from 'web-tree-sitter';
 import { gitArgumentPath, gitCommand, gitCommandEnv, hostGitArgs, quickGitTimeout } from '../../git/hostGitArgs';
 import { wslLocation, wslUncPath } from '../../wsl/wslPath';
 import { resolveOperand } from './paths';
+import { findOnPath } from './userPath';
 import { own } from '@shared/ownKeys';
 
 /**
@@ -293,13 +294,76 @@ function tarExtraction(
 /** Archive members an extraction lists before the scan reads them as paths instead of a whole tree. */
 const LISTED_MEMBERS = 10_000;
 
-/** One archive listing: a member name per line, or a long listing whose lines open with each member's type. */
-function listArchive(cwd: string, file: string, args: readonly string[]): Promise<string | null> {
+function runListing(cwd: string, file: string, args: readonly string[]): Promise<string | null> {
   return new Promise(done => {
     execFile(file, args, { cwd, timeout: 2000, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true }, (error, stdout) =>
       done(error ? null : stdout)
     );
   });
+}
+
+/** Whether each tar on PATH is GNU tar, which alone reads `host:file` as a remote archive and takes `--force-local`. */
+const gnuTar = new Map<string, Promise<boolean>>();
+
+/**
+ * One archive listing, from the program found in an absolute PATH folder (never the project's own copy): a member
+ * name per line, or a long listing whose lines open with each member's type. Null for stdin, a name tar would
+ * fetch from another host, or a name read as an option.
+ */
+async function listArchive(
+  cwd: string,
+  program: string,
+  archive: string,
+  args: readonly string[]
+): Promise<string | null> {
+  if (archive.startsWith('-') || /^[^/\\]*:/.test(archive.replace(/^[A-Za-z]:[\\/]/, ''))) return null;
+  const file = await findOnPath(program, process.env.PATH ?? '');
+  if (file === null) return null;
+  if (program === 'unzip') return runListing(cwd, file, [...args, '--', archive]);
+  let gnu = gnuTar.get(file);
+  if (gnu === undefined) {
+    gnu = runListing(cwd, file, ['--version']).then(version => /GNU tar/.test(version ?? ''));
+    gnuTar.set(file, gnu);
+  }
+  return runListing(cwd, file, [...args, ...((await gnu) ? ['--force-local'] : []), `--file=${archive}`]);
+}
+
+/** find tests that only select by name, path or type, with the value each takes; `-print` is dropped. */
+const FIND_TESTS = /^-(name|iname|path|ipath|wholename|iwholename|type)$/;
+const FIND_LINKS_LISTED = 1000;
+
+/**
+ * The links a POSIX `find` over `folders` (from `cwd`) selects with the same tests, which the system find lists
+ * so a large tree costs no walk here; null when a test is not one it reads, find fails, or it lists too many.
+ */
+export async function findLinks(
+  cwd: string,
+  folders: readonly string[],
+  tests: readonly string[]
+): Promise<string[] | null> {
+  const globals: string[] = [];
+  const kept: string[] = [];
+  for (let index = 0; index < tests.length; index++) {
+    const test = tests[index] as string;
+    const value = tests[index + 1];
+    if (/^-(maxdepth|mindepth)$/.test(test) && value !== undefined && /^\d+$/.test(value)) {
+      globals.push(test, value);
+      index++;
+    } else if (FIND_TESTS.test(test) && value !== undefined) {
+      kept.push(test, value);
+      index++;
+    } else if (['!', '-not', '(', ')', '-o', '-or', '-a', '-and', '-prune'].includes(test)) kept.push(test);
+    else if (test !== '-print' && test !== '-print0') return null;
+  }
+  const file = await findOnPath('find', process.env.PATH ?? '');
+  if (file === null || process.platform === 'win32') return null;
+  const starts = folders.map(folder =>
+    folder.startsWith('-') || folder.startsWith('(') || folder === '!' ? `./${folder}` : folder
+  );
+  const expression = kept.length > 0 ? ['(', ...kept, ')'] : [];
+  const listed = await runListing(cwd, file, ['-P', ...starts, ...globals, ...expression, '-type', 'l', '-print0']);
+  const links = listed?.split('\0').filter(path => path !== '') ?? null;
+  return links === null || links.length > FIND_LINKS_LISTED ? null : links.map(path => resolve(cwd, path));
 }
 
 /**
@@ -315,7 +379,7 @@ async function extractedMembers(program: string, args: readonly string[], cwd: s
   if (program === 'unzip') {
     const archive = args.find(arg => !arg.startsWith('-') && arg !== optionValue(args, '-d', null));
     directory = optionValue(args, '-d', null) ?? '.';
-    const listed = archive === undefined ? null : await listArchive(cwd, 'unzip', ['-Z', '--', archive]);
+    const listed = archive === undefined ? null : await listArchive(cwd, 'unzip', archive, ['-Z']);
     if (listed === null) return null;
     const lines = listed.split('\n').filter(line => /^[-dlbcps][-rwxsStT]{9}\s/.test(line));
     const parsed = lines.map(line => /^\S{10}\s+\S+\s+\S+\s+\d+\s+\S+\s+\S+\s+\S+\s+\S+\s(.*)$/.exec(line)?.[1]);
@@ -327,8 +391,8 @@ async function extractedMembers(program: string, args: readonly string[], cwd: s
     if (!read?.whole || read.archive === undefined || !Number.isInteger(read.strip) || read.strip < 0) return null;
     ({ directory, strip } = read);
     const [plain, long] = await Promise.all([
-      listArchive(cwd, program, ['-tf', read.archive]),
-      listArchive(cwd, program, ['-tvf', read.archive]),
+      listArchive(cwd, program, read.archive, ['-t']),
+      listArchive(cwd, program, read.archive, ['-tv']),
     ]);
     if (plain === null || long === null) return null;
     names = plain.split('\n').filter(line => line !== '');
@@ -476,9 +540,11 @@ async function gitRun(directory: string, args: readonly string[]): Promise<{ cod
   const env: NodeJS.ProcessEnv = Object.fromEntries(
     Object.entries(inherited ?? process.env).filter(([name]) => !name.toUpperCase().startsWith('GIT_'))
   );
-  Object.assign(env, { GIT_ATTR_SOURCE: EMPTY_TREE, GIT_NO_LAZY_FETCH: '1' });
+  // GIT_ALLOW_PROTOCOL=none also stops a lazy fetch on git older than GIT_NO_LAZY_FETCH (2.39.4 and 2.45.1).
+  const settings = { GIT_ATTR_SOURCE: EMPTY_TREE, GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: 'none' };
+  Object.assign(env, settings);
   // Through wsl.exe only the variables WSLENV names reach Linux git.
-  if (inherited) env.WSLENV = [env.WSLENV, 'GIT_ATTR_SOURCE', 'GIT_NO_LAZY_FETCH'].filter(Boolean).join(':');
+  if (inherited) env.WSLENV = [env.WSLENV, ...Object.keys(settings)].filter(Boolean).join(':');
   const nullDevice = wslLocation(directory) || process.platform !== 'win32' ? '/dev/null' : 'NUL';
   const command = await gitCommand(
     directory,
@@ -518,6 +584,12 @@ async function upstreamTracked(cwd: string): Promise<boolean | null> {
 async function gitQuery(directory: string, args: readonly string[]): Promise<string | null> {
   const result = await gitRun(directory, args);
   return result?.code === 0 ? result.stdout : null;
+}
+
+/** Whether git's index lists a link under `paths`, given from `directory`; null when git fails. */
+export async function indexHoldsLink(directory: string, paths: readonly string[]): Promise<boolean | null> {
+  const listed = await gitQuery(directory, ['ls-files', '-s', '-z', '--', ...paths]);
+  return listed === null ? null : listed.split('\0').some(entry => entry.startsWith('120000 '));
 }
 
 /** What `git rev-parse --show-toplevel` prints in `directory` (a Linux path in a WSL folder), or null when git fails. */
@@ -887,7 +959,10 @@ const inSettings = (path: string): boolean => path.toLowerCase().split('/').incl
 /** Index entries the scan compares with the work tree itself before it reads the change as unknown. */
 const COMPARED_ENTRIES = 256;
 
-/** Whether the file at `path` holds what the index records for it, by git's own blob hash of its raw bytes. */
+/**
+ * Whether the file at `path` holds what the index records for it, by git's own blob hash of its raw bytes, or of
+ * them with CRLF read as LF, as `core.autocrlf` checks a file out.
+ */
 async function sameAsIndex(path: string, mode: string, id: string): Promise<boolean> {
   const info = await lstat(path).catch(() => null);
   let content: Buffer | null = null;
@@ -897,8 +972,14 @@ async function sameAsIndex(path: string, mode: string, id: string): Promise<bool
     content = await readFile(path).catch(() => null);
   }
   if (content === null) return false;
-  const hash = createHash(id.length === 64 ? 'sha256' : 'sha1');
-  return hash.update(`blob ${content.length}\0`).update(content).digest('hex') === id;
+  const blobId = (bytes: Buffer): string =>
+    createHash(id.length === 64 ? 'sha256' : 'sha1')
+      .update(`blob ${bytes.length}\0`)
+      .update(bytes)
+      .digest('hex');
+  if (blobId(content) === id) return true;
+  if (mode === '120000' || !content.includes('\r\n')) return false;
+  return blobId(Buffer.from(content.toString('latin1').replace(/\r\n/g, '\n'), 'latin1')) === id;
 }
 
 /**
