@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { BackgroundProcessStatus, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import {
+  isAgentSession,
+  type BackgroundProcessStatus,
+  type ChatSessionStatus,
+  type ChatSessionSummary,
+} from '@shared/chat';
 import type { BackgroundProcessView } from './useBackgroundProcesses';
 
 /**
@@ -103,7 +108,7 @@ export function spawnedSessions(
 ): SpawnedSessionView[] {
   if (!parentId) return [];
   return sessions
-    .filter(session => session.origin?.parentSessionId === parentId)
+    .filter(session => session.origin?.parentSessionId === parentId && isAgentSession(session))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map(session => ({
       id: session.id,

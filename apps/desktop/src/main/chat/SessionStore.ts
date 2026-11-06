@@ -225,6 +225,7 @@ function normalizeOrigin(value: unknown): ChatSessionOrigin | null {
     parentSessionId: raw.parentSessionId,
     depth: Math.floor(raw.depth),
     seedPrompt: typeof raw.seedPrompt === 'string' ? raw.seedPrompt : '',
+    ...(raw.kind === 'side-chat' ? { kind: raw.kind } : {}),
   };
 }
 

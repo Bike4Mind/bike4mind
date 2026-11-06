@@ -61,6 +61,7 @@ describe('ChatService.startSideChat', () => {
       parentSessionId: parent.id,
       depth: 1,
       seedPrompt: 'category of endofunctors',
+      kind: 'side-chat',
     });
     expect(result.session.mode).toBe('chat');
 

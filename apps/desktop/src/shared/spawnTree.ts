@@ -1,4 +1,4 @@
-import type { ChatSessionSummary } from './chat';
+import { isAgentSession, type ChatSessionSummary } from './chat';
 
 /**
  * Distance from `rootId` up the parent chain, or null if the chain ends elsewhere, loops, or passes
@@ -26,7 +26,7 @@ function depthBelow(
 
 export type SpawnedSession = ChatSessionSummary & Required<Pick<ChatSessionSummary, 'origin'>>;
 
-const isSpawned = (session: ChatSessionSummary): session is SpawnedSession => session.origin !== undefined;
+const isSpawned = (session: ChatSessionSummary): session is SpawnedSession => isAgentSession(session);
 
 /** Every live session below `rootId`, with its depth. Shared by the roster and the needs-you rules. */
 export function descendantsOf(
