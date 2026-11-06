@@ -70,10 +70,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
         await loopEventRepository.reopenAsked(resolved.id, now).catch(() => undefined);
         throw error;
       }
-      if (reopened) {
-        await makeDueIfReady(loop, now);
-        await requestLoopDispatch(loop.id, req.logger);
-      }
+      if (reopened && (await makeDueIfReady(loop, now))) await requestLoopDispatch(loop.id, req.logger);
       // `ticketSkipped` tells the owner the answer was saved but the ticket was left as it is.
       if (ticketSkipped) return res.json({ ...unsureRow(resolved), ticketSkipped });
     }

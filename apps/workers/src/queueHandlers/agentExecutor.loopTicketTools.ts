@@ -133,8 +133,7 @@ export function buildLoopTicketTools({ userId, loopId, executionId }: LoopTicket
 
   /** After a ticket write: make the loop due if it has a ready ticket, ask for a dispatch, refresh its open page. */
   const ticketsChanged = async (loop: ILoop) => {
-    await makeDueIfReady(loop);
-    await requestLoopDispatch(loop.id, logger);
+    if (await makeDueIfReady(loop)) await requestLoopDispatch(loop.id, logger);
     await pushLoopChanged(userId, loop.id, logger);
   };
 

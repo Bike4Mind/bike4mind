@@ -165,13 +165,14 @@ export async function assertLoopTicketAccess(
 /**
  * Makes a live loop due now when it has a ticket ready for a cloud run or one to triage, so a new ticket does not
  * wait out the interval. Ready desktop-stage tickets never make it due: the cloud run would not work them.
+ * Returns whether it did, so callers only ask for a dispatch when one could start.
  */
-export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<void> {
-  if (loop.status !== 'live') return;
+export async function makeDueIfReady(loop: ILoop, now = new Date()): Promise<boolean> {
+  if (loop.status !== 'live') return false;
   const ready =
     (await workItemRepository.findNextReadyForLoop(loop.userId, loop.id, loop.stages, desktopStagesOf(loop))) ??
     (await workItemRepository.listUntriagedForLoop(loop.userId, loop.id, 1))[0];
-  if (ready) await loopRepository.makeDueNow(loop.id, now);
+  return ready ? loopRepository.makeDueNow(loop.id, now) : false;
 }
 
 /** A blocked ticket's reason when its run paused at the confidence gate; the full reason is in the loop log. */

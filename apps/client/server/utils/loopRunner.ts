@@ -487,10 +487,7 @@ export async function completeRunnerRun(
   }
   if (loop) {
     // The ticket's next stage may be a cloud one.
-    if (body.outcome === 'advanced') {
-      await makeDueIfReady(loop, now);
-      await requestLoopDispatch(loop.id, logger);
-    }
+    if (body.outcome === 'advanced' && (await makeDueIfReady(loop, now))) await requestLoopDispatch(loop.id, logger);
     await pushLoopChanged(userId, loop.id, logger);
   }
 

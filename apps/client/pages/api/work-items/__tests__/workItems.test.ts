@@ -95,6 +95,7 @@ const item = (overrides: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   verifyOrgAccess.mockResolvedValue(undefined);
+  loopRepo.makeDueNow.mockResolvedValue(true);
 });
 
 describe('GET /api/work-items', () => {
@@ -463,6 +464,14 @@ describe('loop tickets through the work-items routes', () => {
     requestLoopDispatch.mockClear();
     repo.findByIdForUser.mockResolvedValue(item());
     await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+    expect(requestLoopDispatch).not.toHaveBeenCalled();
+  });
+
+  it('does not ask for a dispatch when the loop has nothing ready to run', async () => {
+    repo.findByIdForUser.mockResolvedValue(item({ loopId: LOOP, stage: 'todo' }));
+    repo.findNextReadyForLoop.mockResolvedValue(null);
+    await call('item', 'patch', { query: { id: OID_A }, body: { title: 'Renamed' } }).result;
+    expect(loopRepo.makeDueNow).not.toHaveBeenCalled();
     expect(requestLoopDispatch).not.toHaveBeenCalled();
   });
 

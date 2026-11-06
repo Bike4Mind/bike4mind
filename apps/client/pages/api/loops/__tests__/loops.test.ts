@@ -49,6 +49,8 @@ const tickets = vi.hoisted(() => ({
   countBlockedByLoop: vi.fn(),
   updateForUser: vi.fn(),
   findNextReadyForLoop: vi.fn(),
+  listUntriagedForLoop: vi.fn(),
+  listReadyForLoop: vi.fn(),
 }));
 const loopEvents = vi.hoisted(() => ({
   listForLoop: vi.fn(),
@@ -91,9 +93,11 @@ const dispatch = vi.hoisted(() => ({ requestLoopDispatch: vi.fn(), pushLoopChang
 vi.mock('@server/utils/loopDispatch', () => dispatch);
 
 const loopAdmission = vi.hoisted(() => vi.fn());
+const p2RunsLeft = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/loopBudget', async importOriginal => ({
   ...(await importOriginal<typeof import('@server/utils/loopBudget')>()),
   loopAdmission,
+  p2RunsLeft,
 }));
 
 const resolveDefaultChatModel = vi.hoisted(() => vi.fn());
@@ -157,7 +161,11 @@ beforeEach(() => {
   users.findById.mockResolvedValue({});
   executions.sumLoopCreditsForUser.mockResolvedValue(0);
   repo.countInFlight.mockResolvedValue(0);
+  repo.makeDueNow.mockResolvedValue(true);
   loopAdmission.mockResolvedValue({ ok: true });
+  p2RunsLeft.mockResolvedValue(Infinity);
+  tickets.listUntriagedForLoop.mockResolvedValue([]);
+  tickets.listReadyForLoop.mockResolvedValue([]);
 });
 
 it.each(['collection', 'item', 'run', 'budget'])('%s route refuses API keys (jwtOnly)', mod => {
@@ -546,11 +554,30 @@ describe('POST /api/loops/:id/run', () => {
       () => loopAdmission.mockResolvedValue({ ok: false, kind: 'paced', readyAt: new Date('2026-11-05T14:30:00Z') }),
       /Paced.*14:30 UTC/,
     ],
+    [
+      "today's p2 runs are used up and only p2/p3 tickets are ready",
+      {},
+      () => {
+        p2RunsLeft.mockResolvedValue(0);
+        tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p2' }]);
+      },
+      /p2 runs are used up/,
+    ],
   ])('says why it waits when %s, and still asks for a dispatch', async (_case, fields, arrange, reason) => {
     arrange();
     const body = await run(fields);
     expect(body.waitingReason).toMatch(reason);
     expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(OID, expect.anything());
+  });
+
+  it.each([
+    ['a p0/p1 ticket is ready', () => tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p1' }])],
+    ['an untriaged ticket waits', () => tickets.listUntriagedForLoop.mockResolvedValue([{ id: 't2' }])],
+  ])('does not report the p2 cap when %s', async (_case, arrange) => {
+    p2RunsLeft.mockResolvedValue(0);
+    tickets.listReadyForLoop.mockResolvedValue([{ id: 't1', priority: 'p3' }]);
+    arrange();
+    expect(await run()).not.toHaveProperty('waitingReason');
   });
 
   it('is a 409 when the loop stopped being live mid-request', async () => {

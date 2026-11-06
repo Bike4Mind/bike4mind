@@ -20,6 +20,8 @@ vi.mock('@bike4mind/database', () => ({
   workItemRepository: items,
   adminSettingsRepository: { getSettingsValue: async () => true },
 }));
+const dispatch = vi.hoisted(() => ({ requestLoopDispatch: vi.fn(), pushLoopChanged: vi.fn() }));
+vi.mock('@server/utils/loopDispatch', () => dispatch);
 
 import {
   buildLoopTicketTools,
@@ -72,6 +74,27 @@ describe('resolveLoopTicketTools', () => {
     for (const name of LOOP_TICKET_TOOL_NAMES) expect(classifyToolPermission(name, approved, [])).toBe('allowed');
     // Without the pre-approval the write tools would be refused on a run with nobody to ask.
     expect(classifyToolPermission('loop_ticket_create', [], [])).toBe('needs_approval');
+  });
+});
+
+describe('after a ticket write', () => {
+  it('asks for a dispatch of the loop it made due, and refreshes that loop page', async () => {
+    items.findNextReadyForLoop.mockResolvedValue({ id: 't-new' });
+    loops.makeDueNow.mockResolvedValue(true);
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    await run(tools, 'loop_ticket_create', { title: 'B', loopId: SIBLING });
+
+    expect(dispatch.requestLoopDispatch).toHaveBeenCalledWith(SIBLING, expect.anything());
+    expect(dispatch.pushLoopChanged).toHaveBeenCalledWith('u1', SIBLING, expect.anything());
+  });
+
+  it('only refreshes the page when nothing is ready to run', async () => {
+    const tools = buildLoopTicketTools({ userId: 'u1', loopId: OWN, executionId: 'exec-1' });
+    await run(tools, 'loop_ticket_create', { title: 'A' });
+
+    expect(loops.makeDueNow).not.toHaveBeenCalled();
+    expect(dispatch.requestLoopDispatch).not.toHaveBeenCalled();
+    expect(dispatch.pushLoopChanged).toHaveBeenCalledWith('u1', OWN, expect.anything());
   });
 });
 

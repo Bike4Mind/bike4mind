@@ -650,10 +650,15 @@ describe('runLoopSchedulerTick - unsure', () => {
     expect((await eventsOf(loop.id))[0].foldedAt).toBeUndefined();
 
     executions['exec-0'] = { userId: 'user-1', status: 'completed', result: { answer: 'done' } };
+    h.pushLoopChanged.mockClear();
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await ticketOf(ticket.id)).toMatchObject({ stage: 'doing' });
     expect((await eventsOf(loop.id))[0].foldedAt).toBeInstanceOf(Date);
+    // The fold's own push, before the dispatch the advanced ticket triggers.
+    expect(h.pushLoopChanged.mock.invocationCallOrder[0]).toBeLessThan(
+      h.startAgentExecution.mock.invocationCallOrder[0] ?? Infinity
+    );
     expect(await reload(loop.id)).toMatchObject({ runCount: 0, memory: { notes: '', nextAction: '' } });
   });
 
@@ -926,9 +931,14 @@ describe('runLoopSchedulerTick - budget and auto-resume', () => {
     expect(await openNotices()).toHaveLength(1);
 
     balance = { currentCredits: 5 };
+    h.pushLoopChanged.mockClear();
     await runLoopSchedulerTick(NOW, logger);
 
     expect(await reload(loop.id)).toMatchObject({ status: 'live', activeExecutionId: 'exec-1' });
+    // The resume's own push, before the dispatch's.
+    expect(h.pushLoopChanged.mock.invocationCallOrder[0]).toBeLessThan(
+      h.startAgentExecution.mock.invocationCallOrder[0]
+    );
     expect(await eventsOf(loop.id)).toMatchObject([{ kind: 'auto_resumed', reason: 'Credits available again' }]);
     expect(await openNotices()).toHaveLength(0);
   });

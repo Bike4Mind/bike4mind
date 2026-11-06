@@ -79,6 +79,7 @@ function TicketCard({
   ticket,
   loop,
   stages,
+  saving,
   desktop,
   runner,
   runLimit,
@@ -88,6 +89,8 @@ function TicketCard({
   ticket: ILoopTicket;
   loop: Pick<ILoop, 'serviceLevelHours'>;
   stages: string[];
+  /** This card's own move is still saving: only it locks, the rest of the board stays usable. */
+  saving: boolean;
   /** The ticket's stage is worked by a desktop runner, never by a cloud run. */
   desktop: boolean;
   runner?: ILoopTicketsResponse['runner'];
@@ -95,11 +98,6 @@ function TicketCard({
   onViewRun: (executionId: string) => void;
 }) {
   const moveTicket = useMoveLoopTicket();
-  // Only this card locks while its own move saves; the rest of the board stays usable.
-  const saving = useMutationState({
-    filters: { mutationKey: MOVE_LOOP_TICKET_KEY, status: 'pending' },
-    select: mutation => (mutation.state.variables as MoveLoopTicketVars).id,
-  }).includes(ticket.id);
   return (
     <Card size="sm" variant="outlined" data-testid={`loop-ticket-${ticket.id}`}>
       <Typography level="title-sm">{ticket.title}</Typography>
@@ -361,6 +359,10 @@ export default function LoopTicketBoard({
   onViewRun: (executionId: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const savingIds = useMutationState({
+    filters: { mutationKey: MOVE_LOOP_TICKET_KEY, status: 'pending' },
+    select: mutation => (mutation.state.variables as MoveLoopTicketVars).id,
+  });
   const desktopStages = new Set(desktopStagesOf(loop));
   const all = data?.stages.flatMap(group => group.tickets) ?? [];
   // Same order the scheduler picks in (WorkItemModel.listReadyForLoop): priority, furthest stage, then oldest.
@@ -414,6 +416,7 @@ export default function LoopTicketBoard({
                 ticket={ticket}
                 loop={loop}
                 stages={loop.stages}
+                saving={savingIds.includes(ticket.id)}
                 desktop={!!ticket.stage && desktopStages.has(ticket.stage)}
                 runner={data?.runner}
                 runLimit={data?.runLimit}
