@@ -33,8 +33,10 @@ export function createStripeLookups(stripe: StripeLookupClient) {
       const charge = (await retrieve(paymentIntentId)).latest_charge;
       if (charge && typeof charge === 'object' && charge.refunded === true)
         return { kind: 'reversed', reason: 'refunded' };
-      const disputes = await stripe.disputes.list({ payment_intent: paymentIntentId, limit: 100 });
-      if (disputes.data.some(dispute => dispute.status === 'lost')) return { kind: 'reversed', reason: 'dispute_lost' };
+      // Async iteration auto-paginates past the first page.
+      for await (const dispute of stripe.disputes.list({ payment_intent: paymentIntentId, limit: 100 })) {
+        if (dispute.status === 'lost') return { kind: 'reversed', reason: 'dispute_lost' };
+      }
       return { kind: 'standing' };
     } catch (error) {
       return { kind: 'unknown', error: error instanceof Error ? error.message : String(error) };

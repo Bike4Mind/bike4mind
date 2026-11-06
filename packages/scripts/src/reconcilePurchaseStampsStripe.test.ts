@@ -28,7 +28,11 @@ const stubStripe = ({
     if (retrieveError) throw retrieveError;
     return { id: 'pi_1', customer: null, latest_charge: { refunded: false }, ...intent };
   });
-  const list = vi.fn(async () => ({ data: disputes }));
+  const list = vi.fn(() =>
+    (async function* () {
+      yield* disputes;
+    })()
+  );
   const stripe = { paymentIntents: { retrieve }, disputes: { list } };
   return { stripe: stripe as unknown as Parameters<typeof createStripeLookups>[0], retrieve, list };
 };
