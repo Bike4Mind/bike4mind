@@ -1,5 +1,6 @@
 import type {
   SignupRiskAutoApprovalItem,
+  SignupRiskReviewAdvisory,
   SignupRiskReviewDecision,
   SignupRiskReviewDecisionResult,
   SignupRiskReviewItem,
@@ -11,9 +12,10 @@ const ENDPOINT = '/api/admin/signup-risk-reviews';
 export const SIGNUP_RISK_REVIEWS_QUERY_KEY = ['admin-signup-risk-reviews'];
 
 /** A queue row as it arrives over JSON: the dates are ISO strings. */
-export type SignupRiskReviewRow = Omit<SignupRiskReviewItem, 'createdAt' | 'computedAt'> & {
+export type SignupRiskReviewRow = Omit<SignupRiskReviewItem, 'createdAt' | 'computedAt' | 'advisory'> & {
   createdAt: string;
   computedAt: string;
+  advisory: (Omit<SignupRiskReviewAdvisory, 'assessedAt'> & { assessedAt: string }) | null;
 };
 
 /** An automatic approval as it arrives over JSON. */
