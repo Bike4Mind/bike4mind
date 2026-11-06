@@ -15,7 +15,7 @@ const blockingMessage = (state: AdminErasureState): string | null => {
       : null;
   }
   if (state.state === 'selfDeletionPending') {
-    return `This user scheduled their own account deletion for ${formatUtc(new Date(state.scheduledFor))}.`;
+    return `A deletion this user requested is scheduled for ${formatUtc(new Date(state.scheduledFor))}. Cancel it first to erase now.`;
   }
   if (state.state === 'requested') {
     const started = state.purgeStartedAt ? ` Removal started ${formatUtc(new Date(state.purgeStartedAt))}.` : '';

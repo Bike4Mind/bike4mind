@@ -21,6 +21,7 @@ export type AdminErasureState =
   /** None pending. An erasure is refused while `ownedOrganizations` is non-empty. */
   | { state: 'none'; ownedOrganizations: Array<{ id: string; name: string }> }
   /** A self-serve deletion is pending; an admin erasure cannot be requested over it. */
+  /** A deletion the person asked for (self-serve or scheduled by support), still in its grace period. */
   | { state: 'selfDeletionPending'; scheduledFor: string }
   | { state: 'requested'; requestedAt: string; requestedBy: string | null; purgeStartedAt: string | null };
 
