@@ -83,10 +83,14 @@ export class BFLImageService extends AIImageService {
       return BFL_SAFETY_TOLERANCE.DEFAULT;
     }
     // BFL documents safety_tolerance as an integer; FLUX 3 rejects a fractional one with a 422.
-    const clamped = Math.min(Math.max(Math.round(value), BFL_SAFETY_TOLERANCE.MIN), BFL_SAFETY_TOLERANCE.MAX);
-    if (clamped !== value) {
+    const rounded = Math.round(value);
+    if (rounded !== value) {
+      Logger.globalInstance.debug(`[BFLImageService] safety_tolerance ${value} rounded to ${rounded}`);
+    }
+    const clamped = Math.min(Math.max(rounded, BFL_SAFETY_TOLERANCE.MIN), BFL_SAFETY_TOLERANCE.MAX);
+    if (clamped !== rounded) {
       Logger.globalInstance.warn(
-        `[BFLImageService] safety_tolerance ${value} clamped to ${clamped} (hard cap ${BFL_SAFETY_TOLERANCE.MAX})`
+        `[BFLImageService] safety_tolerance ${rounded} clamped to ${clamped} (hard cap ${BFL_SAFETY_TOLERANCE.MAX})`
       );
     }
     return clamped;

@@ -279,6 +279,14 @@ describe('BFLImageService - request body', () => {
     expect(postSpy.mock.calls[0][1]).toMatchObject({ safety_tolerance: 1 });
   });
 
+  it.each([ImageModels.FLUX_PRO_1_1, ImageModels.FLUX_2_PRO])(
+    'generate() rounds a fractional safety_tolerance for %s as well',
+    async model => {
+      await service.generate('a prompt', { model, safety_tolerance: 1.6 });
+      expect(postSpy.mock.calls[0][1]).toMatchObject({ safety_tolerance: 2 });
+    }
+  );
+
   it('generate() clamps negative safety_tolerance up to MIN', async () => {
     await service.generate('a friendly cat', { safety_tolerance: -3 });
 
