@@ -2,7 +2,7 @@
 
 /**
  * Clear the paid-standing stamp (User.lastCreditsPurchasedAt) from users no completed, unreversed
- * purchase or active subscription backs. Logic: ./reconcilePurchaseStamps.ts.
+ * purchase backs; like the webhook, an active subscription does not keep a stamp. Logic: ./reconcilePurchaseStamps.ts.
  *
  * Reads Stripe for each completed, unreversed purchase row with a payment intent: a full refund or
  * a lost dispute marks the row reversed. A row whose owner is missing is matched to a user through

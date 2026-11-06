@@ -3,17 +3,15 @@ import {
   CreditTransaction,
   User,
   creditTransactionRepository,
-  organizationRepository,
   userRepository,
 } from '@bike4mind/database';
-import { SubscriptionOwnerType } from '@bike4mind/server-utils/lib/subscriptions/types';
-import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
 
 /**
  * Clears User.lastCreditsPurchasedAt (the paid-standing stamp) from users nothing backs any more:
- * no completed, unreversed credit purchase and no active subscription of their own or through an
- * org seat. Purchases that Stripe shows fully refunded or lost to a dispute are marked reversed
- * first, the same way the webhook does (apps/client/server/billing/purchaseReversal.ts).
+ * no completed, unreversed credit purchase. Like the webhook, an active subscription does not keep a
+ * stamp: it confers standing on its own. Purchases that Stripe shows fully refunded or lost to a
+ * dispute are marked reversed first, the same way the webhook does
+ * (apps/client/server/billing/purchaseReversal.ts).
  *
  * Dry run writes nothing. A purchase row with no owner id that no Stripe customer resolves might back
  * a stamped user, so an apply run with any such row stops before its first write, and a dry run says
@@ -26,7 +24,7 @@ export type PurchaseClassification =
 export type UserVerdict = {
   userId: string;
   verdict: 'keep' | 'clear';
-  reason: 'purchase' | 'subscription' | 'error' | 'stamp_changed' | 'no_backing';
+  reason: 'purchase' | 'error' | 'stamp_changed' | 'no_backing';
 };
 
 export type OwnerlessPurchase = {
@@ -54,7 +52,6 @@ export type ReconcileOptions = {
   apply: boolean;
   classifyPurchase: (paymentIntentId: string) => Promise<PurchaseClassification>;
   resolveOwnerByPaymentIntent: (paymentIntentId: string) => Promise<string | null>;
-  hasActiveSubscription?: (userId: string) => Promise<boolean>;
   /** Pushes the client cache invalidation after a stamp is cleared; failures are ignored. */
   notify: (userId: string) => Promise<unknown>;
   log?: (message: string) => void;
@@ -71,24 +68,8 @@ const OBJECT_ID = /^[0-9a-f]{24}$/i;
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/**
- * Mirrors getActiveSubscriptionsForUser in apps/client/server/entitlements/activeSubscriptions.ts
- * in strict mode (own rows plus every plan-holder org's rows); keep the two in sync.
- */
-export async function hasActiveSubscriptionForUser(userId: string): Promise<boolean> {
-  const own = await subscriptionRepository.findActiveUserSubscriptions(userId);
-  if (own.length > 0) return true;
-  const orgIds = await organizationRepository.findPlanHolderOrgIds(userId);
-  const orgRows = await subscriptionRepository.findActiveSubscriptionsByOwners(
-    SubscriptionOwnerType.Organization,
-    orgIds
-  );
-  return orgRows.length > 0;
-}
-
 export async function reconcilePurchaseStamps(options: ReconcileOptions): Promise<ReconcileResult> {
   const { apply, classifyPurchase, resolveOwnerByPaymentIntent, notify } = options;
-  const hasActiveSubscription = options.hasActiveSubscription ?? hasActiveSubscriptionForUser;
   const log = options.log ?? console.log;
   const result: ReconcileResult = {
     apply,
@@ -217,12 +198,6 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
 
   async function decide(userId: string, stamp: Date): Promise<UserVerdict> {
     if (backed.has(userId)) return { userId, verdict: 'keep', reason: 'purchase' };
-    try {
-      if (await hasActiveSubscription(userId)) return { userId, verdict: 'keep', reason: 'subscription' };
-    } catch (error) {
-      recordError(userId, error);
-      return { userId, verdict: 'keep', reason: 'error' };
-    }
     if (!apply) return { userId, verdict: 'clear', reason: 'no_backing' };
 
     try {

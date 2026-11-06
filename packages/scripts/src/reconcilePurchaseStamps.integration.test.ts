@@ -9,7 +9,6 @@ import {
 } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../database/src/__test__/createMongoServer';
 import {
-  hasActiveSubscriptionForUser,
   reconcilePurchaseStamps,
   type PurchaseClassification,
   type ReconcileOptions,
@@ -18,7 +17,6 @@ import {
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 const STAMP = new Date('2026-10-01T00:00:00Z');
-const subscriptions = () => mongoose.connection.collection('subscriptions');
 
 describe('reconcilePurchaseStamps', () => {
   let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -61,15 +59,6 @@ describe('reconcilePurchaseStamps', () => {
       createdAt: STAMP,
       updatedAt: STAMP,
       ...extra,
-    });
-
-  const seedSubscription = (ownerType: 'User' | 'Organization', ownerId: string, status = 'active') =>
-    subscriptions().insertOne({
-      ownerType,
-      ownerId,
-      status,
-      source: 'stripe',
-      subscriptionId: `sub_${Math.random().toString(36).slice(2, 10)}`,
     });
 
   const stampOf = async (userId: string) => (await User.findById(userId).lean())?.lastCreditsPurchasedAt ?? null;
@@ -143,25 +132,20 @@ describe('reconcilePurchaseStamps', () => {
     expect(await stampOf(reversed)).toBeNull();
   });
 
-  it('keeps a stamp backed by an own or org-seat active subscription, but not a canceled one', async () => {
-    const own = await seedUser();
-    const seat = await seedUser();
-    const canceled = await seedUser();
-    await seedSubscription('User', own);
-    await seedSubscription('User', canceled, 'canceled');
-    const org = await Organization.create({
-      name: 'Acme',
-      userId: 'org-owner',
-      users: [{ userId: seat, permissions: ['read'] }],
-      groups: [],
+  it('clears an unbacked stamp even when the user has an active subscription', async () => {
+    const userId = await seedUser();
+    await mongoose.connection.collection('subscriptions').insertOne({
+      ownerType: 'User',
+      ownerId: userId,
+      status: 'active',
+      source: 'stripe',
+      subscriptionId: 'sub_active',
     });
-    await seedSubscription('Organization', org.id);
 
     const result = await run(true).promise;
 
-    expect(verdictOf(result, own)).toMatchObject({ verdict: 'keep', reason: 'subscription' });
-    expect(verdictOf(result, seat)).toMatchObject({ verdict: 'keep', reason: 'subscription' });
-    expect(await stampOf(canceled)).toBeNull();
+    expect(verdictOf(result, userId)).toMatchObject({ verdict: 'clear', reason: 'no_backing' });
+    expect(await stampOf(userId)).toBeNull();
   });
 
   it('marks fully refunded and lost-dispute purchases reversed and clears the stamps they backed', async () => {
@@ -314,35 +298,29 @@ describe('reconcilePurchaseStamps', () => {
     const late = await seedUser();
     const later = new Date(STAMP.getTime() + 60_000);
 
-    const result = await run(true, {
-      hasActiveSubscription: async userId => {
+    const realFind = creditTransactionRepository.findUnreversedPurchase.bind(creditTransactionRepository);
+    const spy = vi
+      .spyOn(creditTransactionRepository, 'findUnreversedPurchase')
+      .mockImplementation(async (userId, ownerType) => {
         if (userId === rewritten)
           await User.collection.updateOne(
             { _id: new mongoose.Types.ObjectId(userId) },
             { $set: { lastCreditsPurchasedAt: later } }
           );
         if (userId === late) await seedPurchase(late, 'pi_late');
-        return hasActiveSubscriptionForUser(userId);
-      },
-    }).promise;
+        return realFind(userId, ownerType);
+      });
+    let result: Awaited<ReturnType<typeof reconcilePurchaseStamps>>;
+    try {
+      result = await run(true).promise;
+    } finally {
+      spy.mockRestore();
+    }
 
     expect(verdictOf(result, rewritten)).toMatchObject({ verdict: 'keep', reason: 'stamp_changed' });
     expect(verdictOf(result, late)).toMatchObject({ verdict: 'keep', reason: 'purchase' });
     expect(await stampOf(rewritten)).toEqual(later);
     expect(await stampOf(late)).toEqual(STAMP);
-  });
-
-  it('keeps a stamp when the subscription read fails', async () => {
-    const userId = await seedUser();
-
-    const result = await run(true, {
-      hasActiveSubscription: async () => {
-        throw new Error('read failed');
-      },
-    }).promise;
-
-    expect(verdictOf(result, userId)).toMatchObject({ verdict: 'keep', reason: 'error' });
-    expect(await stampOf(userId)).toEqual(STAMP);
   });
 
   it('does not let an org-owned purchase back a user stamp', async () => {
