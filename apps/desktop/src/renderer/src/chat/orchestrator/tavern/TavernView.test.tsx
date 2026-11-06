@@ -302,6 +302,22 @@ describe('TavernView', () => {
       expect(sprites()).toHaveLength(1);
     });
 
+    it('is cut off at the counter top behind the bar, with no shadow on floor it does not stand on', async () => {
+      await renderTavern([], false, null, { parent: { status: 'done' } });
+      expect(innkeeper().hasAttribute('data-behind-counter')).toBe(true);
+      expect(el('orchestrator-tavern-innkeeper-art').style.clipPath).toMatch(
+        /^inset\(0(px)? 0(px)? [1-9][\d.]*% 0(px)?\)$/
+      );
+      const shadow = innkeeper().querySelector<HTMLElement>('[data-contact-shadow]');
+      expect(shadow).not.toBeNull();
+      expect(getComputedStyle(shadow!).opacity).toBe('0');
+    });
+
+    it('gives every agent a contact shadow under its feet', async () => {
+      await renderTavern([agentFixture('a', 'working'), agentFixture('b', 'done')]);
+      for (const sprite of sprites()) expect(sprite.querySelector('[data-contact-shadow]')).not.toBeNull();
+    });
+
     it("writes while posting quests, with the parent's activity in a bubble", async () => {
       await renderTavern([], false, null, {
         parent: { status: 'processing', activity: { kind: 'tool', tool: 'session_spawn', detail: '' } },
@@ -327,6 +343,11 @@ describe('TavernView', () => {
         const hearth = TAVERN_SLOTS.hearth[0];
         expect(Math.abs(parseFloat(innkeeper().style.left) - hearth.x)).toBeLessThanOrEqual(6);
         expect(innkeeper().style.top).toBe(`${hearth.y}%`);
+        // Out on the floor: whole, and grounded by its shadow.
+        expect(innkeeper().hasAttribute('data-behind-counter')).toBe(false);
+        expect(el('orchestrator-tavern-innkeeper-art').style.clipPath).toMatch(
+          /^inset\(0(px)?( 0(px)?)*\)$|^inset\(0(px)? 0(px)? 0% 0(px)?\)$/
+        );
 
         // The read returns at once; the walk still finishes before heading back.
         await renderTavern(agents, false, null, { parent: { status: 'processing' } });

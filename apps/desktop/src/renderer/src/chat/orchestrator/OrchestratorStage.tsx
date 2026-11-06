@@ -104,11 +104,15 @@ export function OrchestratorStage({
 
   useEffect(() => {
     if (!hasSelection) return;
+    // On document, which hears a key before window does, and claimed: the drawer is the topmost
+    // thing Escape can close, so the docked conversation beside it (ThreadDock) stays open.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !event.isComposing && !event.defaultPrevented) setSelectedId(null);
+      if (event.key !== 'Escape' || event.isComposing || event.defaultPrevented) return;
+      event.preventDefault();
+      setSelectedId(null);
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
   }, [hasSelection]);
 
   const rosterSummary = summarizeRoster(agents);

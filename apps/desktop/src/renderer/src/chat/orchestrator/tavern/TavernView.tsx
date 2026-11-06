@@ -14,6 +14,7 @@ import {
   LABEL_SPAN,
   characterFor,
   nameLabelLayout,
+  hiddenByCounter,
   placeAgents,
   poseFor,
   type NameLabel,
@@ -25,8 +26,9 @@ import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type InnkeeperPose } f
 const BUBBLE_MAX = 28;
 const NAME_MAX = 26;
 const WALK = '1.2s ease-in-out';
-// Of the scene height, so sprites scale with the window; sprite canvases are square.
-const SPRITE_HEIGHT = '15%';
+// Percent of the scene height, so sprites scale with the window; sprite canvases are square.
+const SPRITE_HEIGHT_PERCENT = 15;
+const SPRITE_HEIGHT = `${SPRITE_HEIGHT_PERCENT}%`;
 const NO_MOTION = '@media (prefers-reduced-motion: reduce)';
 // Pointing at, focusing or selecting an agent brings it forward and shows its label uncapped.
 const LIFTED = '&:hover, &:focus-visible, &[aria-pressed="true"]';
@@ -179,6 +181,33 @@ function Spark({ kind }: { kind: ToolKind }) {
   );
 }
 
+/**
+ * The soft patch of floor under a sprite's feet that keeps it from reading as pasted on. Rendered
+ * before the art so the sprite paints over it; the art's feet sit at the bottom centre of its box.
+ */
+function ContactShadow({ hidden = false }: { hidden?: boolean }) {
+  return (
+    <Box
+      aria-hidden
+      data-contact-shadow
+      sx={{
+        position: 'absolute',
+        left: '50%',
+        bottom: 0,
+        width: '48%',
+        height: '9%',
+        transform: 'translate(-50%, 40%)',
+        borderRadius: '50%',
+        background: 'radial-gradient(closest-side, rgba(14, 7, 2, 0.6), rgba(14, 7, 2, 0))',
+        opacity: hidden ? 0 : 1,
+        transition: `opacity ${WALK}`,
+        pointerEvents: 'none',
+        [NO_MOTION]: { transition: 'none' },
+      }}
+    />
+  );
+}
+
 function NameLabelPlate({ testId, label, text }: { testId: string; label: NameLabel; text: string }) {
   return (
     <Box
@@ -275,12 +304,15 @@ function Sprite({
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
       }}
     >
+      <ContactShadow />
       <Box
         component="img"
         src={characterSprite(characterFor(agent.id, persona?.epithet), pose)}
         alt=""
         draggable={false}
         sx={{
+          // Positioned so it paints over the ContactShadow before it.
+          position: 'relative',
           display: 'block',
           width: '100%',
           height: '100%',
@@ -339,11 +371,13 @@ function Innkeeper({
   label: NameLabel;
   onSelect?(): void;
 }) {
+  const hidden = hiddenByCounter(point, SPRITE_HEIGHT_PERCENT);
   return (
     <Box
       component="button"
       type="button"
       disabled={!onSelect}
+      data-behind-counter={hidden > 0 || undefined}
       tabIndex={onSelect ? undefined : -1}
       data-testid="orchestrator-tavern-innkeeper"
       data-pose={pose}
@@ -367,12 +401,24 @@ function Innkeeper({
         [LIFTED]: { zIndex: LIFTED_Z, '& [data-name-label]': { display: 'block', maxWidth: 'none' } },
       }}
     >
+      <ContactShadow hidden={hidden > 0} />
       <Box
         component="img"
         src={INNKEEPER_ART[pose]}
         alt=""
         draggable={false}
-        sx={{ display: 'block', width: '100%', height: '100%', imageRendering: 'pixelated' }}
+        data-testid="orchestrator-tavern-innkeeper-art"
+        // Animated with the walk, so stepping out from behind the bar reveals the legs as they clear it.
+        style={{ clipPath: `inset(0 0 ${hidden}% 0)` }}
+        sx={{
+          position: 'relative',
+          display: 'block',
+          width: '100%',
+          height: '100%',
+          imageRendering: 'pixelated',
+          transition: `clip-path ${WALK}`,
+          [NO_MOTION]: { transition: 'none' },
+        }}
       />
       {bubble && (
         <Bubble testId="orchestrator-tavern-innkeeper-bubble" text={truncate(bubble, BUBBLE_MAX)} urgent={urgent} />
@@ -438,14 +484,18 @@ export function TavernView({
   const innkeeperPoint = visitedPoint && !reducedMotion && arrived ? standBeside(visitedPoint) : INNKEEPER_POINT;
 
   return (
+    // The scene is a framed picture on the page surface rather than a dark band edge to edge, so the
+    // composer below sits on the same surface as the margin around it instead of cutting the scene off.
     <Box
+      data-testid="orchestrator-tavern-frame"
       sx={{
         flex: 1,
         minHeight: 0,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: '#140c06',
+        p: 1.5,
+        bgcolor: 'background.body',
         containerType: 'size',
         overflow: 'hidden',
       }}
@@ -458,6 +508,11 @@ export function TavernView({
           aspectRatio: '16 / 9',
           containerType: 'size',
           overflow: 'hidden',
+          borderRadius: 'lg',
+          bgcolor: '#140c06',
+          boxShadow: 'md',
+          outline: '1px solid',
+          outlineColor: 'divider',
         }}
       >
         <Box

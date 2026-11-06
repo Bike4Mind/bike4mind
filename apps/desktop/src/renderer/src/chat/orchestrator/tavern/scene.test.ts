@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentState, AgentView } from '../roster';
 import {
+  BAR_COUNTER,
   DOOR_POINT,
   INNKEEPER_POINT,
   LABEL_SPAN,
@@ -8,6 +9,7 @@ import {
   NAME_LABEL_MIN_WIDTH,
   TAVERN_SLOTS,
   characterFor,
+  hiddenByCounter,
   nameLabelLayout,
   placeAgents,
   poseFor,
@@ -227,6 +229,25 @@ describe('nameLabelLayout', () => {
     const layout = nameLabelLayout(points);
     expect(overlapping(points, layout)).toEqual([]);
     expect(layout.get('innkeeper')?.shown).toBe(true);
+  });
+
+  it('hides the Innkeeper below the counter top, waist up, so its feet never float over the front panel', () => {
+    const hidden = hiddenByCounter(INNKEEPER_POINT, 15);
+    // The counter edge lands at the waist: a third to a half of the box is cut away.
+    expect(hidden).toBeGreaterThan(25);
+    expect(hidden).toBeLessThan(50);
+    expect(INNKEEPER_POINT.y - (15 * hidden) / 100).toBeCloseTo(BAR_COUNTER.top);
+  });
+
+  it('keeps every seat and the door whole, standing on visible floor', () => {
+    for (const point of [...allSeats().values()]) expect(hiddenByCounter(point, 15)).toBe(0);
+  });
+
+  it('cuts nothing beside the counter and never more than the whole sprite', () => {
+    expect(hiddenByCounter({ x: BAR_COUNTER.left - 1, y: 32 }, 15)).toBe(0);
+    expect(hiddenByCounter({ x: BAR_COUNTER.right + 1, y: 32 }, 15)).toBe(0);
+    expect(hiddenByCounter({ x: 60, y: BAR_COUNTER.top - 1 }, 15)).toBe(0);
+    expect(hiddenByCounter({ x: 60, y: BAR_COUNTER.front - 0.1 }, 2)).toBe(100);
   });
 
   it('hides a label squeezed below the minimum rather than drawing an empty pill', () => {

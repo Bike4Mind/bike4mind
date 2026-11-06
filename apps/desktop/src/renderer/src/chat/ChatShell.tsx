@@ -691,6 +691,12 @@ export function ChatShell({
   }, [introPhase, introEntry]);
   const orchestratorView = introPhase === 'off' ? orchestratorPrefs.view : 'tavern';
   const threadHost = useRef<HTMLDivElement | null>(null);
+  const dockToggle = useRef<HTMLButtonElement | null>(null);
+  // Focus lands on the header toggle, the way back in, rather than on a dock that just hid.
+  const closeDock = useCallback(() => {
+    setDockOpen(false);
+    dockToggle.current?.focus();
+  }, [setDockOpen]);
   const parentReport = useMemo(
     () => (conversation.session?.id === activeId ? latestQuestReport(conversation.messages) : undefined),
     [conversation.session?.id, activeId, conversation.messages]
@@ -1615,6 +1621,7 @@ export function ChatShell({
                         color="neutral"
                         aria-pressed={orchestratorPrefs.dockOpen}
                         aria-label={orchestratorPrefs.dockOpen ? 'Hide the conversation' : 'Show the conversation'}
+                        ref={dockToggle}
                         onClick={() => setDockOpen(!orchestratorPrefs.dockOpen)}
                         data-testid="orchestrator-dock-toggle-btn"
                       >
@@ -1624,7 +1631,7 @@ export function ChatShell({
                   }
                 />
               )}
-              <ThreadDock mode={threadDockMode} hostRef={threadHost}>
+              <ThreadDock mode={threadDockMode} hostRef={threadHost} onClose={closeDock}>
                 {thread}
               </ThreadDock>
             </Box>
