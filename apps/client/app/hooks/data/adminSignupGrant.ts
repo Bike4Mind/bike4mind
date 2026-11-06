@@ -54,6 +54,9 @@ export const useAdminSignupGrantAction = (userId: string) => {
         queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId, 'credit-summary'] }),
         queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId, 'credit-ledger'] }),
         queryClient.invalidateQueries({ queryKey: ['users', userId] }),
+        // The Invite Center pending list/summary and the held queue tab show this account too.
+        queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: ['held-signup-grants'] }),
       ]),
   });
 };

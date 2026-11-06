@@ -273,10 +273,11 @@ export const signupGrantPendingRepository = {
   async heldQueue(): Promise<SignupGrantPendingQueue> {
     const filter = STATUS_PREMATCH.held;
     const [held, oldest] = await Promise.all([
-      User.countDocuments(filter),
+      User.countDocuments(filter).maxTimeMS(QUERY_MAX_TIME_MS),
       User.findOne({ ...filter, signupGrantHeldAt: { $type: 'date' } })
         .sort({ signupGrantHeldAt: 1 })
         .select('signupGrantHeldAt')
+        .maxTimeMS(QUERY_MAX_TIME_MS)
         .lean(),
     ]);
     return { held, oldestHeldAt: oldest?.signupGrantHeldAt ?? null };
