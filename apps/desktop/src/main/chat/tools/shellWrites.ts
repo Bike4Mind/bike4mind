@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { lstat, readFile, readlink, realpath, stat } from 'node:fs/promises';
@@ -294,6 +295,14 @@ function tarExtraction(
 /** Archive members an extraction lists before the scan reads them as paths instead of a whole tree. */
 const LISTED_MEMBERS = 10_000;
 
+/** The granted roots of the scan running now, for the git calls that do not take them. */
+const scanRoots = new AsyncLocalStorage<readonly string[]>();
+
+/** Runs `scan` with `roots` as the granted roots git is found outside of (see pathOutside). */
+export function withGrantedRoots<T>(roots: readonly string[], scan: () => Promise<T>): Promise<T> {
+  return scanRoots.run(roots, scan);
+}
+
 /**
  * PATH with only its absolute entries outside every granted root, physically as well as by name, so neither a
  * program the scan starts nor a filter that program starts (tar's `gzip -d`) is one a granted folder holds.
@@ -314,9 +323,16 @@ async function pathOutside(roots: readonly string[]): Promise<string> {
 }
 
 /** Runs a listing program from its own folder with `path` as its only PATH, so it starts nothing from the project. */
-function runListing(file: string, args: readonly string[], path: string, cwd = dirname(file)): Promise<string | null> {
+function runListing(
+  file: string,
+  args: readonly string[],
+  path: string,
+  cwd = dirname(file),
+  extra: NodeJS.ProcessEnv = {}
+): Promise<string | null> {
   const env: NodeJS.ProcessEnv = {};
   for (const key of Object.keys(process.env)) if (key.toUpperCase() !== 'PATH') env[key] = process.env[key];
+  Object.assign(env, extra);
   env.PATH = path;
   return new Promise(done => {
     execFile(file, args, { cwd, env, timeout: 2000, maxBuffer: GIT_OUTPUT_BYTES, windowsHide: true }, (error, stdout) =>
@@ -355,7 +371,7 @@ async function listArchive(
   return runListing(file, [...args, ...((await gnu) ? ['--force-local'] : []), `--file=${absolute}`], path);
 }
 
-/** find tests that only select by name, path or type, with the value each takes; `-print` is dropped. */
+/** find tests that only select by name, path or type, with the value each takes; a last `-print` is dropped. */
 const FIND_TESTS = /^-(name|iname|path|ipath|wholename|iwholename|type)$/;
 /** Tests that only narrow what find prints, so without `-o`, `!` or a group dropping one prints more, never other. */
 const FIND_NARROWS = /^-(empty|readable|writable|executable|nouser|nogroup|xdev|mount|depth)$/;
@@ -366,7 +382,7 @@ const FIND_LISTED = 1000;
 /**
  * What a POSIX `find` over `folders` (from `cwd`) prints with the same tests and `select` ANDed on, which the
  * system find lists so a large tree costs no walk here; null when a test is not one it reads, find fails, or it
- * lists too many.
+ * lists too many. With `-print` last, the rest selects all it prints and more, as with `A -o B -print`.
  */
 async function findSelected(
   cwd: string,
@@ -390,7 +406,7 @@ async function findSelected(
     } else if (anded && FIND_NARROWS.test(test)) continue;
     else if (anded && FIND_NARROWS_VALUED.test(test) && value !== undefined) index++;
     else if (['!', '-not', '(', ')', '-o', '-or', '-a', '-and', '-prune'].includes(test)) kept.push(test);
-    else if (test !== '-print' && test !== '-print0') return null;
+    else if (!((test === '-print' || test === '-print0') && index === tests.length - 1)) return null;
   }
   if (process.platform === 'win32') return null;
   const path = await pathOutside(roots);
@@ -400,10 +416,48 @@ async function findSelected(
     folder.startsWith('-') || folder.startsWith('(') || folder === '!' ? `./${folder}` : folder
   );
   const expression = kept.length > 0 ? ['(', ...kept, ')'] : [];
-  const listed = await runListing(file, ['-P', ...starts, ...globals, ...expression, ...select, '-print0'], path, cwd);
+  // In the C locale `[[:space:]]` is the bytes xargs splits at.
+  const listed = await runListing(file, ['-P', ...starts, ...globals, ...expression, ...select, '-print0'], path, cwd, {
+    LC_ALL: 'C',
+  });
   const found = listed?.split('\0').filter(entry => entry !== '') ?? null;
   return found === null || found.length > FIND_LISTED ? null : found.map(entry => resolve(cwd, entry));
 }
+
+/** The folders `find` over `folders` prints with `tests` (see findSelected). */
+export function findFolders(
+  cwd: string,
+  folders: readonly string[],
+  tests: readonly string[],
+  roots: readonly string[]
+): Promise<string[] | null> {
+  return findSelected(cwd, folders, tests, roots, ['-type', 'd']);
+}
+
+/**
+ * The paths `find` over `folders` prints with `tests` (see findSelected), less `select`, that xargs would not pass
+ * whole: those holding a blank, a quote or a backslash, or a part starting with `-`.
+ */
+export function findOddPaths(
+  cwd: string,
+  folders: readonly string[],
+  tests: readonly string[],
+  roots: readonly string[],
+  select: readonly string[] = []
+): Promise<string[] | null> {
+  const odd = ['*[[:space:]]*', "*'*", '*"*', '*\\\\*', '*/-*'].flatMap((pattern, index) => [
+    ...(index > 0 ? ['-o'] : []),
+    '-path',
+    pattern,
+  ]);
+  return findSelected(cwd, folders, tests, roots, [...select, '(', ...odd, ')']);
+}
+
+/**
+ * Whether a path git prints without `-z` may reach xargs's program as other words: git quotes a byte outside
+ * printable ASCII, xargs splits at blanks and quotes, and a part starting with `-` may read as an option.
+ */
+export const oddForXargs = (path: string): boolean => /[^\x21-\x7e]|['"\\]|(^|\/)-/.test(path);
 
 /** The links `find` over `folders` prints with `tests` (see findSelected). */
 export function findLinks(
@@ -629,6 +683,15 @@ async function gitRun(directory: string, args: readonly string[]): Promise<{ cod
     )
   );
   if (!command) return null;
+  if (!inherited) {
+    // Bare `git` would resolve through this process's PATH from the project folder.
+    const path = await pathOutside(scanRoots.getStore() ?? []);
+    const file = await findOnPath('git', path);
+    if (file === null) return null;
+    for (const name of Object.keys(env)) if (name.toUpperCase() === 'PATH') delete env[name];
+    env.PATH = path;
+    command.file = file;
+  }
   return new Promise(done => {
     execFile(
       command.file,
@@ -1159,9 +1222,9 @@ const WORK_TREE_LOOKS = 50_000;
 /**
  * The links in the work tree at `top` at or on the way to each of `paths` (given from the top), by an lstat of each
  * folder and entry, so a tracked path a link has replaced is seen; null past WORK_TREE_LOOKS or when one cannot be
- * looked at.
+ * looked at, or once `stopped`.
  */
-async function workTreeLinks(top: string, paths: readonly string[]): Promise<string[] | null> {
+async function workTreeLinks(top: string, paths: readonly string[], stopped: () => boolean): Promise<string[] | null> {
   const places = new Set<string>();
   for (const path of paths) {
     const parts = path.split('/');
@@ -1171,6 +1234,7 @@ async function workTreeLinks(top: string, paths: readonly string[]): Promise<str
   const ordered = [...places];
   const links: string[] = [];
   for (let at = 0; at < ordered.length; at += 256) {
+    if (stopped()) return null;
     const batch = ordered.slice(at, at + 256);
     const linked = await Promise.all(
       batch.map(place =>
@@ -1205,6 +1269,8 @@ export interface IndexListed {
   settings: { path: string; changed: boolean }[];
   /** Links at or on the way to a listed path in the work tree. */
   links: string[];
+  /** Whether a listed path is one xargs may not pass whole (oddForXargs). */
+  odd: boolean;
 }
 
 /**
@@ -1212,7 +1278,11 @@ export interface IndexListed {
  * git command that looks at the work tree; null when git fails, the index records a link there, or there is too
  * much to look at.
  */
-export async function indexListed(from: string, pathspecs: readonly string[]): Promise<IndexListed | null> {
+export async function indexListed(
+  from: string,
+  pathspecs: readonly string[],
+  stopped: () => boolean
+): Promise<IndexListed | null> {
   const top = await gitToplevel(from);
   const listed =
     top === null ? null : await gitQuery(from, ['ls-files', '-s', '-z', '--full-name', '--', ...pathspecs]);
@@ -1225,11 +1295,9 @@ export async function indexListed(from: string, pathspecs: readonly string[]): P
     if (settings.length >= COMPARED_ENTRIES) return null;
     settings.push({ path: `${top}/${path}`, changed: !(await sameAsIndex(`${top}/${path}`, mode, id, crlf)) });
   }
-  const links = await workTreeLinks(
-    top,
-    entries.map(({ path }) => path)
-  );
-  return links === null ? null : { settings, links };
+  const paths = entries.map(({ path }) => path);
+  const links = await workTreeLinks(top, paths, stopped);
+  return links === null ? null : { settings, links, odd: paths.some(oddForXargs) };
 }
 
 /**
@@ -1242,8 +1310,9 @@ export async function diffListed(
   top: string,
   targets: readonly string[],
   worktree: boolean,
-  pathspecs: readonly string[]
-): Promise<{ settings: string[]; links: string[] } | null> {
+  pathspecs: readonly string[],
+  stopped: () => boolean
+): Promise<{ settings: string[]; links: string[]; odd: boolean } | null> {
   const listed = await gitQuery(top, ['ls-files', '-s', '-z', '--full-name', '--', ...pathspecs]);
   const entries = listed === null ? null : indexEntries(listed);
   if (entries === null) return null;
@@ -1283,12 +1352,13 @@ export async function diffListed(
       if (mode === '120000') links.add(`${top}/${path}`);
     }
   }
-  const found = await workTreeLinks(top, [...entries.map(({ path }) => path), ...printed]);
+  const found = await workTreeLinks(top, [...entries.map(({ path }) => path), ...printed], stopped);
   if (found === null) return null;
   for (const link of found) links.add(link);
   return {
     settings: [...printed].filter(isSettingsPath).map(path => `${top}/${path}`),
     links: [...links],
+    odd: [...printed].some(oddForXargs),
   };
 }
 
