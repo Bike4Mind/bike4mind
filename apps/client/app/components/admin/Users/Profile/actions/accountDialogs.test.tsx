@@ -359,12 +359,40 @@ describe('account dialogs', () => {
     it('limits the date to today and blocks a future one', () => {
       renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
 
-      expect(screen.getByTestId(`${id}-received-input`)).toHaveAttribute('max', new Date().toISOString().slice(0, 10));
+      expect(screen.getByTestId(`${id}-received-input`)).toHaveAttribute(
+        'max',
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)
+      );
       pickReason(id);
       typeEmail();
       pickDate('2999-01-01');
       expect(confirmButton(id)).toBeDisabled();
       expect(hint(id)).toHaveTextContent('cannot be in the future');
+    });
+
+    it.each([
+      ['just after local midnight', new Date(2026, 10, 6, 0, 30), '2026-11-06', '2026-11-07'],
+      ['just before local midnight', new Date(2026, 10, 6, 23, 30), '2026-11-06', '2026-11-07'],
+    ])('uses the admin local day as today, %s', (_name, clock, sameDay, nextDay) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(clock);
+      try {
+        renderDialog((user, close) => <ScheduleDeletionDialog user={user} onClose={close} />);
+        expect(screen.getByTestId(`${id}-received-input`)).toHaveAttribute('max', sameDay);
+        pickReason(id);
+        typeEmail();
+        pickDate(sameDay);
+        expect(confirmButton(id)).toBeEnabled();
+        pickDate(nextDay);
+        expect(confirmButton(id)).toBeDisabled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('shows the current account status as the preview start', () => {
+      renderDialog((user, close) => <ScheduleDeletionDialog user={{ ...user, isBanned: true }} onClose={close} />);
+      expect(screen.getByTestId(`${id}-preview`)).not.toHaveTextContent('Active');
     });
 
     it('warns, without blocking, when the purge lands over 30 days after receipt', () => {

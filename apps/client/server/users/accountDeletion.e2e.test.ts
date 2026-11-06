@@ -373,8 +373,29 @@ describe('support-scheduled deletion', () => {
     });
     expect(h.audit).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ userId, actorUserId: 'admin-1', event: 'account_deletion_requested' })
+      expect.objectContaining({
+        userId,
+        actorUserId: 'admin-1',
+        event: 'account_deletion_requested',
+        metadata: expect.objectContaining({ source: 'support' }),
+      })
     );
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId, actorUserId: 'admin-1', event: 'session_revoked' })
+    );
+  });
+
+  it('refuses a support schedule for an organization owner with support wording', async () => {
+    const userId = await seedAccount();
+    await Organization.create({ name: 'Acme', userId, personal: false });
+
+    await expect(
+      scheduleAccountDeletion(requestFor('admin-1'), { userId, source: 'support', requestedAt: received })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: 'Transfer or delete the organizations this user owns before scheduling deletion.',
+    });
   });
 
   it('stamps nothing when the in-transaction admin audit write fails', async () => {
@@ -424,6 +445,10 @@ describe('support-scheduled deletion', () => {
       expect.objectContaining({ source: 'support', requestedAt: received })
     );
     expect(h.sendCancelledEmail).toHaveBeenCalledTimes(1);
+    expect(h.audit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId, actorUserId: 'admin-1', event: 'account_deletion_cancelled' })
+    );
   });
 
   it('answers 404 when nothing is pending', async () => {

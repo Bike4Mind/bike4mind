@@ -452,6 +452,15 @@ describe('UserProfileView', () => {
       fireEvent.click(await screen.findByTestId('user-profile-menu-cancelDeletion-item'));
       expect(screen.getByTestId('cancel-deletion-dialog')).toBeInTheDocument();
     });
+
+    it('disables the menu cancel entry once the purge has started', async () => {
+      setup(buildProfile({ deletion: deletion({ purgeStartedAt: new Date('2026-11-20T01:00:00Z') }) }));
+      fireEvent.click(screen.getByTestId('user-profile-more-btn'));
+      const item = await screen.findByTestId('user-profile-menu-cancelDeletion-item');
+      expect(item).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.click(item);
+      expect(screen.queryByTestId('cancel-deletion-dialog')).not.toBeInTheDocument();
+    });
   });
 
   describe('status banner', () => {

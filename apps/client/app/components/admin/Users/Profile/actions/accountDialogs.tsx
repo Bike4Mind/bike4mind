@@ -379,12 +379,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // The GDPR month runs from receipt; past this the purge lands later than it, which support should note.
 const DELETION_RECEIPT_WINDOW_DAYS = 30;
 
+/** The admin's calendar day as YYYY-MM-DD: the date input works in local time, toISOString does not. */
+const localDay = (date: Date): string =>
+  [date.getFullYear(), date.getMonth() + 1, date.getDate()].map(n => String(n).padStart(2, '0')).join('-');
+
 /** For a user who cannot sign in: same lockdown, 14-day grace and purge as self-serve deletion. */
 export const ScheduleDeletionDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
   const post = useAdminUserPost(user.id, 'Could not schedule the deletion');
   const [receivedAt, setReceivedAt] = useState('');
   const [now] = useState(() => Date.now());
-  const today = new Date(now).toISOString().slice(0, 10);
+  const today = localDay(new Date(now));
   const purgeOn = new Date(now + ACCOUNT_DELETION_GRACE_DAYS * DAY_MS);
   const late = !!receivedAt && Date.parse(receivedAt) + DELETION_RECEIPT_WINDOW_DAYS * DAY_MS < purgeOn.getTime();
   const dateInvalid = !!receivedAt && receivedAt > today;
@@ -433,7 +437,7 @@ export const ScheduleDeletionDialog: React.FC<ProfileDialogProps> = ({ user, onC
         </Typography>
       )}
       <ChangePreview
-        before="Active"
+        before={accountStatus(user).label}
         after={`Deletion on ${formatDeletionDay(purgeOn)}`}
         data-testid="schedule-deletion-dialog-preview"
       />

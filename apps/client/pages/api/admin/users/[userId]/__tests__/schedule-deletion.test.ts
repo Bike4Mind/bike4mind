@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
   core: vi.fn(),
   deny: vi.fn(),
+  auditCallsAtCommit: -1,
 }));
 
 // adminApi stays real: the permission guard it installs is part of what is under test.
@@ -68,14 +69,33 @@ beforeEach(() => {
   h.core.mockImplementation(async (_req: unknown, input: { recordInTransaction: (d: unknown) => Promise<void> }) => {
     const deletion = { requestedAt: new Date(RECEIVED), scheduledFor, source: 'support' };
     await input.recordInTransaction(deletion);
+    // The real core commits after the callback, so the audit must already be written by here.
+    h.auditCallsAtCommit = h.audit.mock.calls.length;
     return { deletion, subscriptions: { canceled: [{}, {}] } };
   });
 });
 
 describe('POST /api/admin/users/[userId]/schedule-deletion', () => {
-  it('is gated on users:delete', () => {
+  it('is gated on users:delete', async () => {
     expect(h.options).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['POST'] });
-    expect(h.guard).toBeTruthy();
+    const res = await call(
+      { receivedAt: RECEIVED, reason: REASON },
+      { isAdmin: false, adminPermissions: ['users:delete'] }
+    );
+    expect(res._getStatusCode()).toBe(202);
+    await expect(
+      call({ receivedAt: RECEIVED, reason: REASON }, { isAdmin: false, adminPermissions: ['users:write'] })
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('writes the audit inside the core callback, before the core commits', async () => {
+    await call({ receivedAt: RECEIVED, reason: REASON });
+    expect(h.auditCallsAtCommit).toBe(1);
+  });
+
+  it('fails the request when the audit write fails', async () => {
+    h.audit.mockRejectedValue(new Error('audit down'));
+    await expect(call({ receivedAt: RECEIVED, reason: REASON })).rejects.toThrow('audit down');
   });
 
   it('schedules a support deletion, audits it in the same call, and answers 202', async () => {
@@ -112,9 +132,23 @@ describe('POST /api/admin/users/[userId]/schedule-deletion', () => {
     ['a missing date', { reason: REASON }],
     ['an unparsable date', { receivedAt: 'last week', reason: REASON }],
     ['a future date', { receivedAt: '2999-01-01', reason: REASON }],
+    ['a bare number', { receivedAt: '1', reason: REASON }],
+    ['a month-day string', { receivedAt: 'Nov 5', reason: REASON }],
+    ['an impossible calendar date', { receivedAt: '2026-02-30', reason: REASON }],
+    ['a date two days ahead', { receivedAt: new Date(Date.now() + 2 * 86_400_000).toISOString(), reason: REASON }],
   ])('rejects %s with no change', async (_name, body) => {
     await expect(call(body)).rejects.toMatchObject({ statusCode: 400 });
     expect(h.core).not.toHaveBeenCalled();
+  });
+
+  it('accepts a datetime 23 hours ahead (timezone slack)', async () => {
+    const res = await call({ receivedAt: new Date(Date.now() + 23 * 3_600_000).toISOString(), reason: REASON });
+    expect(res._getStatusCode()).toBe(202);
+  });
+
+  it('denies a self target before validating the body', async () => {
+    await expect(call({}, { id: 'admin-1', isAdmin: true }, 'admin-1')).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.deny).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a self target with a denied audit entry', async () => {
@@ -123,7 +157,14 @@ describe('POST /api/admin/users/[userId]/schedule-deletion', () => {
     ).rejects.toMatchObject({
       statusCode: 403,
     });
-    expect(h.deny).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'user.deletion.denied' }));
+    expect(h.deny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.deletion.denied',
+        attempted: 'user.deletion.scheduled',
+        target: expect.objectContaining({ kind: 'user', id: 'admin-1' }),
+      })
+    );
     expect(h.core).not.toHaveBeenCalled();
   });
 

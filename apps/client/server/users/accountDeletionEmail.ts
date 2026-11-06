@@ -1,9 +1,11 @@
 import {
   ACCOUNT_DELETION_RETAINED_RECORDS,
+  isPlaceholderValue,
   requireEnv,
   type AccountDeletionRetainedRecord,
   type AccountDeletionSource,
 } from '@bike4mind/common';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { buildEmailLogoImg, escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 import { PURGED_USER_DATA } from '@server/services/purgeDeletedUserData';
 import { EmailEvents } from '@server/utils/eventBus';
@@ -41,22 +43,31 @@ const layout = (heading: string, content: string): string => {
 export function accountDeletionScheduledEmailBody(
   scheduledFor: Date,
   signInUrl: string,
-  { source }: { source?: AccountDeletionSource } = {}
+  { source, supportEmail }: { source?: AccountDeletionSource; supportEmail?: string } = {}
 ): string {
   const date = escapeHtml(formatDeletionDate(scheduledFor));
-  // Support schedules for users who may be unable to sign in, so the cancel route cannot be the sign-in page.
-  if (source === 'support') {
+  // Support and admin schedules reach users who may be unable to sign in, so the cancel route cannot be the
+  // sign-in page. The sender is a no-reply address, so only a configured support address is offered.
+  if (source && source !== 'self') {
+    const support = supportEmail ? escapeHtml(supportEmail) : '';
+    const cancelRoute = support
+      ? `Changed your mind? Email <a href="mailto:${support}">${support}</a> before cleanup starts and we will cancel the
+      deletion.`
+      : 'Changed your mind? Contact support before cleanup starts and we will cancel the deletion.';
+    const intro =
+      source === 'support'
+        ? 'As you asked by email, your account is scheduled for deletion.'
+        : 'Your account is scheduled for deletion.';
     return layout(
       'Your account is scheduled for deletion',
       `
-      <p>As you asked by email, your account is scheduled for deletion. Your cancellation period ends on
+      <p>${intro} Your cancellation period ends on
       <strong>${date}</strong>. Permanent deletion begins after that date. You have been
       signed out everywhere, your API keys and connected apps have been revoked, and your subscriptions have been
       canceled.</p>
-      <p>Changed your mind? Reply to this email or contact support before cleanup starts and we will cancel the
-      deletion.</p>
+      <p>${cancelRoute}</p>
       <div class="warning">
-        <strong>If you did not ask for this</strong>, contact support right away.
+        <strong>If you did not ask for this</strong>, ${support ? `email <a href="mailto:${support}">${support}</a>` : 'contact support'} right away.
       </div>`
     );
   }
@@ -83,7 +94,10 @@ export async function sendAccountDeletionScheduledEmail(
   await EmailEvents.Send.publish({
     to,
     subject: `Your account deletion cancellation period ends on ${formatDeletionDate(scheduledFor)}`,
-    body: accountDeletionScheduledEmailBody(scheduledFor, signInUrl, opts),
+    body: accountDeletionScheduledEmailBody(scheduledFor, signInUrl, {
+      ...opts,
+      supportEmail: isPlaceholderValue(Config.SUPPORT_EMAIL) ? undefined : Config.SUPPORT_EMAIL,
+    }),
   });
 }
 

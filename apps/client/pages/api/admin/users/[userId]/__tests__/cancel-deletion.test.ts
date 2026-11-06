@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   audit: vi.fn(),
   core: vi.fn(),
   deny: vi.fn(),
+  auditCallsAtCommit: -1,
 }));
 
 // adminApi stays real: the permission guard it installs is part of what is under test.
@@ -66,6 +67,7 @@ beforeEach(() => {
   h.findById.mockResolvedValue({ id: 'user-1', username: 'u', email: 'a@customer.example' });
   h.core.mockImplementation(async (_req: unknown, input: { recordInTransaction: (d: unknown) => Promise<void> }) => {
     await input.recordInTransaction(cleared);
+    h.auditCallsAtCommit = h.audit.mock.calls.length;
   });
 });
 
@@ -86,6 +88,48 @@ describe('POST /api/admin/users/[userId]/cancel-deletion', () => {
       })
     );
     expect(res._getStatusCode()).toBe(204);
+  });
+
+  it('is gated on users:delete', async () => {
+    const res = await call({ reason: REASON }, { isAdmin: false, adminPermissions: ['users:delete'] });
+    expect(res._getStatusCode()).toBe(204);
+    await expect(call({ reason: REASON }, { isAdmin: false, adminPermissions: ['users:write'] })).rejects.toMatchObject(
+      {
+        statusCode: 403,
+      }
+    );
+  });
+
+  it('refuses a delegate acting on an account with admin access', async () => {
+    h.findById.mockResolvedValue({ id: 'user-1', username: 'boss', isAdmin: true });
+    await expect(
+      call({ reason: REASON }, { isAdmin: false, adminPermissions: ['users:delete'] })
+    ).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(h.core).not.toHaveBeenCalled();
+  });
+
+  it('writes the audit inside the core callback, before the core commits', async () => {
+    await call({ reason: REASON });
+    expect(h.auditCallsAtCommit).toBe(1);
+  });
+
+  it('fails the request when the audit write fails', async () => {
+    h.audit.mockRejectedValue(new Error('audit down'));
+    await expect(call({ reason: REASON })).rejects.toThrow('audit down');
+  });
+
+  it('denies a self target with an empty body, not a 400', async () => {
+    await expect(call({}, { id: 'admin-1', isAdmin: true }, 'admin-1')).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.deny).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.deletion.denied',
+        attempted: 'user.deletion.cancelled',
+        target: expect.objectContaining({ kind: 'user', id: 'admin-1' }),
+      })
+    );
   });
 
   it('requires a reason', async () => {

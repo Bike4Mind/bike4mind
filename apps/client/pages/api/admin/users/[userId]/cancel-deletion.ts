@@ -18,8 +18,6 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:del
   const userId = req.query.userId;
   if (typeof userId !== 'string' || !userId) throw new BadRequestError('Invalid user ID');
 
-  const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
-
   const user = await userRepository.findById(userId);
   if (isSelfOrImpersonator(req.user, userId)) {
     await denySelfAdminAction(req, {
@@ -29,6 +27,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:del
     });
   }
   if (!user) throw new NotFoundError('User not found');
+  const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
   assertCanActOnAdminTarget(req.user, user, 'cancel deletion for');
 
   await clearAccountDeletion(req, {
@@ -37,7 +36,7 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:del
     recordInTransaction: async cleared => {
       await recordAdminActionFromRequest(req, {
         action: 'user.deletion.cancelled',
-        target: { kind: 'user', id: user.id, displayName: user.email ?? user.username },
+        target: { kind: 'user', id: user.id, displayName: user.name || user.username || user.email || user.id },
         summary: 'cancelled the scheduled account deletion',
         reason,
         changes: [

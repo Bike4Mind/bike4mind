@@ -4,6 +4,8 @@ import { escapeHtml } from '@bike4mind/server-utils/utils/mailer/emailHelpers';
 
 const publish = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish } } }));
+const config = vi.hoisted(() => ({ SUPPORT_EMAIL: 'not-configured' }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: config }));
 
 import { PURGED_USER_DATA } from '@server/services/purgeDeletedUserData';
 import {
@@ -17,6 +19,7 @@ import {
 
 beforeEach(() => {
   publish.mockReset();
+  config.SUPPORT_EMAIL = 'not-configured';
   vi.stubEnv('APP_URL', 'https://app.example.test');
 });
 
@@ -34,7 +37,8 @@ describe('deletion-scheduled email', () => {
     expect(message.body).toContain('href="https://app.example.test/login"');
   });
 
-  it('tells a support-scheduled user to contact support, not to sign in', async () => {
+  it('offers the configured support address as the cancel route, not the sign-in page', async () => {
+    config.SUPPORT_EMAIL = 'help@example.test';
     await sendAccountDeletionScheduledEmail('dev@example.test', new Date('2026-11-18T12:00:00Z'), {
       source: 'support',
     });
@@ -42,8 +46,29 @@ describe('deletion-scheduled email', () => {
     const [message] = publish.mock.calls[0];
     expect(message.body).toContain('<strong>November 18, 2026 (UTC)</strong>');
     expect(message.body).toContain('As you asked by email');
-    expect(message.body).toContain('Reply to this email or contact support');
+    expect(message.body).toContain('href="mailto:help@example.test"');
+    expect(message.body).not.toContain('Reply to this email');
+    expect(message.body).not.toContain('/login');
+  });
+
+  it('promises no reply path when no support address is configured', async () => {
+    await sendAccountDeletionScheduledEmail('dev@example.test', new Date('2026-11-18T12:00:00Z'), {
+      source: 'support',
+    });
+
+    const [message] = publish.mock.calls[0];
+    expect(message.body).toContain('Contact support before cleanup starts');
+    expect(message.body).not.toContain('Reply to this email');
     expect(message.body).not.toContain('href=');
+  });
+
+  it('gives an admin-scheduled user the no-sign-in copy without "as you asked"', () => {
+    const body = accountDeletionScheduledEmailBody(new Date('2026-11-18T12:00:00Z'), 'https://x.test/login', {
+      source: 'admin',
+    });
+    expect(body).toContain('Contact support before cleanup starts');
+    expect(body).not.toContain('As you asked');
+    expect(body).not.toContain('https://x.test/login');
   });
 
   it('keeps the self-serve body when the source is self', () => {
