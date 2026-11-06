@@ -1,6 +1,7 @@
 export {
   credentialHeaders,
   desktopUserDataDirs,
+  desktopUserDataFile,
   hydrate,
   isStored,
   localModelId,
