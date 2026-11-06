@@ -123,7 +123,9 @@ describe('PendingBulkDialog', () => {
     expect(realCall[1]).toMatchObject({ userIds: [A, B], reason: expect.any(String) });
     expect(onDone).toHaveBeenCalledWith(expect.objectContaining({ failedIds: [B], applied: 1 }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'signup-grants'] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'users', A, 'signup-grant-pending'] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['admin', 'users', A] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['users', A] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['held-signup-grants'] });
 
     await mocks.showUndoToast.mock.calls[0][0].onUndo();
     expect(mocks.post).toHaveBeenLastCalledWith('/api/admin/signup-grants/bulk-unblock', {

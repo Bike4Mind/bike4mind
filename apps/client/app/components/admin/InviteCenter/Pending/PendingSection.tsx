@@ -34,6 +34,7 @@ const UNAVAILABLE = 'Unavailable';
 const STATUS_LABEL: Readonly<Record<(typeof PENDING_STATUSES)[number], string>> = {
   held: 'Held',
   dripping: 'Dripping',
+  locked: 'Locked',
   blocked: 'Blocked',
 };
 const REASON_LABEL: Readonly<Record<(typeof PENDING_HELD_REASONS)[number], string>> = {
@@ -116,13 +117,16 @@ const StateChips = ({ row }: { row: AdminSignupGrantPendingRow }) => (
       <StatusChip tone="warn" dot label={row.held?.reason ? `Held: ${REASON_LABEL[row.held.reason]}` : 'Held'} />
     )}
     {row.status === 'dripping' && <StatusChip tone="info" dot label="Dripping" />}
+    {row.status === 'locked' && (
+      <StatusChip tone="neutral" dot label={row.stage === 'pending_email' ? 'Awaiting email' : 'Locked'} />
+    )}
   </Stack>
 );
 
 export function PendingSection() {
   const setActiveTab = useAdminModal(state => state.setActiveTab);
   const navigate = useNavigate();
-  const [listState, updateList] = useAdminListUrlState(PENDING_SEARCH_KEYS);
+  const [listState, setListState] = useAdminListUrlState(PENDING_SEARCH_KEYS);
   const filters: PendingListFilters = {
     status: pick(PENDING_STATUSES, listState.filters.status),
     heldReason: pick(PENDING_HELD_REASONS, listState.filters.heldReason),
@@ -131,9 +135,14 @@ export function PendingSection() {
   };
   const list = useAdminSignupGrantPendingList(filters);
   const rows = list.data?.pages.flatMap(page => page.data) ?? [];
-  const filtered = Object.values(listState.filters).some(Boolean);
+  const filtered = Boolean(filters.status || filters.heldReason || filters.source);
   const canRelease = list.data?.pages[0]?.viewer.canRelease === true;
   const [selection, setSelection] = useState<AdminSelection>(NO_SELECTION);
+  // A selection made under one filter must not ride into a bulk action under another.
+  const updateList: typeof setListState = (...args) => {
+    setSelection(NO_SELECTION);
+    return setListState(...args);
+  };
   const [dialog, setDialog] = useState<PendingBulkKind | null>(null);
   const [failed, setFailed] = useState<readonly string[]>([]);
   // 'allMatching' is never offered: both bulk routes take explicit ids only.
@@ -224,7 +233,7 @@ export function PendingSection() {
   ) : (
     <EmptyState
       title="No pending signup grants"
-      description="Pending lists accounts that still have signup credits to come: a held grant waiting on the daily pool or a risk review, a drip still paying out, or a grant blocked by an admin."
+      description="Pending lists accounts that still have signup credits to come: a held grant waiting on the daily pool or a risk review, a drip still paying out, a grant locked until the email is verified or an admin releases it, or a grant blocked by an admin."
       action={null}
     />
   );

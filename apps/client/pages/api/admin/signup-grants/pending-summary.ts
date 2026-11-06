@@ -3,7 +3,6 @@ import {
   adminSettingsRepository,
   signupGrantBudgetRepository,
   signupGrantPendingRepository,
-  signupGrantReleaseRepository,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
 import { adminApi } from '@server/middlewares/adminApi';
@@ -20,11 +19,8 @@ async function readTrickle() {
 }
 
 async function readQueue() {
-  const [held, oldest] = await Promise.all([
-    signupGrantReleaseRepository.countHeld(),
-    signupGrantPendingRepository.oldestHeldAt(),
-  ]);
-  return { held, oldestHeldAt: oldest ? oldest.toISOString() : null };
+  const { held, oldestHeldAt } = await signupGrantPendingRepository.heldQueue();
+  return { held, oldestHeldAt: oldestHeldAt ? oldestHeldAt.toISOString() : null };
 }
 
 /**

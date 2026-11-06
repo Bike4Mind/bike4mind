@@ -9,7 +9,7 @@ import {
 } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
 import { User } from './UserModel';
-import { signupGrantPendingRepository } from './signupGrantPending';
+import { buildListPendingPipeline, signupGrantPendingRepository } from './signupGrantPending';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -152,6 +152,24 @@ describe('signupGrantPendingRepository.listPending', () => {
     expect(defaults).not.toContain(idOf('heldNoGrant'));
     expect(defaults).toContain(idOf('dripping'));
     expect((await listAll({ status: 'dripping' })).every(r => r.status === 'dripping')).toBe(true);
+    expect(await ids({ status: 'locked' })).toEqual([idOf('forfeited'), idOf('pendingEmail')].sort());
+    expect(await ids({ status: 'held', heldReason: 'budget_exhausted' })).toEqual([idOf('heldNoGrant')]);
+    expect(await ids({ status: 'dripping', source: 'package' })).toEqual([idOf('package')]);
+  });
+
+  it('labels a row dripping only while its drip can still pay, and locked otherwise', async () => {
+    const statusOf = new Map((await listAll()).map(r => [r.id, r.status]));
+    for (const s of seed) {
+      const g = s.signupGrant as SignupGrant | undefined;
+      if (!statusOf.has(String(s._id)) || s.key.startsWith('held') || s.key === 'blocked') continue;
+      expect({ key: s.key, status: statusOf.get(String(s._id)) }).toEqual({
+        key: s.key,
+        status: g && signupGrantDripOpen(g) ? 'dripping' : 'locked',
+      });
+    }
+    expect(statusOf.get(idOf('forfeited'))).toBe('locked');
+    expect(statusOf.get(idOf('pendingEmail'))).toBe('locked');
+    expect(statusOf.get(idOf('blocked'))).toBe('blocked');
   });
 
   it('sorts oldest-first by id, or by remaining descending with id as the tiebreak', async () => {
@@ -190,15 +208,32 @@ describe('signupGrantPendingRepository.listPending', () => {
     expect(page.next).toBeNull();
   });
 
-  it('serves the candidate scan from the signup grant stage index', async () => {
-    const plan = await User.find({ 'signupGrant.stage': { $type: 'string' } }).explain('queryPlanner');
-    expect(JSON.stringify(plan)).toContain('user_signupGrant_stage');
+  it.each([
+    { sort: 'oldest' as const },
+    { sort: 'remaining' as const },
+    { sort: 'remaining' as const, cursor: { id: idOf('dripping'), remaining: 200 } },
+  ])('serves the shipped list aggregate from both partial indexes (%o)', async input => {
+    const pipeline = buildListPendingPipeline({ dripCap: DRIP_CAP, limit: 25, ...input });
+    const explain = await User.aggregate(pipeline).explain('queryPlanner');
+    // Unsharded explain puts the pushed-down $match plan under the first stage's $cursor, or top level.
+    const planner = JSON.stringify(
+      (explain as { stages?: Array<{ $cursor?: { queryPlanner?: unknown } }>; queryPlanner?: unknown }).stages?.[0]
+        ?.$cursor?.queryPlanner ?? (explain as { queryPlanner?: unknown }).queryPlanner
+    );
+    const winning = JSON.stringify(JSON.parse(planner).winningPlan);
+    expect(winning).toContain('user_signupGrant_stage');
+    expect(winning).toContain('user_signupGrantHeldReason');
+    expect(winning).not.toContain('COLLSCAN');
   });
 });
 
 describe('signupGrantPendingRepository.summarizePending', () => {
-  it('totals remaining and drip remaining over the listed population', async () => {
-    const rows = await listAll();
+  it('totals remaining and drip remaining over listed rows that can still pay, leaving out blocked and forfeited', async () => {
+    const unpaid = new Set([idOf('blocked'), idOf('forfeited')]);
+    const all = await listAll();
+    const rows = all.filter(r => !unpaid.has(r.id));
+    expect(all.length - rows.length).toBe(2);
+    expect(all.filter(r => unpaid.has(r.id)).every(r => r.remaining > 0)).toBe(true);
     const summary = await signupGrantPendingRepository.summarizePending({ dripCap: DRIP_CAP });
     expect(summary).toEqual({
       accountsWithRemaining: rows.filter(r => r.remaining > 0).length,
@@ -208,8 +243,11 @@ describe('signupGrantPendingRepository.summarizePending', () => {
     expect(summary.accountsWithRemaining).toBeGreaterThan(0);
   });
 
-  it('returns the oldest held tranche time among tagged budget holds', async () => {
-    expect((await signupGrantPendingRepository.oldestHeldAt())?.toISOString()).toBe(heldAt.toISOString());
-    expect(await signupGrantPendingRepository.oldestHeldAt('budget_exhausted')).not.toBeNull();
+  it('counts the held queue as the rows the list labels held, of either reason', async () => {
+    const held = (await listAll({ status: 'held' })).map(r => r.id);
+    const queue = await signupGrantPendingRepository.heldQueue();
+    expect(queue.held).toBe(held.length);
+    expect(held).toEqual(expect.arrayContaining([idOf('heldNoGrant'), idOf('heldRisk')]));
+    expect(queue.oldestHeldAt?.toISOString()).toBe(heldAt.toISOString());
   });
 });

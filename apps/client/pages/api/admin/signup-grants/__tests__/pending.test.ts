@@ -82,6 +82,7 @@ const seed: Array<Record<string, unknown> & { key: string; _id: mongoose.Types.O
   },
   { key: 'package', _id: oid(7), grantPackageId: 'pkg-1', signupGrant: grant({ creditsReleased: 250 }) },
   { key: 'noGrant', _id: oid(8) },
+  { key: 'pendingEmail', _id: oid(9), signupGrant: grant({ stage: 'pending_email', creditsReleased: 0 }) },
 ];
 const idOf = (key: string) => String(seed.find(s => s.key === key)!._id);
 
@@ -126,10 +127,10 @@ afterAll(async () => {
 });
 
 describe('GET /api/admin/signup-grants/pending', () => {
-  it('lists held, dripping, blocked, invited and package accounts with the profile card remaining math', async () => {
+  it('lists held, dripping, blocked, invited, package and locked accounts with the profile card remaining math', async () => {
     const { data, nextCursor, viewer } = await call();
     expect(data.map(row => row.id)).toEqual(
-      ['heldBudget', 'heldRisk', 'dripping', 'blocked', 'invited', 'package'].map(idOf)
+      ['heldBudget', 'heldRisk', 'dripping', 'blocked', 'invited', 'package', 'pendingEmail'].map(idOf)
     );
     for (const row of data) {
       const seeded = seed.find(s => String(s._id) === row.id)!;
@@ -155,6 +156,8 @@ describe('GET /api/admin/signup-grants/pending', () => {
     expect(await ids({ heldReason: 'risk_review' })).toEqual([idOf('heldRisk')]);
     expect(await ids({ source: 'package' })).toEqual([idOf('package')]);
     expect(await ids({ source: 'default' })).not.toContain(idOf('package'));
+    expect(await ids({ status: 'locked' })).toEqual([idOf('pendingEmail')]);
+    expect(await ids({ status: 'dripping' })).toEqual(['dripping', 'invited', 'package'].map(idOf));
   });
 
   it('sorts by remaining descending when asked', async () => {
@@ -170,7 +173,14 @@ describe('GET /api/admin/signup-grants/pending', () => {
     const firstIds = first.data.map(row => row.id);
     expect(second.data.length).toBeGreaterThan(0);
     for (const row of second.data) expect(firstIds).not.toContain(row.id);
-    expect([...firstIds, ...second.data.map(row => row.id)].sort()).toEqual((await ids({ sort })).sort());
+    const seen = [...firstIds, ...second.data.map(row => row.id)];
+    for (let cursor = second.nextCursor; cursor;) {
+      const page = await call({ sort, limit: '3', cursor });
+      seen.push(...page.data.map(row => row.id));
+      cursor = page.nextCursor;
+    }
+    expect(new Set(seen).size).toBe(seen.length);
+    expect([...seen].sort()).toEqual((await ids({ sort })).sort());
   });
 
   it('returns the empty shape when nothing matches', async () => {

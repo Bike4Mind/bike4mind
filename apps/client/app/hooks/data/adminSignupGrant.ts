@@ -59,7 +59,7 @@ export const useAdminSignupGrantAction = (userId: string) => {
 };
 
 export type PendingListFilters = {
-  status?: 'held' | 'dripping' | 'blocked';
+  status?: 'held' | 'dripping' | 'locked' | 'blocked';
   heldReason?: 'budget_exhausted' | 'risk_review';
   source?: 'default' | 'package';
   sort: 'oldest' | 'remaining';

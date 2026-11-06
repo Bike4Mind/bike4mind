@@ -16,7 +16,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { respond } from '@server/utils/respond';
 
 const querySchema = z.object({
-  status: z.enum(['held', 'dripping', 'blocked']).optional(),
+  status: z.enum(['held', 'dripping', 'locked', 'blocked']).optional(),
   heldReason: z.enum(['budget_exhausted', 'risk_review']).optional(),
   source: z.enum(['default', 'package']).optional(),
   sort: z.enum(['oldest', 'remaining']).default('oldest'),

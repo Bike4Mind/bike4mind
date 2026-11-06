@@ -75,7 +75,8 @@ export const adminSignupGrantPendingRowSchema = z.object({
   createdAt: z.string().nullable(),
   source: z.enum(['default', 'package']).nullable(),
   stage: z.enum(['pending_email', 'signup', 'unlocked']).nullable(),
-  status: z.enum(['held', 'dripping', 'blocked']),
+  /** `locked`: credits remain but nothing pays them without an unlock or an admin. */
+  status: z.enum(['held', 'dripping', 'locked', 'blocked']),
   held: z
     .object({
       reason: z.enum(['budget_exhausted', 'risk_review']).nullable(),

@@ -9,7 +9,7 @@ import {
   signupGrantRemaining,
   type SignupGrant,
 } from '@bike4mind/common';
-import { adminSettingsRepository, signupGrantReleaseRepository, User } from '@bike4mind/database';
+import { adminSettingsRepository, signupGrantPendingRepository, User } from '@bike4mind/database';
 import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
@@ -63,7 +63,18 @@ const seed = [
   { _id: oid(2), signupGrantHeldReason: 'budget_exhausted', signupGrantHeldAt: at, tags: [PENDING_FREE_CREDITS_TAG] },
   { _id: oid(3), signupGrant: grant({ dripCredits: 50, creditsReleased: 150 }) },
   { _id: oid(4), signupGrant: grant({ stage: 'unlocked', unlockedBy: 'verification', creditsReleased: 300 }) },
+  {
+    _id: oid(5),
+    signupGrantHeldReason: 'risk_review',
+    signupGrantHeldAt: later,
+    tags: [PENDING_FREE_CREDITS_TAG],
+    signupGrant: grant(),
+  },
+  // Listed, but pay nothing without an admin, so they stay out of the exposure totals.
+  { _id: oid(6), signupGrant: grant({ blocked: { at } }) },
+  { _id: oid(7), signupGrant: grant({ unlockForfeited: { cause: 'payment_refunded', at } }) },
 ];
+const unpaid = new Set([String(oid(6)), String(oid(7))]);
 
 const call = async () => {
   const { req, res } = createMocks({ method: 'GET' });
@@ -90,10 +101,13 @@ describe('GET /api/admin/signup-grants/pending-summary', () => {
     expect(summary.trickle).toMatchObject({ spentToday: 0, limit: 0, missing: true });
   });
 
-  it('totals exposure over accounts with credits to come and reports the oldest held tranche', async () => {
+  it('totals exposure over accounts that can still be paid and reports the held queue across both reasons', async () => {
     await User.collection.insertMany(seed.map((doc, n) => ({ ...doc, email: `u${n}@example.com`, username: `u${n}` })));
     const { dripCap } = await resolveSignupGrantSchedule(adminSettingsRepository);
-    const grants = seed.map(doc => doc.signupGrant).filter(Boolean) as SignupGrant[];
+    const grants = seed
+      .filter(doc => doc.signupGrant && !unpaid.has(String(doc._id)))
+      .map(doc => doc.signupGrant) as SignupGrant[];
+    expect(grants.length).toBe(seed.filter(doc => doc.signupGrant).length - 2);
     const remaining = grants.map(g => signupGrantRemaining(g, dripCap));
 
     const summary = await call();
@@ -102,11 +116,12 @@ describe('GET /api/admin/signup-grants/pending-summary', () => {
     expect(summary.exposure.totalDripRemaining).toBe(
       grants.reduce((sum, g) => sum + (signupGrantDripOpen(g) ? signupGrantDripRemaining(g, dripCap) : 0), 0)
     );
-    expect(summary.queue).toEqual({ held: 2, oldestHeldAt: at.toISOString() });
+    // Both hold reasons count, matching the list's Held filter.
+    expect(summary.queue).toEqual({ held: 3, oldestHeldAt: at.toISOString() });
   });
 
   it('nulls only the tile whose read failed', async () => {
-    const spy = vi.spyOn(signupGrantReleaseRepository, 'countHeld').mockRejectedValueOnce(new Error('read failed'));
+    const spy = vi.spyOn(signupGrantPendingRepository, 'heldQueue').mockRejectedValueOnce(new Error('read failed'));
     const summary = await call();
     expect(summary.queue).toBeNull();
     expect(summary.exposure).not.toBeNull();

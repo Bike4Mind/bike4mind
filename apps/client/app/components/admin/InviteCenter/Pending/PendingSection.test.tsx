@@ -116,6 +116,15 @@ describe('PendingSection', () => {
     expect(screen.getByTestId(`pending-row-state-${'b'.repeat(24)}`)).toHaveTextContent('Blocked');
   });
 
+  it('labels a locked row by why it is locked', () => {
+    const awaiting = row({ id: 'c'.repeat(24), status: 'locked', stage: 'pending_email', held: null });
+    const forfeited = row({ id: 'd'.repeat(24), status: 'locked', stage: 'signup', held: null });
+    mocks.list = listOf([awaiting, forfeited]);
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(screen.getByTestId(`pending-row-state-${'c'.repeat(24)}`)).toHaveTextContent('Awaiting email');
+    expect(screen.getByTestId(`pending-row-state-${'d'.repeat(24)}`)).toHaveTextContent(/^Locked$/);
+  });
+
   it('opens the account on its Credits tab', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     fireEvent.click(screen.getByTestId(`pending-row-link-${'a'.repeat(24)}`));
@@ -159,6 +168,23 @@ describe('PendingSection', () => {
     render(<PendingSection />, { wrapper: Wrapper });
     expect(screen.getByText('No pending signup grants')).toBeInTheDocument();
     expect(screen.queryByTestId('pending-clear-filters-btn')).not.toBeInTheDocument();
+  });
+
+  it('treats a sort alone as no filter when nothing is pending', () => {
+    mocks.list = listOf([]);
+    mocks.search = { pendingSort: 'remaining' };
+    render(<PendingSection />, { wrapper: Wrapper });
+    expect(screen.getByText('No pending signup grants')).toBeInTheDocument();
+    expect(screen.queryByTestId('pending-clear-filters-btn')).not.toBeInTheDocument();
+  });
+
+  it('clears the selection when a filter changes', () => {
+    render(<PendingSection />, { wrapper: Wrapper });
+    selectFirstRow();
+    expect(screen.getByTestId('admin-bulk-action-bar')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('admin-filter-heldReason'));
+    fireEvent.click(screen.getByTestId('admin-filter-heldReason-risk_review'));
+    expect(screen.queryByTestId('admin-bulk-action-bar')).not.toBeInTheDocument();
   });
 
   it('offers to clear filters when filters match nothing', () => {

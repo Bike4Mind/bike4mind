@@ -74,9 +74,13 @@ export const bulkOutcome = (kind: PendingBulkKind, data: ReleaseResult | BulkRes
 const invalidatePending = (queryClient: QueryClient, userIds: readonly string[]) =>
   Promise.all([
     queryClient.invalidateQueries({ queryKey: PENDING_GRANTS_QUERY_KEY }),
-    ...userIds.map(userId =>
-      queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId, 'signup-grant-pending'] })
-    ),
+    queryClient.invalidateQueries({ queryKey: ['held-signup-grants'] }),
+    // Same per-account keys as useAdminSignupGrantAction: the ['admin','users',id] prefix covers the pending card,
+    // credit summary and credit ledger.
+    ...userIds.flatMap(userId => [
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users', userId] }),
+      queryClient.invalidateQueries({ queryKey: ['users', userId] }),
+    ]),
   ]);
 
 /** The dry run behind the dialog's count. Never cached: the count must describe the accounts as they are now. */
