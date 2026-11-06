@@ -354,6 +354,23 @@ describe('shadowDetectionRepository', () => {
       expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 1 });
     });
 
+    it('grades a detection confirmed abuse again when the account is suspended after a reinstatement', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await suspend();
+      await reinstate();
+
+      expect((await suspend()).map(item => item.id)).toEqual([id]);
+      expect(await stored(id)).toMatchObject({ verdict: 'confirmed_abuse', revision: 3 });
+    });
+
+    it('does not repeat confirmed abuse on a second suspension', async () => {
+      const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
+      await suspend();
+
+      expect(await suspend()).toEqual([]);
+      expect((await stored(id)).verdicts).toHaveLength(1);
+    });
+
     it('does not repeat legitimate human use on a second reinstatement', async () => {
       const id = await shadowDetectionRepository.record(detection({ userIds: [userId] }));
       await reinstate();

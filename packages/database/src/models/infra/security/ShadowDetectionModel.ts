@@ -484,14 +484,15 @@ class ShadowDetectionRepository {
   }
 
   /**
-   * An admin suspended the account for abuse: every ungraded detection naming it is graded
-   * confirmed_abuse. Graded records are left alone. Returns the records it graded.
+   * An admin suspended the account for abuse: every detection naming it that no reviewer graded
+   * is graded confirmed_abuse, including one an earlier reinstatement set to legitimate_human. Returns the records it graded.
    */
   async gradeForSuspension(input: AccountStatusVerdictInput): Promise<ShadowDetectionItem[]> {
-    const candidates = await ShadowDetectionModel.find({ userIds: input.userId, verdict: null }).lean<
+    const open = { verdict: { $ne: 'confirmed_abuse' }, $nor: [HAS_REVIEW_VERDICT] };
+    const candidates = await ShadowDetectionModel.find({ userIds: input.userId, ...open }).lean<
       LeanShadowDetection[]
     >();
-    return this.appendStatusVerdicts(candidates, { verdict: null }, 'confirmed_abuse', 'suspension', input);
+    return this.appendStatusVerdicts(candidates, open, 'confirmed_abuse', 'suspension', input);
   }
 
   /**
