@@ -3,9 +3,17 @@ import { useEffect, useRef, type MutableRefObject } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
-import { frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
+import { explodeModel, frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
 import { addGlowLights, enableShadows, ModelComposer, ModelStage, type StageLighting } from './modelStage';
-import { orbitPosition, recordCanvas, TURNTABLE_SIZE, turntablePose } from './turntable';
+import {
+  recordCanvas,
+  swing,
+  TURNTABLE_SIZE,
+  turntableCamera,
+  turntablePose,
+  turntableScript,
+  turntableShots,
+} from './turntable';
 
 /** What the pane can ask of the viewport beyond its props. */
 export type ModelViewportHandle = {
@@ -36,6 +44,8 @@ type Props = {
   frameKey: string | null;
   /** Joint angles in degrees by part name; posed on the viewer's own copy, so exports stay at rest. */
   pose: Record<string, number>;
+  /** Pulls the parts apart (animated); a rebuild keeps the view exploded. */
+  exploded: boolean;
   /** The part to highlight, by name. */
   picked: string | null;
   /** A click (not an orbit drag) on a part, or on empty space (null). */
@@ -51,6 +61,8 @@ const CLICK_SLOP = 4;
 const PICK_GLOW = new THREE.Color('#2f7cf6');
 /** Quiet time, in ms, after the last orbit or slider frame before the AO pass is drawn again. */
 const IDLE_RENDER_DELAY = 150;
+/** How long the parts take to pull apart or come back together, in ms. */
+const EXPLODE_MS = 700;
 
 /** Tints the picked part's (cloned, per-view) material so it reads as selected; clears the rest. */
 function highlightPart(root: THREE.Object3D, name: string | null): void {
@@ -92,6 +104,7 @@ export function ModelViewport({
   dimmed,
   frameKey,
   pose,
+  exploded,
   picked,
   onPick,
   clip,
@@ -104,6 +117,8 @@ export function ModelViewport({
   const shownCopy = useRef<THREE.Group | null>(null);
   const poseRef = useRef(pose);
   poseRef.current = pose;
+  // How far apart the parts are now (0..1); the explode animation moves it towards `exploded`.
+  const explodeAmount = useRef(0);
   const pickedRef = useRef(picked);
   pickedRef.current = picked;
   const onPickRef = useRef(onPick);
@@ -230,26 +245,33 @@ export function ModelViewport({
       composer.setSize(width, height, 1);
       canvas.style.objectFit = 'contain';
       camera.aspect = width / height;
-      // Re-fitted to the landscape frame from the angle the user was looking at it.
-      const direction = startPosition.clone().sub(startTarget);
-      const target = frameCamera(camera, shown, [direction.x, direction.y, direction.z]);
-      const orbitStart = camera.position.clone();
+      // Framed for the landscape clip from the angle the user was looking at it.
+      const shots = turntableShots(camera, shown, startPosition.clone().sub(startTarget), startPose);
       try {
         return await recordCanvas(canvas, progress => {
-          camera.position.copy(orbitPosition(orbitStart, target, progress));
-          camera.lookAt(target);
-          if (shownCopy.current && joints.length)
-            poseJoints(shownCopy.current, turntablePose(joints, startPose, progress));
+          const shot = turntableCamera(shots, progress);
+          camera.position.copy(shot.position);
+          camera.lookAt(shot.target);
+          const script = turntableScript(progress);
+          // The current copy, since a rebuild mid-clip swaps it.
+          const current = shownCopy.current;
+          if (current && joints.length) poseJoints(current, turntablePose(joints, startPose, script.joints));
+          if (current) explodeModel(current, script.explode);
+          composer.setFocus(shot.distance);
           composer.render(true);
           onProgress?.(progress);
         });
       } finally {
         recording = false;
+        composer.setFocus(null);
         camera.position.copy(startPosition);
         camera.near = near;
         camera.far = far;
         camera.lookAt(startTarget);
-        if (shownCopy.current) poseJoints(shownCopy.current, poseRef.current);
+        if (shownCopy.current) {
+          poseJoints(shownCopy.current, poseRef.current);
+          explodeModel(shownCopy.current, explodeAmount.current);
+        }
         canvas.style.objectFit = '';
         renderer.setPixelRatio(window.devicePixelRatio);
         controls.enabled = true;
@@ -315,6 +337,7 @@ export function ModelViewport({
     if (object) {
       const shown = object.clone(true);
       poseJoints(shown, poseRef.current);
+      explodeModel(shown, explodeAmount.current);
       shownCopy.current = shown;
       shown.traverse(child => {
         if (child instanceof THREE.Mesh) {
@@ -346,6 +369,43 @@ export function ModelViewport({
     poseJoints(shownCopy.current, pose);
     viewer.current.render();
   }, [pose]);
+
+  useEffect(() => {
+    const target = exploded ? 1 : 0;
+    const from = explodeAmount.current;
+    const current = viewer.current;
+    const shown = shownCopy.current;
+    if (from === target || !current || !shown) {
+      explodeAmount.current = target;
+      return;
+    }
+    const { camera, controls } = current;
+    // The camera glides to fit the parts where they end up, from the angle the user is looking at.
+    const fromPosition = camera.position.clone();
+    const fromTarget = controls.target.clone();
+    const direction = fromPosition.clone().sub(fromTarget);
+    explodeModel(shown, target);
+    const toTarget = frameCamera(camera, shown, [direction.x, direction.y, direction.z]);
+    const toPosition = camera.position.clone();
+    camera.position.copy(fromPosition);
+    explodeModel(shown, from);
+    const started = performance.now();
+    // Timed by the share of the travel still left, so reversing midway is not slower.
+    const duration = EXPLODE_MS * Math.abs(target - from);
+    let frame = requestAnimationFrame(function step(now) {
+      const t = Math.min(1, (now - started) / duration);
+      const eased = swing(t / 2);
+      explodeAmount.current = from + (target - from) * eased;
+      const copy = shownCopy.current;
+      if (copy) explodeModel(copy, explodeAmount.current);
+      camera.position.lerpVectors(fromPosition, toPosition, eased);
+      controls.target.lerpVectors(fromTarget, toTarget, eased);
+      controls.update();
+      current.render();
+      if (t < 1) frame = requestAnimationFrame(step);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [exploded]);
 
   useEffect(() => {
     if (!viewer.current || !shownCopy.current) return;

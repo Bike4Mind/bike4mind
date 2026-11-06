@@ -20,6 +20,7 @@ import {
   useCallback,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -33,6 +34,7 @@ import {
   CloseIcon,
   CubeIcon,
   DownloadIcon,
+  ExplodeIcon,
   FolderIcon,
   FrameIcon,
   GridIcon,
@@ -44,6 +46,7 @@ import {
 import type { ModelEngine } from './model3d/useModelEngine';
 import { ModelClips } from './model3d/ModelClips';
 import { ModelJoints } from './model3d/ModelJoints';
+import { canExplode } from './model3d/modelScene';
 import { ModelViewport, type ModelViewportHandle } from './model3d/ModelViewport';
 import {
   clampModelPaneWidth,
@@ -89,7 +92,7 @@ export const MODEL_VIEW_PRESETS: readonly { view: ModelView | null; label: strin
 /** One arrow-key orbit step, in radians. */
 const ORBIT_STEP = Math.PI / 12;
 const ZOOM_STEP = 0.85;
-const KEY_HELP = 'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, N night.';
+const KEY_HELP = 'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, E explode, N night.';
 
 const pulse = keyframes`
   0%, 100% { opacity: 1; }
@@ -176,9 +179,11 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
   }, [conversation, pane]);
 
   const { state, status, error, object, summary, params, unsaved, joints, jointAngles, clips } = engine;
+  const explodable = useMemo(() => object !== null && canExplode(object), [object]);
   const [wireframe, setWireframe] = useState(false);
   const [grid, setGrid] = useState(false);
   const [night, setNight] = useState(false);
+  const [exploded, setExploded] = useState(false);
   // The recorded share of the clip (0..1) while a turntable records, else null.
   const [recordProgress, setRecordProgress] = useState<number | null>(null);
   const recording = recordProgress !== null;
@@ -249,6 +254,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
       w: () => setWireframe(value => !value),
       g: () => setGrid(value => !value),
       n: () => setNight(value => !value),
+      e: () => explodable && setExploded(value => !value),
     };
     const action = preset
       ? () => handle?.setView(preset.view)
@@ -382,6 +388,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               dimmed={status === 'error'}
               frameKey={state.path}
               pose={jointAngles}
+              exploded={exploded && explodable}
               picked={pickedName}
               onPick={pickPart}
               clip={playingClip}
@@ -436,6 +443,18 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
                 >
                   <GridIcon />
                 </ViewToggle>
+                {explodable && (
+                  <ViewToggle
+                    label="Exploded view"
+                    shortcut="E"
+                    pressed={exploded}
+                    disabled={recording}
+                    onToggle={() => setExploded(value => !value)}
+                    testId="model-pane-explode-btn"
+                  >
+                    <ExplodeIcon />
+                  </ViewToggle>
+                )}
                 <ViewToggle
                   label="Night lighting"
                   shortcut="N"

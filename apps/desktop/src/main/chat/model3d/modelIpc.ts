@@ -147,6 +147,11 @@ export function modelIpcHandlers(view: ModelLiveView): void {
     return picked.filePath;
   });
 
+  // A backgrounded window's timers fire about once a second, which would draw the clip in slow motion.
+  ipcMain.handle(IPC_CHANNELS.modelSetRecording, (event, active: unknown) => {
+    if (typeof active === 'boolean') event.sender.setBackgroundThrottling(!active);
+  });
+
   ipcMain.on(IPC_CHANNELS.modelCaptureResult, (_event, value: unknown) => {
     if (!isRecord(value) || typeof value.id !== 'string') return;
     view.resolveCapture(value.id, {

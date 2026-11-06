@@ -127,8 +127,10 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
       const rest = mesh.position.toArray();
       mesh.userData.joint = { motion, axis: part.axis, range: part.range, step, rest } satisfies JointData;
     }
+    mesh.userData.home = mesh.position.toArray();
     (parent?.mesh ?? model).add(mesh);
   });
+  assignExplodeShifts(parts, meshes);
   model.rotation.x = -Math.PI / 2;
   const root = new THREE.Group();
   root.name = 'root';
@@ -138,6 +140,41 @@ export function buildModelObject(parts: ModelPartMesh[], units: ModelUnits): THR
 }
 
 type Vec3 = [number, number, number];
+
+/** How far Explode moves a part beyond its own offset from its parent, as a share of the model's radius. */
+const EXPLODE_CLEARANCE = 0.2;
+/** Explode's scale on a part's offset from its parent's centre. */
+const EXPLODE_SPREAD = 0.6;
+
+/**
+ * Records on each part how far it moves, in its parent's frame, in a fully exploded view: away from
+ * its parent's centre (the model's centre for a top-level part), further the further out it sits, so
+ * a lid lifts off its box and a lock steps forward off it. A part centred on its parent, such as a
+ * band round a box, stays on it. Nothing moves down, so no part sinks through the floor. A
+ * child rides along with its parent, so its shift adds to its parent's.
+ */
+function assignExplodeShifts(parts: ModelPartMesh[], meshes: THREE.Mesh[]): void {
+  if (parts.length < 2) return;
+  const boxes = parts.map(part => new THREE.Box3().setFromArray(part.positions));
+  const centres = boxes.map(box => box.getCenter(new THREE.Vector3()));
+  const all = boxes.reduce((union, box) => union.union(box), new THREE.Box3());
+  const modelCentre = all.getCenter(new THREE.Vector3());
+  const radius = Math.max(all.getBoundingSphere(new THREE.Sphere()).radius, 1e-6);
+  const indexByName = new Map(parts.map((part, index) => [part.name, index]));
+  parts.forEach((part, index) => {
+    const parentIndex = part.parent === undefined ? undefined : indexByName.get(part.parent);
+    const from = parentIndex === undefined ? modelCentre : centres[parentIndex];
+    const offset = centres[index].clone().sub(from);
+    const distance = offset.length();
+    // Centred on its parent (a band round a box, a lining): it stays on, since no straight move frees it.
+    const shift =
+      distance < radius * 0.05
+        ? new THREE.Vector3()
+        : offset.divideScalar(distance).multiplyScalar(distance * EXPLODE_SPREAD + radius * EXPLODE_CLEARANCE);
+    shift.z = Math.max(0, shift.z);
+    meshes[index].userData.explode = shift.toArray();
+  });
+}
 
 type JointData = Omit<ModelJoint, 'name'> & {
   /** Slides only: the node's offset per range unit, in its parent's frame (unit length until baked). */
@@ -172,9 +209,46 @@ function jointPosition(joint: JointData, amount: number): THREE.Vector3 {
 export function poseJoints(root: THREE.Object3D, angles: Record<string, number>): void {
   for (const { node, joint } of jointNodes(root)) {
     const amount = angles[node.name] ?? 0;
-    if (joint.motion === 'slide') node.position.copy(jointPosition(joint, amount));
-    else node.quaternion.copy(jointRotation(joint, amount));
+    if (joint.motion === 'slide') {
+      node.userData.slide = amount;
+      node.position.copy(jointPosition(joint, amount)).add(explodeShift(node));
+    } else node.quaternion.copy(jointRotation(joint, amount));
   }
+}
+
+/** The node's current exploded-view shift (zero when the view is assembled). */
+function explodeShift(node: THREE.Object3D): THREE.Vector3 {
+  const shift = node.userData.explodeShift as Vec3 | undefined;
+  return shift ? new THREE.Vector3(...shift) : new THREE.Vector3();
+}
+
+/** Whether `root` is a built model whose parts can be pulled apart. */
+export function canExplode(root: THREE.Object3D): boolean {
+  let found = false;
+  root.traverse(node => {
+    if (Array.isArray(node.userData.explode)) found = true;
+  });
+  return found;
+}
+
+/**
+ * Pulls the parts apart by `amount`: 0 assembled, 1 fully exploded (see assignExplodeShifts). Works
+ * with poseJoints in either order: a slide keeps its travel, a turn its angle.
+ */
+export function explodeModel(root: THREE.Object3D, amount: number): void {
+  root.traverse(node => {
+    const full = node.userData.explode as Vec3 | undefined;
+    const home = node.userData.home as Vec3 | undefined;
+    if (!full || !home) return;
+    const shift = new THREE.Vector3(...full).multiplyScalar(amount);
+    node.userData.explodeShift = shift.toArray();
+    const joint = node.userData.joint as JointData | undefined;
+    const base =
+      joint?.motion === 'slide'
+        ? jointPosition(joint, typeof node.userData.slide === 'number' ? node.userData.slide : 0)
+        : new THREE.Vector3(...home);
+    node.position.copy(base).add(shift);
+  });
 }
 
 /** Each joint at the far end of its range: what `model_screenshot` shows as the open pose. */

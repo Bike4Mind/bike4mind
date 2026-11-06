@@ -630,6 +630,16 @@ export function WireframeIcon() {
   );
 }
 
+/** The model pane's exploded view: a cube split into pieces pushed apart from its centre. */
+export function ExplodeIcon() {
+  return (
+    <Glyph>
+      <path d="M5.5 1.75h5v3.5h-5zM1.75 9h4.5v5.25h-4.5zM9.75 9h4.5v5.25h-4.5z" />
+      <path d="M8 6.75v1.5M6.75 8.25 6 8.75M9.25 8.25l.75.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
 export function GridIcon() {
   return (
     <Glyph>

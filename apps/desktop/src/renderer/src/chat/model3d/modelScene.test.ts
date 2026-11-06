@@ -13,6 +13,8 @@ import {
   poseJoints,
   summarizeObject,
   summarizeParts,
+  canExplode,
+  explodeModel,
 } from './modelScene';
 
 /** An axis-aligned box from 0 to (x, y, z): 8 corners, 12 triangles, wound outward. */
@@ -362,5 +364,70 @@ describe('part pivots and parents', () => {
 
   it('reports joints in the summary', () => {
     expect(summarizeParts(parts(), {}, 'mm').joints).toEqual(['lid: pivot (0, 40, 30), in body']);
+  });
+});
+
+describe('explodeModel', () => {
+  /** A body 0..60 x 0..40 x 0..30, a lid on top hinged at its back edge, a band round the body and feet under it. */
+  const parts = (): ModelPartMesh[] => {
+    const lid = box('lid', 60, 40, 10);
+    for (let index = 2; index < lid.positions.length; index += 3) lid.positions[index] += 30;
+    const band = box('band', 70, 50, 34);
+    for (let index = 0; index < band.positions.length; index += 3) {
+      band.positions[index] -= 5;
+      band.positions[index + 1] -= 5;
+      band.positions[index + 2] -= 2;
+    }
+    const feet = box('feet', 60, 40, 4);
+    for (let index = 2; index < feet.positions.length; index += 3) feet.positions[index] -= 4;
+    return [
+      box('body', 60, 40, 30),
+      { ...lid, pivot: [0, 40, 30], parent: 'body', axis: [1, 0, 0], range: [0, 100] },
+      { ...band, parent: 'body' },
+      feet,
+    ];
+  };
+  const placed = (root: THREE.Object3D, name: string) => {
+    root.getObjectByName('model')!.rotation.set(0, 0, 0);
+    root.updateMatrixWorld(true);
+    return new THREE.Box3().setFromObject(root.getObjectByName(name)!);
+  };
+
+  it('lifts a lid off its box, keeps a band on it, and never sinks a part through the floor', () => {
+    const root = buildModelObject(parts(), 'mm');
+    expect(canExplode(root)).toBe(true);
+    const lidBefore = placed(root, 'lid').min.z;
+    const bandBefore = placed(root, 'band').min.toArray();
+    const bodyBefore = placed(root, 'body').min.toArray();
+    explodeModel(root, 1);
+    const lidAfter = placed(root, 'lid').min.z;
+    expect(lidAfter).toBeGreaterThan(lidBefore + 10);
+    // The band moves only with the body it wraps.
+    const bodyShift = placed(root, 'body')
+      .min.clone()
+      .sub(new THREE.Vector3(...bodyBefore));
+    expect(
+      placed(root, 'band')
+        .min.clone()
+        .sub(new THREE.Vector3(...bandBefore))
+        .toArray()
+    ).toEqual(bodyShift.toArray());
+    expect(placed(root, 'feet').min.z).toBeGreaterThanOrEqual(-4);
+    explodeModel(root, 0);
+    expect(placed(root, 'lid').min.z).toBeCloseTo(lidBefore);
+  });
+
+  it('keeps a joint where it was posed, in either order', () => {
+    const root = buildModelObject(parts(), 'mm');
+    poseJoints(root, { lid: 90 });
+    explodeModel(root, 1);
+    const lid = root.getObjectByName('lid')!;
+    expect(lid.rotation.x).toBeCloseTo(Math.PI / 2);
+    explodeModel(root, 0);
+    expect(lid.position.toArray()).toEqual([0, 40, 30]);
+  });
+
+  it('has nothing to pull apart in a single part', () => {
+    expect(canExplode(buildModelObject([box('solo', 10, 10, 10)], 'mm'))).toBe(false);
   });
 });
