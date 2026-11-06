@@ -89,6 +89,7 @@ vi.mock('@bike4mind/server-utils/models/Subscription', () => ({
 }));
 
 vi.mock('@server/websocket/subscriptionScopes', () => ({
+  adminSettingsSubscriptionScope: vi.fn(),
   questMasterPlanSubscriptionScope: vi.fn(),
   inviteSubscriptionScope: vi.fn(),
 }));
