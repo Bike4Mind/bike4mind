@@ -139,7 +139,11 @@ describe('GET /api/user-api-keys/eligibility', () => {
 
   it('lets a free account with room under its allowance create, counting personal keys only', async () => {
     countActiveByUserId.mockResolvedValue(0);
-    expect(await callEligibility(paidStandingRequired(1))).toEqual({ canCreate: true, message: null });
+    expect(await callEligibility(paidStandingRequired(1))).toEqual({
+      canCreate: true,
+      message: null,
+      refusedOrgIds: [],
+    });
     expect(countActiveByUserId).toHaveBeenCalledWith('u1', 'personal');
   });
 
@@ -149,6 +153,7 @@ describe('GET /api/user-api-keys/eligibility', () => {
       canCreate: false,
       message:
         'Free accounts may hold 1 active API key. To create more, purchase credits or a plan, or contact support.',
+      refusedOrgIds: [],
     });
     expect(countActiveByUserId).toHaveBeenCalledWith('u1', 'personal');
   });
