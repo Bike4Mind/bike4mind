@@ -320,7 +320,11 @@ describe('AdminSettingsTab Credits System group', () => {
   const renderCreditsTab = () => renderTab(findTab(settingsMap.billOperationalUsage.category));
 
   it('lists only keys the Growth and Pricing tab edits', () => {
-    const growthPricingKeys = new Set<string>(GROWTH_PRICING_SECTIONS.flatMap(section => section.keys));
+    // defaultFreeCredits is retired: hidden here and edited nowhere until its row is removed.
+    const growthPricingKeys = new Set<string>([
+      ...GROWTH_PRICING_SECTIONS.flatMap(section => section.keys),
+      'defaultFreeCredits',
+    ]);
     for (const key of GROWTH_PRICING_ONLY_KEYS) expect(growthPricingKeys.has(key), key).toBe(true);
   });
 
