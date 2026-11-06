@@ -141,6 +141,7 @@ export async function processAndStoreImages(
         bytes: buffer,
         contentType: mimeType,
         generation: { generator: 'image', provider, modelId: model, jobId: `${batchId}-${index}`, prompt, request },
+        generatedOutputKey: path,
       });
 
       return path;

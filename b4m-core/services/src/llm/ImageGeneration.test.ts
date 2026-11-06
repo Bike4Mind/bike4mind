@@ -1899,6 +1899,8 @@ describe('ImageGenerationService quest partial writes', () => {
         sessionId: 'session1',
         questId: 'quest1',
         contentType: 'image/png',
+        // The chat image's key, so a later "save to Files" of it finds this generation.
+        generatedOutputKey: 'generated/output.png',
         generation: {
           generator: 'image',
           provider: ModelBackend.Gemini,
@@ -1964,6 +1966,21 @@ describe('ImageGenerationService quest partial writes', () => {
 
       expect(save).toHaveBeenCalledTimes(2);
       expect(save.mock.calls.map(call => call[0].generation?.jobId).sort()).toEqual(['gen-1-0', 'gen-1-1']);
+    });
+
+    it('stamps each saved image with its own chat image key', async () => {
+      const save = vi.fn<SaveGeneratedAssetFn>(async () => ({ saved: true }) as never);
+      const { service } = arrange(save);
+      const { upload } = (service as unknown as { storage: { upload: ReturnType<typeof vi.fn> } }).storage;
+      upload.mockImplementation(async (_buffer: unknown, filename: string) => `generated/${filename}`);
+      mockGeminiGenerate.mockReset();
+      mockGeminiGenerate.mockResolvedValue(twoImages);
+      await processGenerate(service, 'gen-1');
+
+      const uploaded = upload.mock.results.map(result => result.value);
+      const keys = save.mock.calls.map(call => call[0].generatedOutputKey);
+      expect(new Set(keys).size).toBe(2);
+      expect(await Promise.all(uploaded)).toEqual(expect.arrayContaining(keys));
     });
 
     it('saves nothing when moderation blocks the second image', async () => {

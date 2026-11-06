@@ -1704,7 +1704,7 @@ export class ImageGenerationService {
 
       // Last, so a run that fails anywhere above (a later image blocked by moderation, billing) leaves no file.
       await Promise.all(
-        storedImages.map(({ buffer, contentType }, index) =>
+        storedImages.map(({ buffer, contentType, path }, index) =>
           saveGeneratedImage(
             this.saveGeneratedAsset,
             {
@@ -1722,6 +1722,7 @@ export class ImageGenerationService {
               ...(derivedFrom.length > 0 && { derivedFrom }),
               sessionId,
               questId,
+              generatedOutputKey: path,
             },
             logger
           )

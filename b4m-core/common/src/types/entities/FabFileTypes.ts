@@ -75,7 +75,8 @@ export enum FabFileSourceType {
    * `sourceMetadata.sessionId`, when set, links it to the notebook it was made in - see
    * persistGeneratedFileAsFabFile for why that link is not the top-level `sessionId`.
    * `sourceMetadata.generatedCopyKey` names a second, generated-bucket copy that deletes also
-   * remove (see generatedCopyKeyOf).
+   * remove (see generatedCopyKeyOf). `sourceMetadata.generatedOutputKey` names the chat image the
+   * file holds, with no delete cascade, so copy-generated-image can find the generation behind it.
    */
   TOOL_GENERATED = 'tool_generated',
   /**
