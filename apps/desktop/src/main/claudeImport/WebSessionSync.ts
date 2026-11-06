@@ -68,15 +68,18 @@ export async function listWebNotebooks(api: WebApi): Promise<{ notebooks: WebNot
   return { notebooks: [...notebooks.values()], complete: false };
 }
 
-export async function fetchQuests(api: WebApi, notebookId: string): Promise<unknown[]> {
+/** `truncated` is true when the page cap was hit with more still to read. */
+export async function fetchQuests(api: WebApi, notebookId: string): Promise<{ quests: unknown[]; truncated: boolean }> {
   const quests: unknown[] = [];
+  let truncated = false;
   const path = `${LIST_PATH}/${encodeURIComponent(notebookId)}/chat`;
   for (let page = 1; page <= MAX_CHAT_PAGES; page++) {
     const result = pageOf(await api.get(pagedUrl(path, page, CHAT_PAGE_SIZE, { sort: 'asc' })));
     quests.push(...result.data);
     if (!result.hasMore) break;
+    if (page === MAX_CHAT_PAGES) truncated = true;
   }
-  return quests;
+  return { quests, truncated };
 }
 
 /** True when the notebook changed since it was read, or the last read failed, and the copy is still ours. */
@@ -99,8 +102,9 @@ export async function importNotebook(
   // Imported once and since deleted by the user: do not bring it back.
   if (previous?.status === 'imported' && !existing) return { ...previous, status: 'removed' };
 
-  const { messages, settled } = mapQuests(await fetchQuests(deps.api, notebook.id), notebook.updatedAt);
-  const version = settled ? notebook.version : '';
+  const { quests, truncated } = await fetchQuests(deps.api, notebook.id);
+  const { messages, settled } = mapQuests(quests, notebook.updatedAt);
+  const version = settled && !truncated ? notebook.version : '';
   if (messages.length === 0) {
     // Emptied on the web: drop the untouched copy so it does not keep stale messages.
     if (existing) await deps.deleteImported(sessionId, deps.scopeKey);

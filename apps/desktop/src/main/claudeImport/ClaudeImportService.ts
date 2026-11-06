@@ -367,6 +367,7 @@ export class ClaudeImportService {
     let done = 0;
     await runQueue(queue, IMPORT_CONCURRENCY, async notebook => {
       if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
+      if (!(await this.states.readSettings()).web.enabled) return;
       const previous = scope.webNotebooks[notebook.id];
       const sessionId = webSessionId(notebook.id, tag);
       try {

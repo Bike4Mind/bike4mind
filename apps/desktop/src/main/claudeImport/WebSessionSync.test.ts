@@ -6,7 +6,7 @@ import { SessionStore } from '../chat/SessionStore';
 import { sessionScopeKey, type SessionScope } from '../chat/sessionScope';
 import { importScopeTag } from './ClaudeCodeSync';
 import { ClaudeImportService } from './ClaudeImportService';
-import { webSessionId, type WebApi } from './WebSessionSync';
+import { fetchQuests, webSessionId, type WebApi } from './WebSessionSync';
 
 vi.mock('electron', () => ({ BrowserWindow: { fromWebContents: () => null }, dialog: {} }));
 
@@ -259,5 +259,110 @@ describe('Bike4Mind web sync', () => {
     const state = await service.state();
     expect(state.web.settings.enabled).toBe(false);
     expect(state.web.counts).toEqual({ found: 1, imported: 1, skipped: 0, failed: 0 });
+  });
+
+  it('does not bring back a session the user deleted, even after the notebook changes', async () => {
+    const web = fakeWeb(oneNotebook());
+    const { service, store } = await setup(new Map([['account-a', web.api]]));
+    await service.setWebSettings({ enabled: true });
+    await service.syncWeb();
+    const id = idFor(ACCOUNT_A, 'nb1');
+    expect(await store.deleteImported(id, sessionScopeKey(ACCOUNT_A))).toBe('removed');
+
+    web.notebooks.nb1.updatedAt = '2026-01-02T00:00:00.000Z';
+    await service.syncWeb();
+    expect(await store.get(id)).toBeNull();
+    expect((await service.state()).web.counts.found).toBe(0);
+  });
+
+  it('reads a notebook again when its chat is longer than the page cap', async () => {
+    const get = vi.fn(async () => ({ data: [{ type: 'message', id: 'q', prompt: 'p' }], hasMore: true }));
+    const result = await fetchQuests({ get } as unknown as WebApi, 'nb1');
+    expect(result.truncated).toBe(true);
+    expect(get).toHaveBeenCalledTimes(100);
+
+    const done = vi.fn(async () => ({ data: [], hasMore: false }));
+    expect((await fetchQuests({ get: done } as unknown as WebApi, 'nb1')).truncated).toBe(false);
+  });
+
+  it('stops importing the remaining notebooks when sync is turned off mid-pass', async () => {
+    const notebooks: Record<string, FakeNotebook> = {};
+    for (let index = 0; index < 5; index++) {
+      notebooks[`nb${index}`] = {
+        name: `Notebook ${index}`,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        quests: [{ id: `q${index}`, prompt: 'p', reply: 'r' }],
+      };
+    }
+    const web = fakeWeb(notebooks);
+    const inner = web.get.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => (release = resolve));
+    web.get.mockImplementation(async url => {
+      if (url.includes('/chat')) await gate;
+      return inner(url);
+    });
+    const { service, store } = await setup(new Map([['account-a', web.api]]));
+    await service.setWebSettings({ enabled: true });
+    const run = service.syncWeb();
+    await vi.waitFor(() => expect(web.get.mock.calls.filter(([url]) => url.includes('/chat'))).toHaveLength(2));
+
+    await service.setWebSettings({ enabled: false });
+    release();
+    await run;
+    expect(await store.list()).toHaveLength(2);
+  });
+
+  describe('on window focus', () => {
+    afterEach(() => vi.useRealTimers());
+    const listReads = (web: ReturnType<typeof fakeWeb>) =>
+      web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/sessions').length;
+    const settle = () => new Promise(resolve => setTimeout(resolve, 25));
+
+    it('syncs at most once a minute', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+      const web = fakeWeb(oneNotebook());
+      const { service } = await setup(new Map([['account-a', web.api]]));
+      await service.setWebSettings({ enabled: true });
+      await service.syncWeb();
+      const base = listReads(web);
+
+      vi.advanceTimersByTime(30_000);
+      service.onWindowFocus();
+      await settle();
+      expect(listReads(web)).toBe(base);
+
+      vi.advanceTimersByTime(31_000);
+      service.onWindowFocus();
+      await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
+    });
+
+    it('does nothing while a web sync is already running', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+      const web = fakeWeb(oneNotebook());
+      const { service } = await setup(new Map([['account-a', web.api]]));
+      await service.setWebSettings({ enabled: true });
+      await service.syncWeb();
+      const base = listReads(web);
+
+      const inner = web.get.getMockImplementation()!;
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => (release = resolve));
+      web.get.mockImplementation(async url => {
+        await gate;
+        return inner(url);
+      });
+      vi.advanceTimersByTime(61_000);
+      service.onWindowFocus();
+      await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
+      vi.advanceTimersByTime(120_000);
+      service.onWindowFocus();
+      release();
+      await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
+      await settle();
+      expect(listReads(web)).toBe(base + 1);
+    });
   });
 });
