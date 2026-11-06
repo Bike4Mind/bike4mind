@@ -2,7 +2,7 @@ import {
   ABUSE_ASSESSMENT_MAX_PROFILE_MODELS,
   AuthStrategy,
   AutoContainmentConfigSchema,
-  canonicalizeEmail,
+  mailboxAliasesOf,
   type AbuseAssessmentAccountProfile,
 } from '@bike4mind/common';
 import { adminSettingsRepository, usageEventRepository, userRepository } from '@bike4mind/database';
@@ -12,6 +12,7 @@ import type {
   UserLinkState,
   UserSignupLinkCandidate,
 } from '@bike4mind/database';
+import type { Logger } from '@bike4mind/observability';
 import { userService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
@@ -156,15 +157,13 @@ async function linksFor(
 ): Promise<LinkedAccountsInput | null> {
   if (!account.createdAt) return null;
   const keys = accountLinkKeys(account);
-  const canonical = account.email ? canonicalizeEmail(account.email) : null;
-  const at = canonical?.lastIndexOf('@') ?? -1;
   const candidates = await deps.findSignupLinkCandidates({
     excludeIds: [account.id],
     from: new Date(account.createdAt.getTime() - windowHours * HOUR_MS),
     to: new Date(account.createdAt.getTime() + windowHours * HOUR_MS),
     ip: keys.signupIp,
     ja4: keys.ja4,
-    mailbox: canonical && at > 0 ? { local: canonical.slice(0, at), domain: canonical.slice(at + 1) } : null,
+    mailbox: account.email ? mailboxAliasesOf(account.email) : null,
     mailDomain: keys.mailDomain,
     limit: LINK_CANDIDATE_LIMIT,
   });
@@ -177,12 +176,14 @@ async function linksFor(
 }
 
 /**
- * Profiles for `ids`, keyed by id. A read that fails for one account leaves that part null rather
- * than failing the assessment; ids that are not users are absent.
+ * Profiles for `ids`, keyed by id; ids that are not users are absent. A failed linked-account read
+ * leaves `linkedAccounts` null for that account. A failed account, spend or settings read rejects
+ * the whole load, and the caller assesses without profiles.
  */
 export async function loadAccountProfiles(
   ids: readonly string[],
-  deps: AccountProfileDeps = liveDeps
+  deps: AccountProfileDeps = liveDeps,
+  logger?: Logger
 ): Promise<Map<string, AbuseAssessmentAccountProfile>> {
   if (ids.length === 0) return new Map();
   const [accounts, spend, windowHours] = await Promise.all([
@@ -192,7 +193,12 @@ export async function loadAccountProfiles(
   ]);
   const profiles = await Promise.all(
     accounts.map(async account => {
-      const links = await linksFor(account, windowHours, deps).catch(() => null);
+      const links = await linksFor(account, windowHours, deps).catch((error: unknown) => {
+        logger?.warn('Abuse assessment linked-account read failed; profile has no linked accounts', {
+          errorName: error instanceof Error ? error.name : typeof error,
+        });
+        return null;
+      });
       return [account.id, buildAccountProfile({ account, spend: spend[account.id] ?? null, links })] as const;
     })
   );

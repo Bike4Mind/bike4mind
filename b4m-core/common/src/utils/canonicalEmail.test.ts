@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalizeEmail, isRandomLookingTag, plusAddressTagOf } from './canonicalEmail';
+import { canonicalizeEmail, isRandomLookingTag, plusAddressTagOf, mailboxAliasesOf } from './canonicalEmail';
 
 describe('canonicalizeEmail', () => {
   it.each([
@@ -92,5 +92,27 @@ describe('isRandomLookingTag', () => {
     'lengths',
   ])('leaves a human tag alone (%s)', tag => {
     expect(isRandomLookingTag(tag)).toBe(false);
+  });
+});
+
+describe('mailboxAliasesOf', () => {
+  it('lists the Gmail domains and ignores dots', () => {
+    expect(mailboxAliasesOf('John.Smith+x@googlemail.com')).toEqual({
+      local: 'johnsmith',
+      domains: ['gmail.com', 'googlemail.com'],
+      ignoreDots: true,
+    });
+  });
+
+  it('lists every domain that folds into the canonical one, keeping dots', () => {
+    expect(mailboxAliasesOf('a.b@me.com')).toEqual({
+      local: 'a.b',
+      domains: ['icloud.com', 'me.com', 'mac.com'],
+      ignoreDots: false,
+    });
+  });
+
+  it('is null when the address is unusable', () => {
+    expect(mailboxAliasesOf('nope')).toBeNull();
   });
 });

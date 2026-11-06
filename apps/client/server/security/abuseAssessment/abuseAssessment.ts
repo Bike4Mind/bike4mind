@@ -256,7 +256,7 @@ export async function summarizeDetection(
   const keptIds = detection.userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS);
   const [stored, profiles] = await Promise.all([
     userRepository.findRiskEvidenceSummaries(keptIds),
-    (deps.loadAccountProfiles ?? loadAccountProfiles)(keptIds).catch((error: unknown) => {
+    (deps.loadAccountProfiles ?? (ids => loadAccountProfiles(ids, undefined, logger)))(keptIds).catch((error: unknown) => {
       logger.warn('Abuse assessment account profiles failed; assessing without them', {
         detectionId: detection.id,
         errorName: error instanceof Error ? error.name : typeof error,

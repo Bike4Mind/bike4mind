@@ -165,7 +165,7 @@ describe('loadAccountProfiles', () => {
       to: new Date(SIGNUP.getTime() + 72 * HOUR_MS),
       ip: '198.51.100.4',
       ja4: null,
-      mailbox: { local: 'jordan', domain: 'outlook.com' },
+      mailbox: { local: 'jordan', domains: ['outlook.com'], ignoreDots: false },
       // Webmail: a shared domain links nothing.
       mailDomain: null,
       limit: LINK_CANDIDATE_LIMIT,
