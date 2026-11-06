@@ -8,6 +8,8 @@ export type ResolvedScope = {
   adminPath: string | null;
   /** Set when an organization pays for a scope whose label names someone else. */
   paidBy?: string;
+  /** The api key's or agent's own name, set for those scope types only. */
+  name?: string;
 };
 
 export type ScopeKey = { scopeType: SpendRollupScopeType; scopeId: string };
@@ -111,7 +113,10 @@ export async function resolveScopes(keys: ScopeKey[], deps: ResolveScopeDeps): P
       case 'apiKey': {
         const apiKey = apiKeysById.get(scopeId);
         if (!apiKey) return unknownScope(scopeType, scopeId);
-        const owner = resolveOwned(ownerLabel => `${apiKey.name} (${ownerLabel})`, apiKey.userId, users);
+        const owner = {
+          ...resolveOwned(ownerLabel => `${apiKey.name} (${ownerLabel})`, apiKey.userId, users),
+          name: apiKey.name,
+        };
         if (apiKey.billingOwnerType === CreditHolderType.Organization && apiKey.organizationId) {
           return {
             ...owner,
@@ -125,8 +130,10 @@ export async function resolveScopes(keys: ScopeKey[], deps: ResolveScopeDeps): P
       case 'Agent': {
         const agent = agentsById.get(scopeId);
         if (!agent) return unknownScope(scopeType, scopeId);
-        if (agent.userId)
-          return resolveOwned(ownerLabel => `agent ${agent.name} of ${ownerLabel}`, agent.userId, users);
+        if (agent.userId) {
+          const owned = resolveOwned(ownerLabel => `agent ${agent.name} of ${ownerLabel}`, agent.userId, users);
+          return { ...owned, name: agent.name };
+        }
         // Org-shared agents have no owning user; the org pays.
         if (agent.organizationId) {
           return {
@@ -135,6 +142,7 @@ export async function resolveScopes(keys: ScopeKey[], deps: ResolveScopeDeps): P
             payerId: agent.organizationId,
             adminPath: null,
             paidBy: organizationName(agent.organizationId),
+            name: agent.name,
           };
         }
         return unknownScope(scopeType, scopeId);

@@ -1,19 +1,28 @@
 import { Logger } from '@bike4mind/observability';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
+import { escapeSlackLine, escapeSlackText, toAbsoluteUrl } from '@bike4mind/common';
 import { connectDB, counterLogRepository, adminSettingsRepository } from '@bike4mind/database';
 import type { YoungAccountSpendSummary, YoungAccountSpender } from '@bike4mind/database';
-import { resolveSlackWebhookUrl } from '@bike4mind/server-utils/integrations/slack/slack';
 import { stripeCustomerSlackLink } from '@server/integrations/slack/accountLinks';
-import { appUrlFromEnv } from '../events/alarmSlackMessage';
+import {
+  ADMIN_LINKS,
+  appUrlFromEnv,
+  composeAlarmMessage,
+  postAlarmToSlack,
+  resolveAlarmWebhookUrl,
+  type SlackAlarmMessage,
+} from '../events/alarmSlackMessage';
+import { readAlarmMention } from '../events/alarmSlackMention';
 import { recordYoungAccountSpendShadowDetections } from './youngAccountSpendShadowDetections';
 import { Config } from '@bike4mind/server-utils/utils/config';
-import axios from 'axios';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
 const HOUR_MS = 60 * 60 * 1000;
 const TOP_SPENDER_LIMIT = 10;
+/** Slack rejects a section over 3000 characters, which would drop the whole post. */
+const SECTION_TEXT_MAX = 2_900;
+const EMAIL_MAX = 64;
 
 export type YoungAccountSpendThresholds = {
   credits: number;
@@ -63,30 +72,62 @@ function formatSpenderLine(
   appUrl: string | undefined
 ): string {
   const links = [adminUserLink(spender.userId, appUrl), stripeCustomerSlackLink(spender.stripeCustomerId, stage)];
+  const who = spender.email
+    ? escapeSlackLine(spender.email.slice(0, EMAIL_MAX))
+    : `\`${escapeSlackText(spender.userId)}\``;
   return (
-    `${rank}. \`${escapeSlackText(spender.userId)}\` ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
+    `${rank}. ${who} ${spender.creditsSpent.toLocaleString('en-US')} credits ` +
     `(created ${new Date(spender.accountCreatedAt).toISOString()}) - ` +
     links.filter((link): link is string => link !== null).join(' | ')
   );
 }
 
-export function formatYoungAccountSpendMessage(
+const formatCount = (value: number) => value.toLocaleString('en-US');
+
+/** The same card shape as the CloudWatch alarm relay, so it sits in the alarms channel beside them. */
+export function buildYoungAccountSpendMessage(
   summary: YoungAccountSpendSummary,
   thresholds: YoungAccountSpendThresholds,
   window: { start: Date; end: Date },
   stage: string,
-  appUrl: string | undefined
-): string {
-  const lines = [
-    `:rotating_light: *Young-account spend alert (${stage})*`,
-    `Window: ${window.start.toISOString()} to ${window.end.toISOString()}`,
-    `Accounts created in the last 7 days spent ${summary.totalCredits.toLocaleString('en-US')} credits ` +
-      `across ${summary.accountCount} accounts ` +
-      `(ceilings: ${thresholds.credits.toLocaleString('en-US')} credits, ${thresholds.accounts} accounts).`,
-    `Top ${summary.topSpenders.length} by spend:`,
-    ...summary.topSpenders.map((spender, index) => formatSpenderLine(spender, index + 1, stage, appUrl)),
+  appUrl: string | undefined,
+  mention?: string
+): SlackAlarmMessage {
+  const fields = [
+    `*Window*\n${window.start.toISOString()} to ${window.end.toISOString()}`,
+    `*Credits (ceiling)*\n${formatCount(summary.totalCredits)} (${formatCount(thresholds.credits)})`,
+    `*Accounts (ceiling)*\n${formatCount(summary.accountCount)} (${formatCount(thresholds.accounts)})`,
   ];
-  return lines.join('\n');
+  const sections = [
+    'Accounts under 7 days old spent more credits in the last hour than the ceiling, or more of them ' +
+      'spent than the account ceiling. Credit farms spend their free credits fast.',
+  ];
+  if (summary.topSpenders.length > 0) {
+    const lines = summary.topSpenders.map((spender, index) => formatSpenderLine(spender, index + 1, stage, appUrl));
+    const title = `*Top ${summary.topSpenders.length} by credits*`;
+    let text = `${title}\n${lines.join('\n')}`;
+    while (text.length > SECTION_TEXT_MAX && lines.length > 1) {
+      lines.pop();
+      text = `${title}\n${lines.join('\n')}\nand ${summary.topSpenders.length - lines.length} more`;
+    }
+    sections.push(text);
+  }
+  const origin = appUrl?.replace(/\/+$/, '');
+  const buttons = origin
+    ? [{ label: ADMIN_LINKS['spend-monitor'].label, url: `${origin}${ADMIN_LINKS['spend-monitor'].path}` }]
+    : [];
+
+  return composeAlarmMessage({
+    stage,
+    level: 'warn',
+    title: 'Young accounts are spending a lot of credits',
+    mention,
+    fields,
+    sections,
+    buttons,
+    context: [escapeSlackText(stage), 'warning', 'credit ledger, accounts under 7 days old'],
+    summary: `${formatCount(summary.totalCredits)} credits across ${formatCount(summary.accountCount)} young accounts in the last hour`,
+  });
 }
 
 const scheduledEventSchema = z.object({ time: z.iso.datetime() });
@@ -129,18 +170,20 @@ export async function handler(event: unknown) {
     // 0 with listed spenders means every claim was taken, i.e. this window was already recorded.
     logger.log('young-account-spend-shadow-detections', { recorded, listed: summary.topSpenders.length });
   }
-  const webhookUrl = resolveSlackWebhookUrl('SlackLiveopsWebhookUrl', settings);
-  if (!webhookUrl) {
-    throw new Error('young-account spend alert breached but no Slack webhook is configured');
-  }
-
+  const webhookUrl = resolveAlarmWebhookUrl(Resource, 'abuse');
   const appUrl = appUrlFromEnv();
   if (!appUrl) {
     // Still post: a spend alert without admin links beats no alert at all.
     logger.error('young-account spend alert has no SERVER_DOMAIN; admin links omitted');
   }
-  await axios.post(webhookUrl, {
-    text: formatYoungAccountSpendMessage(summary, thresholds, { start, end }, Resource.App.stage, appUrl),
-  });
+  const message = buildYoungAccountSpendMessage(
+    summary,
+    thresholds,
+    { start, end },
+    Resource.App.stage,
+    appUrl,
+    await readAlarmMention()
+  );
+  await postAlarmToSlack(webhookUrl, message);
   return { status: 'alerted', totalCredits: summary.totalCredits, accountCount: summary.accountCount };
 }
