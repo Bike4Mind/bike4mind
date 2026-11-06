@@ -76,9 +76,11 @@ export type ExecuteActor = {
   id: string;
   /** The admin plus, under impersonation, the impersonated account: never acted on. */
   selfIds: string[];
+  /** Balances used by the approval gate for a direct set action. */
+  creditBalances?: Readonly<Record<string, number>>;
 };
 
-const AUDIT_ACTION = {
+export const AUDIT_ACTION = {
   suspend: 'user.bulk.suspended',
   restrict: 'user.bulk.restricted',
   adjustCredits: 'user.bulk.credits_adjusted',
@@ -101,6 +103,7 @@ export type ApplyContext = {
   actorId: string;
   reason: string;
   batchId: string;
+  creditBalances?: Readonly<Record<string, number>>;
   /** Epoch ms past which a user's Stripe cancel makes no more requests. */
   cancelDeadline: number;
 };
@@ -120,12 +123,15 @@ const isDoneEntry = (data: unknown): data is { state: 'done'; result: AdminUsers
 /** The steps for one user, inside its transaction. Returns null when nothing changed. */
 async function applySteps(
   userId: string,
-  { action, actorId, reason, batchId }: Omit<ApplyContext, 'cancelDeadline'>,
+  { action, actorId, reason, batchId, creditBalances }: Omit<ApplyContext, 'cancelDeadline'>,
   deps: ApplyDeps
 ): Promise<UserUndoSnapshot | null> {
   const { db } = deps;
   const user = await db.findUser(userId);
   if (!user) throw new Error('User not found');
+  if (creditBalances && creditBalances[userId] !== user.currentCredits) {
+    throw new ConflictError('The credit balance changed; review this action again.');
+  }
   const snapshot: UserUndoSnapshot = { userId };
   const changes: AuditChange[] = [];
   const details: Record<string, unknown> = { batchId };
@@ -331,6 +337,7 @@ export async function executeAdminUsersBulk(
   const context: ApplyContext = {
     action: request.action,
     actorId: actor.id,
+    creditBalances: actor.creditBalances,
     reason: request.reason,
     batchId,
     cancelDeadline: deadline + SUBSCRIPTION_CANCEL_GRACE_MS,
@@ -446,10 +453,10 @@ async function blockDomainsOf(users: readonly BulkUser[], batchId: string, deps:
 }
 
 /** Re-resolves the target and refuses anything but the exact cohort the admin confirmed. */
-async function confirmedCohort(
+export async function confirmedCohort(
   request: AdminUsersBulkExecuteRequest,
   actor: ExecuteActor,
-  deps: ExecuteDeps,
+  deps: ResolveDeps,
   at: Date
 ): Promise<BulkUser[]> {
   const cohort = await resolveAdminUsersBulk(request.target, actor.selfIds, deps, at);

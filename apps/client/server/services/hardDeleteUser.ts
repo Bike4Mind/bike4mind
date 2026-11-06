@@ -26,12 +26,17 @@ export type HardDeleteContext = {
   /** Whose request this was, for the account_deleted analytics event. */
   initiatedBy: HardDeleteInitiator;
   logger: Pick<Logger, 'info' | 'warn' | 'error'>;
-  /** Runs inside the delete's transaction before the row goes; a throw aborts the delete. */
+  /**
+   * Runs inside the delete's transaction before the row goes; a throw aborts the delete. The admin path
+   * also runs it just before its subscription cancel, which cannot roll back.
+   */
   assertInTransaction?: () => Promise<void>;
   /** Runs inside the delete's transaction after the row goes, so an audit entry commits or rolls back with it. */
   recordInTransaction?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
   /** The delete's transaction failed after the subscription cancel, which cannot roll back. */
   onDeleteFailed?: (target: IUserDocument | null, cancellation: AccountSubscriptionCancellation) => Promise<void>;
+  /** The delete's transaction committed; anything that throws after this ran post-commit work only. */
+  onDeleteCommitted?: () => void;
 };
 
 /**
@@ -91,6 +96,7 @@ export async function hardDeleteUser<T>(
         // the transaction commits, so only the admin path may cancel subscriptions before it.
         const cancelAfterDelete = context.initiatedBy === 'self';
         const customerIds = cancelAfterDelete ? await readAccountSubscriptionCustomerIds(id) : undefined;
+        if (!cancelAfterDelete) await context.assertInTransaction?.();
         const cancellation = cancelAfterDelete
           ? NO_SUBSCRIPTIONS_CANCELED
           : await cancelAccountSubscriptions(
@@ -116,6 +122,7 @@ export async function hardDeleteUser<T>(
           throw error;
         }
         deleteCommitted = true;
+        context.onDeleteCommitted?.();
         if (cancelAfterDelete) {
           // Cancellation can win until the guarded delete commits. Do no external writes before
           // that point: a failed due-date guard must leave a restored account's subscriptions alone.

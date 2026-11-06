@@ -133,6 +133,7 @@ export * from './adminActionReason';
 export * from './adminAuditCatalogue';
 export * from './adminAuditQuery';
 export * from './adminAuditReview';
+export * from './adminApproval';
 export * from './adminUserActivity';
 export * from './adminUserTimeline';
 export * from './adminSubscriptionTimeline';

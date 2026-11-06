@@ -11,6 +11,11 @@ import { type OrgSubscriptionSubscribeRequest } from '@bike4mind/server-utils/li
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { z } from 'zod';
+import {
+  isApprovalPending,
+  notifyApprovalSubmitted,
+  type ApprovalPendingResponse,
+} from '@client/app/hooks/data/adminApprovals';
 
 export const useSubscribePlan = () => {
   return useMutation({
@@ -236,13 +241,16 @@ export const useGrantSubscription = () => {
       billingOwnerId?: string;
       reason: string;
     }) => {
-      const { data } = await api.post<{
-        success: boolean;
-        message: string;
-        credits?: number;
-        organizationId?: string;
-        seats?: number;
-      }>(`/api/admin/users/${userId}/grant-subscription`, {
+      const { data } = await api.post<
+        | {
+            success: boolean;
+            message: string;
+            credits?: number;
+            organizationId?: string;
+            seats?: number;
+          }
+        | ApprovalPendingResponse
+      >(`/api/admin/users/${userId}/grant-subscription`, {
         subscriptionType,
         priceId,
         seats,
@@ -255,6 +263,7 @@ export const useGrantSubscription = () => {
       return data;
     },
     onSuccess: data => {
+      if (isApprovalPending(data)) return notifyApprovalSubmitted(queryClient);
       queryClient.invalidateQueries({ queryKey: ['subscriptions'] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'subscriptions'] });

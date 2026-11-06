@@ -4,6 +4,7 @@ import {
   AUDIT_REVIEW_BASELINE_DAYS,
   IMPERSONATION_ENDED_ACTION,
   IMPERSONATION_STARTED_ACTION,
+  type AdminAuditAction,
   type AuditEntry,
   type AuditLogCursor,
   type AuditLogFilters,
@@ -482,10 +483,36 @@ class AdminAuditLogRepository implements SubscriptionTimelineAuditLogRepository 
       .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
   }
 
-  async sumCreditsGranted(actorUserId: string, since: Date): Promise<number> {
+  async countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number> {
+    return this.auditLogModel
+      .countDocuments({
+        'actor.userId': actorUserId,
+        action: { $in: [...actions] },
+        occurredAt: { $gte: since },
+        'details.approval': { $exists: false },
+      })
+      .maxTimeMS(LIST_QUERY_MAX_TIME_MS);
+  }
+
+  async sumCreditsGranted(
+    actorUserId: string,
+    since: Date,
+    options: { excludeApproved?: boolean; includeSubscriptionGrants?: boolean } = {}
+  ): Promise<number> {
+    const approved = options.excludeApproved ? { 'details.approval': { $exists: false } } : {};
+    const actions = options.includeSubscriptionGrants
+      ? [...ADMIN_AUDIT_CREDIT_GRANT_ACTIONS, 'user.subscription.granted']
+      : ADMIN_AUDIT_CREDIT_GRANT_ACTIONS;
     const [total] = await this.auditLogModel
       .aggregate<{ credits: number }>([
-        { $match: { ...creditGrantsBy(actorUserId), occurredAt: { $gte: since } } },
+        {
+          $match: {
+            ...creditGrantsBy(actorUserId),
+            action: { $in: actions },
+            occurredAt: { $gte: since },
+            ...approved,
+          },
+        },
         { $group: { _id: null, credits: { $sum: '$details.credits' } } },
       ])
       .option({ maxTimeMS: LIST_QUERY_MAX_TIME_MS });

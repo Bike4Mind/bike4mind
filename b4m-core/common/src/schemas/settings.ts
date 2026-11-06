@@ -636,6 +636,12 @@ export const SettingKeySchema = z.enum([
   'AdminAuditCriticalGrantCredits',
   'AdminAuditDailyGrantCredits',
 
+  // Two-person approval for high-risk admin actions
+  'AdminApprovalsEnabled',
+  'AdminApprovalBulkUserThreshold',
+  'AdminApprovalCreditThreshold',
+  'AdminApprovalExpiryHours',
+
   // Slack Analytics Bot (existing production bot - DO NOT CHANGE)
   'slackSigningSecret',
   'slackBotToken',
@@ -4300,6 +4306,42 @@ export const settingsMap = {
     int: true,
     description:
       'A grant that takes one admin past this many credits granted in the last 24 hours is recorded as critical in the Admin Audit Log and alerts the security channel.',
+    category: 'SecOps',
+  }),
+  AdminApprovalsEnabled: makeBooleanSetting({
+    key: 'AdminApprovalsEnabled',
+    name: 'Require Second-Admin Approval',
+    defaultValue: false,
+    description:
+      'High-risk admin actions (large bulk user actions, large credit grants, impersonating or deleting an admin) wait for a second admin to approve them. Leave off for a single-admin deployment.',
+    category: 'SecOps',
+  }),
+  AdminApprovalBulkUserThreshold: makeNumberSetting({
+    key: 'AdminApprovalBulkUserThreshold',
+    name: 'Approval Threshold: Bulk Users',
+    defaultValue: 25,
+    min: 1,
+    int: true,
+    description: 'A bulk suspend, contain or credit adjustment touching more than this many users needs approval.',
+    category: 'SecOps',
+  }),
+  AdminApprovalCreditThreshold: makeNumberSetting({
+    key: 'AdminApprovalCreditThreshold',
+    name: 'Approval Threshold: Credits',
+    defaultValue: ADMIN_AUDIT_DEFAULT_CRITICAL_GRANT_CREDITS,
+    min: 1,
+    int: true,
+    description: 'An admin credit grant or top-up of more than this many credits needs approval.',
+    category: 'SecOps',
+  }),
+  AdminApprovalExpiryHours: makeNumberSetting({
+    key: 'AdminApprovalExpiryHours',
+    name: 'Approval Request Expiry (hours)',
+    defaultValue: 24,
+    min: 1,
+    max: 168,
+    int: true,
+    description: 'A pending approval request expires after this many hours and must be requested again.',
     category: 'SecOps',
   }),
   liveFeedbackEmail: makeStringSetting({

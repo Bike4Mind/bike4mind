@@ -1,35 +1,9 @@
-import { z } from 'zod';
-import { BadRequestError, NotFoundError, assertCanActOnAdminTarget } from '@bike4mind/common';
+import { BadRequestError, NotFoundError, assertCanActOnAdminTarget, canAccessAdmin } from '@bike4mind/common';
 import { userRepository } from '@bike4mind/database';
 import { adminApi } from '@server/middlewares/adminApi';
-import {
-  denySelfAdminAction,
-  isSelfOrImpersonator,
-  parseAdminActionReason,
-  recordAdminActionFromRequest,
-} from '@server/utils/adminAudit';
-import { scheduleAccountDeletion } from '@server/users/accountDeletion';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-// `receivedAt` may be a calendar day in a timezone ahead of the server's, hence the day of slack.
-const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
-const isRealCalendarDate = (value: string): boolean => {
-  const time = Date.parse(value);
-  // Date.parse rolls 2026-02-30 over to March 2; the round trip catches it.
-  return !Number.isNaN(time) && new Date(time).toISOString().slice(0, 10) === value.slice(0, 10);
-};
-
-// Only `YYYY-MM-DD` or a UTC ISO datetime: Date.parse alone also accepts "1" or "Nov 5".
-const bodySchema = z.object({
-  receivedAt: z
-    .string()
-    .refine(
-      value => (DATE_ONLY.test(value) || z.string().datetime().safeParse(value).success) && isRealCalendarDate(value),
-      'receivedAt must be a valid date (YYYY-MM-DD)'
-    )
-    .refine(value => Date.parse(value) <= Date.now() + DAY_MS, 'receivedAt cannot be in the future'),
-});
+import { denySelfAdminAction, isSelfOrImpersonator, parseAdminActionReason } from '@server/utils/adminAudit';
+import { getApprovalPolicy, requestApproval } from '@server/admin/approvals/service';
+import { ScheduleDeletionSchema, scheduleDeletionAsAdmin } from '@server/admin/scheduleDeletionAsAdmin';
 
 /**
  * POST /api/admin/users/[userId]/schedule-deletion - schedule the account deletion for a user who
@@ -50,35 +24,32 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'users:del
     });
   }
   if (!user) throw new NotFoundError('User not found');
-  const parsedBody = bodySchema.safeParse(req.body);
+  const parsedBody = ScheduleDeletionSchema.safeParse(req.body);
   if (!parsedBody.success) {
     throw new BadRequestError(parsedBody.error.issues[0]?.message ?? 'Invalid request body: expected { receivedAt }');
   }
-  const receivedAt = new Date(parsedBody.data.receivedAt);
   const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
   assertCanActOnAdminTarget(req.user, user, 'schedule deletion for');
 
-  const { deletion, subscriptions } = await scheduleAccountDeletion(req, {
-    userId: user.id,
-    source: 'support',
-    requestedAt: receivedAt,
-    actorUserId: req.user.id,
-    recordInTransaction: async stamped => {
-      await recordAdminActionFromRequest(req, {
-        action: 'user.deletion.scheduled',
-        target: { kind: 'user', id: user.id, displayName: user.name || user.username || user.email || user.id },
-        summary: "scheduled account deletion at the user's request",
+  const params = { userId: user.id, receivedAt: parsedBody.data.receivedAt, reason };
+  const policy = await getApprovalPolicy();
+  if (policy.enabled && canAccessAdmin(user)) {
+    const pending = await requestApproval(
+      req,
+      {
+        action: 'user.schedule_admin_deletion',
+        params,
+        summary: `schedule deletion for admin ${user.name || user.username || user.email || user.id}`,
         reason,
-        details: {
-          receivedAt: receivedAt.toISOString(),
-          scheduledFor: stamped.scheduledFor.toISOString(),
-          source: 'support',
-        },
-      });
-    },
-  });
-
-  return res.status(202).json({ deletion, canceledSubscriptions: subscriptions.canceled.length });
+        requiredPermission: 'users:delete',
+        requiresFullAdmin: true,
+      },
+      policy
+    );
+    return res.status(202).json(pending);
+  }
+  const result = await scheduleDeletionAsAdmin(req, params, undefined, { requireNonAdmin: policy.enabled });
+  return res.status(202).json(result);
 });
 
 export const config = { api: { externalResolver: true } };

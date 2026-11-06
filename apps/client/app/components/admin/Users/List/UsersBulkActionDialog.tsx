@@ -16,8 +16,9 @@ import { getErrorMessage } from '@client/app/utils/error';
 import { ActionDialog } from '../../shared/ActionDialog';
 import { ADMIN_REASON_PRESETS } from '../../shared/adminReason';
 import { SegmentedControl } from '../../shared/SegmentedControl';
-import { useUndoToast } from '../../shared/UndoToast';
-import { useAdminUsersBulkExecute, useAdminUsersBulkPreview, useAdminUsersBulkUndo } from './useAdminUsersBulk';
+import { useUsersBulkResult } from './useUsersBulkResult';
+import { APPROVAL_SUBMITTED_MESSAGE, isApprovalPending } from '@client/app/hooks/data/adminApprovals';
+import { useAdminUsersBulkExecute, useAdminUsersBulkPreview } from './useAdminUsersBulk';
 
 type CreditMode = 'set' | 'add' | 'subtract';
 
@@ -204,7 +205,7 @@ export function UsersBulkActionDialog({
   const [blockDomains, setBlockDomains] = useState(false);
   // One key per dialog: a double submit or a retried request replays instead of acting twice.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
-  const showUndoToast = useUndoToast();
+  const showBulkResult = useUsersBulkResult();
 
   const action = useMemo(
     () => buildAction(type, creditMode, amount, tag, blockDomains),
@@ -217,7 +218,6 @@ export function UsersBulkActionDialog({
   );
   const preview = useAdminUsersBulkPreview(previewRequest);
   const execute = useAdminUsersBulkExecute();
-  const undo = useAdminUsersBulkUndo();
 
   // Stale while the debounced inputs catch up, so a count is never confirmed for other inputs.
   const current = debouncedAction === action ? preview.data : undefined;
@@ -252,54 +252,11 @@ export function UsersBulkActionDialog({
       });
       onDone();
       onClose();
-      if (result.failed.length > 0)
-        toast.warning(`${result.failed.length.toLocaleString()} users could not be changed.`);
-      if (result.partial)
-        toast.warning(
-          `Stopped after ${plural(result.applied)}; ${plural(result.remaining)} not changed. Run it again for the rest.`
-        );
-      const changed = result.applied > 0 || result.blockedDomains.length > 0;
-      if (!changed) {
-        toast.info('No users were changed.');
+      if (isApprovalPending(result)) {
+        toast.info(`${APPROVAL_SUBMITTED_MESSAGE} No users were changed yet.`);
         return;
       }
-      if (result.subscriptionCancelFailures.length > 0)
-        toast.warning(
-          `Could not cancel the Stripe subscriptions of ${plural(result.subscriptionCancelFailures.length)}. Cancel them in Stripe.`
-        );
-      const message =
-        `${copy.done} ${plural(result.applied)}` +
-        (result.blockedDomains.length > 0 ? `; blocked signups from ${result.blockedDomains.join(', ')}` : '') +
-        (result.canceledSubscriptions > 0
-          ? `; canceled ${result.canceledSubscriptions.toLocaleString()} Stripe subscription(s)`
-          : '');
-      // The server sets undoExpiresAt to no later than now when it could not store an undo record.
-      if (Date.parse(result.undoExpiresAt) <= Date.now()) {
-        toast.success(message);
-        toast.warning('Undo is not available for this batch.');
-        return;
-      }
-      showUndoToast({
-        message,
-        onUndo: async () => {
-          const restored = await undo.mutateAsync(result.batchId);
-          if (restored.stillBlockedDomains.length > 0)
-            toast.warning(
-              `Could not unblock ${domainList(restored.stillBlockedDomains)}. Remove them from the blocked email domains setting.`
-            );
-          if (restored.partial)
-            toast.warning(
-              `${plural(restored.remaining)} not restored before the time limit. Check them on their profiles.`
-            );
-          if (restored.subscriptionsNotRestored.length > 0)
-            toast.warning(
-              `${restored.subscriptionsNotRestored.length.toLocaleString()} canceled Stripe subscription(s) stay canceled; the users must subscribe again.`
-            );
-          if (restored.failed.length > 0)
-            toast.warning(`${restored.failed.length.toLocaleString()} users could not be restored.`);
-          else toast.success(`Restored ${plural(restored.restored)}`);
-        },
-      });
+      showBulkResult(result, copy.done);
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 409) {
         toast.error('The matching users changed. Check the new count and confirm again.');
