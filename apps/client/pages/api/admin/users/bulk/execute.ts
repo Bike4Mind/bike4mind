@@ -34,14 +34,18 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       if (blocksEmailDomains(request.action) && !req.ability?.can('update', AdminSettings)) {
         throw new ForbiddenError('Blocking email domains needs permission to edit admin settings.');
       }
-      const pending = await requestUsersBulkApprovalIfNeeded(req as unknown as Request, request);
-      if (pending) return res.status(202).json(pending);
-      const result: AdminUsersBulkResult = await executeAdminUsersBulk(
-        request,
-        { id: req.user.id, selfIds: selfIdsOf(req.user) },
-        usersBulkExecuteDeps(req, request.reason, req.logger)
-      );
-      return res.json(result);
+      const gate = await requestUsersBulkApprovalIfNeeded(req as unknown as Request, request);
+      if (gate.pending) return res.status(202).json(gate.pending);
+      try {
+        const result: AdminUsersBulkResult = await executeAdminUsersBulk(
+          request,
+          { id: req.user.id, selfIds: selfIdsOf(req.user) },
+          usersBulkExecuteDeps(req, request.reason, req.logger)
+        );
+        return res.json(result);
+      } finally {
+        await gate.release();
+      }
     })
   );
 

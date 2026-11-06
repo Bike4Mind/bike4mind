@@ -22,7 +22,10 @@ vi.mock('@server/admin/usersBulk/execute', () => ({
 }));
 const mockGate = vi.fn();
 vi.mock('@server/admin/usersBulk/approvalGate', () => ({
-  requestUsersBulkApprovalIfNeeded: (...a: unknown[]) => mockGate(...a),
+  requestUsersBulkApprovalIfNeeded: async (...a: unknown[]) => {
+    const pending = await mockGate(...a);
+    return pending ? { pending } : { pending: null, release: async () => undefined };
+  },
 }));
 
 import handler from '../execute';

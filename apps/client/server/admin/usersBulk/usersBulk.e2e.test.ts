@@ -722,7 +722,7 @@ describe('users bulk actions on a real replica set', () => {
     const body = request([first, second], { type: 'suspend' }, [first, second]);
     const asReq = (id: string) => reqFor(id) as unknown as Parameters<typeof approveApproval>[0];
 
-    const pending = await requestUsersBulkApprovalIfNeeded(asReq(requester), body);
+    const { pending } = await requestUsersBulkApprovalIfNeeded(asReq(requester), body);
     expect(pending).toMatchObject({ status: 'pending' });
     expect(await userState(first)).toMatchObject({ isBanned: false });
 

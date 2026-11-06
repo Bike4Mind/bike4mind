@@ -36,8 +36,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const request = req as unknown as Request;
 
     const credits = grantSubscriptionCredits(params, teamPlan);
-    const policy = await creditGrantNeedsApproval(credits, req.user.id);
-    if (policy) {
+    const gate = await creditGrantNeedsApproval(credits, req.user.id);
+    if (gate.policy) {
       const user = await validateGrantSubscription(params, teamPlan);
       const pending = await requestApproval(
         request,
@@ -49,11 +49,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           requiredPermission: 'credits:adjust',
           requiresFullAdmin: true,
         },
-        policy
+        gate.policy
       );
       return res.status(202).json(pending);
     }
-    return res.status(200).json(await grantSubscription(request, params));
+    try {
+      return res.status(200).json(await grantSubscription(request, params));
+    } finally {
+      await gate.release();
+    }
   })
 );
 

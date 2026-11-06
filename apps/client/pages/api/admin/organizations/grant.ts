@@ -22,8 +22,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const params = { name, ownerEmail, seats, initialCredits, reason };
     const request = req as unknown as Request;
-    const policy = await creditGrantNeedsApproval(initialCredits, req.user.id);
-    if (policy) {
+    const gate = await creditGrantNeedsApproval(initialCredits, req.user.id);
+    if (gate.policy) {
       await validateGrantOrg(params);
       const pending = await requestApproval(
         request,
@@ -35,11 +35,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           requiredPermission: 'credits:adjust',
           requiresFullAdmin: true,
         },
-        policy
+        gate.policy
       );
       return res.status(202).json(pending);
     }
-    return res.status(201).json(await grantOrg(request, params));
+    try {
+      return res.status(201).json(await grantOrg(request, params));
+    } finally {
+      await gate.release();
+    }
   })
 );
 

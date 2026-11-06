@@ -9,8 +9,25 @@ const mocks = vi.hoisted(() => ({
   recentCredits: vi.fn(),
   recentUsers: vi.fn(),
 }));
+const reservations = vi.hoisted(() => {
+  const rows = new Map<string, { actorUserId: string; kind: string; amount: number }>();
+  let next = 0;
+  return {
+    rows,
+    reserve: vi.fn(async (actorUserId: string, kind: string, amount: number) => {
+      const id = String(++next);
+      rows.set(id, { actorUserId, kind, amount });
+      return id;
+    }),
+    sumReserved: vi.fn(async (actorUserId: string, kind: string) =>
+      [...rows.values()].filter(r => r.actorUserId === actorUserId && r.kind === kind).reduce((t, r) => t + r.amount, 0)
+    ),
+    release: vi.fn(async (id: string) => void rows.delete(id)),
+  };
+});
 vi.mock('@bike4mind/database', () => ({
   adminAuditLogRepository: { sumCreditsGranted: mocks.recentCredits, countActions: mocks.recentUsers },
+  adminGateReservationRepository: reservations,
 }));
 vi.mock('@server/admin/approvals/service', () => ({
   getApprovalPolicy: mocks.policy,
@@ -64,6 +81,7 @@ const cohort = (count: number, credits = 100) => Array.from({ length: count }, (
 describe('requestUsersBulkApprovalIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    reservations.rows.clear();
     mocks.recentCredits.mockResolvedValue(0);
     mocks.recentUsers.mockResolvedValue(0);
     mocks.policy.mockResolvedValue({ enabled: true, bulkUserThreshold: 2, creditThreshold: 1000, expiryHours: 24 });
@@ -72,11 +90,13 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
 
   it('runs at the threshold and asks for approval one user above it', async () => {
     const two = cohort(2);
-    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(two, { type: 'suspend' }), depsFor(two))).toBeNull();
+    expect(
+      await requestUsersBulkApprovalIfNeeded(req, requestFor(two, { type: 'suspend' }), depsFor(two))
+    ).toMatchObject({ pending: null });
 
     const three = cohort(3);
     const body = requestFor(three, { type: 'suspend' });
-    expect(await requestUsersBulkApprovalIfNeeded(req, body, depsFor(three))).toBe(PENDING);
+    expect(await requestUsersBulkApprovalIfNeeded(req, body, depsFor(three))).toEqual({ pending: PENDING });
     expect(mocks.requestApproval).toHaveBeenCalledWith(
       req,
       expect.objectContaining({
@@ -92,9 +112,9 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
   it('counts the users this admin already moved over the expiry window, so a split batch is held', async () => {
     const two = cohort(2);
     mocks.recentUsers.mockResolvedValue(1);
-    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(two, { type: 'contain' }), depsFor(two))).toBe(
-      PENDING
-    );
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(two, { type: 'contain' }), depsFor(two))).toEqual({
+      pending: PENDING,
+    });
     const [actor, actions, since] = mocks.recentUsers.mock.calls[0] as [string, string[], Date];
     expect(actor).toBe(ADMIN);
     expect(actions.sort()).toEqual(['user.bulk.contained', 'user.bulk.credits_adjusted', 'user.bulk.suspended']);
@@ -106,7 +126,7 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
     const users = cohort(5);
     expect(
       await requestUsersBulkApprovalIfNeeded(req, requestFor(users, { type: 'contain' }), depsFor(users))
-    ).toBeNull();
+    ).toMatchObject({ pending: null });
     expect(mocks.requestApproval).not.toHaveBeenCalled();
   });
 
@@ -114,7 +134,9 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
     'never gates $type',
     async action => {
       const users = cohort(5);
-      expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, action), depsFor(users))).toBeNull();
+      expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, action), depsFor(users))).toMatchObject({
+        pending: null,
+      });
       expect(mocks.policy).not.toHaveBeenCalled();
     }
   );
@@ -122,10 +144,16 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
   it('gates a small credit adjustment on the credits it adds, under credits:adjust', async () => {
     const users = cohort(1);
     const add = (amount: number): AdminUsersBulkAction => ({ type: 'adjustCredits', mode: 'add', amount });
-    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1000)), depsFor(users))).toBeNull();
-    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1001)), depsFor(users))).toBe(PENDING);
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1000)), depsFor(users))).toMatchObject({
+      pending: null,
+    });
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1001)), depsFor(users))).toEqual({
+      pending: PENDING,
+    });
     mocks.recentCredits.mockResolvedValueOnce(1);
-    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1000)), depsFor(users))).toBe(PENDING);
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1000)), depsFor(users))).toEqual({
+      pending: PENDING,
+    });
     expect(mocks.requestApproval).toHaveBeenCalledWith(
       req,
       expect.objectContaining({ requiredPermission: 'credits:adjust', requiresFullAdmin: true }),

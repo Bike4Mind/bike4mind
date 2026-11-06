@@ -82,7 +82,10 @@ const approvalMocks = vi.hoisted(() => ({
   request: vi.fn(),
 }));
 vi.mock('@server/admin/creditGrants/gate', () => ({
-  creditGrantNeedsApproval: (credits: number) => approvalMocks.policy(credits),
+  creditGrantNeedsApproval: async (credits: number) => {
+    const policy = await approvalMocks.policy(credits);
+    return policy ? { policy } : { policy: null, release: async () => undefined };
+  },
 }));
 vi.mock('@server/admin/approvals/service', () => ({
   requestApproval: (...a: unknown[]) => approvalMocks.request(...a),

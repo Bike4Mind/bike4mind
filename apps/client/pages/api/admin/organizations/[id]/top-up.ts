@@ -31,8 +31,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const params = { organizationId: id, credits, kind, idempotencyKey, reason };
     const request = req as unknown as Request;
-    const policy = await creditGrantNeedsApproval(credits, req.user.id);
-    if (policy) {
+    const gate = await creditGrantNeedsApproval(credits, req.user.id);
+    if (gate.policy) {
       const organization = await organizationRepository.findById(id);
       if (!organization) throw new NotFoundError('Organization not found');
       const pending = await requestApproval(
@@ -45,11 +45,15 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
           requiredPermission: 'credits:adjust',
           requiresFullAdmin: true,
         },
-        policy
+        gate.policy
       );
       return res.status(202).json(pending);
     }
-    return res.status(200).json(await topUpOrg(request, params));
+    try {
+      return res.status(200).json(await topUpOrg(request, params));
+    } finally {
+      await gate.release();
+    }
   })
 );
 
