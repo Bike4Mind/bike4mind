@@ -3,7 +3,7 @@ import { type MigrationFile } from './index';
 
 // Below the fail-closed OAuth backfill so these indexes can deploy independently.
 const migration: MigrationFile = {
-  id: 20260921239980,
+  id: 20260921239985,
   name: 'ensure admin search indexes',
   up: async () => {
     await AuthSessionModel.collection.createIndex(
