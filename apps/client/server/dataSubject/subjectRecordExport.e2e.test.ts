@@ -29,6 +29,17 @@ const NoteComment = mongoose.model(
 );
 const Access = mongoose.model('DsTestAccess', new Schema({ viewerId: ObjectId, at: Date }));
 const AccessQuery = mongoose.model('DsTestAccessQuery', new Schema({ text: String }));
+const Ledger = mongoose.model(
+  'DsTestLedger',
+  new Schema({
+    ownerId: ObjectId,
+    partyIds: [ObjectId],
+    adminId: ObjectId,
+    adminName: String,
+    adminIp: String,
+    amount: Number,
+  })
+);
 const Undeclared = mongoose.model('DsTestUndeclared', new Schema({ ownerId: ObjectId }));
 
 const registry: DataHolderRegistry = {
@@ -64,6 +75,21 @@ const registry: DataHolderRegistry = {
     parent: 'DsTestAccess',
     foreignKey: '_id',
     deleteWhenParentAnonymized: true,
+  },
+  DsTestLedger: {
+    kind: 'holder',
+    references: [
+      { path: 'ownerId', matchBy: 'userId', action: 'retain', reason: 'test' },
+      { path: 'partyIds', matchBy: 'userId', action: 'retain', reason: 'test' },
+      {
+        path: 'adminId',
+        matchBy: 'userId',
+        action: 'retain',
+        reason: 'test',
+        identifies: ['adminName', 'adminIp'],
+        exportScope: 'reference',
+      },
+    ],
   },
   DsTestRelease: { kind: 'noUserData', note: 'test' },
 };
@@ -150,8 +176,52 @@ describe('SubjectRecordExport', () => {
     expect(records.DsTestNoteComment.map((record: ExportedRecord) => record._id).sort()).toEqual(
       [onMyNote.id, myCommentElsewhere.id].sort()
     );
-    expect(records.DsTestAccess.map((record: ExportedRecord) => record._id)).toEqual([access.id]);
+    expect(records.DsTestAccess).toEqual([{ _id: access.id, viewerId: subject.id }]);
     expect(records.DsTestAccessQuery).toEqual([{ _id: query.id, text: 'what I searched', __v: 0 }]);
+  });
+
+  it('withholds every other person from a record about this person, and exports only the reference of an actor', async () => {
+    const me = new mongoose.Types.ObjectId();
+    const other = new mongoose.Types.ObjectId();
+    const third = new mongoose.Types.ObjectId();
+    const mine = await Ledger.create({
+      ownerId: me,
+      partyIds: [me, other],
+      adminId: other,
+      adminName: 'Admin',
+      adminIp: '10.0.0.1',
+      amount: 5,
+    });
+    const shared = await Ledger.create({ ownerId: other, partyIds: [third, me], amount: 7 });
+    const actedOn = await Ledger.create({
+      ownerId: other,
+      partyIds: [other],
+      adminId: me,
+      adminName: 'Me',
+      adminIp: '10.0.0.2',
+      amount: 9,
+    });
+    await Ledger.create({ ownerId: other, adminId: third, adminName: 'Them', amount: 11 });
+
+    const exporter = new SubjectRecordExport({ userId: me.toString(), email: null }, registry);
+    const records = json(await collect(exporter, 'DsTestLedger'));
+    const byId = (id: unknown) => records.find((record: ExportedRecord) => record._id === String(id));
+
+    expect(records).toHaveLength(3);
+    expect(byId(mine._id)).toEqual({
+      _id: mine.id,
+      ownerId: me.toString(),
+      partyIds: [me.toString()],
+      amount: 5,
+      __v: 0,
+    });
+    expect(byId(shared._id)).toEqual({ _id: shared.id, partyIds: [me.toString()], amount: 7, __v: 0 });
+    expect(byId(actedOn._id)).toEqual({
+      _id: actedOn.id,
+      adminId: me.toString(),
+      adminName: 'Me',
+      adminIp: '10.0.0.2',
+    });
   });
 
   it('skips email references when the subject has no email', async () => {

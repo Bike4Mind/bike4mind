@@ -95,8 +95,11 @@ export type UserReference = ErasureAction & {
    * lowercase on write and keeps no previous addresses, so a later change of address is not matched.
    */
   matchBy: 'userId' | 'email';
-  /** Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an organization id. */
-  where?: Readonly<Record<string, string>>;
+  /**
+   * Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an
+   * organization id. `null` matches a field that is absent or null.
+   */
+  where?: Readonly<Record<string, string | null>>;
   /**
    * `personal` limits the reference to the person's own content, not their organization's. It is not
    * a literal filter: personal rows store `organizationId` as null, absent or `''`, or name one of
@@ -105,6 +108,13 @@ export type UserReference = ErasureAction & {
    * `isOrganizationFile` in `packages/server-utils/src/users/purgeAccountFiles.ts`, which keeps legacy org uploads).
    */
   scope?: 'personal';
+  /**
+   * Fields beside `path` that describe the person it names (a cached name, email, request IP). An
+   * export to anyone else leaves them out. Erasure does not read this; it clears `alsoRedact`.
+   */
+  identifies?: readonly string[];
+  /** See the export rules above: the person is only the actor here, not a party to the record. */
+  exportScope?: 'reference';
 };
 
 export type AttributionReference = UserReference & { action: 'anonymize' };

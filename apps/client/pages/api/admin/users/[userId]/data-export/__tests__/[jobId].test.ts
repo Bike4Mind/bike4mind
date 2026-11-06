@@ -70,6 +70,8 @@ describe('admin data subject export download', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(h.calls).toEqual(['audit', 'sign']);
+    expect(h.findTarget).toHaveBeenCalledWith(expect.objectContaining({ id: 'admin-1' }), USER_ID);
+    expect(h.builtAt).toHaveBeenCalledWith(expect.anything(), USER_ID, JOB_ID);
     expect(h.record).toHaveBeenCalledWith(expect.anything(), {
       action: 'user.data_export.downloaded',
       target: TARGET,
