@@ -2,7 +2,7 @@ import { z } from 'zod';
 import {
   ALL_IMAGE_MODELS,
   ImageSizeSchema,
-  LEGACY_IMAGE_MODEL_MAP,
+  resolveLegacyImageModel,
   OpenAIImageQualitySchema,
   OpenAIImageStyleSchema,
 } from './openai';
@@ -35,13 +35,7 @@ export const ImageTemplateIdSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Invali
  * The bound model. Reuses the legacy-remap preprocess so a template saved under
  * a since-renamed model id resolves to its current id rather than failing.
  */
-export const ImageTemplateModelSchema = z.preprocess(
-  val =>
-    typeof val === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_MAP, val)
-      ? LEGACY_IMAGE_MODEL_MAP[val]
-      : val,
-  z.enum(ALL_IMAGE_MODELS)
-);
+export const ImageTemplateModelSchema = z.preprocess(resolveLegacyImageModel, z.enum(ALL_IMAGE_MODELS));
 
 /**
  * The settings blob - the image-mode controls captured from LLMContext, minus

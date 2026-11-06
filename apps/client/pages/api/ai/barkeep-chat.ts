@@ -4,6 +4,9 @@ import { blockedAtZeroTierLimit } from '@server/middlewares/perUserRateLimit';
 import { ensureTavernAccess } from '@bike4mind/server-utils/utils/errors';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { HTTPError } from '@bike4mind/common';
+import { meterCompletionBackend } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 const BARKEEP_SYSTEM_PROMPT = `You are Grimbold, the jovial bartender of The Gilded Flagon tavern.
 You speak in a warm, slightly rough medieval voice — think gruff but kind.
@@ -18,7 +21,7 @@ interface BarkeepChatRequest {
   history?: { role: 'user' | 'assistant'; content: string }[];
 }
 
-// SPA-only and not credit-metered, so it stays off the API-key surface.
+// SPA-only, so it stays off the API-key surface.
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
@@ -37,7 +40,13 @@ const handler = baseApi({ auth: 'jwtOnly' })
     }
 
     try {
-      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+      const operations = await OperationsModelService.getOperationsModel();
+      const { modelId } = operations;
+      const llm = meterCompletionBackend(
+        operations.llm,
+        createRequestCompletionMeter(req, 'barkeep chat', { systemModel: true }),
+        operations.modelInfo
+      );
 
       const messages = [
         { role: 'system' as const, content: BARKEEP_SYSTEM_PROMPT },
@@ -62,6 +71,8 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
       return res.json({ reply: trimmed });
     } catch (error) {
+      // Credit and admission refusals keep their status (422) instead of becoming a 500.
+      if (error instanceof HTTPError) throw error;
       req.logger?.error?.('Barkeep chat error:', error);
       return res.status(500).json({
         error: 'The barkeep seems lost in thought. Try again.',

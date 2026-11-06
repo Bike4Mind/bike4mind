@@ -168,12 +168,12 @@ describe('LLM spend metric filters', () => {
     });
   });
 
-  it('counts completions charged down to zero', async () => {
-    const { COMPLETION_CREDIT_OVERDRAFT_MESSAGE } = await load();
+  it('counts completions that cost more than the balance, on the CLI and in web chat', async () => {
+    const { COMPLETION_CREDIT_OVERDRAFT_MESSAGE, SETTLEMENT_DEBT_MESSAGE } = await load();
     expect(callFor(resources.filter, 'completionCreditOverdraftFilter')).toEqual({
       name: 'test-app-production-completion-credit-overdraft',
       logGroupName: expect.objectContaining({ value: 'chat-completion-logs' }),
-      pattern: `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" }`,
+      pattern: `{ $.message = "${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}" || $.message = "${SETTLEMENT_DEBT_MESSAGE}" }`,
       metricTransformation: {
         name: 'CompletionCreditOverdrafts',
         namespace: 'test-app/production/LLMSpend',
@@ -181,8 +181,11 @@ describe('LLM spend metric filters', () => {
         unit: 'Count',
       },
     });
-    const source = readFileSync(new URL('../../b4m-core/services/src/cliCompletions.ts', import.meta.url), 'utf8');
-    expect(source).toContain(`'${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}'`);
+    // The alarm only sees these lines if the emitters log them verbatim.
+    const read = (path: string) =>
+      readFileSync(new URL(`../../b4m-core/services/src/${path}`, import.meta.url), 'utf8');
+    expect(read('cliCompletions.ts')).toContain(`'${COMPLETION_CREDIT_OVERDRAFT_MESSAGE}'`);
+    expect(read('llm/ChatCompletionProcess.ts')).toContain(`'${SETTLEMENT_DEBT_MESSAGE}'`);
   });
 
   it('selects every extracted metric value and dimension in the CloudWatch pattern', async () => {
@@ -265,7 +268,7 @@ describe('LLM spend alarms', () => {
       namespace: 'test-app/production/LLMSpend',
       period: 3600,
       statistic: 'Sum',
-      threshold: 2,
+      threshold: 5,
       treatMissingData: 'notBreaching',
       alarmActions: ['alarm-topic'],
       okActions: ['alarm-topic'],

@@ -120,6 +120,13 @@ export class DependencyInstaller {
     }
   }
 
+  /** Whether this session has an install still running, once any start under way has planned. */
+  async isInstalling(sessionId: string): Promise<boolean> {
+    await this.starting.get(sessionId)?.catch(() => undefined);
+    const install = this.installs.get(sessionId);
+    return install ? this.registry.get(install.processId, sessionId)?.status === 'running' : false;
+  }
+
   /** Wait up to `ms` (ms) for this session's install to end; 'none' when there is no install. */
   async waitFor(sessionId: string, ms: number): Promise<InstallWait> {
     const startedAt = this.now();

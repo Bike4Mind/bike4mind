@@ -18,6 +18,8 @@ import {
 } from '@server/services/publish';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
+import { meterCompletionBackend, type CompletionMeter } from '@bike4mind/services';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 
 /**
  * POST /api/publish/[publicId]/revise - Phase C of the artifact-collab layer:
@@ -183,17 +185,23 @@ const handler = baseApi().post(
       // Counted before the model call rather than after the storage-quota check below, because the
       // model call is the costly part and the quota can only be checked once its output is known.
       // Throws a 429 when the daily publish allowance is used up; `finally` still frees the lock.
-      // An attempt that reaches the model keeps its count whatever the outcome; one that ends
-      // before the model is called is refunded in `finally`.
+      // An attempt whose credit reservation succeeds keeps its count whatever the outcome; one that ends
+      // before then (including a credit or admission refusal) is refunded in `finally`.
       action = await consumePublishAction(req.user);
 
       // ── Run the LLM (in-monorepo path; accumulate the non-streamed completion). ──
-      const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+      const { modelId, llm: rawLlm, modelInfo } = await OperationsModelService.getOperationsModel();
       req.logger.info(`[REVISE] ${publicId} using ${modelInfo.name} (${modelInfo.backend}) on ${open.length} comments`);
 
       const messages = buildPrompt(currentHtml, open);
       const buffers: string[] = [];
-      modelCalled = true;
+      const requestMeter = createRequestCompletionMeter(req, 'artifact revise', { systemModel: true });
+      const meter: CompletionMeter = async (...args) => {
+        const reservation = await requestMeter(...args);
+        modelCalled = true;
+        return reservation;
+      };
+      const llm = meterCompletionBackend(rawLlm, meter, modelInfo);
       await llm.complete(
         modelId,
         messages,

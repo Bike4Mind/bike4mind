@@ -9,7 +9,14 @@ import { accountCampaignGroupSchema } from './accountCampaign';
  * detectors write it, the admin Detections page reads and grades it.
  */
 
-export const SHADOW_DETECTORS = ['signupNetworkBurst', 'accountCampaign', 'youngAccountSpend', 'paymentRisk'] as const;
+export const SHADOW_DETECTORS = [
+  'signupNetworkBurst',
+  'accountCampaign',
+  'youngAccountSpend',
+  'paymentRisk',
+  /** A new account that signed up from the same IP as a blocked account, close in time. */
+  'signupIpLinkedToBlocked',
+] as const;
 export type ShadowDetector = (typeof SHADOW_DETECTORS)[number];
 
 /**

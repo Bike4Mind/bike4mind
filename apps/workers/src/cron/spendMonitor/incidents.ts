@@ -23,6 +23,7 @@ const contextOf = (breach: SpendBreach): Record<string, unknown> => ({
   baseline: breach.baseline,
   ratio: breach.ratio,
   ...(breach.trusted ? { trusted: true } : {}),
+  ...(breach.trustedExcluded ? { trustedExcluded: breach.trustedExcluded } : {}),
 });
 
 const higherSeverity = (a: SpendAlertSeverity, b: SpendAlertSeverity): SpendAlertSeverity =>

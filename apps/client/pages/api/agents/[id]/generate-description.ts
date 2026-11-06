@@ -7,6 +7,8 @@ import { assertAiAccessAllowed } from '@server/auth/assertAiAccessAllowed';
 import { assertOutboundActionAllowed } from '@server/auth/assertOutboundActionAllowed';
 import { agentRepository } from '@bike4mind/database';
 import { generateAgentDescription } from '@server/agents/authoring/generateAgentDescription';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
+import { HTTPError } from '@bike4mind/common';
 
 interface AgentDescriptionResponse {
   description: string;
@@ -31,11 +33,18 @@ const handler = baseApi({ requiredScopes: AGENTS_WRITE_SCOPES }).post<
     assertAgentAccess(agent, userId, 'own');
 
     try {
-      const description = await generateAgentDescription(agent, req.logger);
+      const description = await generateAgentDescription(
+        agent,
+        req.logger,
+        createRequestCompletionMeter(req, 'agent description', { systemModel: true })
+      );
 
       res.json({ description });
     } catch (error) {
       req.logger.error('Error generating agent description:', error);
+
+      // Credit and admission refusals keep their status (422).
+      if (error instanceof HTTPError) throw error;
 
       // Provide user-friendly error messages
       let errorMessage = 'Failed to generate description. Please try again.';

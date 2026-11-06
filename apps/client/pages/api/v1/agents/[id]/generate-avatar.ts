@@ -8,6 +8,7 @@ import { generateAgentAvatarContract } from '@bike4mind/common';
 import { checkStorageLimit, logImageGenerationFailure } from '@bike4mind/utils';
 import imageLogger from '@bike4mind/server-utils/utils/imageLogger';
 import { generateAgentAvatar } from '@server/agents/authoring/generateAgentAvatar';
+import { createRequestCompletionMeter } from '@server/billing/meterPlatformCompletion';
 import { AUTHORING_RATE_LIMIT_BUCKET, findOwnedAgent } from '@server/agents/v1AgentRoute';
 import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { toV1AuthoringError } from '@server/agents/v1AgentErrors';
@@ -32,7 +33,8 @@ const handler = nextRouteForContract(generateAgentAvatarContract, {
         req.user,
         req.validated.image_model,
         req.logger,
-        req
+        req,
+        createRequestCompletionMeter(req, 'agent avatar prompt', { systemModel: true })
       );
       return res.json({ portrait_url: portraitUrl, generation_prompt: generationPrompt });
     } catch (error) {

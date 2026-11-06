@@ -1,6 +1,6 @@
 import { resolveSettingDefinition, type AuditChange, type AuditEntry } from '@bike4mind/common';
 import { adminAuditService } from '@bike4mind/services';
-import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { recordAdminActionFromRequest, type AdminAuditWriter } from '@server/utils/adminAudit';
 
 type AuditRequest = Parameters<typeof recordAdminActionFromRequest>[0];
 
@@ -39,11 +39,15 @@ export type AdminSettingChange = {
  * value is never recorded, and nested secret-like keys are dropped by the writer's redactor.
  * The one shape every settings writer shares, so the Audit Log reads them all the same way.
  */
-export const recordAdminSettingChange = (
-  req: AuditRequest,
+export const recordAdminSettingChange = (req: AuditRequest, change: AdminSettingChange): Promise<AuditEntry | null> =>
+  recordAdminSettingChangeWith((...args) => recordAdminActionFromRequest(req, ...args), change);
+
+/** recordAdminSettingChange for a caller that names its own actor (a job, through systemAuditWriter). */
+export const recordAdminSettingChangeWith = (
+  write: AdminAuditWriter,
   { settingName, before, after, summary, target, details }: AdminSettingChange
 ): Promise<AuditEntry | null> =>
-  recordAdminActionFromRequest(req, {
+  write({
     action: 'settings.admin_settings.updated',
     target: { kind: 'settings', id: target?.id ?? settingName, displayName: target?.displayName ?? settingName },
     summary: summary ?? (after === null ? `cleared ${settingName}` : `updated ${settingName}`),

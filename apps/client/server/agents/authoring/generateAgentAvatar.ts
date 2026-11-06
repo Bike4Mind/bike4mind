@@ -15,7 +15,7 @@ import {
 } from '@bike4mind/utils';
 import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { apiKeyService, fabFilesService } from '@bike4mind/services';
+import { apiKeyService, fabFilesService, type CompletionMeter, meterCompletionBackend } from '@bike4mind/services';
 import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
@@ -120,14 +120,15 @@ export async function generateAgentAvatar(
   user: Parameters<typeof checkStorageLimit>[0],
   userImageModel: string | undefined,
   logger: Logger,
-  billingRequest?: Parameters<typeof reserveRequestCredits>[0]['req']
+  billingRequest: Parameters<typeof reserveRequestCredits>[0]['req'] | undefined,
+  meter: CompletionMeter
 ): Promise<{ portraitUrl: string; generationPrompt: string }> {
   const userId = user.id;
   // Get operations model for text generation (LLM for prompt generation)
   const operationsModel = await OperationsModelService.getOperationsModel();
-  const { modelId, llm } = operationsModel;
+  const { modelId, llm: rawLlm } = operationsModel;
 
-  if (!llm) {
+  if (!rawLlm) {
     throw new Error('Failed to initialize text model for prompt generation');
   }
 
@@ -194,6 +195,7 @@ export async function generateAgentAvatar(
   const userPrompt = buildAgentVisualPrompt(agent);
   let generatedPrompt = '';
 
+  const llm = meterCompletionBackend(rawLlm, meter, operationsModel.modelInfo);
   await llm.complete(
     modelId,
     [

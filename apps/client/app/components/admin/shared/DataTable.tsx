@@ -4,7 +4,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
-import { adminFocus, adminFocusScope, adminScrollGutter, adminSurface } from './adminStyles';
+import { adminFocus, adminFocusScope, adminScrollGutter, adminScrollbarVisible, adminSurface } from './adminStyles';
 import type { AdminSelection } from './BulkActionBar';
 
 export type DataColumn<Row> = {
@@ -59,6 +59,8 @@ export type DataTableProps<Row> = {
   minWidth?: string;
   /** Cap with an inner scroll; `none` lets the page scroll instead. */
   maxHeight?: string;
+  /** Show the scrollbar thumb all the time instead of only on hover. */
+  alwaysShowScrollbar?: boolean;
 };
 const PAGE_SIZES = [25, 50, 100] as const;
 const CELL_CONTROLS = 'button, input, a, [role="checkbox"], [role="menu"], [role="menuitem"]';
@@ -90,6 +92,7 @@ export function DataTable<Row>({
   rowActions,
   minWidth = '40rem',
   maxHeight = '65vh',
+  alwaysShowScrollbar = false,
 }: DataTableProps<Row>) {
   const [localSort, setLocalSort] = useState<DataTableSort>();
   const [localPage, setLocalPage] = useState(0);
@@ -254,6 +257,7 @@ export function DataTable<Row>({
           overflowX: 'auto',
           maxHeight: maxHeight === 'none' ? undefined : maxHeight,
           ...adminScrollGutter,
+          ...(alwaysShowScrollbar ? adminScrollbarVisible : {}),
         }}
       >
         <Table

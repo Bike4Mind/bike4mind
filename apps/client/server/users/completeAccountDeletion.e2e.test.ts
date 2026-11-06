@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { User } from '@bike4mind/database';
+import { AdminAuditLogModel, User } from '@bike4mind/database';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -11,7 +11,10 @@ const h = vi.hoisted(() => ({ purgeFiles: vi.fn(), purgeContent: vi.fn(), sendCo
 vi.mock('./purgeAccountFiles', () => ({ purgeAccountFiles: h.purgeFiles }));
 vi.mock('./purgeAccountContent', () => ({ purgeAccountContent: h.purgeContent }));
 vi.mock('./accountDeletionEmail', () => ({ sendAccountDeletionCompleteEmail: h.sendComplete }));
-vi.mock('@bike4mind/services', () => ({ authSessionService: { endRealtimeConnections: vi.fn() } }));
+vi.mock('@bike4mind/services', async importOriginal => ({
+  adminAuditService: (await importOriginal<typeof import('@bike4mind/services')>()).adminAuditService,
+  authSessionService: { endRealtimeConnections: vi.fn() },
+}));
 vi.mock('@server/services/hardDeleteUser', async () => {
   const { User: UserModel } = await import('@bike4mind/database');
   return {
@@ -86,6 +89,20 @@ describe('account deletion purge claims with Mongo', () => {
     await expect(complete(userId)).resolves.toEqual({ deleted: true });
     expect(h.purgeFiles).toHaveBeenCalledTimes(1);
     expect(h.sendComplete).toHaveBeenCalledTimes(1);
+  });
+  it('records the completed deletion in the admin audit log under a system actor', async () => {
+    const userId = await seedUser();
+    await expect(complete(userId)).resolves.toEqual({ deleted: true });
+    const entries = await AdminAuditLogModel.find({ 'target.id': userId }).lean();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      action: 'user.deletion.completed',
+      category: 'account',
+      severity: 'notice',
+      actor: { kind: 'system', name: 'account-deletion-sweep' },
+      target: { kind: 'user', id: userId },
+      context: { source: 'worker' },
+    });
   });
   it('admits one worker and skips a competing live claim', async () => {
     const userId = await seedUser();

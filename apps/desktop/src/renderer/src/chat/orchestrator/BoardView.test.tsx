@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activityLabel } from './activity';
 import { SIDEBAR_DEFAULT_WIDTH } from '../sidebarWidth';
 import { assignPersonas } from './tavern/agentPersona';
-import { BoardView } from './BoardView';
+import { BoardView, COLUMN_GAP, COLUMN_MIN_WIDTH, EMPTY_COLUMN_WIDTH, packBoardRows } from './BoardView';
 import type { AgentView } from './roster';
 import { agentFixture, createThemedMount, el, query } from './testUtils';
 
@@ -35,6 +35,11 @@ describe('BoardView', () => {
     ]);
     expect(el('orchestrator-board-via-helper').textContent).toBe('via Lead the audit');
     expect(query('orchestrator-board-via-lead')).toBeNull();
+  });
+
+  it("names a preparing agent's setup step on its card", async () => {
+    await renderBoard([agentFixture('a', 'working', { preparing: 'worktree' })]);
+    expect(el('orchestrator-board-card-a').textContent).toContain('Creating worktree');
   });
 
   it('puts stopped and idle agents in Done with a muted state chip', async () => {
@@ -99,25 +104,56 @@ describe('BoardView', () => {
     expect(query('orchestrator-board')).not.toBeNull();
   });
 
-  it('fits all four columns beside the docked conversation in a 1440px window', async () => {
-    await renderBoard([
-      agentFixture('a', 'needs-you'),
-      agentFixture('b', 'working'),
-      agentFixture('c', 'done'),
-      agentFixture('d', 'failed'),
+  it('keeps all four columns on one row beside the docked conversation in a 1440px window', () => {
+    // The window less the default sidebar, ChatShell's 380px dock and its 1px border, less the board's padding.
+    const available = 1440 - SIDEBAR_DEFAULT_WIDTH - 380 - 1 - 2 * 12;
+    const full = ['needs-you', 'working', 'done', 'failed'].map(id => ({ id, empty: false }));
+    expect(packBoardRows(full, available)).toHaveLength(1);
+  });
+
+  describe('packBoardRows', () => {
+    const columns = (...empties: boolean[]) => empties.map((empty, index) => ({ id: String(index), empty }));
+    const ids = (rows: { id: string }[][]) => rows.map(row => row.map(column => column.id));
+    const oneRowOfFour = 4 * COLUMN_MIN_WIDTH + 3 * COLUMN_GAP;
+
+    it('keeps one row until it is measured, and while everything fits', () => {
+      expect(ids(packBoardRows(columns(false, false, false, false), null))).toEqual([['0', '1', '2', '3']]);
+      expect(ids(packBoardRows(columns(false, false, false, false), oneRowOfFour))).toEqual([['0', '1', '2', '3']]);
+    });
+
+    it('wraps into two balanced rows rather than three and one', () => {
+      expect(ids(packBoardRows(columns(false, false, false, false), oneRowOfFour - 1))).toEqual([
+        ['0', '1'],
+        ['2', '3'],
+      ]);
+    });
+
+    it('counts an empty column at its folded width, so a sparse board stays on one row', () => {
+      const sparse = 2 * COLUMN_MIN_WIDTH + 2 * EMPTY_COLUMN_WIDTH + 3 * COLUMN_GAP;
+      expect(packBoardRows(columns(false, true, false, true), sparse)).toHaveLength(1);
+      expect(packBoardRows(columns(false, false, false, false), sparse)).toHaveLength(2);
+    });
+
+    it('falls back to one column per row when not even two fit', () => {
+      expect(ids(packBoardRows(columns(false, false, false, false), COLUMN_MIN_WIDTH))).toEqual([
+        ['0'],
+        ['1'],
+        ['2'],
+        ['3'],
+      ]);
+    });
+  });
+
+  it('lays the columns out in rows, in board order', async () => {
+    await renderBoard([agentFixture('a', 'needs-you'), agentFixture('b', 'failed')]);
+    const rows = document.querySelectorAll('[data-testid="orchestrator-board-row"]');
+    expect(rows).toHaveLength(1);
+    expect(Array.from(rows[0]?.children ?? []).map(column => column.getAttribute('data-testid'))).toEqual([
+      'orchestrator-board-column-needs-you',
+      'orchestrator-board-column-working',
+      'orchestrator-board-column-done',
+      'orchestrator-board-column-failed',
     ]);
-    const px = (value: string) => Number.parseFloat(value) || 0;
-    const board = getComputedStyle(el('orchestrator-board'));
-    const columns = ['needs-you', 'working', 'done', 'failed'].map(id =>
-      getComputedStyle(el(`orchestrator-board-column-${id}`))
-    );
-    const needed =
-      columns.reduce((sum, column) => sum + px(column.minWidth), 0) +
-      3 * px(board.gap) +
-      px(board.paddingLeft) +
-      px(board.paddingRight);
-    // The window less the default sidebar, ChatShell's 380px dock and its 1px border.
-    expect(needed).toBeLessThanOrEqual(1440 - SIDEBAR_DEFAULT_WIDTH - 380 - 1);
   });
 
   describe('FLIP', () => {

@@ -554,6 +554,8 @@ export interface ChatServiceDeps {
   local?: LocalChat;
   /** Paths kept out of reach of shell commands whatever the user granted. Enforced by the file tools, and by the shell only when SANDBOX_SHELL_COMMANDS is on. */
   protectedPaths?: readonly string[];
+  /** Protected folders not yet resolved; the file tools refuse every write while any is. */
+  unresolvedProtectedPaths?: readonly string[];
   /**
    * Where the user's own CLAUDE.md lives. Overridden only by tests, which must not read - or
    * depend on the contents of - the real ~/.claude of whoever runs them.
@@ -1407,6 +1409,7 @@ export class ChatService {
       // A folder shared while the worktree was being cut lives in the store, not in `project`.
       session.project = summary.project;
       this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
+      this.deps.activity?.preparingStep(sessionId, 'starting');
       return null;
     } catch (err) {
       return { error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
@@ -2155,7 +2158,7 @@ export class ChatService {
     this.accepting.add(sessionId);
     // Held past startReply for the reason launchSpawned holds its own: no 'done' blink between.
     const cutsWorktree = awaitsWorktree(existing.project);
-    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId);
+    if (cutsWorktree) this.deps.activity?.preparingStarted(sessionId, 'worktree');
     try {
       return await this.startAcceptedTurn(
         sessionId,
@@ -4234,6 +4237,8 @@ export class ChatService {
             if (signal.aborted) throw new Error(STOPPED_BEFORE_CHANGE);
             writing = true;
           },
+          // Read first: once it is empty, protectedPaths holds every spelling.
+          unresolvedProtectedPaths: this.deps.unresolvedProtectedPaths,
           protectedPaths: this.deps.protectedPaths,
           sessionId,
           callId: call.id,
@@ -5332,7 +5337,7 @@ export class ChatService {
     }
   ): Promise<void> {
     this.launching.add(child.id);
-    this.deps.activity?.preparingStarted(child.id);
+    this.deps.activity?.preparingStarted(child.id, worktree ? 'worktree' : 'starting');
     let failure: string | null = null;
     let deleted = false;
     let stopped = false;
@@ -5357,6 +5362,7 @@ export class ChatService {
         }
       }
       if (!failure) {
+        this.deps.activity?.preparingStep(child.id, 'starting');
         const sent = await this.send(child.id, text, [], { seedHops, spawnSeed: true });
         timer.lap('send');
         if (!sent.ok) failure = `The new session could not start: ${sent.error}`;
@@ -5407,6 +5413,7 @@ export class ChatService {
       })
     );
     try {
+      if (await installer.isInstalling(sessionId)) this.deps.activity?.preparingStep(sessionId, 'dependencies');
       const outcome = await Promise.race([installer.waitFor(sessionId, SPAWN_INSTALL_WAIT_MS), stopped]);
       if (outcome && outcome !== 'none') this.deps.logger.debug(`CHAT: spawn ${sessionId} install wait: ${outcome}`);
     } finally {
@@ -6613,10 +6620,10 @@ export class ChatService {
     return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
   }
 
-  /** A device-side model's defaults from the Models screen; none for a hosted model, or when they cannot be read. */
+  /** A device-side model's defaults from the Models screen; none for a hosted model. Rejects when they cannot be read. */
   private async modelDefaults(model: string): Promise<ModelSettings | undefined> {
     if (!isLocalModel(model) || !this.deps.modelSettings) return undefined;
-    return this.deps.modelSettings.get(model).catch(() => undefined);
+    return this.deps.modelSettings.get(model);
   }
 
   /** Auxiliary generations honor the same device-local boundary as the main reply. */
@@ -6630,7 +6637,9 @@ export class ChatService {
       const thinking = createThinkFilter();
       const listed = this.deps.models?.lastLocal?.() ?? this.deps.models?.cached() ?? undefined;
       const option = findModelOption(listed, request.model);
-      const sampling = auxiliaryGeneration(await this.modelDefaults(option?.id ?? request.model), option);
+      // A title or suggestion has no place to show the read error; the conversation's own turn shows it.
+      const defaults = await this.modelDefaults(option?.id ?? request.model).catch(() => undefined);
+      const sampling = auxiliaryGeneration(defaults, option);
       await (this.deps.local ?? new OllamaLocal()).stream(
         { ...request, thinking: false, ...(Object.keys(sampling).length > 0 ? { generation: sampling } : {}) },
         event =>

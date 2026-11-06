@@ -58,7 +58,7 @@ describe('registerModelSettingsIpc', () => {
     }
   );
 
-  it('rejects the read when the file cannot be read, and reads a corrupt one as empty', async () => {
+  it('rejects the read when the file cannot be read, and names a corrupt one with how to fix it', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'b4m-model-settings-ipc-'));
     roots.push(directory);
     const path = join(directory, 'model-settings.json');
@@ -71,7 +71,25 @@ describe('registerModelSettingsIpc', () => {
     await expect(get()).rejects.toThrow('denied');
     await writeFile(path, '[]', 'utf8');
     registerModelSettingsIpc({ handle }, new ModelSettingsStore(path));
-    await expect(get()).resolves.toEqual({});
+    await expect(get()).rejects.toThrow(
+      `The model settings file ${path} does not hold model settings. Fix it, or delete it`
+    );
+    expect(await readFile(path, 'utf8')).toBe('[]');
+  });
+
+  it('lists the values a model holds that this version keeps but does not use', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-model-settings-ipc-'));
+    roots.push(directory);
+    const path = join(directory, 'model-settings.json');
+    await writeFile(path, JSON.stringify({ models: { [QWEN]: { effort: 'ultra' } } }), 'utf8');
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const handle = (channel: string, listener: (...args: never[]) => unknown) =>
+      void handlers.set(channel, listener as never);
+    registerModelSettingsIpc({ handle }, new ModelSettingsStore(path));
+    const unsupported = (id: unknown) =>
+      handlers.get(IPC_CHANNELS.chatGetUnsupportedModelSettings)?.({ sender: {} }, id);
+    expect(await unsupported(QWEN)).toEqual([{ field: 'effort', value: 'ultra' }]);
+    expect(await unsupported('gpt-5')).toBeNull();
   });
 
   it.each([42, 'gpt-5', ''])('answers null for the model id %j', async id => {

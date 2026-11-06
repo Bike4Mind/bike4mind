@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { Organization, User, realtimeConnectionRepository } from '@bike4mind/database';
+import { Organization, User, adminAuditLogRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
-import { authSessionService } from '@bike4mind/services';
+import { adminAuditService, authSessionService } from '@bike4mind/services';
 import { hardDeleteUser } from '@server/services/hardDeleteUser';
+import { systemAuditActor } from '@server/utils/adminAudit';
 import { sendAccountDeletionCompleteEmail } from './accountDeletionEmail';
 import { purgeAccountContent } from './purgeAccountContent';
 import { purgeAccountFiles } from './purgeAccountFiles';
@@ -98,8 +99,20 @@ export async function completeAccountDeletion(
         },
         // Keep billing references until hardDeleteUser has captured every customer ID. Remove
         // personal workspace rows atomically with the final user deletion, never during a retry.
-        recordInTransaction: async () => {
+        // The admin audit entry commits with the delete, as the admin delete route's does.
+        recordInTransaction: async target => {
           await Organization.deleteMany({ userId, personal: true }, { hardDelete: true });
+          await adminAuditService.recordAdminAction(
+            {
+              action: 'user.deletion.completed',
+              actor: systemAuditActor('account-deletion-sweep'),
+              target: { kind: 'user', id: userId, displayName: target?.name || target?.username || userId },
+              summary: 'deleted the user at their own request once the deletion grace period ended',
+              details: { initiatedBy: 'self' },
+              context: { source: 'worker' },
+            },
+            { db: { adminAuditLog: adminAuditLogRepository }, logger }
+          );
         },
       },
       users => users.delete(userId)

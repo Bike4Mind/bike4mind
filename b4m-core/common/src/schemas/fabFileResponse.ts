@@ -57,6 +57,7 @@ const FAB_FILE_RESPONSE_FIELDS = {
   apiKeyId: true,
   uploadRejectedAt: true,
   storageChargedAt: true,
+  storageExempt: true,
   moderationAttempts: true,
   moderationLastAttemptAt: true,
   error: true,

@@ -4,12 +4,22 @@ import type { IMongoDocument } from '@bike4mind/common';
 
 export const ANALYTICS_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+/** A user's usage billed to one organization on one day. */
+export interface IAnalyticsUserDayOrg {
+  orgId: string;
+  requests: number;
+  creditsCharged: number;
+}
+
 /** One row per (UTC day, user) with activity; the source for DAU/WAU/MAU and per-user rollups. */
 export interface IAnalyticsUserDay {
   day: string; // YYYY-MM-DD (UTC)
   userId: string;
   ownerType: 'User' | 'Organization' | 'Agent';
+  /** The org the user used most that day. */
   orgId?: string;
+  /** Every org the user used that day, with only that org's share. Absent on rows rolled up before it existed. */
+  orgs?: IAnalyticsUserDayOrg[];
   requests: number;
   creditsCharged: number;
   features: string[];
@@ -26,6 +36,19 @@ const AnalyticsUserDaySchema = new Schema<IAnalyticsUserDayDocument>(
     userId: { type: String, required: true },
     ownerType: { type: String, required: true, enum: ['User', 'Organization', 'Agent'] },
     orgId: { type: String, required: false },
+    orgs: {
+      type: [
+        new Schema<IAnalyticsUserDayOrg>(
+          {
+            orgId: { type: String, required: true },
+            requests: { type: Number, required: true },
+            creditsCharged: { type: Number, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     requests: { type: Number, required: true, default: 0 },
     creditsCharged: { type: Number, required: true, default: 0 },
     features: { type: [String], default: [] },

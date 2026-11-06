@@ -1030,6 +1030,8 @@ export function computeHolderSettlement(
 /**
  * Warns when a shortfall settlement left the holder owing credits (see computeHolderSettlement). A
  * refund that lands on a balance a sibling turn already took negative adds no debt and stays quiet.
+ * The message is the completion-credit-overdraft alarm's filter (SETTLEMENT_DEBT_MESSAGE in
+ * infra/llmSpend.ts); keep the two in sync.
  */
 export function warnOnSettlementDebt(
   logger: Logger,
@@ -7124,6 +7126,8 @@ export class ChatCompletionProcess {
               // credit-capped personal turn), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
+              // The hold this turn reserved, so a settlement far above it is findable per account.
+              reservedCredits: reservedAtSettlement > 0 ? reservedAtSettlement : undefined,
               // Not always 'ok': a turn we aborted as degenerate is priced like any other
               // (the provider tokens were really spent) but has to be findable for a refund.
               status: usageEventStatusForFinish(providerStopReason),

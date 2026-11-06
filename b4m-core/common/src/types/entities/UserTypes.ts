@@ -830,6 +830,12 @@ export interface IUser extends ICreditHolder {
   /** Network metadata of the signup request, written once at account creation. Admin-only PII. */
   signupMeta?: ISignupMeta | null;
 
+  /**
+   * Set at an OAuth signup whose post-login redirect named a notebook another account owns: that
+   * owner. Abuse evidence only (an invite link is a normal reason); written once, admin-only.
+   */
+  signupLanding?: { notebookOwnerId: string; capturedAt: Date } | null;
+
   /** Abuse risk of a new account. Never shown to the user: the signals would say how to avoid them. */
   riskScore?: ISignupRiskScore | null;
 

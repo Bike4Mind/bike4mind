@@ -467,6 +467,7 @@ export const SettingKeySchema = z.enum([
   'usagePatternSignalsConfig',
   'abuseAssessmentEnabled',
   'abuseAssessmentConfig',
+  'autoContainmentConfig',
   'thinkingVisibilityFree',
   'thinkingVisibilityPaid',
   'otcLimitSendPerEmailPerIp',
@@ -1461,6 +1462,32 @@ export const AbuseAssessmentConfigSchema = z.object({
 });
 
 export type AbuseAssessmentConfig = z.infer<typeof AbuseAssessmentConfigSchema>;
+
+/** off: no decisions. shadow: decide and record, change nothing. enforce: contain the accounts. */
+export const AUTO_CONTAINMENT_MODES = ['off', 'shadow', 'enforce'] as const;
+export type AutoContainmentMode = (typeof AUTO_CONTAINMENT_MODES)[number];
+
+/**
+ * Automated containment from abuse assessments (apps/client/server/security/autoContainment). Acts
+ * only on an `abuse` judgment at or above minConfidence, through the admin bulk Contain path.
+ */
+export const AutoContainmentConfigSchema = z.object({
+  mode: z.enum(AUTO_CONTAINMENT_MODES).prefault('shadow'),
+  /** The judgment's confidence (0-1) at or above which an `abuse` verdict is acted on. */
+  minConfidence: z.number().min(0.5).max(1).prefault(0.9),
+  /** Containment decisions per fixed one-hour window, shadow included, so shadow measures the real cap. */
+  maxPerHour: z.number().int().min(0).max(100).prefault(5),
+  /** A detection naming more accounts than this goes to an admin instead, so one call never contains a crowd. */
+  maxAccountsPerDetection: z.number().int().min(1).max(25).prefault(5),
+  /** Also adds the accounts' owned email domains (never public mailbox providers) to blockedEmailDomains. */
+  blockEmailDomains: z.boolean().prefault(false),
+  /**
+   * A new account that signed up from the same IP as a blocked account, within this many hours of
+   * it, is assessed at once instead of at the next sweep. 0 turns the rule off.
+   */
+  strongLinkWindowHours: z.number().int().min(0).max(720).prefault(72),
+});
+export type AutoContainmentConfig = z.infer<typeof AutoContainmentConfigSchema>;
 
 export enum ServerStatusEnum {
   Live = 'live',
@@ -2654,6 +2681,7 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'abuseAssessmentEnabled', order: 1 },
       { key: 'abuseAssessmentConfig', order: 2 },
+      { key: 'autoContainmentConfig', order: 3 },
     ],
   },
   // Note: CONTEXT_TELEMETRY settings are managed in the Context Inspector tab (Admin UI)
@@ -4535,6 +4563,18 @@ export const settingsMap = {
     order: 2,
     dependsOn: 'abuseAssessmentEnabled',
     schema: AbuseAssessmentConfigSchema,
+  }),
+  autoContainmentConfig: makeObjectSetting({
+    key: 'autoContainmentConfig',
+    name: 'Automated Containment from Abuse Assessments',
+    defaultValue: AutoContainmentConfigSchema.parse({}),
+    description:
+      "What happens when an abuse assessment judges a detection as abuse at or above minConfidence (0.5-1). mode: off (nothing), shadow (records the decision for grading against the detection's admin verdict and changes no account; the default) or enforce (contains the accounts through the bulk Contain path: suspended, Stripe subscriptions canceled, positive balance removed, API keys revoked, sessions ended, attributed to the system with the evidence as the reason). Unsuspend on the user profile reverses the suspension; revoked keys stay revoked and a removed balance is not restored. maxPerHour caps decisions per hour, counted per mode (over it, the decision is recorded as capped and re-evaluated after the hour); maxAccountsPerDetection sends larger detections to an admin; blockEmailDomains also blocks the accounts' owned email domains, which refuses every new signup on that domain, so one false positive on a shared corporate or campus network blocks the whole domain (leave it off until shadow precision is known); strongLinkWindowHours assesses a new account at once when it signed up from the same IP as a blocked account within that many hours (0 turns the rule off). Needs the advisory assessment on.",
+    category: 'SecOps',
+    group: API_SERVICE_GROUPS.ABUSE_ASSESSMENT.id,
+    order: 3,
+    dependsOn: 'abuseAssessmentEnabled',
+    schema: AutoContainmentConfigSchema,
   }),
   // Enforced by createModelAdmission (b4m-core/services/src/llm/modelAdmission.ts) and mirrored in
   // the model picker (apps/client/server/utils/callerModelList.ts).
