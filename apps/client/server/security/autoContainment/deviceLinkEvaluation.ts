@@ -73,14 +73,14 @@ async function inChunks(values: string[], read: (chunk: string[]) => Promise<Dev
 
 /**
  * Evaluates the rule for each account against the banned accounts sharing a user agent with any of
- * them. Read-only. Accounts with no usable device, or that are banned themselves, come back unlinked.
+ * them. Read-only. Accounts with no usable device come back unlinked.
  */
 export async function evaluateDeviceLinks(
   rows: readonly DeviceLinkRow[],
   config: DeviceLinkConfig,
   deps: DeviceLinkReaders
 ): Promise<Map<string, userService.BanEvasionResult>> {
-  const accounts = rows.filter(row => !row.isBanned).map(toDeviceLinkAccount);
+  const accounts = rows.map(toDeviceLinkAccount);
   const results = new Map<string, userService.BanEvasionResult>();
   const withDevice = accounts.filter(account => account.deviceKeys.length > 0);
   accounts
