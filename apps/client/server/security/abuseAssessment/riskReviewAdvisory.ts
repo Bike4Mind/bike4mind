@@ -54,7 +54,7 @@ export async function findRiskReviewAdvisories(
       if (!wanted.has(userId)) continue;
       judgedCount.set(userId, (judgedCount.get(userId) ?? 0) + 1);
       const current = advisories.get(userId);
-      if (!current || outranks(candidate, current)) advisories.set(userId, candidate);
+      if (!current || outranks(candidate, current)) advisories.set(userId, { ...candidate });
     }
   }
   for (const [userId, advisory] of advisories) advisory.otherVerdicts = (judgedCount.get(userId) ?? 1) - 1;
