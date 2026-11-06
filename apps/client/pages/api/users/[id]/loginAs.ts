@@ -7,7 +7,7 @@ import { issueSessionForRequest } from '@server/auth/issueSession';
 import { readRefreshCookie, setAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { canAccessAdmin, redactUserSecretsForSelf } from '@bike4mind/common';
+import { canAccessAdmin, ConflictError, redactUserSecretsForSelf } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 import {
@@ -59,8 +59,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     // The admin and MFA checks below run before a request is stored, as they do before a session.
     const policy = await getApprovalPolicy();
     const approvalTarget = policy.enabled ? await userRepository.findById(targetUserId) : null;
-    const needsApproval = canAccessAdmin(approvalTarget);
-    const requestOnly = needsApproval && typeof approvalId !== 'string';
+    const initialNeedsApproval = canAccessAdmin(approvalTarget);
 
     const targetUser = await adminService.loginAs(
       adminUser,
@@ -70,23 +69,20 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
           users: userRepository,
         },
         notify: {
-          send: async targetUser => {
-            if (requestOnly) return;
-            req.logger.info(
-              `Admin ${adminUser.name}[${adminUser.email}] logged in as user ${targetUser.name}[${targetUser.email}]`
-            );
-          },
+          send: async () => undefined,
         },
       }
     );
 
+    const needsApproval = policy.enabled && (initialNeedsApproval || canAccessAdmin(targetUser));
+    const requestOnly = needsApproval && typeof approvalId !== 'string';
     if (requestOnly) {
       const pending = await requestApproval(
         req,
         {
           action: 'user.impersonate_admin',
           params: { targetUserId },
-          summary: `impersonate admin ${approvalTarget?.name || approvalTarget?.email || targetUserId}`,
+          summary: `impersonate admin ${targetUser.name || targetUser.email || targetUserId}`,
           reason,
           requiredPermission: 'users:impersonate',
           requiresFullAdmin: true,
@@ -111,6 +107,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     // The session doc, the started entry and the spent approval commit together; the sid groups
     // everything done in this impersonation. Cookies are written only after the commit.
     const { accessToken, refreshToken } = await withTransaction(async () => {
+      if (policy.enabled && !needsApproval && canAccessAdmin(await userRepository.findById(targetUserId))) {
+        throw new ConflictError('This user now has admin access; request impersonation again for approval.');
+      }
       const approval = needsApproval
         ? await redeemApproval(req, approvalId as string, 'user.impersonate_admin', { targetUserId })
         : undefined;
@@ -144,6 +143,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       });
       return session;
     });
+    req.logger.info(
+      `Admin ${adminUser.name}[${adminUser.email}] logged in as user ${targetUser.name}[${targetUser.email}]`
+    );
     setRefreshCookie(res, refreshToken);
     setAdminReturnCookie(res, adminRefreshToken);
 

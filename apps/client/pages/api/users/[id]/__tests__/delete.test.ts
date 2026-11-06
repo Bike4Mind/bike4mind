@@ -550,3 +550,20 @@ describe('deleting an admin account needs approval', () => {
     expect(mockAdminDeleteUser).not.toHaveBeenCalled();
   });
 });
+
+describe('direct deletion target role changes', () => {
+  it('stops a promoted target before canceling subscriptions or deleting it', async () => {
+    mockPolicy.mockResolvedValue({ enabled: true, expiryHours: 24 });
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _params: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+    mockFindById.mockResolvedValueOnce({ id: 'u1', isAdmin: false }).mockResolvedValue({ id: 'u1', isAdmin: true });
+    const { call } = await run();
+
+    await expect(call).rejects.toMatchObject({ statusCode: 409 });
+    expect(mockCancelSubscriptions).not.toHaveBeenCalled();
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+    expect(mockAdminDeleteUser).toHaveBeenCalledOnce();
+  });
+});

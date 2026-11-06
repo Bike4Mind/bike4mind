@@ -4,6 +4,7 @@ import {
   type AdminGateReservationKind,
 } from '@bike4mind/database';
 import { getApprovalPolicy, type ApprovalPolicy } from '@server/admin/approvals/service';
+import { Logger } from '@bike4mind/observability';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -36,12 +37,14 @@ export async function reserveWithinWindow(
     new Date(now.getTime() + windowMs)
   );
   // A reservation that fails to release only over-counts until it expires.
-  const release: ReleaseWindow = () => adminGateReservationRepository.release(id).catch(() => undefined);
+  const release: ReleaseWindow = () =>
+    adminGateReservationRepository.release(id).catch((error: unknown) => {
+      Logger.globalInstance.error('[ADMIN_GATE_RESERVATION_RELEASE_FAILED]', { reservationId: id, error });
+    });
   try {
-    const [audited, reserved] = await Promise.all([
-      recorded(),
-      adminGateReservationRepository.sumReserved(actorUserId, kind, now),
-    ]);
+    // Read reservations first so an action moving into the audit log cannot disappear between reads.
+    const reserved = await adminGateReservationRepository.sumReserved(actorUserId, kind, now);
+    const audited = await recorded();
     if (audited + reserved <= threshold) return release;
   } catch (error) {
     await release();
@@ -65,7 +68,10 @@ export async function creditGrantNeedsApproval(credits: number, actorUserId: str
   const since = new Date(Date.now() - windowMs);
   const release = await reserveWithinWindow(actorUserId, 'credits', credits, policy.creditThreshold, windowMs, () =>
     // Grants this admin ran as the approver of someone else's request were already reviewed.
-    adminAuditLogRepository.sumCreditsGranted(actorUserId, since, { excludeApproved: true })
+    adminAuditLogRepository.sumCreditsGranted(actorUserId, since, {
+      excludeApproved: true,
+      includeSubscriptionGrants: true,
+    })
   );
   return release ? { policy: null, release } : { policy };
 }

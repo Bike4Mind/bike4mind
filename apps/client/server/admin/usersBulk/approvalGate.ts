@@ -12,7 +12,7 @@ import {
 import { selfIdsOf } from './actor';
 import { usersBulkResolveDeps } from './adapters';
 import { AUDIT_ACTION, confirmedCohort } from './execute';
-import { netCreditsAdded, type ResolveDeps } from './resolve';
+import { creditDeltaFor, type ResolveDeps } from './resolve';
 
 const GATED_TYPES: ReadonlySet<AdminUsersBulkAction['type']> = new Set(['suspend', 'contain', 'adjustCredits']);
 const GATED_AUDIT_ACTIONS = [...GATED_TYPES].map(type => AUDIT_ACTION[type]);
@@ -21,12 +21,15 @@ const HOUR_MS = 60 * 60 * 1000;
 export const usersBulkApprovalPermission = (action: AdminUsersBulkAction): AdminPermissionId =>
   action.type === 'adjustCredits' ? 'credits:adjust' : 'users:moderate';
 
-export type UsersBulkGate = { pending: ApprovalPendingBody } | { pending: null; release: ReleaseWindow };
+export type UsersBulkGate =
+  | { pending: ApprovalPendingBody }
+  | { pending: null; release: ReleaseWindow; creditBalances?: Readonly<Record<string, number>> };
 const RUN_BULK_NOW: UsersBulkGate = { pending: null, release: RUN_NOW.release };
 
 /**
  * Stores the execute for a second admin when approvals are on and it acts on more users (or adds more
  * credits) than the thresholds allow, counting what this admin moved or is moving over the expiry window.
+ * Credit deductions do not offset grants: users execute independently and a deduction can fail.
  * Otherwise the batch runs now with its users and credits reserved until `release`. The cohort is checked
  * first with the same 400/409 refusals execute uses, and stored as its sorted ids so a filter cannot drift.
  */
@@ -54,7 +57,10 @@ export async function requestUsersBulkApprovalIfNeeded(
   );
   const credits =
     releaseUsers && request.action.type === 'adjustCredits'
-      ? await creditGrantNeedsApproval(netCreditsAdded(request.action, users), actorId).catch(async error => {
+      ? await creditGrantNeedsApproval(
+          users.reduce((total, user) => total + Math.max(0, creditDeltaFor(request.action, user.currentCredits)), 0),
+          actorId
+        ).catch(async error => {
           await releaseUsers();
           throw error;
         })
@@ -63,6 +69,9 @@ export async function requestUsersBulkApprovalIfNeeded(
     const releaseCredits = credits.release;
     return {
       pending: null,
+      ...(request.action.type === 'adjustCredits' && request.action.mode === 'set'
+        ? { creditBalances: Object.fromEntries(users.map(user => [user.id, user.currentCredits])) }
+        : {}),
       release: async () => {
         await Promise.all([releaseUsers(), releaseCredits()]);
       },

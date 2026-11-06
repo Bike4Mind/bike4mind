@@ -41,7 +41,9 @@ const handler = baseApi().delete(
       }
     }
 
-    const { result: deletedUser, subscriptionCancellation } = await deleteUserAsAdmin(req, userId, reason);
+    const { result: deletedUser, subscriptionCancellation } = await deleteUserAsAdmin(req, userId, reason, undefined, {
+      requireNonAdmin: policy.enabled,
+    });
 
     return res.json({ ...toSafeUser(deletedUser), ...subscriptionCancellationResponse(subscriptionCancellation) });
   })

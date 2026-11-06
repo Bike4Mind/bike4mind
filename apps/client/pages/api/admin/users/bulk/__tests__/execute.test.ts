@@ -24,6 +24,7 @@ const mockGate = vi.fn();
 vi.mock('@server/admin/usersBulk/approvalGate', () => ({
   requestUsersBulkApprovalIfNeeded: async (...a: unknown[]) => {
     const pending = await mockGate(...a);
+    if (pending && 'pending' in pending) return pending;
     return pending ? { pending } : { pending: null, release: async () => undefined };
   },
 }));
@@ -97,6 +98,17 @@ describe('POST /api/admin/users/bulk/execute', () => {
       expect.objectContaining({ action: { type: 'contain' }, expectedCount: 1, cohortHash: BODY.cohortHash }),
       { id: ADMIN.id, selfIds: [ADMIN.id] },
       { deps: true }
+    );
+  });
+
+  it('passes the gated credit balances to the executor', async () => {
+    const creditBalances = { ['b'.repeat(24)]: 1000 };
+    mockGate.mockResolvedValueOnce({ pending: null, creditBalances, release: async () => undefined });
+    await call({ ...BODY, action: { type: 'adjustCredits', mode: 'set', amount: 1000 } });
+    expect(mockExecute).toHaveBeenCalledWith(
+      expect.anything(),
+      { id: ADMIN.id, selfIds: [ADMIN.id], creditBalances },
+      expect.anything()
     );
   });
 

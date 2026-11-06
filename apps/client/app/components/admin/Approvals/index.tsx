@@ -8,6 +8,8 @@ import { AdminPageHeader } from '@client/app/components/admin/shared/AdminPageHe
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
 import { StatusChip } from '@client/app/components/admin/shared/StatusChip';
+import { AdminUsersBulkResultSchema } from '@client/app/utils/adminUsersBulk';
+import { useUsersBulkResult } from '../Users/List/useUsersBulkResult';
 import type { AdminStatusTone } from '@client/app/utils/themes/admin';
 import { useUser } from '@client/app/contexts/UserContext';
 import {
@@ -20,7 +22,16 @@ import {
 import { useLoginAsUser } from '@client/app/hooks/data/user';
 import { getErrorMessage } from '@client/app/utils/error';
 
-const STATUS_FILTERS: AdminApprovalStatusFilter[] = ['pending', 'approved', 'executed', 'rejected', 'failed', 'all'];
+const STATUS_FILTERS: AdminApprovalStatusFilter[] = [
+  'pending',
+  'approved',
+  'executing',
+  'executed',
+  'rejected',
+  'expired',
+  'failed',
+  'all',
+];
 
 const STATUS_TONES: Record<AdminApprovalStatus, AdminStatusTone> = {
   pending: 'warn',
@@ -62,7 +73,7 @@ const hasParams = (row: AdminApprovalRow) =>
   typeof row.params === 'object' && row.params !== null && Object.keys(row.params).length > 0;
 
 const userIdsOf = (row: AdminApprovalRow): string[] | null => {
-  const ids = (row.params as { userIds?: unknown } | null)?.userIds;
+  const ids = (row.params as { target?: { userIds?: unknown } } | null)?.target?.userIds;
   return row.action === 'users.bulk' && Array.isArray(ids) ? ids.map(String).sort() : null;
 };
 
@@ -86,6 +97,25 @@ const ParamsDialog: React.FC<{ row: AdminApprovalRow; onClose: () => void }> = (
               ))}
             </Box>
           </Stack>
+        )}
+        {row.result !== undefined && (
+          <>
+            <Typography level="body-sm" fontWeight={500}>
+              Execution result
+            </Typography>
+            <Box
+              component="pre"
+              sx={{ m: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+              data-testid="admin-approval-details-result"
+            >
+              {JSON.stringify(row.result, null, 2)}
+            </Box>
+          </>
+        )}
+        {row.error && (
+          <Typography level="body-sm" color="danger">
+            {row.error}
+          </Typography>
         )}
         <Typography level="body-sm" fontWeight={500}>
           Parameters
@@ -140,6 +170,7 @@ const Approvals: React.FC = () => {
   const [status, setStatus] = useState<AdminApprovalStatusFilter>('pending');
   const approvals = useAdminApprovals(status);
   const approve = useApproveAdminApproval();
+  const showBulkResult = useUsersBulkResult();
   const reject = useRejectAdminApproval();
   const [rejecting, setRejecting] = useState<AdminApprovalRow | null>(null);
   const [impersonating, setImpersonating] = useState<AdminApprovalRow | null>(null);
@@ -147,7 +178,19 @@ const Approvals: React.FC = () => {
 
   const onApprove = async (row: AdminApprovalRow) => {
     try {
-      await approve.mutateAsync(row.id);
+      const response = await approve.mutateAsync(row.id);
+      if (row.action === 'users.bulk') {
+        const result = AdminUsersBulkResultSchema.safeParse(response.result);
+        if (!result.success) {
+          toast.warning(
+            'The action finished, but its result could not be read. Refresh and inspect the request details.'
+          );
+          return;
+        }
+        showBulkResult(result.data);
+        setInspecting({ ...row, ...response.approval, result: response.result });
+        return;
+      }
       toast.success(
         row.action === 'user.impersonate_admin' ? 'Approved. The requester can now start it.' : 'Approved and run.'
       );
@@ -188,7 +231,7 @@ const Approvals: React.FC = () => {
   ];
 
   const detailsButton = (row: AdminApprovalRow) =>
-    hasParams(row) ? (
+    hasParams(row) || row.result !== undefined || row.error ? (
       <Button
         size="sm"
         variant="plain"
@@ -306,6 +349,18 @@ const Approvals: React.FC = () => {
         rowActions={rowActions}
         pagination={false}
       />
+      {approvals.hasNextPage && (
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          onClick={() => void approvals.fetchNextPage()}
+          loading={approvals.isFetchingNextPage}
+          data-testid="admin-approvals-load-more-btn"
+        >
+          Load more requests
+        </Button>
+      )}
       {rejecting && (
         <ActionDialog
           open

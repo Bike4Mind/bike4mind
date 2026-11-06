@@ -114,8 +114,12 @@ export interface IAdminAuditLogRepository {
   listAscending(page: { after: AuditLogCursor | null; until: Date; limit: number }): Promise<AuditEntry[]>;
   /** Grants (positive `details.credits` on a grant action) by one actor with occurredAt in (from, to]. */
   countCreditGrants(actorUserId: string, window: { from: Date; to: Date }): Promise<number>;
-  /** Credits one actor granted with occurredAt at or after `since`; `excludeApproved` skips approval-run grants. */
-  sumCreditsGranted(actorUserId: string, since: Date, options?: { excludeApproved?: boolean }): Promise<number>;
+  /** Credit total since the cutoff; approvals additionally include subscription grants and skip approval-run rows. */
+  sumCreditsGranted(
+    actorUserId: string,
+    since: Date,
+    options?: { excludeApproved?: boolean; includeSubscriptionGrants?: boolean }
+  ): Promise<number>;
   /** Entries one actor recorded under `actions` with occurredAt at or after `since`, skipping approval-run ones. */
   countActions(actorUserId: string, actions: readonly AdminAuditAction[], since: Date): Promise<number>;
 }

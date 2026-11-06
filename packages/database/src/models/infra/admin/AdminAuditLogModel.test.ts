@@ -369,6 +369,49 @@ describe('AdminAuditLogRepository.countActions', () => {
 describe('AdminAuditLogRepository.sumCreditsGranted excludeApproved', () => {
   setupMongoTest();
 
+  it('includes subscription grants only for approval totals, respecting the actor, window and approval filter', async () => {
+    const since = new Date('2026-03-01T00:00:00Z');
+    const at = new Date('2026-03-02T00:00:00Z');
+    await adminAuditLogRepository.append(entry({ action: 'org.credits.granted', details: { credits: 100 } }, at));
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.subscription.granted', details: { credits: 600 } }, since)
+    );
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.subscription.granted', details: { credits: 900, approval: { id: 'approval-1' } } }, at)
+    );
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.subscription.granted', details: { credits: 1100 } }, new Date(since.getTime() - 1))
+    );
+    await adminAuditLogRepository.append(
+      entry(
+        {
+          action: 'user.subscription.granted',
+          actor: { kind: 'user', scope: 'platform', userId: 'admin-2', name: 'Other', wasAdmin: true },
+          details: { credits: 1200 },
+        },
+        at
+      )
+    );
+    await adminAuditLogRepository.append(
+      entry({ action: 'user.subscription.granted', details: { credits: -200 } }, at)
+    );
+
+    await expect(adminAuditLogRepository.sumCreditsGranted('admin-1', since)).resolves.toBe(100);
+    await expect(
+      adminAuditLogRepository.sumCreditsGranted('admin-1', since, { includeSubscriptionGrants: false })
+    ).resolves.toBe(100);
+    await expect(
+      adminAuditLogRepository.sumCreditsGranted('admin-1', since, { includeSubscriptionGrants: true })
+    ).resolves.toBe(1600);
+    await expect(
+      adminAuditLogRepository.sumCreditsGranted('admin-1', since, {
+        excludeApproved: true,
+        includeSubscriptionGrants: true,
+      })
+    ).resolves.toBe(700);
+    await expect(adminAuditLogRepository.countCreditGrants('admin-1', { from: since, to: at })).resolves.toBe(1);
+  });
+
   it('skips grants run on an approval only when asked', async () => {
     const since = new Date('2026-03-01T00:00:00Z');
     const at = new Date('2026-03-02T00:00:00Z');

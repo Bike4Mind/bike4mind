@@ -15,7 +15,7 @@ import {
   type AdminPermissionId,
   type AuditTarget,
 } from '@bike4mind/common';
-import { adminApprovalRepository, adminSettingsRepository } from '@bike4mind/database';
+import { adminApprovalRepository, adminSettingsRepository, withTransaction } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import type { Request } from 'express';
 import { selfIdsOf } from '@server/admin/usersBulk/actor';
@@ -48,6 +48,7 @@ export const getApprovalPolicy = async (): Promise<ApprovalPolicy> => {
         'AdminApprovalCreditThreshold',
         'AdminApprovalExpiryHours',
       ],
+      skipCache: true,
     }
   );
   return {
@@ -108,7 +109,7 @@ const compensate = async (req: Request, tag: string, approvalId: string, write: 
 
 /** A lost claim re-reads the record so a request expired by a concurrent reader answers 410, not 409. */
 const claimMissError = async (approvalId: string) => {
-  const current = await adminApprovalRepository.findById(approvalId).catch(() => null);
+  const current = await adminApprovalRepository.findById(approvalId);
   if (current?.status === 'expired') return expiredError();
   return new ConflictError(`This request is already ${current?.status ?? 'decided'}.`);
 };
@@ -148,32 +149,27 @@ export async function requestApproval(
   const user = currentUser(req);
   const { expiryHours } = policy ?? (await getApprovalPolicy());
   const paramsJson = canonicalApprovalJson(input.params);
-  const approval = await adminApprovalRepository.create({
-    action: input.action,
-    paramsJson,
-    paramsHash: approvalParamsHash(paramsJson),
-    summary: input.summary,
-    requestedBy: { id: user.id, name: displayNameOf(user), email: user.email ?? '', selfIds: selfIdsOf(user) },
-    reason: input.reason,
-    requiredPermission: input.requiredPermission,
-    requiresFullAdmin: input.requiresFullAdmin,
-    expiresAt: new Date(Date.now() + expiryHours * HOUR_MS),
-  });
-  try {
+  const approval = await withTransaction(async () => {
+    const created = await adminApprovalRepository.create({
+      action: input.action,
+      paramsJson,
+      paramsHash: approvalParamsHash(paramsJson),
+      summary: input.summary,
+      requestedBy: { id: user.id, name: displayNameOf(user), email: user.email ?? '', selfIds: selfIdsOf(user) },
+      reason: input.reason,
+      requiredPermission: input.requiredPermission,
+      requiresFullAdmin: input.requiresFullAdmin,
+      expiresAt: new Date(Date.now() + expiryHours * HOUR_MS),
+    });
     await recordAdminActionFromRequest(req, {
       action: 'admin.approval.requested',
-      target: approvalTarget(approval),
-      summary: `requested approval: ${approval.summary}`,
-      reason: approval.reason,
-      details: { approval: { id: approval.id, action: approval.action }, params: JSON.parse(paramsJson) },
+      target: approvalTarget(created),
+      summary: `requested approval: ${created.summary}`,
+      reason: created.reason,
+      details: { approval: { id: created.id, action: created.action }, params: JSON.parse(paramsJson) },
     });
-  } catch (error) {
-    // The request write is strict: an unaudited request must not stay approvable.
-    await compensate(req, '[ADMIN_APPROVAL_REQUEST_ROLLBACK_FAILED]', approval.id, () =>
-      adminApprovalRepository.finish(approval.id, 'pending', 'failed', { error: 'audit write failed' })
-    );
-    throw error;
-  }
+    return created;
+  });
   return { approvalId: approval.id, status: 'pending', expiresAt: approval.expiresAt };
 }
 
@@ -208,37 +204,27 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
 
   const redeemedByRequester = approval.action === 'user.impersonate_admin';
   const to: AdminApprovalStatus = redeemedByRequester ? 'approved' : 'executing';
-  const claimed = await adminApprovalRepository.claim(
-    approval.id,
-    'pending',
-    to,
-    { now, notRequestedBy: approver.id },
-    { decidedBy: { id: approver.id, name: displayNameOf(approver) }, decidedAt: now }
-  );
-  if (!claimed) throw await claimMissError(approval.id);
-  // The claim re-reads the record, and these are the params that run.
-  if (approvalParamsHash(claimed.paramsJson) !== claimed.paramsHash) {
-    await compensate(req, '[ADMIN_APPROVAL_TAMPER_MARK_FAILED]', claimed.id, () =>
-      adminApprovalRepository.finish(claimed.id, to, 'failed', { error: 'stored params changed' })
+  const claimed = await withTransaction(async () => {
+    const record = await adminApprovalRepository.claim(
+      approval.id,
+      'pending',
+      to,
+      { now: new Date(), notRequestedBy: approver.id },
+      { decidedBy: { id: approver.id, name: displayNameOf(approver) }, decidedAt: now }
     );
-    throw tamperedError();
-  }
-
-  const details = { approval: approvalAuditDetails(claimed), action: claimed.action };
-  try {
+    if (!record) return null;
+    if (approvalParamsHash(record.paramsJson) !== record.paramsHash) throw tamperedError();
     await recordAdminActionFromRequest(req, {
       action: 'admin.approval.approved',
       target,
-      summary: `approved: ${claimed.summary}`,
-      reason: claimed.reason,
-      details,
+      summary: `approved: ${record.summary}`,
+      reason: record.reason,
+      details: { approval: approvalAuditDetails(record), action: record.action },
     });
-  } catch (error) {
-    await compensate(req, '[ADMIN_APPROVAL_APPROVE_ROLLBACK_FAILED]', claimed.id, () =>
-      adminApprovalRepository.finish(claimed.id, to, 'failed', { error: 'audit write failed' })
-    );
-    throw error;
-  }
+    return record;
+  });
+  if (!claimed) throw await claimMissError(approval.id);
+  const details = { approval: approvalAuditDetails(claimed), action: claimed.action };
   if (redeemedByRequester) return { approval: claimed };
 
   let result: unknown;
@@ -391,19 +377,23 @@ export const APPROVAL_LIST_MAX = 100;
  */
 export async function listApprovals(
   req: Request,
-  query: { status?: AdminApprovalStatus; before?: Date; limit?: number }
+  query: { status?: AdminApprovalStatus; before?: Date; beforeId?: string; limit?: number }
 ): Promise<ApprovalListRow[]> {
   const user = currentUser(req);
   const now = new Date();
   const approvals = await adminApprovalRepository.list({
     status: query.status,
     before: query.before,
-    limit: Math.min(query.limit ?? 50, APPROVAL_LIST_MAX),
+    beforeId: query.beforeId,
+    now,
+    limit: Math.min(query.limit ?? 50, APPROVAL_LIST_MAX + 1),
   });
   return approvals.map((record): ApprovalListRow => {
     const { paramsJson, ...approval } = record;
     const status: AdminApprovalStatus =
-      approval.status === 'pending' && isExpired(record, now) ? 'expired' : approval.status;
+      (approval.status === 'pending' || approval.status === 'approved') && isExpired(record, now)
+        ? 'expired'
+        : approval.status;
     const own = isOwnRequest(user, record);
     const mayDecide = canDecideAs(user, record);
     const flags: ApprovalListFlags = {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Types } from 'mongoose';
 import { approvalParamsHash, canonicalApprovalJson, type NewAdminApproval } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
-import { adminApprovalRepository } from './AdminApprovalModel';
+import { AdminApprovalModel, adminApprovalRepository } from './AdminApprovalModel';
 
 const REQUESTER = new Types.ObjectId().toHexString();
 const APPROVER = new Types.ObjectId().toHexString();
@@ -100,5 +100,45 @@ describe('AdminApprovalRepository', () => {
     expect(pending.map(({ id }) => id)).not.toContain(older.id);
     const page = await adminApprovalRepository.list({ before: newer.createdAt, limit: 50 });
     expect(page.every(({ createdAt }) => createdAt < newer.createdAt)).toBe(true);
+  });
+  it('pages past 50 rows sharing the same creation timestamp without gaps', async () => {
+    const createdAt = new Date('2026-01-01T00:00:00Z');
+    await AdminApprovalModel.insertMany(
+      Array.from({ length: 55 }, (_, index) => ({
+        ...newApproval(),
+        _id: new Types.ObjectId((index + 1).toString(16).padStart(24, '0')),
+        createdAt,
+      }))
+    );
+    const first = await adminApprovalRepository.list({ limit: 50 });
+    const last = first.at(-1)!;
+    const second = await adminApprovalRepository.list({ before: last.createdAt, beforeId: last.id, limit: 50 });
+    expect(first).toHaveLength(50);
+    expect(second).toHaveLength(5);
+    expect(new Set([...first, ...second].map(row => row.id)).size).toBe(55);
+    expect([...first, ...second].map(row => row.id)).toEqual(
+      [...first, ...second]
+        .map(row => row.id)
+        .sort()
+        .reverse()
+    );
+  });
+
+  it('filters effective expiry before applying the page limit', async () => {
+    const now = new Date();
+    const expired = new Date(now.getTime() - HOUR);
+    const live = await adminApprovalRepository.create(newApproval());
+    const oldApproved = await adminApprovalRepository.create(newApproval({ action: 'user.impersonate_admin' }));
+    await adminApprovalRepository.claim(oldApproved.id, 'pending', 'approved', { now });
+    await AdminApprovalModel.updateOne({ _id: oldApproved.id }, { $set: { expiresAt: expired } });
+    await AdminApprovalModel.insertMany(Array.from({ length: 51 }, () => newApproval({ expiresAt: expired })));
+
+    expect((await adminApprovalRepository.list({ status: 'pending', now, limit: 1 })).map(row => row.id)).toEqual([
+      live.id,
+    ]);
+    expect(await adminApprovalRepository.list({ status: 'approved', now, limit: 50 })).toEqual([]);
+    const expiredRows = await adminApprovalRepository.list({ status: 'expired', now, limit: 100 });
+    expect(expiredRows).toHaveLength(52);
+    expect(expiredRows.map(row => row.id)).toContain(oldApproved.id);
   });
 });

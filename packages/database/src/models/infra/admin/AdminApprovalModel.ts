@@ -76,7 +76,7 @@ const AdminApprovalSchema = new Schema<AdminApprovalDocumentShape>(
 
 AdminApprovalSchema.index({ status: 1, expiresAt: 1 });
 AdminApprovalSchema.index({ 'requestedBy.id': 1, createdAt: -1 });
-AdminApprovalSchema.index({ createdAt: -1 });
+AdminApprovalSchema.index({ createdAt: -1, _id: -1 });
 
 export const AdminApprovalModel: Model<AdminApprovalDocumentShape> =
   (mongoose.models.AdminApproval as Model<AdminApprovalDocumentShape> | undefined) ??
@@ -89,6 +89,27 @@ export const toAdminApproval = (document: AdminApprovalDocumentShape): AdminAppr
     id: String(_id),
     requestedBy: { ...document.requestedBy, selfIds: [...document.requestedBy.selfIds] },
   };
+};
+
+const effectiveStatusFilter = (
+  status: AdminApprovalStatus | undefined,
+  now: Date
+): FilterQuery<AdminApprovalDocumentShape> => {
+  if (!status) return {};
+  if (status === 'expired') {
+    return { $or: [{ status: 'expired' }, { status: { $in: ['pending', 'approved'] }, expiresAt: { $lte: now } }] };
+  }
+  if (status === 'pending' || status === 'approved') return { status, expiresAt: { $gt: now } };
+  return { status };
+};
+
+const approvalCursorFilter = (
+  before: Date | undefined,
+  beforeId: string | undefined
+): FilterQuery<AdminApprovalDocumentShape> => {
+  if (!before) return {};
+  if (!beforeId) return { createdAt: { $lt: before } };
+  return { $or: [{ createdAt: { $lt: before } }, { createdAt: before, _id: { $lt: new Types.ObjectId(beforeId) } }] };
 };
 
 class AdminApprovalRepository implements IAdminApprovalRepository {
@@ -105,14 +126,10 @@ class AdminApprovalRepository implements IAdminApprovalRepository {
     return document ? toAdminApproval(document) : null;
   }
 
-  async list({ status, before, limit }: AdminApprovalListQuery): Promise<AdminApproval[]> {
-    const filter: FilterQuery<AdminApprovalDocumentShape> = {
-      ...(status ? { status } : {}),
-      ...(before ? { createdAt: { $lt: before } } : {}),
-    };
+  async list({ status, before, beforeId, now = new Date(), limit }: AdminApprovalListQuery): Promise<AdminApproval[]> {
     const documents = await this.approvalModel
-      .find(filter)
-      .sort({ createdAt: -1 })
+      .find({ $and: [effectiveStatusFilter(status, now), approvalCursorFilter(before, beforeId)] })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(limit)
       .lean<AdminApprovalDocumentShape[]>();
     return documents.map(toAdminApproval);

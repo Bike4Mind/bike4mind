@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useMutation, useInfiniteQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { AdminApprovalAction, AdminApprovalStatus } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
@@ -22,6 +22,7 @@ export type AdminApprovalRow = {
   decidedBy?: { id: string; name: string };
   decisionReason?: string;
   error?: string;
+  result?: unknown;
   params: unknown;
   stalled: boolean;
   canDecide: boolean;
@@ -43,16 +44,22 @@ export const notifyApprovalSubmitted = (queryClient: QueryClient) => {
   queryClient.invalidateQueries({ queryKey: ADMIN_APPROVALS_KEY });
 };
 
+export type AdminApprovalCursor = { before: string; beforeId: string };
+type AdminApprovalsPage = { approvals: AdminApprovalRow[]; nextCursor: AdminApprovalCursor | null };
+
 export function useAdminApprovals(status: AdminApprovalStatusFilter) {
-  return useQuery({
+  const query = useInfiniteQuery({
     queryKey: [...ADMIN_APPROVALS_KEY, status],
-    queryFn: async () => {
-      const { data } = await api.get<{ approvals: AdminApprovalRow[] }>('/api/admin/approvals', {
-        params: { status },
+    initialPageParam: null as AdminApprovalCursor | null,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<AdminApprovalsPage>('/api/admin/approvals', {
+        params: { status, ...pageParam },
       });
-      return data.approvals;
+      return data;
     },
+    getNextPageParam: page => page.nextCursor ?? undefined,
   });
+  return { ...query, data: query.data?.pages.flatMap(page => page.approvals) };
 }
 
 /** An approved action may have changed users, orgs or subscriptions, so their lists refetch too. */
@@ -67,7 +74,9 @@ export function useApproveAdminApproval() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const { data } = await api.post<{ approval: AdminApprovalRow }>(`/api/admin/approvals/${id}/approve`);
+      const { data } = await api.post<{ approval: AdminApprovalRow; result?: unknown }>(
+        `/api/admin/approvals/${id}/approve`
+      );
       return data;
     },
     onSettled: () => invalidateAfterDecision(queryClient),

@@ -39,7 +39,11 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
       try {
         const result: AdminUsersBulkResult = await executeAdminUsersBulk(
           request,
-          { id: req.user.id, selfIds: selfIdsOf(req.user) },
+          {
+            id: req.user.id,
+            selfIds: selfIdsOf(req.user),
+            ...(gate.creditBalances ? { creditBalances: gate.creditBalances } : {}),
+          },
           usersBulkExecuteDeps(req, request.reason, req.logger)
         );
         return res.json(result);

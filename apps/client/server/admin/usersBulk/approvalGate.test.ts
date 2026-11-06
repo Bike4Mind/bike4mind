@@ -179,4 +179,37 @@ describe('requestUsersBulkApprovalIfNeeded', () => {
     expect(stored.idempotencyKey).toBe(body.idempotencyKey);
     expect(stored.cohortHash).toBe(body.cohortHash);
   });
+
+  it('binds a direct set action to the balances used for its credit gate', async () => {
+    const users = cohort(1, 1000);
+    expect(
+      await requestUsersBulkApprovalIfNeeded(
+        req,
+        requestFor(users, { type: 'adjustCredits', mode: 'set', amount: 1000 }),
+        depsFor(users)
+      )
+    ).toMatchObject({ pending: null, creditBalances: { [users[0].id]: 1000 } });
+  });
+
+  it('reserves positive set grants without offsetting deductions that may fail independently', async () => {
+    mocks.policy.mockResolvedValue({ enabled: true, bulkUserThreshold: 2, creditThreshold: 100, expiryHours: 24 });
+    const users = [userRow(idOf(1), 0), userRow(idOf(2), 200)];
+    const action: AdminUsersBulkAction = { type: 'adjustCredits', mode: 'set', amount: 100 };
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, action), depsFor(users))).toMatchObject({
+      pending: null,
+    });
+    expect([...reservations.rows.values()].filter(row => row.kind === 'credits')).toEqual([
+      { actorUserId: ADMIN, kind: 'credits', amount: 100 },
+    ]);
+  });
+
+  it('requires approval when positive set grants exceed the threshold even with zero net change', async () => {
+    mocks.policy.mockResolvedValue({ enabled: true, bulkUserThreshold: 2, creditThreshold: 99, expiryHours: 24 });
+    const users = [userRow(idOf(1), 0), userRow(idOf(2), 200)];
+    const action: AdminUsersBulkAction = { type: 'adjustCredits', mode: 'set', amount: 100 };
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, action), depsFor(users))).toEqual({
+      pending: PENDING,
+    });
+    expect(reservations.rows.size).toBe(0);
+  });
 });

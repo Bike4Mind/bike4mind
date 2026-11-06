@@ -114,3 +114,18 @@ describe('deleteUserAsAdmin onDeleteFailed', () => {
     expect(entry.details).toEqual({ canceledSubscriptions: ['sub_1'] });
   });
 });
+
+describe('direct deletion with approvals enabled', () => {
+  it.each([
+    { id: 'target', isAdmin: true },
+    { id: 'target', isAdmin: false, adminPermissions: ['support:read'] },
+  ])('checks the target role again before cancellation and deletion', async target => {
+    await deleteUserAsAdmin(req, 'target', 'offboarding', undefined, { requireNonAdmin: true });
+    const [, context] = mocks.hardDeleteUser.mock.calls[0] as [string, DeleteContext];
+    expect(context.assertInTransaction).toEqual(expect.any(Function));
+    mocks.findById.mockResolvedValue(target);
+    await expect(context.assertInTransaction?.()).rejects.toMatchObject({ statusCode: 409 });
+    mocks.findById.mockResolvedValue({ id: 'target', isAdmin: false });
+    await expect(context.assertInTransaction?.()).resolves.toBeUndefined();
+  });
+});

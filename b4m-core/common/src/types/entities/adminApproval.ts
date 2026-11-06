@@ -68,7 +68,13 @@ export type AdminApprovalUpdate = Partial<
 /** A claim only matches an unexpired record; at most one of the requester conditions is set. */
 export type AdminApprovalClaimGuard = { now: Date; requestedBy?: string; notRequestedBy?: string };
 
-export type AdminApprovalListQuery = { status?: AdminApprovalStatus; before?: Date; limit: number };
+export type AdminApprovalListQuery = {
+  status?: AdminApprovalStatus;
+  before?: Date;
+  beforeId?: string;
+  now?: Date;
+  limit: number;
+};
 
 export interface IAdminApprovalRepository {
   create(approval: NewAdminApproval): Promise<AdminApproval>;

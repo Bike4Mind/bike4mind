@@ -29,7 +29,7 @@ export async function deleteUserAsAdmin(
   userId: string,
   reason: string,
   approval?: AdminApproval,
-  onDeleteCommitted?: () => void
+  options: { onDeleteCommitted?: () => void; requireNonAdmin?: boolean } = {}
 ) {
   const admin = req.user!;
   return hardDeleteUser(
@@ -38,9 +38,16 @@ export async function deleteUserAsAdmin(
       deletedBy: String(admin.id),
       initiatedBy: 'admin',
       logger: req.logger,
-      onDeleteCommitted,
-      // An approved delete re-reads the target in the delete's transaction, so a demotion racing it aborts it.
-      ...(approval && { assertInTransaction: () => assertStillAdmin(userId) }),
+      onDeleteCommitted: options.onDeleteCommitted,
+      // Check the approved target role before cancellation and inside the delete transaction.
+      ...((approval || options.requireNonAdmin) && {
+        assertInTransaction: async () => {
+          if (approval) return assertStillAdmin(userId);
+          if (canAccessAdmin(await userRepository.findById(userId))) {
+            throw new ConflictError('This user now has admin access; request the deletion again for approval.');
+          }
+        },
+      }),
       // The delete and its audit entry commit together; cascades and notifications run after.
       recordInTransaction: async (target, cancellation) => {
         const canceledEntry = subscriptionCancellationAudit(cancellation, 'account_deleted');
@@ -114,8 +121,10 @@ export async function executeApprovedAdminDelete(req: Request, params: DeleteAdm
   await assertStillAdmin(params.userId);
   let committed = false;
   try {
-    await deleteUserAsAdmin(req, params.userId, params.reason, approval, () => {
-      committed = true;
+    await deleteUserAsAdmin(req, params.userId, params.reason, approval, {
+      onDeleteCommitted: () => {
+        committed = true;
+      },
     });
   } catch (error) {
     // Notifications and cleanup run after the delete commits; once it has committed the approved action ran.

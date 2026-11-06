@@ -6,11 +6,16 @@ const mocks = vi.hoisted(() => ({
   repo: { create: vi.fn(), findById: vi.fn(), list: vi.fn(), claim: vi.fn(), finish: vi.fn() },
   record: vi.fn(),
   execute: vi.fn(),
+  settings: vi.fn(async () => ({})),
 }));
 
-vi.mock('@bike4mind/database', () => ({ adminApprovalRepository: mocks.repo, adminSettingsRepository: {} }));
+vi.mock('@bike4mind/database', () => ({
+  adminApprovalRepository: mocks.repo,
+  adminSettingsRepository: {},
+  withTransaction: async <T>(callback: () => Promise<T>) => callback(),
+}));
 vi.mock('@bike4mind/utils', () => ({
-  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsMap: mocks.settings,
   getSettingsValue: (_key: string, _settings: unknown, fallback: unknown) => fallback,
 }));
 vi.mock('@server/utils/adminAudit', async () => {
@@ -31,7 +36,14 @@ vi.mock('./executors', () => ({
   approvalExecutors: new Proxy({}, { get: () => mocks.execute }),
 }));
 
-import { approveApproval, listApprovals, redeemApproval, rejectApproval, requestApproval } from './service';
+import {
+  approveApproval,
+  getApprovalPolicy,
+  listApprovals,
+  redeemApproval,
+  rejectApproval,
+  requestApproval,
+} from './service';
 
 const REQUESTER = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 const APPROVER = 'bbbbbbbbbbbbbbbbbbbbbbbb';
@@ -64,10 +76,34 @@ const auditActions = () => mocks.record.mock.calls.map(([, input]) => (input as 
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.settings.mockReset().mockResolvedValue({});
   mocks.repo.findById.mockResolvedValue(approvalOf());
   mocks.repo.claim.mockImplementation(async (_id, _from, to) => approvalOf({ status: to }));
   mocks.repo.finish.mockImplementation(async (_id, _from, to, set) => approvalOf({ status: to, ...set }));
   mocks.execute.mockResolvedValue({ updated: 2 });
+});
+
+describe('getApprovalPolicy', () => {
+  it('reads the named approval controls without the process settings cache', async () => {
+    await getApprovalPolicy();
+    expect(mocks.settings).toHaveBeenCalledWith(
+      { adminSettings: {} },
+      {
+        names: [
+          'AdminApprovalsEnabled',
+          'AdminApprovalBulkUserThreshold',
+          'AdminApprovalCreditThreshold',
+          'AdminApprovalExpiryHours',
+        ],
+        skipCache: true,
+      }
+    );
+  });
+
+  it('propagates a settings read failure instead of disabling approvals', async () => {
+    mocks.settings.mockRejectedValueOnce(new Error('settings unavailable'));
+    await expect(getApprovalPolicy()).rejects.toThrow('settings unavailable');
+  });
 });
 
 describe('requestApproval', () => {
@@ -95,7 +131,7 @@ describe('requestApproval', () => {
     expect(auditActions()).toEqual(['admin.approval.requested']);
   });
 
-  it('rethrows the requested audit error when its rollback also fails', async () => {
+  it('rethrows a requested audit error without a compensating status write', async () => {
     mocks.repo.create.mockImplementation(async input => ({
       ...input,
       id: ID,
@@ -103,11 +139,8 @@ describe('requestApproval', () => {
       createdAt: new Date(),
     }));
     mocks.record.mockRejectedValueOnce(new Error('audit down'));
-    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
-    const error = vi.fn();
-    const req = Object.assign(fullAdmin(REQUESTER), { logger: { error } });
     await expect(
-      requestApproval(req, {
+      requestApproval(fullAdmin(REQUESTER), {
         action: 'users.bulk',
         params: PARAMS,
         summary: 'Suspend 2 users',
@@ -116,7 +149,7 @@ describe('requestApproval', () => {
         requiresFullAdmin: true,
       })
     ).rejects.toThrow('audit down');
-    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_REQUEST_ROLLBACK_FAILED]', expect.anything());
+    expect(mocks.repo.finish).not.toHaveBeenCalled();
   });
 });
 
@@ -193,7 +226,7 @@ describe('approveApproval', () => {
     mocks.repo.claim.mockResolvedValue(changed);
     await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toMatchObject({ statusCode: 409 });
     expect(mocks.execute).not.toHaveBeenCalled();
-    expect(mocks.repo.finish).toHaveBeenCalledWith(ID, 'executing', 'failed', expect.anything());
+    expect(mocks.repo.finish).not.toHaveBeenCalled();
   });
 
   it('answers 409 when another approver claimed it first', async () => {
@@ -225,20 +258,24 @@ describe('approveApproval', () => {
     expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_FAILED_AUDIT_FAILED]', expect.anything());
   });
 
-  it('rethrows the approved audit error when its rollback also fails', async () => {
+  it('rethrows an approved audit error without running or compensating', async () => {
     mocks.record.mockRejectedValueOnce(new Error('audit down'));
-    mocks.repo.finish.mockRejectedValueOnce(new Error('db down'));
-    const error = vi.fn();
-    const req = Object.assign(fullAdmin(APPROVER), { logger: { error } });
-    await expect(approveApproval(req, ID)).rejects.toThrow('audit down');
+    await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toThrow('audit down');
     expect(mocks.execute).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith('[ADMIN_APPROVAL_APPROVE_ROLLBACK_FAILED]', expect.anything());
+    expect(mocks.repo.finish).not.toHaveBeenCalled();
   });
 
   it('answers 410 when a concurrent reader expired the record before the claim', async () => {
     mocks.repo.findById.mockResolvedValueOnce(approvalOf()).mockResolvedValueOnce(approvalOf({ status: 'expired' }));
     mocks.repo.claim.mockResolvedValueOnce(null);
     await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toMatchObject({ statusCode: 410 });
+  });
+
+  it('propagates a failed claim-status read instead of inventing a conflict', async () => {
+    mocks.repo.findById.mockResolvedValueOnce(approvalOf()).mockRejectedValueOnce(new Error('database unavailable'));
+    mocks.repo.claim.mockResolvedValueOnce(null);
+    await expect(approveApproval(fullAdmin(APPROVER), ID)).rejects.toThrow('database unavailable');
+    expect(mocks.execute).not.toHaveBeenCalled();
   });
 
   it('answers 409 naming the status when another admin won the claim', async () => {
@@ -392,6 +429,22 @@ describe('listApprovals', () => {
     ]);
     expect(rows[0]).not.toHaveProperty('paramsJson');
     expect(rows[0]?.params).toEqual(PARAMS);
+  });
+
+  it('reports an approved impersonation past its deadline as expired and passes the stable cursor', async () => {
+    const before = new Date();
+    mocks.repo.list.mockResolvedValue([
+      approvalOf({ action: 'user.impersonate_admin', status: 'approved', expiresAt: new Date(Date.now() - 1) }),
+    ]);
+    const rows = await listApprovals(fullAdmin(APPROVER), { status: 'approved', before, beforeId: ID });
+    expect(rows[0]).toMatchObject({ status: 'expired', canDecide: false });
+    expect(mocks.repo.list).toHaveBeenCalledWith({
+      status: 'approved',
+      before,
+      beforeId: ID,
+      now: expect.any(Date),
+      limit: 50,
+    });
   });
 
   it('withholds params from an admin who neither requested nor may decide the row', async () => {

@@ -336,3 +336,46 @@ describe('POST /api/users/:id/loginAs - admin targets need approval', () => {
     expect(mockRequestApproval).not.toHaveBeenCalled();
   });
 });
+
+describe('impersonation target role changes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPolicy.mockResolvedValue({ enabled: true, expiryHours: 24 });
+    mockFindById.mockReset().mockResolvedValue({ id: 'target1', isAdmin: false });
+    mockLoginAs.mockReset().mockResolvedValue({ id: 'target1', name: 'Target', isAdmin: false });
+    mockIssueSession.mockReset().mockResolvedValue({ accessToken: 'tok', refreshToken: 'refresh', sid: 'sid-1' });
+    mockRequestApproval.mockReset().mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
+    mockRecord.mockReset().mockResolvedValue(null);
+  });
+
+  it('requests approval when the verified target gained admin access during MFA', async () => {
+    mockLoginAs.mockResolvedValue({ id: 'target1', name: 'Target', isAdmin: true });
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    const invoke = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+
+    await invoke(req, res);
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(mockRequestApproval).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'user.impersonate_admin' }),
+      expect.anything()
+    );
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect((req as unknown as { logger: { info: unknown } }).logger.info).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { id: 'target1', isAdmin: true },
+    { id: 'target1', isAdmin: false, adminPermissions: ['support:read'] },
+  ])('refuses a newly privileged target before minting the session', async target => {
+    mockFindById.mockResolvedValueOnce({ id: 'target1', isAdmin: false }).mockResolvedValue(target);
+    const { req, res } = post({ mfaToken: '123456', reason: REASON });
+    const invoke = handler as unknown as (request: typeof req, response: typeof res) => Promise<void>;
+
+    await expect(invoke(req, res)).rejects.toMatchObject({ statusCode: 409 });
+    expect(mockIssueSession).not.toHaveBeenCalled();
+    expect(mockSetRefreshCookie).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+  });
+});

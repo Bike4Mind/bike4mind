@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import React from 'react';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
@@ -9,11 +9,12 @@ import {
   isApprovalPending,
   notifyApprovalSubmitted,
   useApproveAdminApproval,
+  useAdminApprovals,
   useRejectAdminApproval,
 } from './adminApprovals';
 
 vi.mock('sonner', () => ({ toast: { info: vi.fn() } }));
-vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn() } }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 
 const post = api.post as unknown as Mock;
 const ID = 'a'.repeat(24);
@@ -86,5 +87,32 @@ describe('adminApprovals hooks', () => {
     expect(isApprovalPending({ status: 'pending' })).toBe(false);
     expect(isApprovalPending({ approvalId: ID, status: 'executed' })).toBe(false);
     expect(isApprovalPending(null)).toBe(false);
+  });
+  it('loads the next cursor page, retaining earlier rows and resetting on a new status', async () => {
+    const get = vi.mocked(api.get);
+    const cursor = { before: '2026-01-01T00:00:00.000Z', beforeId: ID };
+    get.mockResolvedValueOnce({ data: { approvals: [{ id: 'first' }], nextCursor: cursor } });
+    get.mockResolvedValueOnce({ data: { approvals: [{ id: 'second' }], nextCursor: null } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result, rerender } = renderHook(
+      ({ status }: { status: 'pending' | 'executed' }) => useAdminApprovals(status),
+      {
+        wrapper,
+        initialProps: { status: 'pending' },
+      }
+    );
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+    await act(async () => {
+      await result.current.fetchNextPage();
+    });
+    await waitFor(() => expect(result.current.data?.map(row => row.id)).toEqual(['first', 'second']));
+    expect(get).toHaveBeenLastCalledWith('/api/admin/approvals', { params: { status: 'pending', ...cursor } });
+    get.mockResolvedValueOnce({ data: { approvals: [{ id: 'executed' }], nextCursor: null } });
+    rerender({ status: 'executed' });
+    await waitFor(() => expect(result.current.data?.map(row => row.id)).toEqual(['executed']));
+    expect(get).toHaveBeenLastCalledWith('/api/admin/approvals', { params: { status: 'executed' } });
   });
 });

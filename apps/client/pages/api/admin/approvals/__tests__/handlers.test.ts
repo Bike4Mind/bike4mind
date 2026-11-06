@@ -120,4 +120,24 @@ describe('approval routes', () => {
       expect(chain.indexOf(mocks.stepUp)).toBeLessThan(chain.indexOf(limiterOf(route)));
     }
   });
+  it('returns a cursor only when another page exists and forwards both cursor fields', async () => {
+    const list = await load('index', () => import('../index'));
+    const createdAt = new Date();
+    const records = Array.from({ length: 51 }, (_, index) => ({ id: index.toString(16).padStart(24, '0'), createdAt }));
+    mocks.list.mockResolvedValue(records);
+    const res = resMock();
+    await list(reqOf({ query: {} }), res);
+    expect(mocks.list).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ limit: 51 }));
+    expect(res.json).toHaveBeenCalledWith({
+      approvals: records.slice(0, 50),
+      nextCursor: { before: createdAt, beforeId: records[49]!.id },
+    });
+    mocks.list.mockResolvedValue([records[50]]);
+    await list(reqOf({ query: { before: createdAt.toISOString(), beforeId: records[49]!.id } }), res);
+    expect(mocks.list).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ before: createdAt, beforeId: records[49]!.id })
+    );
+    expect(res.json).toHaveBeenLastCalledWith({ approvals: [records[50]], nextCursor: null });
+  });
 });

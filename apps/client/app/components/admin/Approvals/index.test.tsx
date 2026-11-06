@@ -1,19 +1,30 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
-const { mockApprove, mockReject, rows } = vi.hoisted(() => ({
+const { mockApprove, mockReject, mockNextPage, mockBulkResult, rows, queryFlags } = vi.hoisted(() => ({
   mockApprove: vi.fn(),
   mockReject: vi.fn(),
+  mockNextPage: vi.fn(),
+  mockBulkResult: vi.fn(),
+  queryFlags: { hasNextPage: false },
   rows: [] as unknown[],
 }));
 
+vi.mock('../Users/List/useUsersBulkResult', () => ({ useUsersBulkResult: () => mockBulkResult }));
 vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: 'me' } }) }));
 vi.mock('@client/app/hooks/data/user', () => ({ useLoginAsUser: () => ({ mutateAsync: vi.fn(), isPending: false }) }));
 vi.mock('@client/app/hooks/data/adminApprovals', () => ({
-  useAdminApprovals: () => ({ data: rows, isLoading: false, error: null, refetch: vi.fn() }),
+  useAdminApprovals: () => ({
+    data: rows,
+    isLoading: false,
+    error: null,
+    refetch: vi.fn(),
+    hasNextPage: queryFlags.hasNextPage,
+    fetchNextPage: mockNextPage,
+  }),
   useApproveAdminApproval: () => ({ mutateAsync: mockApprove, isPending: false }),
   useRejectAdminApproval: () => ({ mutateAsync: mockReject, isPending: false }),
 }));
@@ -45,6 +56,9 @@ const row = (id: string, overrides: Record<string, unknown> = {}) => ({
 describe('Approvals queue', () => {
   beforeEach(() => {
     rows.length = 0;
+    queryFlags.hasNextPage = false;
+    mockNextPage.mockReset();
+    mockBulkResult.mockReset();
     mockApprove.mockReset().mockResolvedValue({});
     mockReject.mockReset().mockResolvedValue({});
   });
@@ -102,7 +116,9 @@ describe('Approvals queue', () => {
   });
 
   it('shows the sorted user ids of a bulk request in the details dialog', () => {
-    rows.push(row('bulk', { params: { type: 'suspend', userIds: ['u-b', 'u-a'] } }));
+    rows.push(
+      row('bulk', { params: { action: { type: 'suspend' }, target: { kind: 'ids', userIds: ['u-b', 'u-a'] } } })
+    );
     rows.push(row('bare', { params: null }));
     renderQueue();
 
@@ -110,5 +126,33 @@ describe('Approvals queue', () => {
     fireEvent.click(screen.getByTestId('admin-approval-details-btn'));
     const list = screen.getByTestId('admin-approval-details-user-ids');
     expect(Array.from(list.querySelectorAll('li')).map(li => li.textContent)).toEqual(['u-a', 'u-b']);
+  });
+  it('offers the next page when the server returned a cursor', () => {
+    queryFlags.hasNextPage = true;
+    renderQueue();
+    fireEvent.click(screen.getByTestId('admin-approvals-load-more-btn'));
+    expect(mockNextPage).toHaveBeenCalledOnce();
+  });
+
+  it('passes partial bulk outcomes to the shared warning and undo flow and retains their details', async () => {
+    const result = {
+      batchId: 'batch',
+      applied: 1,
+      skipped: 0,
+      failed: [],
+      partial: true,
+      remaining: 2,
+      undoExpiresAt: new Date(Date.now() + 30_000).toISOString(),
+      blockedDomains: [],
+      canceledSubscriptions: 0,
+      subscriptionCancelFailures: [{ userId: 'u-a', error: 'cancel failed' }],
+    };
+    rows.push(row('partial', { params: { target: { userIds: ['u-a'] } } }));
+    mockApprove.mockResolvedValue({ approval: { id: 'partial', status: 'executed' }, result });
+    renderQueue();
+    fireEvent.click(screen.getByTestId('admin-approve-btn'));
+    await waitFor(() => expect(mockBulkResult).toHaveBeenCalledWith(result));
+    expect(screen.getByTestId('admin-approval-details-result').textContent).toContain('cancel failed');
+    expect(screen.getByTestId('admin-approval-details-result').textContent).toContain('"remaining": 2');
   });
 });
