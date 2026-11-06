@@ -102,7 +102,9 @@ const McpConnectionItem = ({
       description:
         connection.auth.kind === 'oauth'
           ? 'This signs Bike4Mind out of the server and removes the connector and its tool settings.'
-          : 'This removes the connector and its tool settings. Revoke the API key at the provider if you no longer need it.',
+          : connection.auth.kind === 'api_key'
+            ? 'This removes the connector and its tool settings. Revoke the API key at the provider if you no longer need it.'
+            : 'This removes the connector and its tool settings.',
       okLabel: 'Remove',
       onOk: () =>
         remove.mutate(connection.id, {
