@@ -94,3 +94,17 @@ describe('PUT /api/admin/operations-model admin audit', () => {
     expect(h.getModel).not.toHaveBeenCalled();
   });
 });
+
+describe('/api/admin/operations-model permission gate', () => {
+  it.each(['GET', 'PUT'] as const)('refuses %s for a user without admin access before any work', async method => {
+    const { req, res } = createMocks({ method, body });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow(
+      /missing permission/i
+    );
+    expect(h.getModel).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.audit).not.toHaveBeenCalled();
+  });
+});

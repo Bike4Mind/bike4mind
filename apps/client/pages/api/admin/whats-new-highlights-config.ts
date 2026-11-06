@@ -46,7 +46,7 @@ const HighlightsConfigSchema = z.object({
 });
 
 const handler = adminApi({
-  adminPermissions: { GET: 'support:read', PUT: 'settings:manage' },
+  adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage' },
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .use(rateLimit({ limit: ADMIN_CONFIG_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))

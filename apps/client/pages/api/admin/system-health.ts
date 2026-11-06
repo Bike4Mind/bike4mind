@@ -3,7 +3,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { getSystemHealthStatus } from '@server/admin/systemHealth/getSystemHealthStatus';
 
-const handler = adminApi({ adminPermissions: { GET: 'support:read' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
+const handler = adminApi({ adminPermissions: { GET: 'settings:manage' }, requiredScopes: [ApiKeyScope.ADMIN] }).get(
   async (req: Request, res: Response) => {
     try {
       return res.json(await getSystemHealthStatus());

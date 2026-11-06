@@ -87,3 +87,16 @@ describe('DELETE /api/admin/system-secrets/[id] admin audit', () => {
     expect(h.clearSecretCache).not.toHaveBeenCalled();
   });
 });
+
+describe('/api/admin/system-secrets/[id] permission gate', () => {
+  it.each(['GET', 'DELETE'] as const)('refuses %s for a user without admin access before any work', async method => {
+    const { req, res } = createMocks({ method, query: { id: 'secret-1' } });
+    (req as Record<string, unknown>).user = { id: 'user-1', isAdmin: false };
+
+    await expect((handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res)).rejects.toThrow(
+      /missing permission/i
+    );
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.deleteSecret).not.toHaveBeenCalled();
+  });
+});
