@@ -20,11 +20,12 @@ import {
   AbuseAssessmentConfigSchema,
   ABUSE_ASSESSMENT_MAX_ATTEMPTS,
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ABUSE_ASSESSMENT_POLICY_VERSION,
   ABUSE_ASSESSMENT_SKIP_REASONS,
-  RISK_EVIDENCE_VERSION,
   SELF_ASSESSED_SHADOW_DETECTORS,
   abuseAssessmentGroupEvidenceSchema,
+  type AbuseAssessmentAccountProfile,
   type AbuseAssessmentConfig,
   type AbuseAssessmentFailureCode,
   type AbuseAssessmentFeatureSummary,
@@ -69,6 +70,7 @@ import {
   type AssessedAccountSource,
 } from './featureSummary';
 import { collectRequestActivity } from './requestActivity';
+import { loadAccountProfiles } from './accountProfile';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Namespaces this feature's budget, call cap and concurrency in the shared platform policy.
@@ -236,6 +238,8 @@ async function readCache(cacheKey: string): Promise<AbuseAssessmentItem | null> 
 
 export type AbuseAssessmentDeps = {
   groupEvidence?: AbuseAssessmentGroupEvidenceSource;
+  /** Overrides the live account profile loader (accountProfile.ts); for tests. */
+  loadAccountProfiles?: (ids: readonly string[]) => Promise<Map<string, AbuseAssessmentAccountProfile>>;
   /**
    * Sweep only: called with every judgment the sweep reads or makes, cached included. A failure is
    * logged and counted as an error; it never stops the sweep.
@@ -249,12 +253,23 @@ export async function summarizeDetection(
   logger: Logger,
   deps: AbuseAssessmentDeps = {}
 ): Promise<AbuseAssessmentFeatureSummary> {
-  const stored: AssessedAccountSource[] = await userRepository.findRiskEvidenceSummaries(detection.userIds);
+  const keptIds = detection.userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS);
+  const [stored, profiles] = await Promise.all([
+    userRepository.findRiskEvidenceSummaries(keptIds),
+    (deps.loadAccountProfiles ?? loadAccountProfiles)(keptIds).catch((error: unknown) => {
+      logger.warn('Abuse assessment account profiles failed; assessing without them', {
+        detectionId: detection.id,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return new Map<string, AbuseAssessmentAccountProfile>();
+    }),
+  ]);
   const byId = new Map(stored.map(account => [account.id, account]));
   const accounts: AssessedAccountSource[] = await Promise.all(
-    detection.userIds.slice(0, ABUSE_ASSESSMENT_MAX_ACCOUNTS).map(async id => ({
+    keptIds.map(async id => ({
       ...(byId.get(id) ?? { id, createdAt: null, summary: null }),
       requests: await collectRequestActivity(id, detection.detectedAt, logger),
+      profile: profiles.get(id) ?? null,
     }))
   );
   const refs = buildFeatureSummary({ detection, accounts, group: null }).accounts.map(account => account.ref);
@@ -328,7 +343,7 @@ export async function assessShadowDetection({
           model,
           modelVersion: output.modelVersion,
           policyVersion: ABUSE_ASSESSMENT_POLICY_VERSION,
-          evidenceVersion: RISK_EVIDENCE_VERSION,
+          evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
           evidenceHash: hash,
           featureSummary: summary,
           failure: output.result === 'unknown' ? output.failure : null,

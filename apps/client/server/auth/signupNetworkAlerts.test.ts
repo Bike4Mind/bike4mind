@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   loggerError: vi.fn(),
   recordShadowDetection: vi.fn(),
   userWrite: vi.fn(),
+  findRecentSignupsOnIp: vi.fn(),
+  findLinkStatesByIds: vi.fn(),
+  spendProfileByUsers: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -17,7 +20,14 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: { claimDedup: mocks.claimDedup, deleteByKey: mocks.deleteByKey },
   shadowDetectionRepository: { record: mocks.recordShadowDetection },
   // Shadow recording must never act on the account: any write here fails the no-side-effects test.
-  userRepository: { update: mocks.userWrite, updateOne: mocks.userWrite, findByIdAndUpdate: mocks.userWrite },
+  userRepository: {
+    update: mocks.userWrite,
+    updateOne: mocks.userWrite,
+    findByIdAndUpdate: mocks.userWrite,
+    findLinkStatesByIds: mocks.findLinkStatesByIds,
+  },
+  authEventRepository: { findRecentSignupsOnIp: mocks.findRecentSignupsOnIp },
+  usageEventRepository: { spendProfileByUsers: mocks.spendProfileByUsers },
   userApiKeyRepository: { update: mocks.userWrite, revokeAllForUser: mocks.userWrite },
   creditTransactionRepository: { create: mocks.userWrite },
 }));
@@ -41,6 +51,7 @@ import {
   buildSignupNetworkShadowDetection,
   evaluateSignupNetworkBursts,
   formatSignupNetworkAlert,
+  readIpCorroboration,
   readSignupNetworkAlertThresholds,
   SIGNUP_NETWORK_BURST_POLICY_VERSION,
   type SignupNetworkAlertThresholds,
@@ -50,6 +61,7 @@ const THRESHOLDS: SignupNetworkAlertThresholds = {
   enabled: true,
   windowMinutes: 180,
   maxPerIp: 1,
+  minUncorroboratedPerIp: 3,
   maxPerHostingAsn: 2,
   maxPerAsn: 0,
 };
@@ -81,7 +93,17 @@ describe('readSignupNetworkAlertThresholds', () => {
         signupNetworkAlertMaxPerHostingAsn: '0',
         signupNetworkAlertMaxPerAsn: '50',
       })
-    ).toEqual({ enabled: false, windowMinutes: 60, maxPerIp: 3, maxPerHostingAsn: 0, maxPerAsn: 50 });
+    ).toEqual({
+      enabled: false,
+      windowMinutes: 60,
+      maxPerIp: 3,
+      minUncorroboratedPerIp: 3,
+      maxPerHostingAsn: 0,
+      maxPerAsn: 50,
+    });
+    expect(
+      readSignupNetworkAlertThresholds({ signupNetworkAlertMinUncorroboratedPerIp: '5' }).minUncorroboratedPerIp
+    ).toBe(5);
   });
 });
 
@@ -108,9 +130,46 @@ describe('evaluateSignupNetworkBursts', () => {
     expect(
       evaluateSignupNetworkBursts({ counts: { ipSignups: 2, asnSignups: 3 }, hosting: true, thresholds: THRESHOLDS })
     ).toEqual([
-      { scope: 'ip', signups: 2, max: 1 },
+      { scope: 'ip', signups: 2, max: 1, corroboratedBy: ['anonymousNetwork'] },
       { scope: 'asn', signups: 3, max: 2, hosting: true },
     ]);
+  });
+
+  it('needs corroboration for a residential IP below the uncorroborated threshold', () => {
+    const counts = { ipSignups: 2, asnSignups: null };
+    expect(evaluateSignupNetworkBursts({ counts, hosting: false, thresholds: THRESHOLDS })).toEqual([]);
+    expect(evaluateSignupNetworkBursts({ counts, hosting: null, thresholds: THRESHOLDS })).toEqual([]);
+    expect(
+      evaluateSignupNetworkBursts({ counts, hosting: false, thresholds: THRESHOLDS, corroboration: ['sharedMailbox'] })
+    ).toEqual([{ scope: 'ip', signups: 2, max: 1, corroboratedBy: ['sharedMailbox'] }]);
+  });
+
+  it('fires on the count alone once it reaches the uncorroborated threshold', () => {
+    expect(
+      evaluateSignupNetworkBursts({
+        counts: { ipSignups: 3, asnSignups: null },
+        hosting: false,
+        thresholds: THRESHOLDS,
+      })
+    ).toEqual([{ scope: 'ip', signups: 3, max: 1, corroboratedBy: [] }]);
+    // A truncated scan is far over any threshold.
+    expect(
+      evaluateSignupNetworkBursts({
+        counts: { ipSignups: Infinity, asnSignups: null },
+        hosting: false,
+        thresholds: THRESHOLDS,
+      })
+    ).toHaveLength(1);
+  });
+
+  it('restores count-only alerting when the uncorroborated threshold is one over the max', () => {
+    expect(
+      evaluateSignupNetworkBursts({
+        counts: { ipSignups: 2, asnSignups: null },
+        hosting: false,
+        thresholds: { ...THRESHOLDS, minUncorroboratedPerIp: 2 },
+      })
+    ).toEqual([{ scope: 'ip', signups: 2, max: 1, corroboratedBy: [] }]);
   });
 
   it('ignores a busy consumer network unless the any-network check is on', () => {
@@ -139,7 +198,7 @@ describe('evaluateSignupNetworkBursts', () => {
 describe('formatSignupNetworkAlert', () => {
   it('names the IP, network and latest account for an IP burst', () => {
     const text = formatSignupNetworkAlert({
-      burst: { scope: 'ip', signups: 3, max: 1 },
+      burst: { scope: 'ip', signups: 3, max: 1, corroboratedBy: ['anonymousNetwork'] },
       network: HOSTED,
       userId: 'u1',
       windowMinutes: 180,
@@ -149,6 +208,7 @@ describe('formatSignupNetworkAlert', () => {
     expect(text).toContain('*IP:* `203.0.113.7`');
     expect(text).toContain('*Network:* AS64500 (Example Cloud), hosting/VPN: yes');
     expect(text).toContain('`u1`');
+    expect(text).toContain('*Corroborated by:* Hosting or anonymous-IP network');
   });
 
   it('leaves the IP out of a network burst and reports a truncated count as a floor', () => {
@@ -175,6 +235,9 @@ describe('alertSignupNetworkBurst', () => {
     mocks.loggerError.mockReset();
     mocks.recordShadowDetection.mockReset().mockResolvedValue('d1');
     mocks.userWrite.mockReset();
+    mocks.findRecentSignupsOnIp.mockReset().mockResolvedValue([]);
+    mocks.findLinkStatesByIds.mockReset().mockResolvedValue([]);
+    mocks.spendProfileByUsers.mockReset().mockResolvedValue({});
     vi.spyOn(Logger.globalInstance, 'error').mockImplementation(mocks.loggerError);
   });
 
@@ -210,7 +273,7 @@ describe('alertSignupNetworkBurst', () => {
   });
 
   it('releases the claim after a failed post so the next signup retries, but keeps it when alerts are off', async () => {
-    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 3, prefixSignups: null, asnSignups: null });
     mocks.postMessageToSlackWithOutcome.mockResolvedValueOnce('failed');
     await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
     expect(mocks.deleteByKey).toHaveBeenCalledWith('signup-network-alert:ip:hash:203.0.113.7');
@@ -281,6 +344,7 @@ describe('alertSignupNetworkBurst', () => {
         summary: '2 self-serve signups from one IP and 3 from one network in 180 minutes',
         signals: [
           { key: 'ipSignups', label: expect.any(String), observed: 2, threshold: 1 },
+          { key: 'anonymousNetwork', label: expect.any(String), observed: 1, threshold: null },
           { key: 'asnSignups', label: expect.any(String), observed: 3, threshold: 2 },
         ],
       })
@@ -303,13 +367,17 @@ describe('alertSignupNetworkBurst', () => {
     expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(1);
     expect(mocks.recordShadowDetection).toHaveBeenCalledWith(
       expect.objectContaining({
-        signals: [expect.objectContaining({ key: 'ipSignups' }), expect.objectContaining({ key: 'asnSignups' })],
+        signals: [
+          expect.objectContaining({ key: 'ipSignups' }),
+          expect.objectContaining({ key: 'anonymousNetwork' }),
+          expect.objectContaining({ key: 'asnSignups' }),
+        ],
       })
     );
   });
 
   it('keeps the shadow claim when the Slack post fails', async () => {
-    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 3, prefixSignups: null, asnSignups: null });
     mocks.postMessageToSlackWithOutcome.mockResolvedValue('failed');
     await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
     expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(1);
@@ -350,6 +418,60 @@ describe('alertSignupNetworkBurst', () => {
     );
   });
 
+  it('stays silent for two residential signups from one IP with nothing tying them together', async () => {
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
+    mocks.findRecentSignupsOnIp.mockResolvedValue([{ userId: 'u0', ja4: null }]);
+    mocks.findLinkStatesByIds.mockResolvedValue([
+      { id: 'u1', email: 'asha@gmail.com' },
+      { id: 'u0', email: 'ravi@gmail.com' },
+    ]);
+    await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
+    expect(mocks.findRecentSignupsOnIp).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '203.0.113.7', excludeUserId: 'u1', limit: 20 })
+    );
+    expect(mocks.postMessageToSlackWithOutcome).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+  });
+
+  it('fires for two residential signups that share a mailbox, naming the corroboration', async () => {
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
+    mocks.findRecentSignupsOnIp.mockResolvedValue([{ userId: 'u0', ja4: null }]);
+    mocks.findLinkStatesByIds.mockResolvedValue([
+      { id: 'u1', email: 'farm+x7k2q9@outlook.com' },
+      { id: 'u0', email: 'farm+p3m8z1@outlook.com' },
+    ]);
+    await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
+    expect(mocks.recordShadowDetection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        policyVersion: 2,
+        signals: [
+          expect.objectContaining({ key: 'ipSignups', observed: 2 }),
+          expect.objectContaining({ key: 'sharedMailbox', observed: 1 }),
+        ],
+      })
+    );
+    expect(mocks.postMessageToSlackWithOutcome).toHaveBeenCalledWith(
+      expect.stringContaining('*Corroborated by:* Shares a mailbox'),
+      'SlackSecurityAlertsWebhookUrl',
+      { timeoutMs: 3000 }
+    );
+  });
+
+  it('does not read corroboration when the count decides alone', async () => {
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 3, prefixSignups: null, asnSignups: null });
+    await alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' });
+    await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
+    expect(mocks.findRecentSignupsOnIp).not.toHaveBeenCalled();
+    expect(mocks.recordShadowDetection).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats a failed corroboration read as uncorroborated and never throws', async () => {
+    mocks.countRecentSignups.mockResolvedValue({ ipSignups: 2, prefixSignups: null, asnSignups: null });
+    mocks.findRecentSignupsOnIp.mockRejectedValue(new Error('db down'));
+    await expect(alertSignupNetworkBurst({ network: CONSUMER, userId: 'u1', method: 'otc' })).resolves.toBeUndefined();
+    expect(mocks.recordShadowDetection).not.toHaveBeenCalled();
+  });
+
   it('never writes to the account, its keys or its credits', async () => {
     await alertSignupNetworkBurst({ network: HOSTED, userId: 'u1', method: 'otc' });
     expect(mocks.recordShadowDetection).toHaveBeenCalled();
@@ -371,7 +493,7 @@ describe('buildSignupNetworkShadowDetection', () => {
       })
     ).toEqual({
       detector: 'signupNetworkBurst',
-      policyVersion: 1,
+      policyVersion: 2,
       wouldAction: 'contain',
       summary: '3 self-serve signups from one network in 60 minutes',
       userIds: ['u1'],
@@ -387,7 +509,7 @@ describe('buildSignupNetworkShadowDetection', () => {
   it('names every tripped scope and carries a signal for each', () => {
     const detection = buildSignupNetworkShadowDetection({
       bursts: [
-        { scope: 'ip', signups: 3, max: 1 },
+        { scope: 'ip', signups: 3, max: 1, corroboratedBy: [] },
         { scope: 'asn', signups: 7, max: 2, hosting: true },
       ],
       network: HOSTED,
@@ -405,7 +527,7 @@ describe('buildSignupNetworkShadowDetection', () => {
   it('reports a truncated count as a floor with no observed number', () => {
     const detection = buildSignupNetworkShadowDetection({
       bursts: [
-        { scope: 'ip', signups: Infinity, max: 1 },
+        { scope: 'ip', signups: Infinity, max: 1, corroboratedBy: [] },
         { scope: 'asn', signups: Infinity, max: 2, hosting: false },
       ],
       network: CONSUMER,
@@ -421,5 +543,87 @@ describe('buildSignupNetworkShadowDetection', () => {
       expect.objectContaining({ observed: null, threshold: 2 }),
     ]);
     expect(detection.network?.hosting).toBe(false);
+  });
+});
+
+describe('readIpCorroboration', () => {
+  const window = { since: new Date('2026-10-01T00:00:00Z'), until: new Date('2026-10-01T03:00:00Z') };
+  const deps = (input: {
+    siblings: { userId: string; ja4: string | null }[];
+    emails?: { id: string; email: string | null }[];
+    spend?: Record<string, { totalCredits: number }>;
+  }) => ({
+    findRecentSignupsOnIp: vi.fn().mockResolvedValue(input.siblings),
+    findEmails: vi.fn().mockResolvedValue(input.emails ?? []),
+    spendSince: vi.fn().mockResolvedValue(input.spend ?? {}),
+  });
+
+  it('finds nothing for unrelated household signups', async () => {
+    const result = await readIpCorroboration({
+      network: { ip: '198.51.100.4', ja4: 't13d1516h2_a' },
+      userId: 'u1',
+      ...window,
+      deps: deps({
+        siblings: [{ userId: 'u0', ja4: 't13d1516h2_b' }],
+        emails: [
+          { id: 'u1', email: 'asha@gmail.com' },
+          { id: 'u0', email: 'ravi@yahoo.com' },
+        ],
+      }),
+    });
+    expect(result).toEqual([]);
+  });
+
+  it('names a shared JA4, mailbox, company mail domain and a sibling that already spent', async () => {
+    const result = await readIpCorroboration({
+      network: { ip: '198.51.100.4', ja4: 't13d1516h2_a' },
+      userId: 'u1',
+      ...window,
+      deps: deps({
+        siblings: [
+          { userId: 'u0', ja4: 't13d1516h2_a' },
+          { userId: 'u2', ja4: null },
+          { userId: 'u3', ja4: null },
+        ],
+        emails: [
+          { id: 'u1', email: 'j.doe+1@gmail.com' },
+          { id: 'u0', email: 'jdoe@gmail.com' },
+          { id: 'u2', email: 'someone@example.org' },
+          { id: 'u3', email: 'other@example.net' },
+        ],
+        spend: { u3: { totalCredits: 900 } },
+      }),
+    });
+    expect(result).toEqual(['sharedJa4', 'sharedMailbox', 'siblingSpent']);
+  });
+
+  it('counts a shared company domain but not a shared webmail domain', async () => {
+    const run = (emails: { id: string; email: string }[]) =>
+      readIpCorroboration({
+        network: { ip: '198.51.100.4', ja4: null },
+        userId: 'u1',
+        ...window,
+        deps: deps({ siblings: [{ userId: 'u0', ja4: null }], emails }),
+      });
+    expect(
+      await run([
+        { id: 'u1', email: 'a@acme-labs.io' },
+        { id: 'u0', email: 'b@acme-labs.io' },
+      ])
+    ).toEqual(['sharedMailDomain']);
+    expect(
+      await run([
+        { id: 'u1', email: 'a@gmail.com' },
+        { id: 'u0', email: 'b@gmail.com' },
+      ])
+    ).toEqual([]);
+  });
+
+  it('reads nothing further when the IP has no earlier signup', async () => {
+    const d = deps({ siblings: [] });
+    expect(
+      await readIpCorroboration({ network: { ip: '198.51.100.4', ja4: null }, userId: 'u1', ...window, deps: d })
+    ).toEqual([]);
+    expect(d.findEmails).not.toHaveBeenCalled();
   });
 });

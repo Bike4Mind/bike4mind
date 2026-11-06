@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto';
 import {
   ACCOUNT_CAMPAIGN_AXIS_OF,
+  ABUSE_ASSESSMENT_EVIDENCE_VERSION,
   ABUSE_ASSESSMENT_MAX_ACCOUNTS,
   ABUSE_ASSESSMENT_MAX_SIGNALS,
   ABUSE_ASSESSMENT_MAX_SUMMARY_CHARS,
@@ -19,6 +20,7 @@ import {
   abuseAssessmentFeatureSummarySchema,
   riskEvidenceFactValueSchemas,
   type AbuseAssessmentAccount,
+  type AbuseAssessmentAccountProfile,
   type AbuseAssessmentAccountEvidence,
   type AbuseAssessmentFeatureSummary,
   type AbuseAssessmentGroupEvidence,
@@ -37,6 +39,8 @@ export type AssessedAccountSource = {
   createdAt: Date | null;
   summary: RiskEvidenceSummary | null;
   requests?: AbuseAssessmentRequestActivity;
+  /** From accountProfile.ts; null when the account could not be read. */
+  profile?: AbuseAssessmentAccountProfile | null;
 };
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -94,6 +98,7 @@ const projectAccount = (
     evidenceAgeHours: summary ? hoursBetween(detectedAt, summary.computedAt) : null,
     evidence: summary ? projectEvidence(summary.facts) : null,
     ...(source?.requests ? { requests: abuseAssessmentRequestActivitySchema.parse(source.requests) } : {}),
+    profile: source?.profile ?? null,
   };
 };
 
@@ -221,7 +226,7 @@ export function buildFeatureSummary({
 
   const build = (kept: AbuseAssessmentAccount[]): AbuseAssessmentFeatureSummary =>
     abuseAssessmentFeatureSummarySchema.parse({
-      evidenceVersion: RISK_EVIDENCE_VERSION,
+      evidenceVersion: ABUSE_ASSESSMENT_EVIDENCE_VERSION,
       detection: {
         detector: detection.detector,
         detectorPolicyVersion: detection.policyVersion,
