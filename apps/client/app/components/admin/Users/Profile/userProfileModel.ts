@@ -20,7 +20,7 @@ export type AdminUserProfile = AdminUserListItem &
 export const DELETION_SOURCE_LABELS: Readonly<Record<AccountDeletionSource, string>> = {
   self: 'Self-serve',
   support: 'Support',
-  admin: 'Admin',
+  admin: 'Admin erasure',
 };
 
 /** A calendar day in UTC, matching the (UTC) dates the user is emailed. */
