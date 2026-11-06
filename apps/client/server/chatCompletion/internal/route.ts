@@ -107,6 +107,8 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       if (!isExpectedCompletionError(err)) {
         logger.error('Quest processing failed', { error: errorMessage, errorCause: describeErrorCause(err), err });
         track(emitProcessingFailed('/process', err));
+      } else {
+        logger.warn('Quest processing ended with an expected provider error', { error: errorMessage });
       }
 
       // Surface the failure to the client instead of leaving the quest 'running' forever - but only

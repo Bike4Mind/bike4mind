@@ -287,8 +287,14 @@ describe('ChatCompletion /process', () => {
     const response = await post(VALID_BODY, { authorization: AUTH });
     expect(response.status).toBe(202);
     await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
-    const logger = mockProcessQuest.mock.calls[0][1] as { error: ReturnType<typeof vi.fn> };
+    const logger = mockProcessQuest.mock.calls[0][1] as {
+      error: ReturnType<typeof vi.fn>;
+      warn: ReturnType<typeof vi.fn>;
+    };
     expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith('Quest processing ended with an expected provider error', {
+      error: refusal.message,
+    });
     expect(mockEmitMetrics).not.toHaveBeenCalled();
     expect(mockQuestSettleIfUnfinished).toHaveBeenCalledWith(
       'q1',
