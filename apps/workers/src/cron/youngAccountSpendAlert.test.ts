@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   fetch: vi.fn(),
   readAlarmMention: vi.fn(),
   recordShadowDetections: vi.fn(),
+  reconcileAlarmThresholds: vi.fn(),
   log: vi.fn(),
   error: vi.fn(),
 }));
@@ -29,6 +30,10 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('./youngAccountSpendShadowDetections', () => ({
   recordYoungAccountSpendShadowDetections: mocks.recordShadowDetections,
+}));
+vi.mock('./youngAccountSpendAlarmThresholds', async importOriginal => ({
+  ...(await importOriginal<typeof import('./youngAccountSpendAlarmThresholds')>()),
+  reconcileYoungAccountAlarmThresholds: mocks.reconcileAlarmThresholds,
 }));
 vi.mock('../events/alarmSlackMention', () => ({ readAlarmMention: mocks.readAlarmMention }));
 vi.mock('@bike4mind/observability', () => ({
@@ -75,6 +80,7 @@ beforeEach(() => {
   mocks.readAlarmMention.mockResolvedValue(undefined);
   mocks.getSettingsMap.mockResolvedValue({});
   mocks.recordShadowDetections.mockResolvedValue(1);
+  mocks.reconcileAlarmThresholds.mockResolvedValue(undefined);
 });
 
 describe('young-account spend thresholds', () => {
@@ -388,5 +394,57 @@ describe('young-account spend handler', () => {
     expect(await handler(event)).toMatchObject({ status: 'alerted' });
     expect(mocks.recordShadowDetections).not.toHaveBeenCalled();
     expect(mocks.fetch).toHaveBeenCalledOnce();
+  });
+
+  describe('alarm threshold override', () => {
+    beforeEach(() => {
+      vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_NAME', 'app-production-young-account-spend-rate');
+      vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME', 'app-production-young-account-spend-rate-warn');
+    });
+
+    it('reconciles after the Slack alert with the admin-set ceilings', async () => {
+      mocks.getSettingsMap.mockResolvedValue({
+        youngAccountSpendPageUsdPerHour: '8',
+        youngAccountSpendWarnUsdPerHour: '0',
+      });
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+      expect(await handler(event)).toMatchObject({ status: 'alerted' });
+      expect(mocks.reconcileAlarmThresholds).toHaveBeenCalledExactlyOnceWith({
+        client: expect.anything(),
+        alarmNames: {
+          page: 'app-production-young-account-spend-rate',
+          warn: 'app-production-young-account-spend-rate-warn',
+        },
+        desired: { page: 8 },
+        logger: expect.anything(),
+      });
+      expect(mocks.reconcileAlarmThresholds.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mocks.fetch.mock.invocationCallOrder[0]
+      );
+    });
+
+    it('reconciles on a quiet hour too', async () => {
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+      expect(await handler(event)).toMatchObject({ status: 'ok' });
+      expect(mocks.reconcileAlarmThresholds).toHaveBeenCalledOnce();
+    });
+
+    it('cannot fail the run', async () => {
+      mocks.reconcileAlarmThresholds.mockRejectedValue(new Error('cloudwatch down'));
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+      expect(await handler(event)).toMatchObject({ status: 'alerted' });
+      expect(mocks.fetch).toHaveBeenCalledOnce();
+      expect(mocks.error).toHaveBeenCalledWith('young-account-alarm-threshold-reconcile-failed', {
+        error: 'cloudwatch down',
+      });
+    });
+
+    it('skips, with a log line, when the alarm names are not configured', async () => {
+      vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME', '');
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+      expect(await handler(event)).toMatchObject({ status: 'ok' });
+      expect(mocks.reconcileAlarmThresholds).not.toHaveBeenCalled();
+      expect(mocks.log).toHaveBeenCalledWith('young-account-alarm-threshold-reconcile-skipped', expect.anything());
+    });
   });
 });

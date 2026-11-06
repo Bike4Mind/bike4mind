@@ -18,6 +18,17 @@ const MENTION = {
   permissions: [{ actions: ['ssm:GetParameter'], resources: ['alarm-slack-mention-arn'] }],
 };
 
+/** What the alarm-threshold override wiring resolves to on a monitored stage; declared above the slice. */
+const ALARMS = {
+  environment: {
+    YOUNG_ACCOUNT_SPEND_ALARM_NAME: 'app-production-young-account-spend-rate',
+    YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: 'app-production-young-account-spend-rate-warn',
+  },
+  permissions: [
+    { actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'], resources: ['page-arn', 'warn-arn'] },
+  ],
+};
+
 function output<T>(value: T) {
   return { value, apply: <Result>(callback: (input: T) => Result) => callback(value) };
 }
@@ -43,6 +54,7 @@ function loadCron(source = declaration, runsScheduledJobs = true) {
     runsScheduledJobs,
     youngAccountSpendAlertDeadLetter: deadLetter,
     youngAccountSpendAlertMention: MENTION,
+    youngAccountSpendAlarmArgs: ALARMS,
     sst: { aws: { Cron: cron } },
     lambdaVpc: {},
     allSecrets: [],
@@ -65,8 +77,12 @@ function verifyDeadLetters(source = declaration) {
       schedule: 'rate(1 hour)',
       transform: { target: { deadLetterConfig: { arn: 'spend-alert-dlq' }, input: undefined } },
       function: expect.objectContaining({
-        environment: expect.objectContaining(MENTION.environment),
-        permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }, ...MENTION.permissions],
+        environment: expect.objectContaining({ ...MENTION.environment, ...ALARMS.environment }),
+        permissions: [
+          { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
+          ...MENTION.permissions,
+          ...ALARMS.permissions,
+        ],
         transform: { function: { deadLetterConfig: { targetArn: 'spend-alert-dlq' } } },
       }),
     })
@@ -111,7 +127,8 @@ describe('young-account spend alert failure recovery', () => {
   });
 
   it.each([
-    'permissions: [youngAccountSpendAlertDeadLetter.sendPermission, ...youngAccountSpendAlertMention.permissions],',
+    'youngAccountSpendAlertDeadLetter.sendPermission,',
+    '...youngAccountSpendAlarmArgs.permissions,',
     'transform: youngAccountSpendAlertDeadLetter.functionTarget,',
     '...youngAccountSpendAlertDeadLetter.ruleTarget.target,',
     'youngAccountSpendAlertDeadLetter.allowRules([$util.output(youngAccountSpendAlert)]);',

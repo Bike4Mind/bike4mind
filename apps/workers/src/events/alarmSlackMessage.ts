@@ -388,6 +388,17 @@ export const ALARM_CATALOG: Record<string, AlarmCatalogEntry> = {
     links: SIGNUP_LINKS,
     detail: 'young-account-spend',
   },
+  'young-account-spend-rate-warn': {
+    title: 'New accounts are spending more than usual on AI',
+    level: 'warn',
+    category: 'abuse',
+    unit: 'USD',
+    meaning:
+      'Accounts under 7 days old spent more estimated AI dollars in one hour than the warn line. This is the heads-up tier; the page tier is the young-account-spend-rate alarm.',
+    action: 'Glance at the top accounts listed above; nothing to do unless one looks like abuse.',
+    links: SIGNUP_LINKS,
+    detail: 'young-account-spend',
+  },
   'llm-spend-young-accounts': {
     title: 'Young-account LLM spend is spiking',
     level: 'page',
@@ -632,6 +643,17 @@ const formatNumber = (raw: string) => {
   return Number.isFinite(n) ? String(n) : raw;
 };
 
+/** USD keeps cents, or 4 decimals below a cent so a tiny nonzero spend does not read as 0.00. */
+export function formatAlarmNumber(value: number, unit?: string): string {
+  if (unit === 'USD') return value.toFixed(value === 0 || Math.abs(value) >= 0.01 ? 2 : 4);
+  return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
+}
+
+const displayNumber = (raw: string, unit?: string) => {
+  const n = Number(raw);
+  return Number.isFinite(n) ? formatAlarmNumber(n, unit) : raw;
+};
+
 const DATAPOINT_RE = /([-+\d.eE]+) \((\d{2})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2}):(\d{2})\)/g;
 
 export type ParsedReason =
@@ -698,11 +720,12 @@ export function describeReason(alarm: CloudWatchAlarmPayload, unit?: string): st
   }
   if (parsed.kind === 'raw') return parsed.reason;
 
-  const what = unit ? `${parsed.value} ${unit}` : `The value was ${parsed.value}`;
+  const value = displayNumber(parsed.value, unit);
+  const what = unit ? `${value} ${unit}` : `The value was ${value}`;
   const when = parsed.period
     ? ` in the ${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`
     : ` at ${formatClock(new Date(parsed.latestStart))} UTC`;
-  const threshold = parsed.threshold ? `; the ${parsed.limit} is ${parsed.threshold}` : '';
+  const threshold = parsed.threshold ? `; the ${parsed.limit} is ${displayNumber(parsed.threshold, unit)}` : '';
   return `${what}${when}${threshold}.`;
 }
 
@@ -713,8 +736,10 @@ export function describeFields(alarm: CloudWatchAlarmPayload, unit?: string, cha
   let sinceMs: number | undefined;
 
   if (parsed.kind === 'threshold') {
-    fields.push(`*Measured*\n${parsed.value}${unit ? ` ${unit}` : ''}`);
-    if (parsed.threshold) fields.push(`*${parsed.limit === 'floor' ? 'Floor' : 'Ceiling'}*\n${parsed.threshold}`);
+    fields.push(`*Measured*\n${displayNumber(parsed.value, unit)}${unit ? ` ${unit}` : ''}`);
+    if (parsed.threshold) {
+      fields.push(`*${parsed.limit === 'floor' ? 'Floor' : 'Ceiling'}*\n${displayNumber(parsed.threshold, unit)}`);
+    }
     fields.push(
       parsed.period
         ? `*Window*\n${periodPhrase(parsed.period)} ending ${formatClock(new Date(parsed.latestStart + parsed.period * 1000))} UTC`

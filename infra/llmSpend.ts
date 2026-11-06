@@ -4,7 +4,8 @@
  * `cli_completion_request` WebSocket route: metric filters, a dashboard, and a
  * 5-minute spend-rate alarm and an hourly spend alarm per provider (LLM_SPEND_ALARM_USD_PER_5MIN,
  * LLM_SPEND_ALARM_USD_PER_HOUR, LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC) plus hourly and 5-minute
- * ceilings on young-account spend, and a count of completions that cost more than the balance could pay.
+ * ceilings on young-account spend (YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR, YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR,
+ * LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN), and a count of completions that cost more than the balance could pay.
  * See infra/signup-code-send-alarm.md.
  */
 
@@ -22,8 +23,9 @@ export const llmSpendNamespace = () => `${$app.name}/${$app.stage}/LLMSpend`;
 export const LLM_SPEND_ALARM_USD_PER_5MIN_DEFAULT = 25;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 20;
 export const LLM_SPEND_ALARM_USD_PER_HOUR_ANTHROPIC_DEFAULT = 75;
-// Ordinary new-user use peaks around 2 USD per rolling hour; 5 leaves headroom.
+// 2 is where ordinary new-user hours top out (warn); 5 is credit-farm territory (page).
 export const YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT = 5;
+export const YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR_DEFAULT = 2;
 export const LLM_SPEND_YOUNG_ACCOUNT_ALARM_USD_PER_5MIN_DEFAULT = 3;
 const USAGE_MESSAGE = 'llm-usage-settled';
 /** Must stay in sync with the charged-down-to-zero log line in b4m-core/services/src/cliCompletions.ts. */
@@ -69,6 +71,12 @@ const youngAccountSpendThreshold = parseAlarmThreshold(
   'YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR',
   process.env.YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR,
   YOUNG_ACCOUNT_SPEND_ALARM_USD_PER_HOUR_DEFAULT
+);
+
+const youngAccountSpendWarnThreshold = parseAlarmThreshold(
+  'YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR',
+  process.env.YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR,
+  YOUNG_ACCOUNT_SPEND_WARN_USD_PER_HOUR_DEFAULT
 );
 
 const youngAccountSpendBurstThreshold = parseAlarmThreshold(
@@ -149,6 +157,9 @@ function createLlmSpendFilters({ key, logGroupName }: LlmSpendLogSource, prefix:
 }
 
 let llmSpendDashboard: aws.cloudwatch.Dashboard | undefined;
+/** Page and warn hourly alarms, in that order; empty on unmonitored stages. Their thresholds are
+ * overridden from admin settings by apps/workers/src/cron/youngAccountSpendAlarmThresholds.ts. */
+const youngAccountSpendAlarms: aws.cloudwatch.MetricAlarm[] = [];
 
 if (isMonitoredStage) {
   if (!dlqAlarmTopic) {
@@ -205,22 +216,40 @@ if (isMonitoredStage) {
     );
   }
 
-  new aws.cloudwatch.MetricAlarm('youngAccountSpendRate', {
-    name: `${prefix}-young-account-spend-rate`,
-    alarmDescription:
-      'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD ceiling',
-    comparisonOperator: 'GreaterThanOrEqualToThreshold',
-    evaluationPeriods: 1,
-    metricName: 'EstimatedUsdYoungAccounts',
-    namespace: LLM_SPEND_NAMESPACE,
-    period: 3600,
-    statistic: 'Sum',
-    threshold: youngAccountSpendThreshold,
-    treatMissingData: 'notBreaching',
-    alarmActions: actions,
-    okActions: actions,
-    tags: { Application: 'LLMSpend', Severity: 'High' },
-  });
+  youngAccountSpendAlarms.push(
+    new aws.cloudwatch.MetricAlarm('youngAccountSpendRate', {
+      name: `${prefix}-young-account-spend-rate`,
+      alarmDescription:
+        'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD ceiling',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 3600,
+      statistic: 'Sum',
+      threshold: youngAccountSpendThreshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
+      tags: { Application: 'LLMSpend', Severity: 'High' },
+    }),
+    new aws.cloudwatch.MetricAlarm('youngAccountSpendRateWarn', {
+      name: `${prefix}-young-account-spend-rate-warn`,
+      alarmDescription:
+        'Estimated LLM spend per hour by accounts under 7 days old at or above the configured USD warn line',
+      comparisonOperator: 'GreaterThanOrEqualToThreshold',
+      evaluationPeriods: 1,
+      metricName: 'EstimatedUsdYoungAccounts',
+      namespace: LLM_SPEND_NAMESPACE,
+      period: 3600,
+      statistic: 'Sum',
+      threshold: youngAccountSpendWarnThreshold,
+      treatMissingData: 'notBreaching',
+      alarmActions: actions,
+      okActions: actions,
+      tags: { Application: 'LLMSpend', Severity: 'Medium' },
+    })
+  );
 
   new aws.cloudwatch.MetricAlarm('llmSpendYoungAccounts', {
     name: `${prefix}-llm-spend-young-accounts`,
@@ -449,4 +478,4 @@ if (isMonitoredStage) {
   });
 }
 
-export { llmSpendDashboard };
+export { llmSpendDashboard, youngAccountSpendAlarms };

@@ -11,6 +11,7 @@ import {
   composeAlarmMessage,
   describeFields,
   describeReason,
+  formatAlarmNumber,
   formatAlarmSlackMessage,
   formatDuration,
   lookupCatalog,
@@ -229,6 +230,19 @@ describe('formatAlarmSlackMessage on production', () => {
     expect(fields).toContain('*Breaching since*\n04:00 UTC (11 min)');
   });
 
+  it('rounds a USD measurement and ceiling to cents in both the sentence and the fields', () => {
+    const alarm = {
+      ...sample,
+      NewStateReason:
+        'Threshold Crossed: 1 datapoint [2.4855329999999998 (27/10/26 23:00:00)] was greater than or equal to the threshold (2.0).',
+      Trigger: { Period: 3600, EvaluationPeriods: 1 },
+    };
+    expect(describeReason(alarm, 'USD')).toBe('2.49 USD in the hour ending 00:00 UTC; the ceiling is 2.00.');
+    const fields = describeFields(alarm, 'USD');
+    expect(fields).toContain('*Measured*\n2.49 USD');
+    expect(fields).toContain('*Ceiling*\n2.00');
+  });
+
   it('rolls the bucket end over midnight', () => {
     const alarm = {
       ...sample,
@@ -381,13 +395,33 @@ describe('formatAlarmSlackMessage on other stages', () => {
   });
 });
 
+describe('formatAlarmNumber', () => {
+  it.each([
+    [2.4855329999999998, 'USD', '2.49'],
+    [5, 'USD', '5.00'],
+    [0, 'USD', '0.00'],
+    [0.01, 'USD', '0.01'],
+    [0.00123456, 'USD', '0.0012'],
+    [7, 'errors', '7'],
+    [1234567, undefined, '1234567'],
+    [0.30000000000000004, 'runs', '0.3'],
+    [123.456789123, undefined, '123.457'],
+  ] as const)('formats %s %s as %s', (value, unit, expected) => {
+    expect(formatAlarmNumber(value, unit)).toBe(expected);
+  });
+});
+
 describe('ALARM_CATALOG', () => {
   it('asks for the account list on the young-account spend alarms only', () => {
     const withDetail = Object.entries(ALARM_CATALOG)
       .filter(([, entry]) => entry.detail !== undefined)
       .map(([key]) => key)
       .sort();
-    expect(withDetail).toEqual(['llm-spend-young-accounts', 'young-account-spend-rate']);
+    expect(withDetail).toEqual([
+      'llm-spend-young-accounts',
+      'young-account-spend-rate',
+      'young-account-spend-rate-warn',
+    ]);
     expect(ALARM_CATALOG['young-account-spend-rate'].action).toContain('listed above');
     expect(alarmCatalogEntry({ ...sample, AlarmName: 'bike4mind-dev-young-account-spend-rate' }, 'dev')?.detail).toBe(
       'young-account-spend'
@@ -453,6 +487,7 @@ describe('ALARM_CATALOG', () => {
       'llm-spend-rate',
       'llm-spend-young-accounts',
       'young-account-spend-rate',
+      'young-account-spend-rate-warn',
       'completion-credit-overdraft',
     ]) {
       expect(ALARM_CATALOG[key].category).toBe('abuse');
@@ -486,6 +521,7 @@ describe('ALARM_CATALOG', () => {
     expect(ALARM_CATALOG.SuccessfulSignups.level).toBe('page');
     expect(ALARM_CATALOG.NewAccountApiKeys.level).toBe('page');
     expect(ALARM_CATALOG['young-account-spend-rate'].level).toBe('page');
+    expect(ALARM_CATALOG['young-account-spend-rate-warn'].level).toBe('warn');
     expect(ALARM_CATALOG['llm-spend-hourly'].level).toBe('page');
     expect(ALARM_CATALOG['llm-spend-rate'].level).toBe('warn');
     expect(ALARM_CATALOG['provider-reported-spend-hourly'].level).toBe('page');
@@ -605,6 +641,7 @@ describe('lookupCatalog', () => {
     expect(lookupCatalog('llm-spend-rate-anthropic')).toBe(ALARM_CATALOG['llm-spend-rate']);
     expect(lookupCatalog('llm-spend-hourly-anthropic')).toBe(ALARM_CATALOG['llm-spend-hourly']);
     expect(lookupCatalog('young-account-spend-rate')).toBe(ALARM_CATALOG['young-account-spend-rate']);
+    expect(lookupCatalog('young-account-spend-rate-warn')).toBe(ALARM_CATALOG['young-account-spend-rate-warn']);
     expect(lookupCatalog('llm-spend-young-accounts')).toBe(ALARM_CATALOG['llm-spend-young-accounts']);
     expect(lookupCatalog('completion-credit-overdraft')).toBe(ALARM_CATALOG['completion-credit-overdraft']);
     expect(lookupCatalog('account-creation-metrics-missing')).toBe(ALARM_CATALOG['account-creation-metrics-missing']);
