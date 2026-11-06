@@ -446,10 +446,10 @@ async function blockDomainsOf(users: readonly BulkUser[], batchId: string, deps:
 }
 
 /** Re-resolves the target and refuses anything but the exact cohort the admin confirmed. */
-async function confirmedCohort(
+export async function confirmedCohort(
   request: AdminUsersBulkExecuteRequest,
   actor: ExecuteActor,
-  deps: ExecuteDeps,
+  deps: ResolveDeps,
   at: Date
 ): Promise<BulkUser[]> {
   const cohort = await resolveAdminUsersBulk(request.target, actor.selfIds, deps, at);

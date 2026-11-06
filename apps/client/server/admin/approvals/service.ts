@@ -191,7 +191,7 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
     approval.id,
     'pending',
     to,
-    { now, notRequestedBy: approval.requestedBy.id },
+    { now, notRequestedBy: approver.id },
     { decidedBy: { id: approver.id, name: displayNameOf(approver) }, decidedAt: now }
   );
   if (!claimed) throw new ConflictError('This request was already decided or has expired.');

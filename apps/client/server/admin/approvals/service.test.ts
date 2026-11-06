@@ -102,7 +102,7 @@ describe('approveApproval', () => {
       ID,
       'pending',
       'executing',
-      expect.objectContaining({ notRequestedBy: REQUESTER }),
+      expect.objectContaining({ notRequestedBy: APPROVER }),
       expect.objectContaining({ decidedBy: { id: APPROVER, name: APPROVER } })
     );
     expect(mocks.repo.finish).toHaveBeenCalledWith(ID, 'executing', 'executed', expect.anything());

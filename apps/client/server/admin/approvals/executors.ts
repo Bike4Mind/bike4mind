@@ -1,5 +1,6 @@
 import { ConflictError, type AdminApproval, type AdminApprovalAction } from '@bike4mind/common';
 import type { Request } from 'express';
+import { executeApprovedUsersBulk } from '@server/admin/usersBulk/approvalExecutor';
 
 /** `req` is the approver's request: the approver's live session runs the stored params. */
 export type ApprovalExecutionContext = { req: Request; approval: AdminApproval };
@@ -13,7 +14,7 @@ const notExecutableOnApprove =
 
 /** One entry per gated action; the gated route's own module supplies the real executor. */
 export const approvalExecutors: Record<AdminApprovalAction, ApprovalExecutor> = {
-  'users.bulk': notExecutableOnApprove('users.bulk'),
+  'users.bulk': (params, context) => executeApprovedUsersBulk(params, context),
   'org.credits.grant': notExecutableOnApprove('org.credits.grant'),
   'org.credits.top_up': notExecutableOnApprove('org.credits.top_up'),
   'user.subscription.grant': notExecutableOnApprove('user.subscription.grant'),

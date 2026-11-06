@@ -1,0 +1,128 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Request } from 'express';
+import type { AdminUsersBulkAction, AdminUsersBulkExecuteRequest } from '@client/app/utils/adminUsersBulk';
+import { cohortHashOf, type BulkUser, type ResolveDeps } from './resolve';
+
+const mocks = vi.hoisted(() => ({
+  policy: vi.fn(),
+  requestApproval: vi.fn(),
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  getApprovalPolicy: mocks.policy,
+  requestApproval: mocks.requestApproval,
+}));
+vi.mock('./adapters', () => ({ usersBulkResolveDeps: {} }));
+
+import { requestUsersBulkApprovalIfNeeded } from './approvalGate';
+
+const ADMIN = 'a'.repeat(24);
+const PENDING = { approvalId: 'p'.repeat(24), status: 'pending', expiresAt: new Date() };
+const idOf = (n: number) => n.toString(16).padStart(24, '0');
+
+const userRow = (id: string, credits = 100): BulkUser => ({
+  id,
+  name: null,
+  email: null,
+  username: null,
+  isAdmin: false,
+  isBanned: false,
+  isModerated: false,
+  tags: [],
+  currentCredits: credits,
+  disputePending: false,
+  moderationStatus: null,
+});
+
+const depsFor = (users: BulkUser[]): ResolveDeps => ({
+  findUsersByIds: vi.fn(async (ids: string[]) => users.filter(user => ids.includes(user.id))),
+  openFilterPages: vi.fn(async () => async (afterId: string | null) => (afterId ? [] : users)),
+});
+
+const req = { user: { id: ADMIN, isAdmin: true } } as unknown as Request;
+
+const requestFor = (
+  users: BulkUser[],
+  action: AdminUsersBulkAction,
+  overrides: Partial<AdminUsersBulkExecuteRequest> = {}
+): AdminUsersBulkExecuteRequest => ({
+  target: { kind: 'ids', userIds: users.map(user => user.id) },
+  action,
+  reason: 'Coordinated abuse from one campaign',
+  idempotencyKey: '7b1f3c52-9a3e-4b8e-8f43-2f4a1c9d0e11',
+  expectedCount: users.length,
+  cohortHash: cohortHashOf(users),
+  ...overrides,
+});
+
+const cohort = (count: number, credits = 100) => Array.from({ length: count }, (_, i) => userRow(idOf(i + 1), credits));
+
+describe('requestUsersBulkApprovalIfNeeded', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.policy.mockResolvedValue({ enabled: true, bulkUserThreshold: 2, creditThreshold: 1000, expiryHours: 24 });
+    mocks.requestApproval.mockResolvedValue(PENDING);
+  });
+
+  it('runs at the threshold and asks for approval one user above it', async () => {
+    const two = cohort(2);
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(two, { type: 'suspend' }), depsFor(two))).toBeNull();
+
+    const three = cohort(3);
+    const body = requestFor(three, { type: 'suspend' });
+    expect(await requestUsersBulkApprovalIfNeeded(req, body, depsFor(three))).toBe(PENDING);
+    expect(mocks.requestApproval).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ action: 'users.bulk', requiredPermission: 'users:moderate', reason: body.reason }),
+      expect.objectContaining({ enabled: true })
+    );
+  });
+
+  it('leaves everything to the legacy path when approvals are off', async () => {
+    mocks.policy.mockResolvedValue({ enabled: false, bulkUserThreshold: 1, creditThreshold: 1, expiryHours: 24 });
+    const users = cohort(5);
+    expect(
+      await requestUsersBulkApprovalIfNeeded(req, requestFor(users, { type: 'contain' }), depsFor(users))
+    ).toBeNull();
+    expect(mocks.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it.each<AdminUsersBulkAction>([{ type: 'restrict' }, { type: 'revokeApiKeys' }, { type: 'addTag', tag: 'x' }])(
+    'never gates $type',
+    async action => {
+      const users = cohort(5);
+      expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, action), depsFor(users))).toBeNull();
+      expect(mocks.policy).not.toHaveBeenCalled();
+    }
+  );
+
+  it('gates a small credit adjustment on the credits it adds, under credits:adjust', async () => {
+    const users = cohort(1);
+    const add = (amount: number): AdminUsersBulkAction => ({ type: 'adjustCredits', mode: 'add', amount });
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1000)), depsFor(users))).toBeNull();
+    expect(await requestUsersBulkApprovalIfNeeded(req, requestFor(users, add(1001)), depsFor(users))).toBe(PENDING);
+    expect(mocks.requestApproval).toHaveBeenCalledWith(
+      req,
+      expect.objectContaining({ requiredPermission: 'credits:adjust' }),
+      expect.anything()
+    );
+  });
+
+  it('judges the resolved cohort, so a lowered expectedCount is a 409 and nothing is stored', async () => {
+    const users = cohort(3);
+    const tampered = requestFor(users, { type: 'suspend' }, { expectedCount: 2 });
+    await expect(requestUsersBulkApprovalIfNeeded(req, tampered, depsFor(users))).rejects.toMatchObject({
+      statusCode: 409,
+    });
+    expect(mocks.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it('stores a filter target as the sorted resolved ids', async () => {
+    const users = cohort(3).reverse();
+    const body = requestFor(users, { type: 'suspend' }, { target: { kind: 'filter', filter: {} as never } });
+    await requestUsersBulkApprovalIfNeeded(req, body, depsFor(users));
+    const stored = mocks.requestApproval.mock.calls[0][1].params as AdminUsersBulkExecuteRequest;
+    expect(stored.target).toEqual({ kind: 'ids', userIds: [idOf(1), idOf(2), idOf(3)] });
+    expect(stored.idempotencyKey).toBe(body.idempotencyKey);
+    expect(stored.cohortHash).toBe(body.cohortHash);
+  });
+});

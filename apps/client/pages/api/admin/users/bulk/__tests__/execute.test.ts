@@ -20,6 +20,10 @@ const mockExecute = vi.fn();
 vi.mock('@server/admin/usersBulk/execute', () => ({
   executeAdminUsersBulk: (...a: unknown[]) => mockExecute(...a),
 }));
+const mockGate = vi.fn();
+vi.mock('@server/admin/usersBulk/approvalGate', () => ({
+  requestUsersBulkApprovalIfNeeded: (...a: unknown[]) => mockGate(...a),
+}));
 
 import handler from '../execute';
 
@@ -54,6 +58,7 @@ describe('POST /api/admin/users/bulk/execute', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecute.mockResolvedValue(RESULT);
+    mockGate.mockResolvedValue(null);
   });
 
   it('requires JWT admin auth and a per-admin rate limit', () => {
@@ -118,6 +123,22 @@ describe('POST /api/admin/users/bulk/execute', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(ability.can).not.toHaveBeenCalled();
     });
+  });
+
+  it('answers 202 and runs nothing when the batch needs a second admin', async () => {
+    const pending = { approvalId: 'd'.repeat(24), status: 'pending', expiresAt: '2026-10-28T00:00:00.000Z' };
+    mockGate.mockResolvedValueOnce(pending);
+    const res = await call(BODY);
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toEqual(pending);
+    expect(mockGate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ cohortHash: BODY.cohortHash }));
+    expect(mockExecute).not.toHaveBeenCalled();
+  });
+
+  it('checks the email-domain permission before asking for approval', async () => {
+    const blocking = { ...BODY, action: { type: 'contain', blockEmailDomains: true } };
+    await expect(call(blocking, ADMIN, canEditSettings(false))).rejects.toMatchObject({ statusCode: 403 });
+    expect(mockGate).not.toHaveBeenCalled();
   });
 
   it('propagates a conflict from execute', async () => {

@@ -22,6 +22,8 @@ import { executeAdminUsersBulk, type ExecuteDeps } from './execute';
 import { SUBSCRIPTION_CANCEL_GRACE_MS } from './ports';
 import { SUPERSEDED_MESSAGE, undoAdminUsersBulk } from './undo';
 import { cohortHashOf, type BulkUser } from './resolve';
+import { requestUsersBulkApprovalIfNeeded } from './approvalGate';
+import { approveApproval } from '@server/admin/approvals/service';
 
 const invalidateSettingsCache = vi.fn();
 const cancelAccountSubscriptions = vi.hoisted(() =>
@@ -37,6 +39,11 @@ vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
 vi.mock('@bike4mind/utils', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/utils')>()),
   invalidateSettingsCache: (...args: unknown[]) => invalidateSettingsCache(...args),
+}));
+
+vi.mock('@server/admin/approvals/service', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/admin/approvals/service')>()),
+  getApprovalPolicy: async () => ({ enabled: true, bulkUserThreshold: 1, creditThreshold: 1000, expiryHours: 24 }),
 }));
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -706,5 +713,32 @@ describe('users bulk actions on a real replica set', () => {
       expect(await undo(adminId, result.batchId)).toMatchObject({ unblockedDomains: ['fresh-campaign.com'] });
       expect(await blockedList()).toEqual([]);
     });
+  });
+  it('runs an over-threshold suspend only when a second admin approves, on exactly the stored users', async () => {
+    const requester = await seedUser({ isAdmin: true });
+    const approver = await seedUser({ isAdmin: true });
+    const first = await seedUser();
+    const second = await seedUser();
+    const body = request([first, second], { type: 'suspend' }, [first, second]);
+    const asReq = (id: string) => reqFor(id) as unknown as Parameters<typeof approveApproval>[0];
+
+    const pending = await requestUsersBulkApprovalIfNeeded(asReq(requester), body);
+    expect(pending).toMatchObject({ status: 'pending' });
+    expect(await userState(first)).toMatchObject({ isBanned: false });
+
+    await expect(approveApproval(asReq(requester), pending!.approvalId)).rejects.toMatchObject({ statusCode: 403 });
+    // Joins the cohort after the request; the stored ids keep it out.
+    const late = await seedUser();
+
+    const outcome = await approveApproval(asReq(approver), pending!.approvalId);
+    expect(outcome.approval.status).toBe('executed');
+    expect(outcome.result).toMatchObject({ applied: 2, failed: [] });
+    for (const id of [first, second]) expect(await userState(id)).toMatchObject({ isBanned: true });
+    expect(await userState(late)).toMatchObject({ isBanned: false });
+
+    const row = await AdminAuditLogModel.findOne({ action: 'user.bulk.suspended', 'target.id': first }).lean();
+    expect(String(row?.actor?.userId)).toBe(approver);
+    expect(row?.details).toMatchObject({ approval: { id: pending!.approvalId, requestedBy: { id: requester } } });
+    await expect(approveApproval(asReq(approver), pending!.approvalId)).rejects.toMatchObject({ statusCode: 409 });
   });
 });
