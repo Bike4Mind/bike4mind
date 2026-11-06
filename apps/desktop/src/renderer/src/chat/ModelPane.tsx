@@ -3,12 +3,44 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Chip from '@mui/joy/Chip';
 import CircularProgress from '@mui/joy/CircularProgress';
+import Divider from '@mui/joy/Divider';
+import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
+import LinearProgress from '@mui/joy/LinearProgress';
+import ListItemContent from '@mui/joy/ListItemContent';
+import Menu from '@mui/joy/Menu';
+import MenuButton from '@mui/joy/MenuButton';
+import MenuItem from '@mui/joy/MenuItem';
 import Slider from '@mui/joy/Slider';
 import Stack from '@mui/joy/Stack';
+import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { CloseIcon, CubeIcon } from './icons';
+import { keyframes } from '@mui/system';
+import {
+  useCallback,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import type { ModelView } from '@shared/model3d';
+import {
+  CaretDownIcon,
+  CheckIcon,
+  CloseIcon,
+  CubeIcon,
+  DownloadIcon,
+  FolderIcon,
+  FrameIcon,
+  GridIcon,
+  MoonIcon,
+  RecordIcon,
+  WarningIcon,
+  WireframeIcon,
+} from './icons';
 import type { ModelEngine } from './model3d/useModelEngine';
 import { ModelClips } from './model3d/ModelClips';
 import { ModelJoints } from './model3d/ModelJoints';
@@ -22,6 +54,7 @@ import {
   writeModelPaneWidth,
 } from './model3d/modelPaneWidth';
 import { ResizeHandle } from './ResizeHandle';
+import { TURNTABLE_SECONDS } from './model3d/turntable';
 
 /** First-run prompts: game-asset shaped, since that is who this pane is for first. */
 export const MODEL_EXAMPLE_PROMPTS = [
@@ -44,6 +77,68 @@ type Props = {
 
 const STATUS_LABEL = { idle: 'No model', building: 'Building', ok: 'Ready', error: 'Error' } as const;
 const STATUS_COLOR = { idle: 'neutral', building: 'primary', ok: 'success', error: 'danger' } as const;
+
+/** The camera presets, in menu order, with the key that picks each while the view has focus. */
+export const MODEL_VIEW_PRESETS: readonly { view: ModelView | null; label: string; key: string }[] = [
+  { view: null, label: 'Three-quarter', key: '0' },
+  { view: 'front', label: 'Front', key: '1' },
+  { view: 'right', label: 'Right', key: '2' },
+  { view: 'top', label: 'Top', key: '3' },
+  { view: 'back', label: 'Back', key: '4' },
+];
+/** One arrow-key orbit step, in radians. */
+const ORBIT_STEP = Math.PI / 12;
+const ZOOM_STEP = 0.85;
+const KEY_HELP = 'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, N night.';
+
+const pulse = keyframes`
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+`;
+
+/** What the line under the toolbar says; an error reads in the danger colour. */
+type Note = { kind: 'info' | 'success' | 'error'; text: string } | null;
+
+function errorText(caught: unknown): string {
+  return caught instanceof Error ? caught.message : String(caught);
+}
+
+/** A tooltip'd icon toggle for the viewport toolbar; the pressed state is colour and aria-pressed both. */
+function ViewToggle({
+  label,
+  shortcut,
+  pressed,
+  disabled,
+  onToggle,
+  testId,
+  children,
+}: {
+  label: string;
+  shortcut: string;
+  pressed: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+  testId: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip title={`${label} (${shortcut})`} size="sm" placement="bottom" variant="solid">
+      <IconButton
+        size="sm"
+        variant={pressed ? 'solid' : 'plain'}
+        color={pressed ? 'primary' : 'neutral'}
+        disabled={disabled}
+        aria-label={label}
+        aria-pressed={pressed}
+        aria-keyshortcuts={shortcut}
+        onClick={onToggle}
+        data-testid={testId}
+      >
+        {children}
+      </IconButton>
+    </Tooltip>
+  );
+}
 
 function formatSize(size: [number, number, number], units: string): string {
   return `${size.map(value => Number(value.toFixed(value < 10 ? 2 : 1))).join(' x ')} ${units}`;
@@ -84,7 +179,10 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
   const [wireframe, setWireframe] = useState(false);
   const [grid, setGrid] = useState(false);
   const [night, setNight] = useState(false);
-  const [recording, setRecording] = useState(false);
+  // The recorded share of the clip (0..1) while a turntable records, else null.
+  const [recordProgress, setRecordProgress] = useState<number | null>(null);
+  const recording = recordProgress !== null;
+  const keyHelpId = useId();
   const viewportHandle = useRef<ModelViewportHandle | null>(null);
   // Keyed to the file, so opening another model never keeps a stale highlight.
   const [picked, setPicked] = useState<{ path: string | null; name: string } | null>(null);
@@ -101,17 +199,18 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
     setPicked({ path: state.path, name: part });
     onPickPart(partMention(part));
   };
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState<Note>(null);
   const name = state.path ? (state.path.split(/[\\/]/).pop() ?? state.path) : null;
   const paramEntries = Object.entries(params);
   const canExport = !!object && status !== 'building';
+  const savedNote = (saved: string | null): Note =>
+    saved ? { kind: 'success', text: `Saved ${saved.split(/[\\/]/).pop()}` } : null;
 
   const runExport = async (format: 'glb' | 'stl') => {
     try {
-      const saved = await engine.exportFile(format);
-      setNote(saved ? `Saved ${saved.split(/[\\/]/).pop()}` : '');
+      setNote(savedNote(await engine.exportFile(format)));
     } catch (caught) {
-      setNote(caught instanceof Error ? caught.message : String(caught));
+      setNote({ kind: 'error', text: errorText(caught) });
     }
   };
 
@@ -120,27 +219,55 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
     if (!handle) return;
     // A playing clip would fight the turntable's own joint swing.
     setPlaying(null);
-    setRecording(true);
-    setNote('Recording a turntable...');
+    setRecordProgress(0);
+    setNote({ kind: 'info', text: `Recording a turntable (${TURNTABLE_SECONDS} s)...` });
     try {
-      const bytes = await handle.recordTurntable(joints);
-      const saved = await window.b4m.model.saveExport({ format: 'webm', bytes });
-      setNote(saved ? `Saved ${saved.split(/[\\/]/).pop()}` : '');
+      const bytes = await handle.recordTurntable(joints, setRecordProgress);
+      setRecordProgress(null);
+      setNote(savedNote(await window.b4m.model.saveExport({ format: 'webm', bytes })));
     } catch (caught) {
-      setNote(caught instanceof Error ? caught.message : String(caught));
+      setNote({ kind: 'error', text: errorText(caught) });
     } finally {
-      setRecording(false);
+      setRecordProgress(null);
     }
+  };
+
+  // Shortcuts act only while the view itself has focus, so they never steal a letter from a field.
+  const onViewKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget || !object || recording) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const handle = viewportHandle.current;
+    const preset = MODEL_VIEW_PRESETS.find(entry => entry.key === event.key);
+    const actions: Record<string, () => void> = {
+      ArrowLeft: () => handle?.orbit(-ORBIT_STEP, 0),
+      ArrowRight: () => handle?.orbit(ORBIT_STEP, 0),
+      ArrowUp: () => handle?.orbit(0, -ORBIT_STEP),
+      ArrowDown: () => handle?.orbit(0, ORBIT_STEP),
+      '+': () => handle?.zoom(ZOOM_STEP),
+      '=': () => handle?.zoom(ZOOM_STEP),
+      '-': () => handle?.zoom(1 / ZOOM_STEP),
+      w: () => setWireframe(value => !value),
+      g: () => setGrid(value => !value),
+      n: () => setNight(value => !value),
+    };
+    const action = preset
+      ? () => handle?.setView(preset.view)
+      : actions[event.key.length === 1 ? event.key.toLowerCase() : event.key];
+    if (!action) return;
+    event.preventDefault();
+    action();
   };
 
   const runOpen = async () => {
     try {
       await engine.openFile();
-      setNote('');
+      setNote(null);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
       // Electron prefixes a rejected invoke with where it came from; the user needs the reason only.
-      setNote(message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+      setNote({
+        kind: 'error',
+        text: errorText(caught).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''),
+      });
     }
   };
 
@@ -186,7 +313,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           {name ?? '3D model'}
         </Typography>
         {name && (
-          <Chip size="sm" variant="soft" color={STATUS_COLOR[status]} data-testid="model-pane-status">
+          <Chip size="sm" variant="soft" color={STATUS_COLOR[status]} role="status" data-testid="model-pane-status">
             {STATUS_LABEL[status]}
           </Chip>
         )}
@@ -216,6 +343,13 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
       )}
 
       <Box
+        tabIndex={object ? 0 : undefined}
+        role={object ? 'application' : undefined}
+        aria-roledescription={object ? '3D view' : undefined}
+        aria-label={object && name ? `${name}, 3D view` : undefined}
+        aria-describedby={object ? keyHelpId : undefined}
+        onKeyDown={onViewKeyDown}
+        data-testid="model-pane-stage"
         sx={{
           flex: 1,
           minHeight: 0,
@@ -224,6 +358,17 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           borderRadius: 'sm',
           overflow: 'hidden',
           bgcolor: 'background.surface',
+          outline: 'none',
+          // Drawn over the canvas: an inset shadow on the box itself would sit under it.
+          '&:focus-visible::after': {
+            content: '""',
+            position: 'absolute',
+            inset: 0,
+            borderRadius: 'inherit',
+            boxShadow: 'inset 0 0 0 2px var(--joy-palette-focusVisible)',
+            pointerEvents: 'none',
+          },
+          '&:focus-visible .model-key-help': { opacity: 1 },
         }}
       >
         {name ? (
@@ -247,10 +392,166 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
                 <CircularProgress size="sm" />
               </Stack>
             )}
-            {summary && (
+            {object && (
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={0.25}
+                role="toolbar"
+                aria-label="View"
+                sx={{
+                  position: 'absolute',
+                  top: 8,
+                  right: 8,
+                  p: 0.375,
+                  borderRadius: 'md',
+                  // Near-opaque, so the icons keep their contrast on the black night backdrop too.
+                  bgcolor: 'color-mix(in srgb, var(--joy-palette-background-surface) 88%, transparent)',
+                  backdropFilter: 'blur(10px) saturate(1.4)',
+                  boxShadow: 'sm',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  opacity: recording ? 0 : 1,
+                  transition: 'opacity 150ms',
+                  pointerEvents: recording ? 'none' : undefined,
+                }}
+              >
+                <ViewToggle
+                  label="Wireframe"
+                  shortcut="W"
+                  pressed={wireframe}
+                  disabled={recording}
+                  onToggle={() => setWireframe(value => !value)}
+                  testId="model-pane-wireframe-btn"
+                >
+                  <WireframeIcon />
+                </ViewToggle>
+                <ViewToggle
+                  label="Grid"
+                  shortcut="G"
+                  pressed={grid}
+                  disabled={recording}
+                  onToggle={() => setGrid(value => !value)}
+                  testId="model-pane-grid-btn"
+                >
+                  <GridIcon />
+                </ViewToggle>
+                <ViewToggle
+                  label="Night lighting"
+                  shortcut="N"
+                  pressed={night}
+                  disabled={recording}
+                  onToggle={() => setNight(value => !value)}
+                  testId="model-pane-night-btn"
+                >
+                  <MoonIcon />
+                </ViewToggle>
+                <Divider orientation="vertical" sx={{ mx: 0.25, my: 0.5 }} />
+                <Dropdown>
+                  <Tooltip title="Camera view" size="sm" placement="bottom" variant="solid">
+                    <MenuButton
+                      slots={{ root: IconButton }}
+                      slotProps={{ root: { size: 'sm', variant: 'plain', color: 'neutral' } }}
+                      aria-label="Camera view"
+                      disabled={recording}
+                      data-testid="model-pane-view-btn"
+                    >
+                      <FrameIcon />
+                    </MenuButton>
+                  </Tooltip>
+                  <Menu size="sm" placement="bottom-end" sx={{ minWidth: 180 }}>
+                    {MODEL_VIEW_PRESETS.map(preset => (
+                      <MenuItem
+                        key={preset.key}
+                        onClick={() => viewportHandle.current?.setView(preset.view)}
+                        aria-keyshortcuts={preset.key}
+                        data-testid={`model-pane-view-${preset.view ?? 'default'}`}
+                      >
+                        <ListItemContent>{preset.label}</ListItemContent>
+                        <Typography level="body-xs" component="kbd" sx={{ color: 'text.tertiary', fontFamily: 'code' }}>
+                          {preset.key}
+                        </Typography>
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                </Dropdown>
+              </Stack>
+            )}
+            {object && (
+              <Typography
+                id={keyHelpId}
+                className="model-key-help"
+                level="body-xs"
+                sx={{
+                  position: 'absolute',
+                  left: 8,
+                  top: 8,
+                  maxWidth: 'calc(100% - 180px)',
+                  px: 0.75,
+                  py: 0.25,
+                  borderRadius: 'sm',
+                  bgcolor: 'background.surface',
+                  boxShadow: 'sm',
+                  color: 'text.secondary',
+                  pointerEvents: 'none',
+                  opacity: 0,
+                  transition: 'opacity 150ms',
+                }}
+              >
+                {KEY_HELP}
+              </Typography>
+            )}
+            {recording && (
+              <>
+                <Chip
+                  size="sm"
+                  variant="solid"
+                  color="danger"
+                  startDecorator={
+                    <Box
+                      component="span"
+                      sx={{
+                        display: 'inline-flex',
+                        '@media (prefers-reduced-motion: no-preference)': {
+                          animation: `${pulse} 1.2s ease-in-out infinite`,
+                        },
+                      }}
+                    >
+                      <RecordIcon />
+                    </Box>
+                  }
+                  sx={{ position: 'absolute', top: 8, left: 8, fontVariantNumeric: 'tabular-nums' }}
+                  data-testid="model-pane-rec-badge"
+                >
+                  REC {((recordProgress ?? 0) * TURNTABLE_SECONDS).toFixed(1)} / {TURNTABLE_SECONDS} s
+                </Chip>
+                <LinearProgress
+                  determinate
+                  value={(recordProgress ?? 0) * 100}
+                  color="danger"
+                  thickness={3}
+                  aria-label="Recording progress"
+                  sx={{ position: 'absolute', left: 0, right: 0, bottom: 0, borderRadius: 0 }}
+                  data-testid="model-pane-record-progress"
+                />
+              </>
+            )}
+            {summary && !recording && (
               <Typography
                 level="body-xs"
-                sx={{ position: 'absolute', left: 8, bottom: 6, pointerEvents: 'none', color: 'text.secondary' }}
+                sx={{
+                  position: 'absolute',
+                  left: 8,
+                  bottom: 8,
+                  maxWidth: 'calc(100% - 16px)',
+                  px: 0.75,
+                  py: 0.25,
+                  borderRadius: 'sm',
+                  bgcolor: 'color-mix(in srgb, var(--joy-palette-background-surface) 80%, transparent)',
+                  backdropFilter: 'blur(6px)',
+                  pointerEvents: 'none',
+                  color: 'text.secondary',
+                }}
                 data-testid="model-pane-size"
               >
                 {formatSize(summary.size, summary.units)}
@@ -350,84 +651,85 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ px: 1.5, py: 1.25 }}>
         <Button
           size="sm"
-          variant={wireframe ? 'soft' : 'plain'}
-          color="neutral"
-          disabled={!object}
-          onClick={() => setWireframe(value => !value)}
-          aria-pressed={wireframe}
-          data-testid="model-pane-wireframe-btn"
-        >
-          Wireframe
-        </Button>
-        <Button
-          size="sm"
-          variant={grid ? 'soft' : 'plain'}
-          color="neutral"
-          disabled={!object}
-          onClick={() => setGrid(value => !value)}
-          aria-pressed={grid}
-          data-testid="model-pane-grid-btn"
-        >
-          Grid
-        </Button>
-        <Button
-          size="sm"
-          variant={night ? 'soft' : 'plain'}
-          color="neutral"
-          disabled={!object}
-          onClick={() => setNight(value => !value)}
-          aria-pressed={night}
-          data-testid="model-pane-night-btn"
-        >
-          Night
-        </Button>
-        <Button
-          size="sm"
           variant="plain"
           color="neutral"
+          startDecorator={<FolderIcon />}
+          disabled={recording}
           onClick={() => void runOpen()}
           data-testid="model-pane-open-btn"
         >
           Open
         </Button>
         <Box sx={{ flex: 1 }} />
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          disabled={!canExport || recording}
-          loading={recording}
-          onClick={() => void runRecord()}
-          data-testid="model-pane-record-btn"
-        >
-          Record
-        </Button>
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          disabled={!canExport}
-          onClick={() => void runExport('glb')}
-          data-testid="model-pane-export-glb-btn"
-        >
-          GLB
-        </Button>
-        <Button
-          size="sm"
-          variant="outlined"
-          color="neutral"
-          disabled={!canExport || state.kind !== 'model'}
-          onClick={() => void runExport('stl')}
-          data-testid="model-pane-export-stl-btn"
-        >
-          STL
-        </Button>
+        <Tooltip title={`Save an ${TURNTABLE_SECONDS} s turntable video`} size="sm" variant="solid">
+          <Button
+            size="sm"
+            variant="outlined"
+            color={recording ? 'danger' : 'neutral'}
+            startDecorator={
+              <Box component="span" sx={{ display: 'inline-flex', color: 'danger.plainColor' }}>
+                <RecordIcon />
+              </Box>
+            }
+            disabled={!canExport || recording}
+            aria-busy={recording}
+            onClick={() => void runRecord()}
+            sx={{ fontVariantNumeric: 'tabular-nums' }}
+            data-testid="model-pane-record-btn"
+          >
+            {recording ? `Recording ${Math.round((recordProgress ?? 0) * 100)}%` : 'Record'}
+          </Button>
+        </Tooltip>
+        <Dropdown>
+          <MenuButton
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            startDecorator={<DownloadIcon />}
+            endDecorator={<CaretDownIcon />}
+            disabled={!canExport || recording}
+            data-testid="model-pane-export-btn"
+          >
+            Export
+          </MenuButton>
+          <Menu size="sm" placement="top-end" sx={{ minWidth: 220 }}>
+            <MenuItem onClick={() => void runExport('glb')} data-testid="model-pane-export-glb-btn">
+              <ListItemContent>
+                GLB
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                  For three.js, Unity, Blender
+                </Typography>
+              </ListItemContent>
+            </MenuItem>
+            <MenuItem
+              disabled={state.kind !== 'model'}
+              onClick={() => void runExport('stl')}
+              data-testid="model-pane-export-stl-btn"
+            >
+              <ListItemContent>
+                STL
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                  {state.kind === 'model' ? 'For 3D printing' : 'Only for models built from code'}
+                </Typography>
+              </ListItemContent>
+            </MenuItem>
+          </Menu>
+        </Dropdown>
       </Stack>
-      {note && (
-        <Typography level="body-xs" sx={{ px: 1.5, pb: 1, color: 'text.secondary' }} data-testid="model-pane-note">
-          {note}
-        </Typography>
-      )}
+      <Typography
+        role="status"
+        level="body-xs"
+        startDecorator={note?.kind === 'success' ? <CheckIcon /> : note?.kind === 'error' ? <WarningIcon /> : undefined}
+        sx={{
+          px: 1.5,
+          pb: note ? 1 : 0,
+          color: note?.kind === 'error' ? 'danger.plainColor' : 'text.secondary',
+          '&:empty': { display: 'none' },
+        }}
+        data-testid="model-pane-note"
+      >
+        {note?.text}
+      </Typography>
     </Stack>
   );
 }

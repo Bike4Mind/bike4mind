@@ -618,3 +618,48 @@ export function CloudIcon({ size }: { size?: number } = {}) {
     </Glyph>
   );
 }
+
+/** The model pane's wireframe toggle: a cube drawn as edges only, hidden ones included. */
+export function WireframeIcon() {
+  return (
+    <Glyph>
+      <path d="M8 1.75 13.75 5v6L8 14.25 2.25 11V5z" />
+      <path d="M2.25 5 8 8.25 13.75 5M8 8.25v6" />
+      <path d="M8 1.75v6.5M2.25 11 8 8.25l5.75 2.75" strokeDasharray="1.5 1.5" strokeWidth="1" />
+    </Glyph>
+  );
+}
+
+export function GridIcon() {
+  return (
+    <Glyph>
+      <path d="M2 5.5h12M2 10.5h12M5.5 2v12M10.5 2v12" />
+    </Glyph>
+  );
+}
+
+export function MoonIcon() {
+  return (
+    <Glyph>
+      <path d="M13.5 9.75A5.75 5.75 0 1 1 6.25 2.5a4.5 4.5 0 0 0 7.25 7.25z" />
+    </Glyph>
+  );
+}
+
+/** Camera framing: four corners around a point, for the model pane's view presets. */
+export function FrameIcon() {
+  return (
+    <Glyph>
+      <path d="M2 5.5V2h3.5M10.5 2H14v3.5M14 10.5V14h-3.5M5.5 14H2v-3.5" />
+      <circle cx="8" cy="8" r="1.75" />
+    </Glyph>
+  );
+}
+
+export function RecordIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="4" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
