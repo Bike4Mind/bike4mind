@@ -282,7 +282,7 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ['docker', 'compose', '-f', 'base.yaml', '-f', 'prod.yaml',
                                                '--env-file', 'prod.env', '--profile', 'proxy',
                                                'config', '--format', 'json'])
-        self.assertIn('preflight checks passed; live TLS/mail/auth/restore not proven', output.getvalue())
+        self.assertIn('preflight checks passed; live TLS/mail/auth not proven; restore with scripts/selfhost_backup.py (SELF_HOST.md#backup-and-restore)', output.getvalue())
         self.assertNotIn('private-warning', output.getvalue())
         self.assertNotIn('smtp-password', output.getvalue())
 
