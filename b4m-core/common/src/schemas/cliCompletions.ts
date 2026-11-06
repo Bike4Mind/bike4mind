@@ -173,6 +173,7 @@ const ImageUrlValueSchema = z.union([z.string(), z.looseObject({ url: z.string()
 const ImageSourceSchema = z.discriminatedUnion('type', [
   z.looseObject({ type: z.literal('base64'), media_type: z.string(), data: z.string() }),
   z.looseObject({ type: z.literal('url'), url: z.string() }),
+  z.looseObject({ type: z.literal('file'), file_id: z.string() }),
 ]);
 
 /**
