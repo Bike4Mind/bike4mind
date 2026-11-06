@@ -1817,6 +1817,8 @@ export class ConfigStore {
       // this is a reset, which intentionally wipes the feature map.
       this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
     }
+    // Memory already holds the patch, so a failed read below must still roll it back.
+    if (this.fallbackBase) onStaged(structuredClone(this.globalConfig));
     if (!opts?.clearFeatures) {
       this.globalConfig = await this.mergeModelFields(this.globalConfig, global, config);
     }
@@ -2113,10 +2115,11 @@ export class ConfigStore {
     if (text === null) {
       if (expectedRefreshToken !== undefined) return false;
       const g = this.globalConfig!;
-      g.auth = tokens;
       await this.writeGlobal(undefined, {
         authFields: { auth: tokens, authByEnv: g.authByEnv, apiConfig: g.apiConfig },
       });
+      this.globalConfig!.auth = tokens;
+      if (this.config) this.config.auth = tokens;
       return true;
     }
     const file = this.parseConfigText(text);
@@ -2296,9 +2299,6 @@ export class ConfigStore {
     await this.load();
     if (this.globalConfig!.apiConfig?.endpointChosen) return;
     await this.lockedWrite(async () => {
-      const g = this.globalConfig!;
-      g.apiConfig = { ...g.apiConfig, endpointChosen: true };
-      if (this.config) this.config.apiConfig = g.apiConfig;
       // Patched in the raw file, so it also lands on a config this build cannot validate (startup calls this).
       const patched = await this.patchConfigText(raw => {
         const onDisk = isJsonObject(raw.apiConfig) ? raw.apiConfig : {};
@@ -2311,6 +2311,9 @@ export class ConfigStore {
           authFields: { auth: undefined, authByEnv: undefined, apiConfig: { endpointChosen: true } },
         });
       }
+      const g = this.globalConfig!;
+      g.apiConfig = { ...g.apiConfig, endpointChosen: true };
+      if (this.config) this.config.apiConfig = g.apiConfig;
     });
   }
 
@@ -2411,14 +2414,16 @@ export class ConfigStore {
         newUrl
       );
       const apiConfig = swap.changed || !diskApi?.endpointChosen ? newApiConfig : diskApi;
-      g.apiConfig = apiConfig;
-      g.authByEnv = swap.changed ? swap.authByEnv : authByEnv.data;
-      g.auth = swap.auth; // undefined -> user will be prompted to /login
+      const nextAuthByEnv = swap.changed ? swap.authByEnv : authByEnv.data;
       if (swap.changed || !diskApi?.endpointChosen) {
-        await this.writeGlobal(undefined, { authFields: { auth: g.auth, authByEnv: g.authByEnv, apiConfig } });
-      } else {
-        this.config = await this.computeMerged();
+        await this.writeGlobal(undefined, { authFields: { auth: swap.auth, authByEnv: nextAuthByEnv, apiConfig } });
       }
+      // Memory follows only once the file holds the switch; writeGlobal replaced the snapshot object.
+      const next = this.globalConfig!;
+      next.apiConfig = apiConfig;
+      next.authByEnv = nextAuthByEnv;
+      next.auth = swap.auth; // undefined -> user will be prompted to /login
+      this.config = await this.computeMerged();
       return { url: newUrl, envName, changed: !wasHere, authenticated: isAuthTokenValid(swap.auth) };
     });
   }

@@ -470,4 +470,113 @@ describe('after a refused save in a config this build cannot validate', () => {
     expect(config.trustedTools).toEqual(['t2']);
     expect(config.preferences.exportFormat).toBe('markdown');
   });
+
+  it('drops a change whose save failed reading the model fields', async () => {
+    await writeFile(configPath, JSON.stringify({ toolApiKeys: 'bad' }), { mode: 0o600 });
+    const contents = await readFile(configPath, 'utf-8');
+    const store = new ConfigStore(configPath);
+    await store.load();
+    const realRead = fsPromises.readFile.bind(fsPromises);
+    let reads = 0;
+    // Over a file that failed validation a save reads the feature map, then the model fields.
+    vi.spyOn(fsPromises, 'readFile').mockImplementation((async (...args: Parameters<typeof realRead>) => {
+      if (String(args[0]) === configPath && ++reads === 2) {
+        throw Object.assign(new Error('resource busy'), { code: 'EBUSY' });
+      }
+      return realRead(...args);
+    }) as typeof fsPromises.readFile);
+
+    await expect(store.save({ preferences: { exportFormat: 'json' } })).rejects.toThrow('EBUSY');
+    vi.mocked(fsPromises.readFile).mockRestore();
+
+    expect(await readFile(configPath, 'utf-8')).toBe(contents);
+    expect((await store.load()).preferences.exportFormat).toBe('markdown');
+    await store.trustTool('t1');
+    expect(await readJson()).toEqual({ toolApiKeys: 'bad', trustedTools: ['t1'] });
+  });
+});
+
+describe('a backend switch or sign-in that does not reach the file', () => {
+  const failRenameOnce = () => {
+    const realRename = fsPromises.rename.bind(fsPromises);
+    let failed = false;
+    vi.spyOn(fsPromises, 'rename').mockImplementation((async (...args: Parameters<typeof realRename>) => {
+      if (!failed) {
+        failed = true;
+        throw Object.assign(new Error('no space left'), { code: 'ENOSPC' });
+      }
+      return realRename(...args);
+    }) as typeof fsPromises.rename);
+  };
+
+  const validConfigSignedIn = async () => {
+    await new ConfigStore(configPath).setAuthTokens(signIn);
+    const store = new ConfigStore(configPath);
+    await store.load();
+    return store;
+  };
+
+  it('keeps the session on the old backend when the switch cannot be written', async () => {
+    const store = await validConfigSignedIn();
+    failRenameOnce();
+
+    await expect(store.switchApiEnvironment({ customUrl: 'https://self.example.com' })).rejects.toThrow(
+      'no space left'
+    );
+    await store.trustTool('file_read');
+
+    expect(await store.getAuthTokens()).toEqual(signIn);
+    expect((await store.load()).apiConfig?.customUrl).toBeUndefined();
+    const file = await readJson();
+    expect(file.auth).toEqual(signIn);
+    expect(file.apiConfig).toBeUndefined();
+  });
+
+  it('keeps the session on the old backend when the switch is refused', async () => {
+    await writeFile(configPath, JSON.stringify({ auth: signIn, toolApiKeys: 'bad' }), { mode: 0o600 });
+    const contents = await readFile(configPath, 'utf-8');
+    const store = new ConfigStore(configPath);
+    await store.reloadAuthTokens();
+    const internals = store as unknown as {
+      mergeOverInvalidConfig: (...args: unknown[]) => Promise<unknown>;
+      invalidConfigError: () => Error;
+    };
+    const merge = internals.mergeOverInvalidConfig.bind(store);
+    let calls = 0;
+    internals.mergeOverInvalidConfig = async (...args: unknown[]) => {
+      if (++calls === 1) throw internals.invalidConfigError();
+      return merge(...args);
+    };
+
+    await expect(store.switchApiEnvironment({ customUrl: 'https://self.example.com' })).rejects.toThrow(
+      'failed validation'
+    );
+
+    expect(await readFile(configPath, 'utf-8')).toBe(contents);
+    expect(await store.getAuthTokens()).toEqual(signIn);
+    expect((await store.load()).apiConfig?.customUrl).toBeUndefined();
+  });
+
+  it('does not record a backend choice that could not be written', async () => {
+    const store = await validConfigSignedIn();
+    failRenameOnce();
+
+    await expect(store.markEndpointChosen()).rejects.toThrow('no space left');
+    await store.trustTool('file_read');
+
+    expect((await store.load()).apiConfig?.endpointChosen).toBeUndefined();
+  });
+
+  it('does not keep a first sign-in that could not be written', async () => {
+    const store = new ConfigStore(configPath);
+    await store.load();
+    await rm(configPath, { force: true });
+    failRenameOnce();
+
+    await expect(store.setAuthTokens(signIn)).rejects.toThrow('no space left');
+    await store.trustTool('file_read');
+
+    expect(await store.getAuthTokens()).toBeNull();
+    expect((await readJson()).auth).toBeUndefined();
+  });
 });
