@@ -108,6 +108,29 @@ export function aiAccessDeniedMessage(user: AiAccessStateFields): string | null 
   return null;
 }
 
+/** Every refusal `aiAccessDeniedMessage` can return; must stay in sync with its branches. */
+const AI_ACCESS_DENIED_MESSAGES: ReadonlySet<string> = new Set([
+  ...Object.values(BLOCK_REASON_MESSAGES),
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
+  AI_ACCESS_REVOKED_MESSAGE,
+  AI_ACCESS_PENDING_REVIEW_MESSAGE,
+]);
+
+/**
+ * True for the 403 an account that may not use AI gets from the gate (`assertAiAccessAllowed`,
+ * `reserveRequestCredits`, `createModelAdmission`, which all throw `ForbiddenError(aiAccessDeniedMessage(user))`).
+ * A background worker treats it as an expected, terminal outcome - acknowledge the message, fail the job, log
+ * at warn - never as a fault to retry. Any other 403 is not this. Matched by shape rather than `instanceof`
+ * so a second bundled copy of the error class still classifies.
+ */
+export function isAiAccessRefusal(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as { statusCode?: unknown }).statusCode === 403 &&
+    AI_ACCESS_DENIED_MESSAGES.has(error.message)
+  );
+}
+
 /**
  * True when the admin "Moderate" action has revoked the user's AI access. Unlike
  * `accountBlockReasons`, this does not block sign-in or data access - only AI features. It is

@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { AI_ACCESS_REVOKED_MESSAGE } from '@bike4mind/services/userService/accountState';
+import {
+  ACCOUNT_BANNED_MESSAGE,
+  ACCOUNT_DISPUTE_PENDING_MESSAGE,
+  ACCOUNT_SUSPENDED_MESSAGE,
+  AI_ACCESS_DELETION_PENDING_MESSAGE,
+  AI_ACCESS_PENDING_REVIEW_MESSAGE,
+  AI_ACCESS_REVOKED_MESSAGE,
+} from '@bike4mind/services/userService/accountState';
 
 // Mirror of fabFileChunk.test.ts, scoped to the batchId log-metadata attach. We drive the raw
 // handler with a fully-vectorized FabFile so it hits the idempotency early-return right after the
@@ -1614,9 +1621,16 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
     expect(h.reservationSettle).not.toHaveBeenCalled();
   });
 
-  it('fails the file once and consumes the message when AI access has been revoked', async () => {
+  it.each([
+    ['banned', ACCOUNT_BANNED_MESSAGE],
+    ['dispute-pending', ACCOUNT_DISPUTE_PENDING_MESSAGE],
+    ['suspended', ACCOUNT_SUSPENDED_MESSAGE],
+    ['deletion-pending', AI_ACCESS_DELETION_PENDING_MESSAGE],
+    ['moderated', AI_ACCESS_REVOKED_MESSAGE],
+    ['review-held', AI_ACCESS_PENDING_REVIEW_MESSAGE],
+  ])('fails the file once and consumes the message when a %s account is refused AI access', async (_, message) => {
     const { ForbiddenError } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
-    h.reserveRequestCredits.mockRejectedValueOnce(new ForbiddenError(AI_ACCESS_REVOKED_MESSAGE));
+    h.reserveRequestCredits.mockRejectedValueOnce(new ForbiddenError(message));
     h.markFailedIfNotAlready.mockResolvedValueOnce(true);
     h.deferFailureIfRetryable.mockResolvedValueOnce(true);
 
@@ -1624,8 +1638,9 @@ describe('fabFileVectorize handler - credit billing outside a data lake', () => 
 
     expect(h.getVector).not.toHaveBeenCalled();
     expect(h.deferFailureIfRetryable).not.toHaveBeenCalled();
-    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith('ff1', AI_ACCESS_REVOKED_MESSAGE);
+    expect(h.markFailedIfNotAlready).toHaveBeenCalledExactlyOnceWith('ff1', message);
     expect(h.reservationSettle).not.toHaveBeenCalled();
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('AI access'));
   });
 
   it.each(['billing store unavailable', 'unrelated forbidden request'])(

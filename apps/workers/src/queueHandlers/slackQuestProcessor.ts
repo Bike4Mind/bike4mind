@@ -63,6 +63,7 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
 import { isTerminalCreditRefusal, IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { withEventContext } from '@workers/utils/eventContext';
@@ -475,8 +476,8 @@ export const handler = withEventContext(async (event, logger) => {
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
     });
   } catch (processError) {
-    // A credit refusal fails identically on every retry, so it is an expected outcome, not a fault.
-    const isCreditRefusal = isTerminalCreditRefusal(processError);
+    // A credit or AI-access refusal fails identically on every retry, so it is an expected outcome, not a fault.
+    const isCreditRefusal = isTerminalCreditRefusal(processError) || isAiAccessRefusal(processError);
     const failureLog = { questId: params.questId, error: processError };
     if (isCreditRefusal) {
       logger.warn('[SLACK-NOTIFY] Chat processing refused by billing before a reply was delivered', failureLog);

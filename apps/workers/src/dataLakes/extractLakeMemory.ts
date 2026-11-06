@@ -8,6 +8,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { isTerminalCreditRefusal, LAKE_MEMORY_EXTRACTION_LEASE_MS, type IUserDocument } from '@bike4mind/common';
+import { isAiAccessRefusal } from '@bike4mind/services/userService/accountState';
 import { apiKeyService, dataLakeService } from '@bike4mind/services';
 import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -368,10 +369,10 @@ export async function extractLakeMemoryForBatch(
         lastCoveredId = doc.fabFileId;
         consecutiveFailures = 0;
       } catch (err) {
-        // A credit refusal (out of credits, free-tier daily cap) is not a bad document: every later doc
-        // would be refused too. Stop like an abort, so the cursor stays at the last covered doc and the
+        // A credit refusal (out of credits, free-tier daily cap) or an AI-access refusal is not a bad
+        // document: every later doc would be refused too. Stop like an abort, so the cursor stays at the last covered doc and the
         // next finalize resumes there.
-        if (isTerminalCreditRefusal(err)) {
+        if (isTerminalCreditRefusal(err) || isAiAccessRefusal(err)) {
           aborted = true;
           logger.warn(
             `[lakeMemory] lake ${datalakeTag}: the lake owner cannot be billed after ${docsAttempted}/${docs.length} docs; stopping: ${(err as Error).message}`
