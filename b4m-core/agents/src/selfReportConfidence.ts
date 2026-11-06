@@ -22,14 +22,20 @@ The score is a number from 0 to 1: how confident you are that your work so far i
 
 const OPEN = '<confidence';
 const CLOSE = '</confidence>';
+// Models given this prompt open a turn with an empty reasoning block before the tag. It carries
+// nothing, and left in it surfaces as a literal "<think></think>" thought.
+const EMPTY_THINK = '<think></think>';
+const EMPTY_THINK_BLOCKS = /<think>\s*<\/think>/gi;
+const LEADING_FILLER = /^(?:\s|<think>\s*<\/think>)*/i;
 // A tag still unclosed after this much text is not a tag; stop holding the stream back.
 const MAX_HELD_LENGTH = 600;
 
 /**
  * Keeps a leading `<confidence>` tag out of a live text stream. The prompt puts the tag first in the
- * turn, so only that position is held back: the tag is withheld until it closes and the text after it
- * flows through. Anything else passes straight through, as does a tag that never closes
- * (`flush()` returns whatever is still held).
+ * turn (after an empty reasoning block, if the model sends one), so only that position is held back:
+ * the tag is withheld until it closes and the text after it flows through. Anything else passes
+ * straight through, as does a tag that never closes (`flush()` returns whatever is still held).
+ * Empty reasoning blocks at the start are dropped, as `parseSelfReport` drops them from the final text.
  */
 export class SelfReportStreamFilter {
   private held = '';
@@ -39,16 +45,15 @@ export class SelfReportStreamFilter {
   push(delta: string): string {
     if (this.settled) return delta;
     this.held += delta;
-    const lead = this.held.trimStart();
-    if (lead === '') return '';
-    const lower = lead.toLowerCase();
-    if (OPEN.startsWith(lower)) return '';
+    const rest = this.held.slice(LEADING_FILLER.exec(this.held)![0].length);
+    const lower = rest.toLowerCase();
+    if (lower === '' || OPEN.startsWith(lower) || EMPTY_THINK.startsWith(lower)) return '';
     if (!lower.startsWith(OPEN)) return this.release();
     const end = lower.indexOf(CLOSE);
     if (end === -1) return this.held.length > MAX_HELD_LENGTH ? this.release() : '';
     this.settled = true;
     this.held = '';
-    return lead.slice(end + CLOSE.length).trimStart();
+    return rest.slice(end + CLOSE.length).trimStart();
   }
 
   /** Whatever the stream ended while still holding back. */
@@ -57,7 +62,7 @@ export class SelfReportStreamFilter {
   }
 
   private release(): string {
-    const held = this.held;
+    const held = this.held.replace(EMPTY_THINK_BLOCKS, '');
     this.settled = true;
     this.held = '';
     return held;
@@ -67,9 +72,10 @@ export class SelfReportStreamFilter {
 /**
  * Pull the model's self-reported confidence out of its turn text.
  *
- * Returns the first well-formed report and the text with every confidence tag removed, so the tag
- * never reaches a thought or final answer. A tag whose score is missing, non-numeric or outside 0-1
- * yields no report (the caller falls back to the tool-based score) but is still stripped.
+ * Returns the first well-formed report and the text with every confidence tag, and every empty
+ * reasoning block, removed, so neither reaches a thought or final answer. A tag whose score is
+ * missing, non-numeric or outside 0-1 yields no report (the caller falls back to the tool-based
+ * score) but is still stripped.
  */
 export function parseSelfReport(text: string): { report?: SelfReport; text: string } {
   let report: SelfReport | undefined;
@@ -83,5 +89,5 @@ export function parseSelfReport(text: string): { report?: SelfReport; text: stri
     }
     return '';
   });
-  return { report, text: stripped };
+  return { report, text: stripped.replace(EMPTY_THINK_BLOCKS, '') };
 }
