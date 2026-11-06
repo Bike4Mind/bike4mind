@@ -239,9 +239,10 @@ export function filterRunnableModels(
  * (Kontext models are image-to-image transforms dispatched through ImageGeneration's
  * transform path, not edit), and XAI exposes no edit endpoint at all.
  *
- * Must stay the single source of truth for both edit dispatchers - the image-edit queue
- * handler (services/llm/ImageEdit.ts) and the chat edit_image tool - so neither silently
- * substitutes a model the user did not pick and was not billed for.
+ * This is the list the chat edit-model picker and the chat edit_image tool offer, so
+ * neither silently substitutes a model the user did not pick and was not billed for. The
+ * image-edit queue handler (services/llm/ImageEdit.ts) gates on the wider
+ * supportsImageEditEndpoint, which adds FLUX.2.
  */
 export const EDIT_SUPPORTED_IMAGE_MODELS = [
   ...OPENAI_IMAGE_MODELS,
@@ -249,7 +250,7 @@ export const EDIT_SUPPORTED_IMAGE_MODELS = [
   ...GEMINI_IMAGE_MODELS,
 ] as const;
 
-/** Returns true for image models that support editing; gates both edit dispatch paths. */
+/** Returns true for image models the chat picker and edit_image tool offer for editing. */
 export function supportsImageEdit(model?: string | null): boolean {
   if (!model) return false;
   return (EDIT_SUPPORTED_IMAGE_MODELS as readonly string[]).includes(model);
@@ -281,4 +282,19 @@ export function getMaxReferenceImages(model: string): number {
   if (isGPTImageModel(model)) return MAX_REFERENCE_IMAGES;
   if (!isFlux2ImageModel(model)) return 0;
   return model.startsWith('flux-2-klein-') ? 4 : 8;
+}
+
+/**
+ * Whether `/image-edits` can serve the model. Wider than {@link supportsImageEdit}: FLUX.2 edits
+ * on its generation endpoint with no mask, but stays out of EDIT_SUPPORTED_IMAGE_MODELS because
+ * the chat edit-model picker and edit_image tool (which run BFL edits as Fill) read that list.
+ */
+export function supportsImageEditEndpoint(model?: string | null): boolean {
+  return supportsImageEdit(model) || (!!model && isFlux2ImageModel(model));
+}
+
+/** Reference images an edit may carry beyond the source image; FLUX.2's cap counts the source. */
+export function getMaxEditReferenceImages(model: string): number {
+  if (isGPTImageModel(model)) return MAX_REFERENCE_IMAGES;
+  return isFlux2ImageModel(model) ? getMaxReferenceImages(model) - 1 : 0;
 }

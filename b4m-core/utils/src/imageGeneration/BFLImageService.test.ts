@@ -388,3 +388,81 @@ describe('BFLImageService - expected failures stay below error level', () => {
     expect(logged).not.toContain(API_KEY);
   });
 });
+
+describe('BFLImageService - edit()', () => {
+  let postSpy: ReturnType<typeof vi.spyOn>;
+  let service: BFLImageService;
+
+  const submittedBody = (): Record<string, unknown> => postSpy.mock.calls[0][1] as Record<string, unknown>;
+
+  beforeEach(() => {
+    postSpy = vi.spyOn(axios, 'post').mockResolvedValue({
+      data: { id: 'req-1', polling_url: 'https://api.bfl.ai/v1/poll/req-1' },
+    });
+    vi.spyOn(axios, 'get').mockResolvedValue({
+      data: { status: 'Ready', result: { sample: 'https://img.example/out.png' } },
+    });
+    service = new BFLImageService(API_KEY, { log() {}, error() {}, warn() {}, info() {} } as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([ImageModels.FLUX_2_PRO, ImageModels.FLUX_2_KLEIN_4B] as const)(
+    'maps the source and references to input_image_N on %s, with no mask',
+    async model => {
+      await service.edit('source', 'blend them', { model, referenceImages: ['ref-1', 'ref-2'] });
+
+      expect(postSpy.mock.calls[0][0]).toBe(`https://api.bfl.ai/v1/${model}`);
+      expect(submittedBody()).toMatchObject({
+        input_image: 'source',
+        input_image_2: 'ref-1',
+        input_image_3: 'ref-2',
+      });
+      for (const field of ['image', 'mask', 'steps', 'guidance', 'width', 'height']) {
+        expect(submittedBody()).not.toHaveProperty(field);
+      }
+    }
+  );
+
+  it.each([
+    [ImageModels.FLUX_2_PRO, 7],
+    [ImageModels.FLUX_2_KLEIN_4B, 3],
+  ] as const)('accepts %s with its maximum references and rejects one more before posting', async (model, limit) => {
+    const referenceImages = Array.from({ length: limit }, (_, index) => `ref-${index}`);
+    await service.edit('source', 'blend them', { model, referenceImages });
+    expect(submittedBody()[`input_image_${limit + 1}`]).toBe(`ref-${limit - 1}`);
+    postSpy.mockClear();
+
+    await expect(
+      service.edit('source', 'too many', { model, referenceImages: [...referenceImages, 'extra'] })
+    ).rejects.toThrow(`at most ${limit + 1} input images`);
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs no source or reference base64 for an edit', async () => {
+    const logged: string[] = [];
+    const capture = (...args: unknown[]) => logged.push(args.map(arg => JSON.stringify(arg)).join(' '));
+    vi.spyOn(Logger.globalInstance, 'debug').mockImplementation(capture);
+
+    await service.edit('secret-source-bytes', 'blend them', {
+      model: ImageModels.FLUX_2_PRO,
+      referenceImages: ['secret-reference-bytes'],
+    });
+
+    const output = logged.join('\n');
+    expect(output).toContain('BFL Image edit request body');
+    expect(output).toContain('[BASE64_DATA_');
+    expect(output).not.toContain('secret-source-bytes');
+    expect(output).not.toContain('secret-reference-bytes');
+  });
+
+  it('keeps the Fill request on image + mask, with no input_image', async () => {
+    await service.edit('source', 'fill it', { model: ImageModels.FLUX_PRO_FILL, mask: 'mask-data' });
+
+    expect(postSpy.mock.calls[0][0]).toBe(`https://api.bfl.ai/v1/${ImageModels.FLUX_PRO_FILL}`);
+    expect(submittedBody()).toMatchObject({ image: 'source', mask: 'mask-data' });
+    expect(submittedBody()).not.toHaveProperty('input_image');
+  });
+});

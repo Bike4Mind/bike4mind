@@ -1,7 +1,12 @@
 import { IMAGE_SIZE_CONSTRAINTS, ImageModels } from '../models';
 import { MAX_IMAGES_PER_REQUEST, type ImageOutputFormat, type OpenAIImageQuality } from '../schemas/openai';
 import type { ImageSizing } from '../utils/imageCapabilities';
-import { getMaxReferenceImages, IMAGES_PER_EDIT_REQUEST, MAX_REFERENCE_IMAGES } from '../utils/modelHelpers';
+import {
+  getMaxEditReferenceImages,
+  getMaxReferenceImages,
+  IMAGES_PER_EDIT_REQUEST,
+  MAX_REFERENCE_IMAGES,
+} from '../utils/modelHelpers';
 import type { AspectRatioCapability, ImageModeCapabilities, ImageModelCatalogEntry } from './types';
 
 const GPT_IMAGE_QUALITIES = ['low', 'medium', 'high', 'auto'] as const satisfies readonly OpenAIImageQuality[];
@@ -92,7 +97,8 @@ const bfl = (overrides: Pick<ImageModelCatalogEntry, 'modes' | 'sizing'>): Image
 });
 
 // FLUX.2 forwards the workbench image and any referenceImageFabFileIds together as input_image..input_image_N,
-// under one cap that counts all of them (getMaxReferenceImages). It has no edit dispatcher.
+// under one cap that counts all of them (getMaxReferenceImages). /image-edits edits with no mask; the chat
+// edit_image tool does not dispatch it.
 const flux2 = (model: ImageModels): ImageModelCatalogEntry =>
   bfl({
     modes: {
@@ -102,6 +108,11 @@ const flux2 = (model: ImageModels): ImageModelCatalogEntry =>
         aspectRatios: null,
         outputFormats: PNG_JPEG,
       },
+      edit: editMode({
+        inputs: { edit_source: { max: 1 }, reference: { max: getMaxEditReferenceImages(model) } },
+        aspectRatios: null,
+        outputFormats: PNG_JPEG,
+      }),
     },
     sizing: BFL_SIZING,
   });
