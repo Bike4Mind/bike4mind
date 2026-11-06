@@ -185,6 +185,7 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
     log(`WARNING: --apply would abort before any write: ${what}`);
   }
 
+  const failedReversals = new Set<string>();
   for (const reversal of result.reversals) {
     if (!apply) {
       log(`Would reverse purchase ${reversal.paymentIntentId} (${reversal.reason})`);
@@ -196,7 +197,11 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
     } catch (error) {
       // The row stays unreversed, so decide()'s findUnreversedPurchase re-check still keeps its owner.
       recordError(reversal.paymentIntentId, error);
+      failedReversals.add(reversal.paymentIntentId);
     }
+  }
+  if (failedReversals.size > 0) {
+    result.reversals = result.reversals.filter(r => !failedReversals.has(r.paymentIntentId));
   }
 
   const stamped = User.find({ lastCreditsPurchasedAt: { $ne: null } }, { _id: 1, lastCreditsPurchasedAt: 1 })

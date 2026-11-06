@@ -290,6 +290,7 @@ describe('reconcilePurchaseStamps', () => {
       expect(verdictOf(result, failing)).toMatchObject({ verdict: 'keep', reason: 'error' });
       expect(verdictOf(result, stale)).toMatchObject({ verdict: 'clear', reason: 'no_backing' });
       expect(result.errors.map(e => e.id).sort()).toEqual(['pi_refunded', failing].sort());
+      expect(result.reversals).toEqual([]);
       expect(await stampOf(refunded)).toEqual(STAMP);
       expect(await stampOf(failing)).toEqual(STAMP);
       expect(await stampOf(stale)).toBeNull();

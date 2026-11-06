@@ -22,7 +22,6 @@
  *   npx sst shell --stage <stage> -- pnpm --filter @bike4mind/scripts credits:reconcile-purchase-stamps --apply [--report=/abs/path]
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -32,7 +31,12 @@ import { Resource } from 'sst';
 import Stripe from 'stripe';
 import { Config } from '../utils/config';
 import { reconcilePurchaseStamps } from './reconcilePurchaseStamps';
-import { createStripeLookups, openReportFile, resolveReportPath } from './reconcilePurchaseStampsStripe';
+import {
+  createStripeLookups,
+  openReportFile,
+  resolveReportPath,
+  writeReportFile,
+} from './reconcilePurchaseStampsStripe';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -95,8 +99,7 @@ async function main() {
       `reversals: ${result.reversals.length}; ownerless rows: ${result.ownerless.length}; errors: ${result.errors.length}`
   );
   if (reportFd !== null) {
-    fs.writeFileSync(reportFd, JSON.stringify(result, null, 2));
-    fs.closeSync(reportFd);
+    writeReportFile(reportFd, JSON.stringify(result, null, 2));
     console.log(`Report written to ${reportPath}`);
   }
   if (!values.apply) {

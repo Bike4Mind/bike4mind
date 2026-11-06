@@ -72,10 +72,12 @@ export function resolveReportPath(raw: string, repoRoot: string): string {
 /**
  * Opens the report before the run so a bad target fails ahead of any write. Refuses a symlink at
  * the target (resolveReportPath only resolves the directory) and resets an existing file to 0600.
+ * Existing content is kept until writeReportFile, so a run that fails does not wipe a prior report.
+ * O_NONBLOCK makes a FIFO target fail instead of hanging before the regular-file check.
  */
 export function openReportFile(target: string): number {
-  const { O_WRONLY, O_CREAT, O_TRUNC, O_NOFOLLOW } = fs.constants;
-  const fd = fs.openSync(target, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0o600);
+  const { O_WRONLY, O_CREAT, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  const fd = fs.openSync(target, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o600);
   try {
     if (!fs.fstatSync(fd).isFile()) throw new Error(`--report must be a regular file, got ${target}`);
     fs.fchmodSync(fd, 0o600);
@@ -84,4 +86,13 @@ export function openReportFile(target: string): number {
     throw error;
   }
   return fd;
+}
+
+export function writeReportFile(fd: number, content: string): void {
+  try {
+    fs.ftruncateSync(fd, 0);
+    fs.writeSync(fd, content, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
 }

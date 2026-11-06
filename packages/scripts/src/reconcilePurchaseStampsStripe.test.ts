@@ -1,9 +1,15 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { userRepository } from '@bike4mind/database';
-import { createStripeLookups, openReportFile, resolveReportPath } from './reconcilePurchaseStampsStripe';
+import {
+  createStripeLookups,
+  openReportFile,
+  resolveReportPath,
+  writeReportFile,
+} from './reconcilePurchaseStampsStripe';
 
 vi.mock('@bike4mind/database', () => ({ userRepository: { findByStripeCustomerId: vi.fn() } }));
 
@@ -136,9 +142,27 @@ describe('openReportFile', () => {
     const existing = path.join(dir, 'existing.json');
     fs.writeFileSync(existing, 'old', { mode: 0o644 });
 
-    fs.closeSync(openReportFile(existing));
+    const fd = openReportFile(existing);
 
     expect(fs.statSync(existing).mode & 0o777).toBe(0o600);
-    expect(fs.readFileSync(existing, 'utf8')).toBe('');
+    expect(fs.readFileSync(existing, 'utf8')).toBe('old');
+    writeReportFile(fd, '{}');
+    expect(fs.readFileSync(existing, 'utf8')).toBe('{}');
+  });
+
+  it('replaces longer existing content in full', () => {
+    const existing = path.join(dir, 'longer.json');
+    fs.writeFileSync(existing, 'a much longer previous report');
+
+    writeReportFile(openReportFile(existing), 'new');
+
+    expect(fs.readFileSync(existing, 'utf8')).toBe('new');
+  });
+
+  it('refuses a FIFO target instead of blocking on it', () => {
+    const fifo = path.join(dir, 'pipe.json');
+    execFileSync('mkfifo', [fifo]);
+
+    expect(() => openReportFile(fifo)).toThrow();
   });
 });
