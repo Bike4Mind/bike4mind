@@ -1,3 +1,4 @@
+import type { ModelLighting } from '@shared/model3d';
 import * as THREE from 'three';
 import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -11,8 +12,9 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
  * The studio the model pane and the `model_screenshot` contact sheet both render in, so the agent
  * judges what the user sees: filmic tone mapping, a procedural softbox environment, a key light
  * casting soft shadows onto a shadow-catcher floor, and ambient occlusion as a post pass.
- * Everything is fitted to the model's bounds, since models come in mm or m. A night lighting mode
- * dims the studio to moonlight so emissive parts carry the scene: they bloom and light what is near.
+ * Everything is fitted to the model's bounds, since models come in mm or m. The lighting presets
+ * past the studio dim it to a low sun, a tungsten workshop lamp or moonlight; in the last two,
+ * emissive parts bloom and light what is near.
  */
 
 export const TONE_MAPPING_EXPOSURE = 1;
@@ -69,16 +71,68 @@ export function untoneMapped(hex: string): THREE.Color {
 }
 
 /** The pane's backdrop colours from before tone mapping, pre-compensated so they still show as is. */
-// Night is black: the glow light's shadow blackens the floor, whose edge would show on anything lighter.
-const BACKDROP = { light: untoneMapped('#f4f5f7'), dark: untoneMapped('#1b1e23'), night: new THREE.Color(0, 0, 0) };
+const BACKDROP = { light: untoneMapped('#f4f5f7'), dark: untoneMapped('#1b1e23') };
 
-export type StageLighting = 'studio' | 'night';
+export type StageLighting = ModelLighting;
 
-/** Per lighting mode: how much of the softbox studio is left, and the key light's colour and strength. */
-const LIGHTING: Record<StageLighting, { environment: number; key: number; keyColor: number }> = {
-  studio: { environment: 1, key: 3, keyColor: 0xffffff },
-  night: { environment: 0.1, key: 1, keyColor: 0x9fb4ff },
+type LightingPreset = {
+  /** How much of the softbox studio is left. */
+  environment: number;
+  key: number;
+  keyColor: number;
+  /** Where the key light comes from, towards the model. */
+  keyDirection: THREE.Vector3;
+  /** The rest follow the pane's theme when unset. */
+  backdrop?: THREE.Color;
+  shadow?: number;
+  reflection?: number;
+  /** Emissive parts bloom and become point lights. */
+  glow: boolean;
 };
+
+/** The softboxes' direction from the model; the shadow-casting key light comes from the brightest. */
+const KEY_DIRECTION = new THREE.Vector3(-0.6, 1, 0.45).normalize();
+
+const LIGHTING: Record<StageLighting, LightingPreset> = {
+  studio: { environment: 1, key: 3, keyColor: 0xffffff, keyDirection: KEY_DIRECTION, glow: false },
+  // A low sun from the side throws long shadows and rakes the textures.
+  sunset: {
+    environment: 0.3,
+    key: 4.5,
+    keyColor: 0xff9a52,
+    keyDirection: new THREE.Vector3(-1, 0.3, 0.35).normalize(),
+    backdrop: untoneMapped('#2b1c19'),
+    shadow: 0.75,
+    reflection: 0.35,
+    glow: false,
+  },
+  workshop: {
+    environment: 0.35,
+    key: 2.6,
+    keyColor: 0xffc489,
+    keyDirection: new THREE.Vector3(0.35, 1, 0.25).normalize(),
+    backdrop: untoneMapped('#17130f'),
+    shadow: 0.7,
+    reflection: 0.32,
+    glow: true,
+  },
+  // Black: the glow light's shadow blackens the floor, whose edge would show on anything lighter.
+  night: {
+    environment: 0.1,
+    key: 1,
+    keyColor: 0x9fb4ff,
+    keyDirection: KEY_DIRECTION,
+    backdrop: new THREE.Color(0, 0, 0),
+    shadow: 0.7,
+    reflection: 0.4,
+    glow: true,
+  },
+};
+
+/** Whether a lighting preset lets emissive parts bloom and light the scene. */
+export function lightingGlows(lighting: StageLighting): boolean {
+  return LIGHTING[lighting].glow;
+}
 
 /** The most glow lights a model gets; each is a point light every lit fragment pays for. */
 export const MAX_GLOW_LIGHTS = 4;
@@ -131,9 +185,6 @@ export function addGlowLights(object: THREE.Object3D, radius: number): THREE.Poi
     return light;
   });
 }
-
-/** The softboxes' direction from the model; the shadow-casting key light comes from the brightest. */
-const KEY_DIRECTION = new THREE.Vector3(-0.6, 1, 0.45).normalize();
 
 export function configureRenderer(renderer: THREE.WebGLRenderer): void {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -263,7 +314,7 @@ const GlossyFloorShader = {
 };
 
 /** How strongly the floor reflects, by backdrop: a dark floor shows a reflection more, as a real one does. */
-const REFLECTION = { light: 0.24, dark: 0.3, night: 0.4 };
+const REFLECTION = { light: 0.24, dark: 0.3 };
 /** The reflection's resolution, as a share of the canvas: a little softness reads as gloss, not glass. */
 const REFLECTION_SCALE = 0.5;
 
@@ -346,9 +397,8 @@ export class ModelStage {
 
   /** Sizes the light, its shadow camera and the floor to `object` (null keeps a unit-sized stage). */
   fit(object: THREE.Object3D | null, { dark, grid, lighting = 'studio' }: StageOptions): void {
-    const night = lighting === 'night';
     const mode = LIGHTING[lighting];
-    this.scene.background = night ? BACKDROP.night : dark ? BACKDROP.dark : BACKDROP.light;
+    this.scene.background = mode.backdrop ?? (dark ? BACKDROP.dark : BACKDROP.light);
     this.scene.environmentIntensity = mode.environment;
     this.key.intensity = mode.key;
     this.key.color.setHex(mode.keyColor);
@@ -365,7 +415,7 @@ export class ModelStage {
     const floorY = box.min.y;
 
     this.key.target.position.copy(sphere.center);
-    this.key.position.copy(sphere.center).addScaledVector(KEY_DIRECTION, radius * 4);
+    this.key.position.copy(sphere.center).addScaledVector(mode.keyDirection, radius * 4);
     const camera = this.key.shadow.camera;
     // Wide enough for the shadow the key light throws across the floor, tight enough to stay sharp.
     const reach = radius * 1.6;
@@ -383,12 +433,12 @@ export class ModelStage {
 
     this.floor.position.set(sphere.center.x, floorY, sphere.center.z);
     this.floor.scale.setScalar(radius * 12);
-    this.floor.material.opacity = night ? 0.7 : dark ? 0.5 : 0.55;
+    this.floor.material.opacity = mode.shadow ?? (dark ? 0.5 : 0.55);
     // Just under the shadow catcher, so the two never fight over the same depth.
     this.reflection.position.set(sphere.center.x, floorY - radius * 1e-3, sphere.center.z);
     this.reflection.scale.setScalar(radius * 12);
     const uniforms = (this.reflection.material as THREE.ShaderMaterial).uniforms;
-    uniforms.strength.value = night ? REFLECTION.night : dark ? REFLECTION.dark : REFLECTION.light;
+    uniforms.strength.value = mode.reflection ?? (dark ? REFLECTION.dark : REFLECTION.light);
     uniforms.center.value.copy(sphere.center);
     uniforms.fadeRadius.value = radius * 2.5;
 
@@ -398,7 +448,7 @@ export class ModelStage {
       this.grid = null;
     }
     if (grid) {
-      this.grid = gridFor(box, dark || night);
+      this.grid = gridFor(box, dark || mode.backdrop !== undefined);
       this.grid.position.set(sphere.center.x, floorY, sphere.center.z);
       this.group.add(this.grid);
     }
@@ -489,7 +539,7 @@ export class ModelComposer {
   }
 
   setLighting(lighting: StageLighting): void {
-    this.bloom.enabled = lighting === 'night';
+    this.bloom.enabled = LIGHTING[lighting].glow;
   }
 
   setSize(width: number, height: number, pixelRatio: number): void {

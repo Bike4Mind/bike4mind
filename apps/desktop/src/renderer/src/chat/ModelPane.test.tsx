@@ -263,13 +263,15 @@ describe('ModelPane', () => {
     expect(byTestId('model-pane-viewport')?.dataset.clip).toBe('');
   });
 
-  it('switches the viewport to night lighting and back', () => {
+  it('picks a lighting preset from the lighting menu', () => {
     render(engine(BUILT));
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('studio');
-    act(() => byTestId('model-pane-night-btn')?.click());
-    expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('night');
-    expect(byTestId('model-pane-night-btn')?.getAttribute('aria-pressed')).toBe('true');
-    act(() => byTestId('model-pane-night-btn')?.click());
+    act(() => byTestId('model-pane-lighting-btn')?.click());
+    act(() => byTestId('model-pane-lighting-sunset')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('sunset');
+    act(() => byTestId('model-pane-lighting-btn')?.click());
+    expect(byTestId('model-pane-lighting-sunset')?.getAttribute('aria-checked')).toBe('true');
+    act(() => byTestId('model-pane-lighting-studio')?.click());
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('studio');
   });
 
@@ -341,9 +343,10 @@ describe('ModelPane', () => {
     expect(handle.setView).toHaveBeenCalledWith('right');
     press('0');
     expect(handle.setView).toHaveBeenLastCalledWith(null);
+    press('l');
+    expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('sunset');
     press('n');
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('night');
-    expect(byTestId('model-pane-night-btn')?.getAttribute('aria-pressed')).toBe('true');
     // A key typed on a control inside the view is that control's, not a shortcut.
     press('n', byTestId('model-pane-grid-btn'));
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('night');

@@ -27,7 +27,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
-import type { ModelView } from '@shared/model3d';
+import type { ModelLighting, ModelView } from '@shared/model3d';
 import {
   CaretDownIcon,
   CheckIcon,
@@ -38,8 +38,8 @@ import {
   FolderIcon,
   FrameIcon,
   GridIcon,
-  MoonIcon,
   RecordIcon,
+  SunIcon,
   WarningIcon,
   WireframeIcon,
 } from './icons';
@@ -92,7 +92,20 @@ export const MODEL_VIEW_PRESETS: readonly { view: ModelView | null; label: strin
 /** One arrow-key orbit step, in radians. */
 const ORBIT_STEP = Math.PI / 12;
 const ZOOM_STEP = 0.85;
-const KEY_HELP = 'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, E explode, N night.';
+/** The lighting presets, in menu order; L steps through them while the view has focus. */
+export const MODEL_LIGHTING_PRESETS: readonly { lighting: ModelLighting; label: string }[] = [
+  { lighting: 'studio', label: 'Studio' },
+  { lighting: 'sunset', label: 'Sunset' },
+  { lighting: 'workshop', label: 'Workshop' },
+  { lighting: 'night', label: 'Night' },
+];
+const KEY_HELP =
+  'Arrow keys orbit, plus and minus zoom, 0 to 4 pick a view, W wireframe, G grid, E explode, L lighting, N night.';
+
+function nextLighting(lighting: ModelLighting): ModelLighting {
+  const index = MODEL_LIGHTING_PRESETS.findIndex(preset => preset.lighting === lighting);
+  return MODEL_LIGHTING_PRESETS[(index + 1) % MODEL_LIGHTING_PRESETS.length].lighting;
+}
 
 const pulse = keyframes`
   0%, 100% { opacity: 1; }
@@ -182,7 +195,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
   const explodable = useMemo(() => object !== null && canExplode(object), [object]);
   const [wireframe, setWireframe] = useState(false);
   const [grid, setGrid] = useState(false);
-  const [night, setNight] = useState(false);
+  const [lighting, setLighting] = useState<ModelLighting>('studio');
   const [exploded, setExploded] = useState(false);
   // The recorded share of the clip (0..1) while a turntable records, else null.
   const [recordProgress, setRecordProgress] = useState<number | null>(null);
@@ -253,7 +266,8 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
       '-': () => handle?.zoom(1 / ZOOM_STEP),
       w: () => setWireframe(value => !value),
       g: () => setGrid(value => !value),
-      n: () => setNight(value => !value),
+      l: () => setLighting(nextLighting),
+      n: () => setLighting(value => (value === 'night' ? 'studio' : 'night')),
       e: () => explodable && setExploded(value => !value),
     };
     const action = preset
@@ -383,7 +397,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               object={object}
               wireframe={wireframe}
               grid={grid}
-              lighting={night ? 'night' : 'studio'}
+              lighting={lighting}
               dark={dark}
               dimmed={status === 'error'}
               frameKey={state.path}
@@ -412,7 +426,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
                   right: 8,
                   p: 0.375,
                   borderRadius: 'md',
-                  // Near-opaque, so the icons keep their contrast on the black night backdrop too.
+                  // Near-opaque, so the icons keep their contrast on the dark lighting backdrops too.
                   bgcolor: 'color-mix(in srgb, var(--joy-palette-background-surface) 88%, transparent)',
                   backdropFilter: 'blur(10px) saturate(1.4)',
                   boxShadow: 'sm',
@@ -455,16 +469,36 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
                     <ExplodeIcon />
                   </ViewToggle>
                 )}
-                <ViewToggle
-                  label="Night lighting"
-                  shortcut="N"
-                  pressed={night}
-                  disabled={recording}
-                  onToggle={() => setNight(value => !value)}
-                  testId="model-pane-night-btn"
-                >
-                  <MoonIcon />
-                </ViewToggle>
+                <Dropdown>
+                  <Tooltip title="Lighting (L)" size="sm" placement="bottom" variant="solid">
+                    <MenuButton
+                      slots={{ root: IconButton }}
+                      slotProps={{
+                        root: { size: 'sm', variant: lighting === 'studio' ? 'plain' : 'soft', color: 'neutral' },
+                      }}
+                      aria-label="Lighting"
+                      disabled={recording}
+                      data-testid="model-pane-lighting-btn"
+                    >
+                      <SunIcon />
+                    </MenuButton>
+                  </Tooltip>
+                  <Menu size="sm" placement="bottom-end" sx={{ minWidth: 160 }}>
+                    {MODEL_LIGHTING_PRESETS.map(preset => (
+                      <MenuItem
+                        key={preset.lighting}
+                        selected={preset.lighting === lighting}
+                        role="menuitemradio"
+                        aria-checked={preset.lighting === lighting}
+                        onClick={() => setLighting(preset.lighting)}
+                        data-testid={`model-pane-lighting-${preset.lighting}`}
+                      >
+                        <ListItemContent>{preset.label}</ListItemContent>
+                        {preset.lighting === lighting && <CheckIcon />}
+                      </MenuItem>
+                    ))}
+                  </Menu>
+                </Dropdown>
                 <Divider orientation="vertical" sx={{ mx: 0.25, my: 0.5 }} />
                 <Dropdown>
                   <Tooltip title="Camera view" size="sm" placement="bottom" variant="solid">

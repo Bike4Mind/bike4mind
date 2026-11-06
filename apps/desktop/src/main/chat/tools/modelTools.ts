@@ -45,7 +45,7 @@ const MODEL_FILE_CONTRACT = [
   '(a barrel, a knob) while keeping sharp edges; parts are faceted by default. Optional physical fields: `clearcoat` (0..1, a',
   'varnish layer), `sheen` (0..1, cloth), `transmission` (0..1, see-through) with `ior` (1..2.333) and `thickness` (model',
   'units), and `emissive` (#rrggbb glow) with `emissiveIntensity` (0+; 2 to 5 blooms and lights nearby parts in the',
-  "pane's Night lighting, so a lantern flame or a gem can light its own scene). Starting points: polished brass color #c9a043,",
+  "pane's Workshop and Night lighting, so a lantern flame or a gem can light its own scene). Starting points: polished brass color #c9a043,",
   'metalness 1, roughness 0.3; wrought iron #3a3a3c, metalness 1, roughness 0.6; oiled wood #7a4a24, roughness 0.7 (add',
   'clearcoat 0.6 for varnished); clear glass #f2f8f8, roughness 0.05, transmission 1, ior 1.5, thickness about its wall depth; black rubber',
   "#1e1e1e, roughness 0.9; velvet sheen 1, roughness 0.9. `texture` adds procedural surface detail tinted by the part's",
@@ -109,7 +109,7 @@ function parseLighting(input: Record<string, unknown>): ModelLighting {
 /** Where a turntable clip of `modelPath` is saved: beside it, named after it and its lighting. */
 export function turntablePath(modelPath: string, lighting: ModelLighting): string {
   const stem = basename(modelPath).replace(/\.(model\.js|glb|stl)$/i, '');
-  return join(dirname(modelPath), `${stem}${lighting === 'night' ? '-night' : ''}-turntable.webm`);
+  return join(dirname(modelPath), `${stem}${lighting === 'studio' ? '' : `-${lighting}`}-turntable.webm`);
 }
 
 function parseViews(input: Record<string, unknown>): ModelView[] {
@@ -244,10 +244,10 @@ export const modelRecord: ToolDefinition = {
     name: 'model_record',
     description: [
       'Record a turntable video of the open 3D model: an 8 second 1080p WebM clip of one full orbit while every joint',
-      'swings through its range and back, saved beside the model as <name>-turntable.webm (<name>-night-turntable.webm',
-      'for night lighting). Use it when the user asks for a video, clip or showcase of the model, after checking the model',
-      'with model_screenshot. Night lighting shows the model by moonlight with its emissive parts glowing and lighting',
-      'what is near them; pick it when the model has glowing parts. You cannot see the clip; tell the user where it is.',
+      'swings through its range and back, saved beside the model as <name>-turntable.webm (<name>-<lighting>-turntable.webm',
+      'for any other lighting). Use it when the user asks for a video, clip or showcase of the model, after checking the',
+      'model with model_screenshot. Workshop and night lighting let emissive parts glow and light what is near them; pick',
+      'one when the model has glowing parts. You cannot see the clip; tell the user where it is.',
     ].join(' '),
     parameters: {
       type: 'object',
@@ -256,7 +256,10 @@ export const modelRecord: ToolDefinition = {
         lighting: {
           type: 'string',
           enum: [...MODEL_LIGHTINGS],
-          description: 'studio (default): soft studio light. night: moonlight, with glowing parts lighting the scene.',
+          description: [
+            'studio (default): soft studio light. sunset: a low warm sun with long shadows, for wood, stone and leather.',
+            'workshop: a warm overhead lamp, with glowing parts lighting the scene. night: moonlight, the same but darker.',
+          ].join(' '),
         },
       },
     },
