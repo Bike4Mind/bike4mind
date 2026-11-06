@@ -267,7 +267,8 @@ describe('data holder registry', () => {
     })
   )('%s: beforeErasure function %s is exported from the repo', (_modelName, functionName) => {
     const repoRoot = path.resolve(__dirname, '../../../..');
-    const pattern = `export (async )?function ${functionName}([^A-Za-z0-9_]|$)`;
+    // A text match, not a type check: it accepts `export [async] function fn` and `export const fn`.
+    const pattern = `export ((async )?function|const) ${functionName}([^A-Za-z0-9_]|$)`;
     const matches = execFileSync('git', ['grep', '-l', '-E', pattern, '--', '*.ts'], {
       cwd: repoRoot,
       encoding: 'utf8',

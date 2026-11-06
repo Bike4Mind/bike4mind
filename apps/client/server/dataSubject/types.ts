@@ -19,11 +19,14 @@
  *   subdocuments only the matching elements change (`versions.createdBy` anonymizes the versions
  *   this person created, not every version).
  *
- * What an export includes for a document matched by each action:
- * - `deleteDocument` / `retain`: the whole document minus `secretPaths`, plus its `viaParent` children.
- * - `anonymize`: the whole document minus `secretPaths`; it records this person.
- * - `pullFromArray`: only the matching array elements and the document id. The rest of the document
- *   belongs to someone else (a notebook shared with this person) and is not this person's to take.
+ * What an export includes for a document, decided by where the match is rather than by the action:
+ * - A match on a scalar path (`userId`, `metadata.actorId`): the whole document minus `secretPaths`,
+ *   plus its `viaParent` children.
+ * - A match only on array paths (an array of ids such as `userIds`, or a key inside an array of
+ *   subdocuments such as `versions.createdBy`): only the matching elements and the document id,
+ *   whatever the action. The other elements name other people (co-members of a fraud cluster, other
+ *   editors of a page), and the rest of the document is not this person's to take.
+ * When a document matches on both kinds, the scalar match decides and the whole document is exported.
  */
 
 /** What erasure does with a document (or field) that references the erased person. */
@@ -93,7 +96,7 @@ export type DataHolder =
   /**
    * The document carries no user field of its own but belongs to a parent document that does (a
    * file chunk to its file). It is deleted when its parent is deleted and exported when its parent
-   * is exported whole (see the export rules above). When the parent survives, the child is kept,
+   * is exported whole (a scalar match, per the export rules above). When the parent survives, the child is kept,
    * except that `attribution` is anonymized and `deleteWhenParentAnonymized` removes it.
    */
   | {
