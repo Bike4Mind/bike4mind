@@ -12,6 +12,7 @@ The ElasticMQ PVC is excluded on purpose. See README.md "Backup and restore".
 """
 import argparse
 import copy
+import contextlib
 import datetime
 import hashlib
 import json
@@ -314,6 +315,21 @@ def scale(kube, roles, to_zero, release):
             raise BackupError('app pods did not drain: ' + err.strip()[-300:])
 
 
+@contextlib.contextmanager
+def paused_app(kube, roles, release):
+    try:
+        scale(kube, roles, True, release)
+        yield
+    except BaseException as original:
+        try:
+            scale(kube, roles, False, release)
+        except BackupError as error:
+            raise BackupError('%s; and: %s' % (str(original) or type(original).__name__, error)) from original
+        raise
+    else:
+        scale(kube, roles, False, release)
+
+
 def backup(args):
     kube, release = Kube(args.namespace, args.context), args.release
     dest = pathlib.Path(args.dest)
@@ -322,16 +338,17 @@ def backup(args):
     require_local_mongo(kube, release)
     dest.mkdir(parents=True, exist_ok=True)
     started = now()
-    # Mongo first: an orphan object is harmless, a row without its bytes is not.
-    with open(dest / ARTIFACTS[0], 'wb') as out:
-        mongo_exec(kube, release, mongo_dump_cmd(), stdout=out)
-    mongo_image = kube.json(['get', 'pod', release + '-mongo-0'])['spec']['containers'][0]['image']
-    with Helper(kube, release, args.mc_image) as helper:
-        buckets = helper.buckets()
-        with open(dest / ARTIFACTS[1], 'wb') as out:
-            helper.sh(mirror_script(buckets, 'backup'), stdout=out)
-        counts = tar_counts(dest / ARTIFACTS[1], buckets)
-        images = {'mongo': mongo_image, 'mc': helper.image()}
+    roles = app_role_deployments(kube.json(['get', 'deploy']), release)
+    with paused_app(kube, roles, release):
+        with Helper(kube, release, args.mc_image) as helper:
+            buckets = helper.buckets()
+            with open(dest / ARTIFACTS[0], 'wb') as out:
+                mongo_exec(kube, release, mongo_dump_cmd(), stdout=out)
+            mongo_image = kube.json(['get', 'pod', release + '-mongo-0'])['spec']['containers'][0]['image']
+            with open(dest / ARTIFACTS[1], 'wb') as out:
+                helper.sh(mirror_script(buckets, 'backup'), stdout=out)
+            counts = tar_counts(dest / ARTIFACTS[1], buckets)
+            images = {'mongo': mongo_image, 'mc': helper.image()}
     manifest = build_manifest(release, args.namespace, started, now(), images, buckets, counts, dest)
     (dest / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print('backup complete: %s (%s .. %s)' % (dest, started, manifest['finished_at']))
@@ -367,10 +384,16 @@ def restore(args):
         idle = sorted(name for name, replicas in roles.items() if replicas == 0)
         if idle:
             print('warning: already at 0 replicas, will be left at 0: %s' % ', '.join(idle), file=sys.stderr)
+        destructive_started = False
         try:
             scale(kube, roles, True, release)
             # Re-read after the drain: a worker that seeded late is gone now, but its data is not.
-            for name in user_databases(kube, release):
+            populated = user_databases(kube, release)
+            objects = {b: n for b, n in helper.counts(buckets).items() if n}
+            if (populated or objects) and not args.yes:
+                raise BackupError('target became non-empty during drain; pass --yes to replace its data')
+            destructive_started = True
+            for name in populated:
                 mongo_exec(kube, release, ['mongosh', '--quiet', MONGO_URI, '--eval',
                                            'db.getSiblingDB(%s).dropDatabase()' % json.dumps(name)])
             with open(src / ARTIFACTS[0], 'rb') as handle:
@@ -379,6 +402,12 @@ def restore(args):
                 helper.sh(mirror_script(buckets, 'restore', replace=args.yes), stdin=handle)
             check_restored_counts(manifest, helper.counts(buckets))
         except BaseException as original:
+            if destructive_started:
+                commands = [' '.join(kube.base + ['scale', 'deployment', name, '--replicas', str(replicas)])
+                            for name, replicas in roles.items()]
+                print('restore incomplete; app Deployments remain at 0. Retry the restore with --yes. '
+                      'Only after recovery, restore replica counts with:\n' + '\n'.join(commands), file=sys.stderr)
+                raise
             try:
                 scale(kube, roles, False, release)
             except BackupError as error:

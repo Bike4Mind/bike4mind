@@ -40,6 +40,7 @@ class FakeKube:
 
     def __init__(self, databases=('admin', 'config', 'local'), counts=0, fail_restore=False, fail_scale_at=None,
                  replicas=None, late_databases=None):
+        self.base = ['kubectl', '-n', 'ns']
         self.restored_counts, self.late_databases, self.db_reads = None, late_databases, 0
         self.calls, self.databases, self.counts, self.fail_restore = [], list(databases), counts, fail_restore
         self.fail_scale_at, self.replicas, self.scale_calls = fail_scale_at, replicas or {}, 0
@@ -204,7 +205,7 @@ class CommandTests(unittest.TestCase):
             with self.assertRaisesRegex(backup.BackupError, 'manifest.json'):
                 backup.read_manifest(d)
 
-    def test_backup_prints_secret_reminder(self):
+    def run_backup(self, kube):
         class FakeHelper:
             def __init__(self, *a):
                 pass
@@ -219,6 +220,7 @@ class CommandTests(unittest.TestCase):
                 return ['a']
 
             def sh(self, script, stdin=None, stdout=None):
+                kube.calls.append(['helper', script])
                 with tarfile.open(fileobj=stdout, mode='w') as archive:
                     archive.addfile(tarfile.TarInfo('./a/x'), io.BytesIO(b''))
 
@@ -229,15 +231,44 @@ class CommandTests(unittest.TestCase):
             args = type('A', (), {'namespace': 'ns', 'release': 'rel', 'context': None, 'mc_image': None,
                                   'dest': str(pathlib.Path(d) / 'out')})
             saved = backup.Kube, backup.Helper
-            backup.Kube, backup.Helper = lambda *a: FakeKube(), FakeHelper
+            backup.Kube, backup.Helper = lambda *a: kube, FakeHelper
             out = io.StringIO()
             try:
                 with contextlib.redirect_stdout(out):
                     backup.backup(args)
             finally:
                 backup.Kube, backup.Helper = saved
+        return out.getvalue()
+
+    def test_backup_prints_secret_reminder(self):
+        out = self.run_backup(FakeKube())
         for name in ('SECRET_ENCRYPTION_KEY', 'SECRET_ENCRYPTION_KEY_PREVIOUS', 'MEMORY_KEY_SECRET'):
-            self.assertIn(name, out.getvalue())
+            self.assertIn(name, out)
+
+    def test_backup_drains_before_dump_and_resumes_after_copy(self):
+        kube = FakeKube()
+        self.run_backup(kube)
+        calls = [' '.join(call) for call in kube.calls]
+        drain = next(i for i, call in enumerate(calls) if call.startswith('wait '))
+        dump = next(i for i, call in enumerate(calls) if 'mongodump' in call)
+        copied = next(i for i, call in enumerate(calls) if 'mc mirror' in call)
+        resumed = next(i for i, call in enumerate(calls) if call == 'scale deployment rel-app --replicas 2')
+        self.assertLess(drain, dump)
+        self.assertLess(dump, copied)
+        self.assertLess(copied, resumed)
+        self.assertEqual([call[4] for call in kube.calls if call[0] == 'scale'], ['0', '0', '2', '1'])
+
+    def test_backup_failure_resumes_all_deployments(self):
+        for error in (backup.BackupError('dump failed'), KeyboardInterrupt()):
+            class K(FakeKube):
+                def run(self, args, **kwargs):
+                    if 'mongodump' in args:
+                        raise error
+                    return super().run(args, **kwargs)
+            kube = K()
+            with self.assertRaises(type(error)):
+                self.run_backup(kube)
+            self.assertEqual([call[4] for call in kube.calls if call[0] == 'scale'], ['0', '0', '2', '1'])
 
     def test_mirror_script_creates_dir_for_empty_bucket(self):
         for direction in ('backup', 'restore'):
@@ -370,7 +401,7 @@ class RestoreSafetyTests(unittest.TestCase):
         kube.restored_counts = {'a': 0, 'b': 0}
         with self.assertRaisesRegex(backup.BackupError, 'fewer objects'):
             self.run_restore(kube)
-        self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0', '2', '1'])
+        self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0'])
 
     def test_scale_down_failure_still_scales_back(self):
         kube = FakeKube(fail_scale_at=2)
@@ -426,26 +457,33 @@ class RestoreSafetyTests(unittest.TestCase):
         backup.scale(K(), {'rel-app': 1}, True, 'rel')
 
     def test_scale_up_attempts_every_role_and_reports_both_errors(self):
-        kube = FakeKube(fail_restore=True, fail_scale_at=3)
+        kube = FakeKube(fail_scale_at=3, late_databases=['bike4mind'])
         with self.assertRaises(backup.BackupError) as ctx:
             self.run_restore(kube)
         self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0', '2', '1'])
         self.assertEqual(str(ctx.exception),
-                         'restore boom; and: could not scale back up (fix by hand): rel-app: scale boom')
-        self.assertIs(ctx.exception.__cause__, kube.restore_error)
+                         'target became non-empty during drain; pass --yes to replace its data; and: could not scale back up (fix by hand): rel-app: scale boom')
+        self.assertIsInstance(ctx.exception.__cause__, backup.BackupError)
 
-    def test_interrupt_scales_back_up_and_propagates(self):
+    def test_interrupt_during_destructive_restore_keeps_writers_stopped(self):
         kube = FakeKube(fail_restore=True)
         kube.restore_error = KeyboardInterrupt()
         with self.assertRaises(KeyboardInterrupt):
             self.run_restore(kube)
-        self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0', '2', '1'])
+        self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0'])
 
-    def test_interrupt_with_failed_scale_up_names_the_interrupt(self):
-        kube = FakeKube(fail_restore=True, fail_scale_at=3)
-        kube.restore_error = KeyboardInterrupt()
-        with self.assertRaisesRegex(backup.BackupError, '^KeyboardInterrupt; and: '):
+    def test_object_created_during_drain_requires_yes(self):
+        class K(FakeKube):
+            def run(self, args, **kwargs):
+                result = super().run(args, **kwargs)
+                if args[0] == 'wait':
+                    self.counts = 1
+                return result
+        kube = K()
+        with self.assertRaisesRegex(backup.BackupError, 'became non-empty'):
             self.run_restore(kube)
+        self.assertFalse(any('mongorestore' in call for call in kube.calls))
+        self.assertEqual([call[4] for call in kube.calls if call[0] == 'scale'], ['0', '0', '2', '1'])
 
     def test_database_seeded_during_drain_is_dropped(self):
         kube = FakeKube(databases=['admin'], late_databases=['admin', 'bike4mind'])
@@ -457,17 +495,24 @@ class RestoreSafetyTests(unittest.TestCase):
         self.assertLess(kube.calls.index(['scale', 'deployment', 'rel-app', '--replicas', '0']),
                         kube.calls.index(dropped[0]))
 
-    def test_database_seeded_after_check_is_dropped_without_yes(self):
+    def test_database_seeded_after_check_requires_yes(self):
         kube = FakeKube(databases=['admin'], late_databases=['admin', 'bike4mind'])
         kube.restored_counts = {'a': 1, 'b': 0}
-        self.run_restore(kube)
-        self.assertEqual(len([c for c in kube.calls if 'dropDatabase' in ' '.join(c)]), 1)
-
-    def test_scaled_back_even_when_restore_fails(self):
-        kube = FakeKube(fail_restore=True)
-        with self.assertRaises(backup.BackupError):
+        with self.assertRaisesRegex(backup.BackupError, 'became non-empty'):
             self.run_restore(kube)
+        self.assertFalse(any('dropDatabase' in ' '.join(c) or 'mongorestore' in c for c in kube.calls))
         self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0', '2', '1'])
+
+    def test_failed_restore_keeps_writers_stopped_and_reports_recovery(self):
+        kube = FakeKube(fail_restore=True)
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stderr(diagnostic):
+            with self.assertRaises(backup.BackupError):
+                self.run_restore(kube)
+        self.assertEqual([c[4] for c in kube.calls if c[0] == 'scale'], ['0', '0'])
+        self.assertIn('Retry the restore with --yes', diagnostic.getvalue())
+        self.assertIn('kubectl -n ns scale deployment rel-app --replicas 2', diagnostic.getvalue())
+        self.assertIn('kubectl -n ns scale deployment rel-worker --replicas 1', diagnostic.getvalue())
 
     def test_yes_drops_user_databases_without_drop_flag(self):
         kube = FakeKube(databases=['admin', 'bike4mind'])
