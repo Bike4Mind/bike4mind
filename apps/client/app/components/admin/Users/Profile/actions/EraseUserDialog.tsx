@@ -7,7 +7,13 @@ import { displayName } from '../userProfileModel';
 import type { ProfileDialogProps } from './profileActions';
 import { useAdminErasureState, usePreviewAdminErasure, useRequestAdminErasure } from './useAdminErasure';
 
-const pendingMessage = (state: AdminErasureState): string | null => {
+const blockingMessage = (state: AdminErasureState): string | null => {
+  if (state.state === 'none') {
+    const names = state.ownedOrganizations.map(organization => organization.name);
+    return names.length > 0
+      ? `This user owns ${names.join(', ')}. Transfer or delete those organizations before erasing their data.`
+      : null;
+  }
   if (state.state === 'selfDeletionPending') {
     return `This user scheduled their own account deletion for ${formatUtc(new Date(state.scheduledFor))}.`;
   }
@@ -20,9 +26,9 @@ const pendingMessage = (state: AdminErasureState): string | null => {
 
 const SCOPE_COLUMNS: readonly DataColumn<AdminErasureCollection>[] = [
   { id: 'model', label: 'Collection', render: row => row.model },
-  { id: 'deleted', label: 'Deleted', numeric: true, render: row => row.deleted },
-  { id: 'anonymized', label: 'Removed from', numeric: true, render: row => row.anonymized },
-  { id: 'retained', label: 'Kept', numeric: true, render: row => row.retained },
+  { id: 'deleted', label: 'Deleted', numeric: true, render: row => row.deleted.toLocaleString() },
+  { id: 'anonymized', label: 'Removed from', numeric: true, render: row => row.anonymized.toLocaleString() },
+  { id: 'retained', label: 'Kept', numeric: true, render: row => row.retained.toLocaleString() },
   { id: 'why', label: 'Why kept', render: row => row.retainReasons.join('; ') },
 ];
 
@@ -44,8 +50,8 @@ const ScopeTable: React.FC<{ collections: readonly AdminErasureCollection[] }> =
 
 /**
  * Data subject erasure in two audited steps: a dry run of what the data holder registry says an
- * erasure does, then the irreversible request, which locks the account and purges it at once. The
- * person is not emailed.
+ * erasure does, then the irreversible request, which locks the account and queues its purge (the
+ * daily deletion sweep is the backstop). The person is not emailed.
  */
 export const EraseUserDialog: React.FC<ProfileDialogProps> = ({ user, onClose }) => {
   const state = useAdminErasureState(user.id);
@@ -55,7 +61,11 @@ export const EraseUserDialog: React.FC<ProfileDialogProps> = ({ user, onClose })
   const name = displayName(user);
 
   if (!scope) {
-    const blocked = state.data ? pendingMessage(state.data) : null;
+    const blocked = state.isError
+      ? 'Could not check whether this account can be erased. Close and try again.'
+      : state.data
+        ? blockingMessage(state.data)
+        : null;
     return (
       <ActionDialog
         key="preview"
