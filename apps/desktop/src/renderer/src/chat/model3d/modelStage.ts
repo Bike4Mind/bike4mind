@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
@@ -328,17 +329,26 @@ export class ModelStage {
   }
 }
 
+/** Blur, as a share of the frame, at one model radius in front of or behind the focus. */
+const DOF_BLUR = 0.006;
+/** The most any point blurs, as a share of the frame: the backdrop, far behind, stops here. */
+const DOF_MAX_BLUR = 0.008;
+
 /**
  * Render, then GTAO so creases and lid gaps read, then tone mapping and sRGB in the output pass.
  * `render(false)` skips the AO for frames drawn while the user orbits or a clip plays. Bloom runs
  * on the linear HDR image before tone mapping, and only in night mode: the studio backdrop is
  * brighter than white (see `untoneMapped`), so any threshold low enough for a glow would bloom it.
+ * A recording adds a depth of field after the bloom (setFocus).
  */
 export class ModelComposer {
   private readonly composer: EffectComposer;
   private readonly ambientOcclusion: GTAOPass;
   private readonly output = new OutputPass();
   private readonly bloom: UnrealBloomPass;
+  private readonly depthOfField: BokehPass;
+  /** The fitted model's bounding radius, which the depth of field's blur is scaled by. */
+  private radius = 1;
 
   constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -355,6 +365,9 @@ export class ModelComposer {
     this.bloom = new UnrealBloomPass(new THREE.Vector2(Math.max(size.x, 1), Math.max(size.y, 1)), 0.7, 0.35, 1.2);
     this.bloom.enabled = false;
     this.composer.addPass(this.bloom);
+    this.depthOfField = new BokehPass(scene, camera, { focus: 1, aperture: 0, maxblur: DOF_MAX_BLUR });
+    this.depthOfField.enabled = false;
+    this.composer.addPass(this.depthOfField);
     this.composer.addPass(this.output);
   }
 
@@ -362,6 +375,7 @@ export class ModelComposer {
   fit(bounds: THREE.Box3): void {
     if (bounds.isEmpty()) return;
     const radius = bounds.getBoundingSphere(new THREE.Sphere()).radius;
+    this.radius = Math.max(radius, 1e-6);
     this.ambientOcclusion.updateGtaoMaterial({
       radius: radius * 0.3,
       thickness: radius * 0.3,
@@ -369,6 +383,18 @@ export class ModelComposer {
       scale: 1.6,
     });
     this.ambientOcclusion.setSceneClipBox(bounds.clone().expandByScalar(radius * 0.25));
+  }
+
+  /**
+   * Focuses a shallow depth of field `distance` (world units) from the camera, as a macro lens
+   * would on a small object, or turns it off (null). The blur is scaled to the fitted model, so
+   * its far side softens the same for a mm or an m model.
+   */
+  setFocus(distance: number | null): void {
+    this.depthOfField.enabled = distance !== null;
+    if (distance === null) return;
+    this.depthOfField.materialBokeh.uniforms.focus.value = distance;
+    this.depthOfField.materialBokeh.uniforms.aperture.value = DOF_BLUR / this.radius;
   }
 
   setLighting(lighting: StageLighting): void {
@@ -388,6 +414,7 @@ export class ModelComposer {
   dispose(): void {
     this.ambientOcclusion.dispose();
     this.bloom.dispose();
+    this.depthOfField.dispose();
     this.output.dispose();
     this.composer.dispose();
   }

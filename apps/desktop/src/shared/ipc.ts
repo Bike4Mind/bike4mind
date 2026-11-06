@@ -438,6 +438,7 @@ export const IPC_CHANNELS = {
   modelSetParam: 'model:set-param',
   /** Renderer -> main: save an export the user asked for (save dialog in main). */
   modelSaveExport: 'model:save-export',
+  modelSetRecording: 'model:set-recording',
   modelCaptureResult: 'model:capture-result',
   /** main -> renderer push: the open model changed (opened, edited on disk, closed). */
   modelState: 'model:state',
@@ -1094,6 +1095,11 @@ export interface DesktopApi {
     setParam(request: { key: string; value: number }): Promise<boolean>;
     /** Resolves to the saved path, or null when cancelled. */
     saveExport(request: { format: ModelExportFormat; bytes: Uint8Array }): Promise<string | null>;
+    /**
+     * Marks a turntable recording as running or done. While one runs the window keeps full-rate timers
+     * in the background, since the clip's frame times are wall-clock times.
+     */
+    setRecording(active: boolean): Promise<void>;
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (state: ModelViewState) => void): () => void;
     onCaptureRequest(listener: (request: ModelCaptureRequest) => void): () => void;

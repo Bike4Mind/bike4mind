@@ -25,6 +25,7 @@ vi.mock('./model3d/ModelViewport', () => ({
     picked,
     onPick,
     clip,
+    exploded,
     handleRef,
   }: {
     dimmed: boolean;
@@ -33,6 +34,7 @@ vi.mock('./model3d/ModelViewport', () => ({
     picked: string | null;
     onPick: (name: string | null) => void;
     clip: string | null;
+    exploded: boolean;
     handleRef?: { current: unknown };
   }) => {
     if (handleRef) handleRef.current = handle;
@@ -44,6 +46,7 @@ vi.mock('./model3d/ModelViewport', () => ({
         data-pose={JSON.stringify(pose)}
         data-picked={picked ?? ''}
         data-clip={clip ?? ''}
+        data-exploded={String(exploded)}
       >
         <button data-testid="pick-lid" onClick={() => onPick('lid')} />
         <button data-testid="pick-none" onClick={() => onPick(null)} />
@@ -344,6 +347,26 @@ describe('ModelPane', () => {
     // A key typed on a control inside the view is that control's, not a shortcut.
     press('n', byTestId('model-pane-grid-btn'));
     expect(byTestId('model-pane-viewport')?.dataset.lighting).toBe('night');
+  });
+
+  it('offers an exploded view only for a model with separable parts, by button and by E', () => {
+    render(engine(BUILT));
+    expect(byTestId('model-pane-explode-btn')).toBeNull();
+    const parted = new THREE.Group();
+    const lid = new THREE.Object3D();
+    lid.userData.explode = [0, 0, 10];
+    parted.add(lid);
+    render(engine({ ...BUILT, object: parted }));
+    expect(byTestId('model-pane-viewport')?.dataset.exploded).toBe('false');
+    act(() => byTestId('model-pane-explode-btn')?.click());
+    expect(byTestId('model-pane-viewport')?.dataset.exploded).toBe('true');
+    expect(byTestId('model-pane-explode-btn')?.getAttribute('aria-pressed')).toBe('true');
+    act(() => {
+      byTestId('model-pane-stage')?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'e', bubbles: true, cancelable: true })
+      );
+    });
+    expect(byTestId('model-pane-viewport')?.dataset.exploded).toBe('false');
   });
 
   it('frames a preset view from the camera menu', () => {
