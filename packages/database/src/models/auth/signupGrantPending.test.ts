@@ -25,7 +25,7 @@ const grant = (over: Partial<SignupGrant> = {}) => ({
 });
 const heldAt = new Date('2026-01-01T00:00:00Z');
 
-// Raw inserts so fixtures can carry shapes the schema would coerce away (non-integer dripCredits).
+// Raw inserts so fixtures can carry shapes the schema would coerce away (non-integer, NaN or infinite dripCredits).
 const seed: Array<Record<string, unknown> & { _id: mongoose.Types.ObjectId; key: string }> = [
   {
     key: 'heldNoGrant',
@@ -70,6 +70,8 @@ const seed: Array<Record<string, unknown> & { _id: mongoose.Types.ObjectId; key:
   { key: 'noGrant', _id: oid(10) },
   { key: 'pendingEmail', _id: oid(11), signupGrant: grant({ stage: 'pending_email', creditsReleased: 0 }) },
   { key: 'heldNoTag', _id: oid(12), signupGrantHeldReason: 'budget_exhausted', tags: [] },
+  { key: 'nanDrip', _id: oid(13), signupGrant: grant({ dripCredits: NaN, creditsReleased: 112 }) },
+  { key: 'infiniteDrip', _id: oid(14), signupGrant: grant({ dripCredits: Infinity, creditsReleased: 112 }) },
 ];
 const idOf = (key: string) => String(seed.find(s => s.key === key)!._id);
 

@@ -68,7 +68,10 @@ describe('PendingBulkDialog', () => {
         ]),
     });
     renderDialog('block');
+    expect(screen.getByTestId('pending-bulk-counting')).toHaveAttribute('role', 'status');
+    expect(screen.getByTestId('pending-bulk-counting')).toHaveAttribute('aria-busy', 'true');
     expect(await screen.findByTestId('pending-bulk-would-apply')).toHaveTextContent('1 account of 2 selected');
+    expect(screen.queryByTestId('pending-bulk-counting')).not.toBeInTheDocument();
     expect(screen.getByTestId('pending-bulk-noop-already_blocked')).toHaveTextContent(
       'This account is already blocked.'
     );

@@ -128,7 +128,17 @@ export function PendingBulkDialog({
           ))}
         </Stack>
       ) : (
-        !preview.isError && <Skeleton variant="text" level="body-sm" width="60%" />
+        !preview.isError && (
+          <Skeleton
+            variant="text"
+            level="body-sm"
+            width="60%"
+            role="status"
+            aria-busy="true"
+            aria-label="Counting the accounts this changes"
+            data-testid="pending-bulk-counting"
+          />
+        )
       )}
     </ActionDialog>
   );
