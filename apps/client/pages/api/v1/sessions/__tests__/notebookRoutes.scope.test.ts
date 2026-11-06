@@ -45,6 +45,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
     };
     chain.get = compose;
     chain.put = compose;
+    chain.post = compose;
     chain.delete = compose;
     return chain;
   },
@@ -53,21 +54,43 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
+  apiKeyRepository: {},
+  creditTransactionRepository: {},
   fabFileRepository: {},
+  newAccountSpendCapAdapters: {},
+  organizationRepository: {},
   questRepository: {},
   sessionRepository: {},
+  usageEventRepository: {},
   userRepository: {},
 }));
+vi.mock('@server/utils/untrustedCompletionQuota', () => ({ admitRequestCompletion: vi.fn() }));
+vi.mock('@bike4mind/database/content', () => ({ Quest: {} }));
 vi.mock('@bike4mind/services', () => ({
+  apiKeyService: {},
+  creditService: {},
   fabFilesService: { listFabFilesBySession: vi.fn() },
+  meterCompletionBackend: (llm: unknown) => llm,
   sessionService: { deleteSessionMessage: mockDeleteSessionMessage },
 }));
+vi.mock('@bike4mind/utils', () => ({ computeCosineSimilarity: () => 0, getSettingsByNames: vi.fn() }));
+vi.mock('@server/billing/meterPlatformCompletion', () => ({
+  createRequestCompletionMeter: vi.fn(),
+  isCreditsEnforced: async () => false,
+  reserveCompletionCredits: vi.fn(),
+  settleCompletion: vi.fn(),
+}));
+vi.mock('@bike4mind/services/llm/SmallLLMService', () => ({ SmallLLMService: class {} }));
+vi.mock('@bike4mind/services/llm/reranker', () => ({ ReRankService: class {} }));
+vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({ OperationsModelService: {} }));
 vi.mock('@bike4mind/server-utils/utils/storage/index', () => ({ getFilesStorage: () => ({}) }));
 
 await import('@pages/api/v1/sessions/[id]/files');
+await import('@pages/api/v1/sessions/semantic-search');
 const { default: messageHandler } = await import('@pages/api/v1/sessions/[id]/messages/[messageId]');
 const filesOptions = baseApiOptions[0];
-const [getOptions, putOptions, deleteOptions] = baseApiOptions.slice(1);
+const searchOptions = baseApiOptions[1];
+const [getOptions, putOptions, deleteOptions] = baseApiOptions.slice(2);
 
 const READ = [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS];
 const WRITE = [ApiKeyScope.WRITE_NOTEBOOKS];
@@ -89,6 +112,7 @@ describe('notebook route scopes', () => {
 
   it('hands the contract scopes to the API-key chain', () => {
     expect(filesOptions).toMatchObject({ auth: true, requiredScopes: READ });
+    expect(searchOptions).toMatchObject({ auth: true, requiredScopes: READ });
     expect(getOptions).toMatchObject({ auth: true, requiredScopes: READ });
     expect(putOptions).toMatchObject({ auth: true, requiredScopes: WRITE });
     expect(deleteOptions).toMatchObject({ auth: true, requiredScopes: WRITE });
