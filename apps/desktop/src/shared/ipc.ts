@@ -123,7 +123,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
-import type { ModelBuildReport, ModelPose, ModelView, ModelViewState } from './model3d';
+import type { ModelBuildReport, ModelExportFormat, ModelPose, ModelView, ModelViewState } from './model3d';
 import type { SimulatorFrame, SimulatorPaneInput, SimulatorViewDevice, SimulatorViewState } from './simulator';
 import type { LocalHistoryResult, LocalHistoryState } from './history';
 
@@ -1093,7 +1093,7 @@ export interface DesktopApi {
     /** False when the value could not be written back to the file. */
     setParam(request: { key: string; value: number }): Promise<boolean>;
     /** Resolves to the saved path, or null when cancelled. */
-    saveExport(request: { format: 'glb' | 'stl'; bytes: Uint8Array }): Promise<string | null>;
+    saveExport(request: { format: ModelExportFormat; bytes: Uint8Array }): Promise<string | null>;
     captureResult(result: { id: string; bytes?: Uint8Array; error?: string }): void;
     onState(listener: (state: ModelViewState) => void): () => void;
     onCaptureRequest(listener: (request: { id: string; views: ModelView[]; pose: ModelPose }) => void): () => void;

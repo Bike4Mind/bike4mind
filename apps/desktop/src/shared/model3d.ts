@@ -65,6 +65,14 @@ export const MAX_IOR = 2.333;
 export const MODEL_MOTIONS = ['turn', 'slide'] as const;
 export type ModelMotion = (typeof MODEL_MOTIONS)[number];
 
+/** What the model pane saves through its export dialog: the model as GLB or STL, or a turntable video. */
+export const MODEL_EXPORT_FORMATS = ['glb', 'stl', 'webm'] as const;
+export type ModelExportFormat = (typeof MODEL_EXPORT_FORMATS)[number];
+
+export function isModelExportFormat(value: unknown): value is ModelExportFormat {
+  return (MODEL_EXPORT_FORMATS as readonly unknown[]).includes(value);
+}
+
 /** A part that moves: what the pane's joint sliders and the GLB's animation clips are made from. */
 export type ModelJoint = {
   name: string;

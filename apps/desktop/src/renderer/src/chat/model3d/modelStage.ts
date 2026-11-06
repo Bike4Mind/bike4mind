@@ -3,12 +3,14 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 /**
  * The studio the model pane and the `model_screenshot` contact sheet both render in, so the agent
  * judges what the user sees: filmic tone mapping, a procedural softbox environment, a key light
  * casting soft shadows onto a shadow-catcher floor, and ambient occlusion as a post pass.
- * Everything is fitted to the model's bounds, since models come in mm or m.
+ * Everything is fitted to the model's bounds, since models come in mm or m. A night lighting mode
+ * dims the studio to moonlight so emissive parts carry the scene: they bloom and light what is near.
  */
 
 export const TONE_MAPPING_EXPOSURE = 1;
@@ -65,7 +67,68 @@ export function untoneMapped(hex: string): THREE.Color {
 }
 
 /** The pane's backdrop colours from before tone mapping, pre-compensated so they still show as is. */
-const BACKDROP = { light: untoneMapped('#f4f5f7'), dark: untoneMapped('#1b1e23') };
+// Night is black: the glow light's shadow blackens the floor, whose edge would show on anything lighter.
+const BACKDROP = { light: untoneMapped('#f4f5f7'), dark: untoneMapped('#1b1e23'), night: new THREE.Color(0, 0, 0) };
+
+export type StageLighting = 'studio' | 'night';
+
+/** Per lighting mode: how much of the softbox studio is left, and the key light's colour and strength. */
+const LIGHTING: Record<StageLighting, { environment: number; key: number; keyColor: number }> = {
+  studio: { environment: 1, key: 3, keyColor: 0xffffff },
+  night: { environment: 0.1, key: 1, keyColor: 0x9fb4ff },
+};
+
+/** The most glow lights a model gets; each is a point light every lit fragment pays for. */
+export const MAX_GLOW_LIGHTS = 4;
+
+/** A mesh's own glow as partMaterial recorded it, or null when it does not glow. */
+function glowOf(mesh: THREE.Mesh): { color: THREE.Color; strength: number } | null {
+  const material = mesh.material as THREE.Material;
+  const hex = material.userData.emissive;
+  const intensity = material.userData.emissiveIntensity;
+  if (typeof hex !== 'number' || hex === 0) return null;
+  const color = new THREE.Color().setHex(hex, THREE.LinearSRGBColorSpace);
+  const strength = ((color.r + color.g + color.b) / 3) * (typeof intensity === 'number' ? intensity : 1);
+  return strength > 0 ? { color, strength } : null;
+}
+
+/**
+ * Night mode: a point light at the heart of each of the brightest glowing parts, as a child of the
+ * part so it follows a lid as it opens. Sized to the model (`radius`, in model units); the brightest
+ * casts shadows, so a closed lid keeps its light inside; the glowing parts themselves stop casting,
+ * or each would wrap its own light in shadow. Returns the lights added.
+ */
+export function addGlowLights(object: THREE.Object3D, radius: number): THREE.PointLight[] {
+  const glowing: { mesh: THREE.Mesh; color: THREE.Color; strength: number }[] = [];
+  object.traverse(node => {
+    if (!(node instanceof THREE.Mesh)) return;
+    const glow = glowOf(node);
+    if (glow) glowing.push({ mesh: node, ...glow });
+  });
+  glowing.sort((a, b) => b.strength - a.strength);
+  return glowing.slice(0, MAX_GLOW_LIGHTS).map(({ mesh, color, strength }, index) => {
+    const geometry = mesh.geometry as THREE.BufferGeometry;
+    geometry.computeBoundingBox();
+    const centre = geometry.boundingBox ? geometry.boundingBox.getCenter(new THREE.Vector3()) : new THREE.Vector3();
+    // Physical falloff (decay 2) in model units: scale by radius squared so mm and m models match.
+    const light = new THREE.PointLight(color, strength * radius * radius * 1.6, radius * 4, 2);
+    light.position.copy(centre);
+    light.name = 'glow';
+    if (index === 0) {
+      light.castShadow = true;
+      light.shadow.mapSize.set(1024, 1024);
+      light.shadow.camera.near = radius * 0.01;
+      light.shadow.camera.far = radius * 4;
+      // Shadow maps hold back faces, so a lip just outside a wall sits at the wall's own depth; a
+      // positive bias (in depth over `far`, about a model unit here) keeps it dark.
+      light.shadow.bias = 0.0012;
+      light.shadow.radius = 1;
+    }
+    mesh.castShadow = false;
+    mesh.add(light);
+    return light;
+  });
+}
 
 /** The softboxes' direction from the model; the shadow-casting key light comes from the brightest. */
 const KEY_DIRECTION = new THREE.Vector3(-0.6, 1, 0.45).normalize();
@@ -155,7 +218,7 @@ function gridFor(box: THREE.Box3, dark: boolean): THREE.GridHelper {
   return grid;
 }
 
-export type StageOptions = { dark: boolean; grid: boolean };
+export type StageOptions = { dark: boolean; grid: boolean; lighting?: StageLighting };
 
 /**
  * The studio around one model: environment, key light, shadow-catcher floor and optional grid,
@@ -198,8 +261,13 @@ export class ModelStage {
   }
 
   /** Sizes the light, its shadow camera and the floor to `object` (null keeps a unit-sized stage). */
-  fit(object: THREE.Object3D | null, { dark, grid }: StageOptions): void {
-    this.scene.background = dark ? BACKDROP.dark : BACKDROP.light;
+  fit(object: THREE.Object3D | null, { dark, grid, lighting = 'studio' }: StageOptions): void {
+    const night = lighting === 'night';
+    const mode = LIGHTING[lighting];
+    this.scene.background = night ? BACKDROP.night : dark ? BACKDROP.dark : BACKDROP.light;
+    this.scene.environmentIntensity = mode.environment;
+    this.key.intensity = mode.key;
+    this.key.color.setHex(mode.keyColor);
     this.bounds.makeEmpty();
     if (object) {
       object.updateMatrixWorld(true);
@@ -231,7 +299,7 @@ export class ModelStage {
 
     this.floor.position.set(sphere.center.x, floorY, sphere.center.z);
     this.floor.scale.setScalar(radius * 12);
-    this.floor.material.opacity = dark ? 0.5 : 0.55;
+    this.floor.material.opacity = night ? 0.7 : dark ? 0.5 : 0.55;
 
     if (this.grid) {
       this.group.remove(this.grid);
@@ -239,7 +307,7 @@ export class ModelStage {
       this.grid = null;
     }
     if (grid) {
-      this.grid = gridFor(box, dark);
+      this.grid = gridFor(box, dark || night);
       this.grid.position.set(sphere.center.x, floorY, sphere.center.z);
       this.group.add(this.grid);
     }
@@ -253,16 +321,24 @@ export class ModelStage {
     this.key.dispose();
     this.environment.dispose();
   }
+
+  /** The fitted model's bounding-sphere radius, in model units (1 for an empty stage). */
+  get radius(): number {
+    return this.bounds.isEmpty() ? 1 : Math.max(this.bounds.getBoundingSphere(new THREE.Sphere()).radius, 1e-3);
+  }
 }
 
 /**
  * Render, then GTAO so creases and lid gaps read, then tone mapping and sRGB in the output pass.
- * `render(false)` skips the AO for frames drawn while the user orbits or a clip plays.
+ * `render(false)` skips the AO for frames drawn while the user orbits or a clip plays. Bloom runs
+ * on the linear HDR image before tone mapping, and only in night mode: the studio backdrop is
+ * brighter than white (see `untoneMapped`), so any threshold low enough for a glow would bloom it.
  */
 export class ModelComposer {
   private readonly composer: EffectComposer;
   private readonly ambientOcclusion: GTAOPass;
   private readonly output = new OutputPass();
+  private readonly bloom: UnrealBloomPass;
 
   constructor(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
@@ -276,6 +352,9 @@ export class ModelComposer {
     this.ambientOcclusion = new GTAOPass(scene, camera, Math.max(size.x, 1), Math.max(size.y, 1));
     this.ambientOcclusion.blendIntensity = 0.85;
     this.composer.addPass(this.ambientOcclusion);
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(Math.max(size.x, 1), Math.max(size.y, 1)), 0.7, 0.35, 1.2);
+    this.bloom.enabled = false;
+    this.composer.addPass(this.bloom);
     this.composer.addPass(this.output);
   }
 
@@ -292,6 +371,10 @@ export class ModelComposer {
     this.ambientOcclusion.setSceneClipBox(bounds.clone().expandByScalar(radius * 0.25));
   }
 
+  setLighting(lighting: StageLighting): void {
+    this.bloom.enabled = lighting === 'night';
+  }
+
   setSize(width: number, height: number, pixelRatio: number): void {
     this.composer.setPixelRatio(pixelRatio);
     this.composer.setSize(width, height);
@@ -304,6 +387,7 @@ export class ModelComposer {
 
   dispose(): void {
     this.ambientOcclusion.dispose();
+    this.bloom.dispose();
     this.output.dispose();
     this.composer.dispose();
   }

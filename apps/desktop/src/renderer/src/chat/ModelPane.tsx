@@ -7,12 +7,12 @@ import IconButton from '@mui/joy/IconButton';
 import Slider from '@mui/joy/Slider';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { useCallback, useLayoutEffect, useState, type RefObject } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { CloseIcon, CubeIcon } from './icons';
 import type { ModelEngine } from './model3d/useModelEngine';
 import { ModelClips } from './model3d/ModelClips';
 import { ModelJoints } from './model3d/ModelJoints';
-import { ModelViewport } from './model3d/ModelViewport';
+import { ModelViewport, type ModelViewportHandle } from './model3d/ModelViewport';
 import {
   clampModelPaneWidth,
   MODEL_PANE_MIN_WIDTH,
@@ -83,6 +83,9 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
   const { state, status, error, object, summary, params, unsaved, joints, jointAngles, clips } = engine;
   const [wireframe, setWireframe] = useState(false);
   const [grid, setGrid] = useState(false);
+  const [night, setNight] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const viewportHandle = useRef<ModelViewportHandle | null>(null);
   // Keyed to the file, so opening another model never keeps a stale highlight.
   const [picked, setPicked] = useState<{ path: string | null; name: string } | null>(null);
   const pickedName = picked && picked.path === state.path ? picked.name : null;
@@ -109,6 +112,24 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
       setNote(saved ? `Saved ${saved.split(/[\\/]/).pop()}` : '');
     } catch (caught) {
       setNote(caught instanceof Error ? caught.message : String(caught));
+    }
+  };
+
+  const runRecord = async () => {
+    const handle = viewportHandle.current;
+    if (!handle) return;
+    // A playing clip would fight the turntable's own joint swing.
+    setPlaying(null);
+    setRecording(true);
+    setNote('Recording a turntable...');
+    try {
+      const bytes = await handle.recordTurntable(joints);
+      const saved = await window.b4m.model.saveExport({ format: 'webm', bytes });
+      setNote(saved ? `Saved ${saved.split(/[\\/]/).pop()}` : '');
+    } catch (caught) {
+      setNote(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRecording(false);
     }
   };
 
@@ -211,6 +232,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               object={object}
               wireframe={wireframe}
               grid={grid}
+              lighting={night ? 'night' : 'studio'}
               dark={dark}
               dimmed={status === 'error'}
               frameKey={state.path}
@@ -218,6 +240,7 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
               picked={pickedName}
               onPick={pickPart}
               clip={playingClip}
+              handleRef={viewportHandle}
             />
             {status === 'building' && !object && (
               <Stack alignItems="center" justifyContent="center" sx={{ position: 'absolute', inset: 0 }}>
@@ -349,6 +372,17 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
         </Button>
         <Button
           size="sm"
+          variant={night ? 'soft' : 'plain'}
+          color="neutral"
+          disabled={!object}
+          onClick={() => setNight(value => !value)}
+          aria-pressed={night}
+          data-testid="model-pane-night-btn"
+        >
+          Night
+        </Button>
+        <Button
+          size="sm"
           variant="plain"
           color="neutral"
           onClick={() => void runOpen()}
@@ -357,6 +391,17 @@ export function ModelPane({ engine, dark, onClose, onExamplePrompt, onPickPart, 
           Open
         </Button>
         <Box sx={{ flex: 1 }} />
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          disabled={!canExport || recording}
+          loading={recording}
+          onClick={() => void runRecord()}
+          data-testid="model-pane-record-btn"
+        >
+          Record
+        </Button>
         <Button
           size="sm"
           variant="outlined"
