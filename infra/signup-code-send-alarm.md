@@ -155,10 +155,12 @@ The line is written by a dedicated info-level JSON logger in
 metadata. Research completions log each settled configuration, including when
 credit enforcement is disabled; aborts carrying settled partial usage count too.
 
-Metric filters on the ChatCompletion log group and the `cli_completion_request`
-WebSocket Lambda's log group (both run `executeCompletion`; the list is
-`infra/llmSpendLogGroups.ts`) write the same metrics to the `<app>/<stage>/LLMSpend`
-namespace, so every alarm and widget below sums both:
+Metric filters on every log group that logs the line write the same metrics to the
+`<app>/<stage>/LLMSpend` namespace, so every alarm and widget below sums them all.
+The list is `infra/llmSpendLogGroups.ts`: the ChatCompletion container and the
+`cli_completion_request` WebSocket Lambda (both run `executeCompletion`), the Slack
+quest processor Lambda, and the Next.js server Lambda (`/api/chat?wait=true` and the
+voice v2 LLM proxy run `ChatCompletionProcess` inline):
 
 | Metric                      | Value            | Dimensions        |
 | --------------------------- | ---------------- | ----------------- |
@@ -199,10 +201,9 @@ DLQ topic, is listed in the alarm-status widget, and has its own "Estimated USD
 per hour by provider" widget with both ceilings drawn.
 
 The figures are estimates from our price table, not provider invoices. Paths
-outside those two log groups are not counted: the Slack quest Lambdas log the
-same line but are not filtered; the agent executor, image, video and voice paths
-do not log it. JSON selectors do match Lambda's tab-prefixed text lines (see
-`infra/logMessageFilterPattern.ts`).
+outside those log groups are not counted: the agent executor, image, video and
+voice paths other than the v2 LLM proxy do not log it. JSON selectors do match
+Lambda's tab-prefixed text lines (see `infra/logMessageFilterPattern.ts`).
 
 ## Mail send failures (`infra/mailAlarms.ts`)
 
