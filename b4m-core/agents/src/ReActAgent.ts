@@ -2002,9 +2002,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     // tool validator's verdict is ground truth the model's pre-result estimate must not override.
     const useSelfReport = !!selfReport && (scored.source === 'default' || scored.source === 'heuristic');
     const confidence = useSelfReport ? selfReport.confidence : scored.confidence;
-    const confidenceSource: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default' = useSelfReport
-      ? 'llm_self_report'
-      : scored.source;
+    const confidenceSource = useSelfReport ? 'llm_self_report' : scored.source;
     const confidenceReason = useSelfReport ? selfReport.reason : undefined;
 
     this.confidenceLog.push({
