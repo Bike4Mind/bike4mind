@@ -48,6 +48,8 @@ export interface AgentStep {
     confidence?: number;
     /** How the confidence score was determined */
     confidenceSource?: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default';
+    /** The model's one-line reason when `confidenceSource` is `llm_self_report` */
+    confidenceReason?: string;
     /** Set on an observation whose tool call threw or could not run (not inferred from result text) */
     toolFailed?: boolean;
   };
@@ -102,6 +104,8 @@ export interface AgentResult {
       toolName: string;
       confidence: number;
       source: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default';
+      /** The model's one-line reason; only set for `llm_self_report` */
+      reason?: string;
       timestamp: number;
     }>;
   };
@@ -163,6 +167,13 @@ export interface AgentContext {
    * `getSystemPrompt()`.
    */
   artifactEmissionPrompt?: string;
+  /**
+   * Ask the model to report its own confidence each tool-calling turn (opt-in; default off).
+   * The report replaces the default/heuristic tool score for that iteration (source
+   * `llm_self_report`); a missing or malformed report falls back to the tool-based score.
+   * See `selfReportConfidence.ts`.
+   */
+  selfReportConfidence?: boolean;
   /** Force the model to use a specific tool or any tool */
   toolChoice?: 'auto' | 'required' | { type: 'function'; function: { name: string } };
   /** Extended thinking configuration (Anthropic models) */
@@ -401,6 +412,7 @@ export interface AgentCheckpoint {
     toolName: string;
     confidence: number;
     source: 'deterministic' | 'llm_self_report' | 'heuristic' | 'default';
+    reason?: string;
     timestamp: number;
   }>;
   /** Confidence scores from the most recent iteration (reset each iteration) */
