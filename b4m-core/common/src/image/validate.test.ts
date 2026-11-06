@@ -250,24 +250,48 @@ describe('validateImageRequest', () => {
         { mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'mask' }, { role: 'reference' }] },
         fill
       );
-      expect(reasonsOf(result)).toEqual(['This model takes no reference images']);
+      expect(reasonsOf(result)).toEqual(['This model takes no reference images when editing']);
     });
 
     it('names the limit and the requested value', () => {
       const inputs = Array.from({ length: 2 }, () => ({ role: 'reference' as const }));
       expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs }, ultra))).toEqual([
-        'This model takes up to 1 reference image; you added 2',
+        'This model takes up to 1 reference image when generating; you added 2',
       ]);
       expect(reasonsOf(validateImageRequest({ mode: 'generate', count: 11 }, fluxPro))).toEqual([
-        'This model makes up to 10 images per request; you asked for 11',
+        'This model makes up to 10 images per request when generating; you asked for 11',
       ]);
+    });
+
+    it('scopes per-mode limits to the mode and does not point at a mode the model lacks', () => {
+      const gemini25 = getImageModelCatalogEntry(ImageModels.GEMINI_2_5_FLASH_IMAGE);
+      const editWithReference = validateImageRequest(
+        { mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'reference' }] },
+        gemini25
+      );
+      expect(reasonsOf(editWithReference)).toEqual(['This model takes no reference images when editing']);
+      const flux2 = getImageModelCatalogEntry(ImageModels.FLUX_2_PRO);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs: [{ role: 'edit_source' }] }, flux2))).toEqual([
+        'This model does not edit images, so it takes no source image',
+      ]);
+      expect(reasonsOf(validateImageRequest({ mode: 'generate', inputs: [{ role: 'mask' }] }, gptImage1))).toEqual([
+        'A mask only applies when editing',
+      ]);
+    });
+
+    it('explains a count that is not a whole number from 1 up', () => {
+      for (const count of [0, 1.5]) {
+        expect(reasonsOf(validateImageRequest({ mode: 'generate', count }, fluxPro))).toEqual([
+          `Ask for a whole number of images from 1 to 10; you asked for ${count}`,
+        ]);
+      }
     });
 
     it('carries the typed detail the reason was built from', () => {
       const result = validateImageRequest({ mode: 'generate', count: 11 }, fluxPro);
       expect(result).toMatchObject({
         ok: false,
-        failures: [{ detail: { code: 'unsupported_output_count', requested: 11, max: 10 } }],
+        failures: [{ detail: { code: 'unsupported_output_count', mode: 'generate', requested: 11, max: 10 } }],
       });
     });
 
@@ -289,9 +313,9 @@ describe('validateImageRequest', () => {
     const SAMPLES = {
       unsupported_mode: { code: 'unsupported_mode', mode: 'edit' },
       missing_input: { code: 'missing_input', role: 'mask' },
-      unexpected_input: { code: 'unexpected_input', role: 'edit_source' },
-      unsupported_input_role: { code: 'unsupported_input_role', role: 'reference' },
-      too_many_inputs: { code: 'too_many_inputs', role: 'reference', max: 4, requested: 6 },
+      unexpected_input: { code: 'unexpected_input', role: 'edit_source', editSupported: true },
+      unsupported_input_role: { code: 'unsupported_input_role', role: 'reference', mode: 'edit' },
+      too_many_inputs: { code: 'too_many_inputs', role: 'reference', mode: 'generate', max: 4, requested: 6 },
       unsupported_size: {
         code: 'unsupported_size',
         requested: '999x999',
@@ -311,7 +335,7 @@ describe('validateImageRequest', () => {
         allowed: ['png', 'jpeg'],
         needsAlpha: false,
       },
-      unsupported_output_count: { code: 'unsupported_output_count', requested: 2, max: 1 },
+      unsupported_output_count: { code: 'unsupported_output_count', mode: 'edit', requested: 2, max: 1 },
       unsupported_transparent_background: { code: 'unsupported_transparent_background' },
       unsupported_seed: { code: 'unsupported_seed' },
     } satisfies { [C in ImageFailureDetail['code']]: Extract<ImageFailureDetail, { code: C }> };
@@ -325,17 +349,17 @@ describe('validateImageRequest', () => {
     it('phrases each sample for a person, not a developer', () => {
       expect(imageFailureReason(SAMPLES.unsupported_mode)).toBe('This model cannot edit images');
       expect(imageFailureReason(SAMPLES.too_many_inputs)).toBe(
-        'This model takes up to 4 reference images; you added 6'
+        'This model takes up to 4 reference images when generating; you added 6'
       );
       expect(imageFailureReason(SAMPLES.unsupported_size)).toBe(
         'This model supports 1024x1024 or 1792x1024; you asked for 999x999'
       );
       expect(imageFailureReason(SAMPLES.unsupported_aspect_ratio)).toBe(
-        'This model supports 9:21 to 21:9; you asked for 1:4'
+        'This model supports 9:21 to 21:9 when generating; you asked for 1:4'
       );
       expect(imageFailureReason(SAMPLES.unsupported_quality)).toBe('This model has no quality setting');
       expect(imageFailureReason(SAMPLES.unsupported_output_count)).toBe(
-        'This model makes one image per request; you asked for 2'
+        'This model makes one image per request when editing; you asked for 2'
       );
     });
   });

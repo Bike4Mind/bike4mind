@@ -65,7 +65,9 @@ const VIDEO_REASONS: ReasonTable<VideoValidationErrorCode, VideoFailureDetail> =
   unsupported_resolution: ({ model, requested, allowed }) =>
     `${model} supports ${joinWithOr(allowed)}; you asked for ${requested}`,
   unsupported_audio_option: ({ model, audio }) =>
-    audio === 'always' ? `${model} always generates audio` : `${model} generates silent video only`,
+    audio === 'always'
+      ? `${model} has no audio toggle; it always generates audio`
+      : `${model} has no audio toggle; it makes silent video only`,
 };
 
 /** A short, user-facing "why not" for one video validation failure, e.g. for a greyed-out model card. */

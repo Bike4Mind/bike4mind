@@ -343,9 +343,19 @@ describe('validateAgainstCapabilities why-not reasons', () => {
     expect(videoFailureReason(SAMPLES.unsupported_aspect_ratio)).toBe(
       'Veo 3.1 supports 16:9 or 9:16; you asked for 1:1'
     );
-    expect(videoFailureReason(SAMPLES.unsupported_audio_option)).toBe('Veo 3.1 generates silent video only');
-    expect(videoFailureReason({ ...SAMPLES.unsupported_audio_option, audio: 'always' })).toBe(
-      'Veo 3.1 always generates audio'
+    expect(videoFailureReason(SAMPLES.unsupported_audio_option)).toBe(
+      'Veo 3.1 has no audio toggle; it makes silent video only'
     );
+    expect(videoFailureReason({ ...SAMPLES.unsupported_audio_option, audio: 'always' })).toBe(
+      'Veo 3.1 has no audio toggle; it always generates audio'
+    );
+  });
+
+  it('explains audio on a model without a toggle, whichever value was asked for', () => {
+    for (const audio of [true, false]) {
+      expect(reasonOf({ ...base, durationSeconds: 4, audio }, veo)).toBe(
+        'Veo 3.1 has no audio toggle; it always generates audio'
+      );
+    }
   });
 });

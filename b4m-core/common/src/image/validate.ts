@@ -2,6 +2,7 @@ import type { ImageOutputFormat, OpenAIImageQuality, OpenAIImageStyle } from '..
 import type { ImageSizing } from '../utils/imageCapabilities';
 import { parseSizeEdges, satisfiesGptImage2Constraints } from '../utils/imageSizes';
 import {
+  IMAGE_ALPHA_FORMATS,
   IMAGE_INPUT_ROLES,
   type AspectRatioCapability,
   type ImageInputRole,
@@ -66,8 +67,8 @@ export type ImageValidationResult<T extends ImageCapabilityRequest = ImageCapabi
   { ok: true; request: T } | { ok: false; failures: [ImageValidationFailure, ...ImageValidationFailure[]] };
 
 const EDIT_ONLY_ROLES = new Set<ImageInputRole>(['edit_source', 'mask']);
-// Formats with an alpha channel; the request path silently promotes jpeg to png when transparency is asked for.
-const ALPHA_FORMATS = new Set<ImageOutputFormat>(['png', 'webp']);
+// The request path silently promotes jpeg to png when transparency is asked for; validation does not.
+const ALPHA_FORMATS = new Set<ImageOutputFormat>(IMAGE_ALPHA_FORMATS);
 const RATIO_PATTERN = /^(\d+):(\d+)$/;
 
 const parseRatio = (ratio: string): number | null => {
@@ -85,7 +86,11 @@ function failure(detail: ImageFailureDetail, field: ImageRequestField, message: 
 
 const listOrNone = (values: readonly string[]): string => (values.length > 0 ? values.join(', ') : 'none');
 
-function checkInputs(request: ImageCapabilityRequest, modeCaps: ImageModeCapabilities): ImageValidationFailure[] {
+function checkInputs(
+  request: ImageCapabilityRequest,
+  caps: ImageModelCatalogEntry,
+  modeCaps: ImageModeCapabilities
+): ImageValidationFailure[] {
   const inputs = request.inputs ?? [];
   const failures: ImageValidationFailure[] = [];
   for (const role of IMAGE_INPUT_ROLES) {
@@ -98,17 +103,29 @@ function checkInputs(request: ImageCapabilityRequest, modeCaps: ImageModeCapabil
       continue;
     }
     if (request.mode === 'generate' && EDIT_ONLY_ROLES.has(role)) {
-      failures.push(failure({ code: 'unexpected_input', role }, 'inputs', `a ${role} input is only valid for edit`));
+      failures.push(
+        failure(
+          { code: 'unexpected_input', role, editSupported: caps.modes.edit !== undefined },
+          'inputs',
+          `a ${role} input is only valid for edit`
+        )
+      );
       continue;
     }
     if (!accepted) {
-      failures.push(failure({ code: 'unsupported_input_role', role }, 'inputs', `${role} inputs are not supported`));
+      failures.push(
+        failure(
+          { code: 'unsupported_input_role', role, mode: request.mode },
+          'inputs',
+          `${role} inputs are not supported`
+        )
+      );
       continue;
     }
     if (count > accepted.max) {
       failures.push(
         failure(
-          { code: 'too_many_inputs', role, max: accepted.max, requested: count },
+          { code: 'too_many_inputs', role, mode: request.mode, max: accepted.max, requested: count },
           'inputs',
           `at most ${accepted.max} ${role} input(s)`
         )
@@ -224,7 +241,7 @@ function checkModeOutput(
   if (count !== undefined && (!Number.isInteger(count) || count < 1 || count > maxOutputs)) {
     failures.push(
       failure(
-        { code: 'unsupported_output_count', requested: count, max: maxOutputs },
+        { code: 'unsupported_output_count', mode: request.mode, requested: count, max: maxOutputs },
         'count',
         `${count} images per request is not supported for ${request.mode} (allowed: 1-${maxOutputs})`
       )
@@ -289,7 +306,7 @@ export function validateImageRequest<T extends ImageCapabilityRequest>(
 ): ImageValidationResult<T> {
   const modeCaps = caps.modes[request.mode];
   const failures: ImageValidationFailure[] = modeCaps
-    ? [...checkInputs(request, modeCaps), ...checkModeOutput(request, caps, modeCaps)]
+    ? [...checkInputs(request, caps, modeCaps), ...checkModeOutput(request, caps, modeCaps)]
     : [
         failure(
           { code: 'unsupported_mode', mode: request.mode },

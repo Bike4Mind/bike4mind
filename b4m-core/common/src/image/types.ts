@@ -18,6 +18,9 @@ export type AspectRatioCapability =
   { kind: 'discrete'; values: readonly string[] } | { kind: 'range'; tallest: string; widest: string };
 
 // `required` marks a role an edit must carry beyond its edit_source (Fill needs a mask).
+// Formats with an alpha channel, so the only ones that can carry a transparent background.
+export const IMAGE_ALPHA_FORMATS: readonly ImageOutputFormat[] = ['png', 'webp'];
+
 export type ImageInputCapability = { max: number; required?: true };
 
 // What a model honours in one mode. These differ by mode: an edit renders one image, and some providers'
