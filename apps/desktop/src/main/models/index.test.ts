@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { IPC_CHANNELS } from '@shared/ipc';
 import { AUTO_LOCAL_CONTEXT } from '@shared/localContextSetting';
 import type { CapabilityScope } from '@shared/capabilities';
@@ -80,6 +80,8 @@ function setup() {
     check: vi.fn(async () => []),
     hubServer: vi.fn(() => null),
     specs: vi.fn(() => null),
+    kvCacheType: vi.fn(() => undefined),
+    flashAttention: vi.fn(() => undefined),
     onServerSaved: vi.fn((listener: (id: string) => void) => {
       saved = listener;
       return () => {};
@@ -113,6 +115,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe('registerModels', () => {
@@ -154,7 +157,6 @@ describe('registerModels', () => {
       expect(deps.defaultStoreDir?.()).not.toBe(SERVICE_STORE);
       vi.stubEnv('OLLAMA_MODELS', '/data/models');
       expect(deps.defaultStoreDir?.()).toBe('/data/models');
-      vi.unstubAllEnvs();
     }
   );
 
@@ -164,6 +166,22 @@ describe('registerModels', () => {
     expect(existsSync(missing)).toBe(false);
     await expect(deps.freeSpace?.(missing)).resolves.toBeGreaterThan(0);
   });
+
+  it.runIf(process.platform !== 'darwin')(
+    'stages split imports under the cache variable only when it is absolute',
+    () => {
+      const key = process.platform === 'win32' ? 'LOCALAPPDATA' : 'XDG_CACHE_HOME';
+      const absolute = join(tmpdir(), 'b4m-cache');
+      const stagedUnder = (value: string) => {
+        vi.stubEnv(key, value);
+        return setup().deps.importDir?.();
+      };
+      const fallback = stagedUnder('');
+      expect(fallback && isAbsolute(fallback)).toBe(true);
+      expect(stagedUnder('relative/cache')).toBe(fallback);
+      expect(stagedUnder(absolute)).toBe(join(absolute, 'bike4mind-desktop', 'model-imports'));
+    }
+  );
 
   it('tells the service when Settings saves or removes a server', () => {
     const { saved } = setup();

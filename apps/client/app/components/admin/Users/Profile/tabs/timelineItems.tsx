@@ -5,19 +5,29 @@ import { describeAuditEntry } from './auditSentence';
 import type { TimelineItem, TimelineTile } from './TimelineList';
 
 export const TIMELINE_TYPE_LABELS: Readonly<Record<UserTimelineType, string>> = {
+  signup: 'Signup',
   signin: 'Sign-ins',
-  usage: 'Usage',
-  credit: 'Credits',
   key: 'API keys',
+  usage: 'Notebooks',
+  spend: 'Spend',
+  limit: 'Limits',
+  credit: 'Credits',
+  payment: 'Payments',
   admin: 'Admin',
+  moderation: 'Moderation',
 };
 
 const TILES: Readonly<Record<UserTimelineType, TimelineTile>> = {
-  usage: { text: 'AI', tone: 'info' },
-  credit: { text: 'CR', tone: 'warn' },
+  signup: { text: 'SU', tone: 'good' },
   signin: { text: 'IN', tone: 'good' },
   key: { text: 'KY', tone: 'neutral' },
+  usage: { text: 'NB', tone: 'info' },
+  spend: { text: 'AI', tone: 'info' },
+  limit: { text: 'LM', tone: 'bad' },
+  credit: { text: 'CR', tone: 'warn' },
+  payment: { text: 'PY', tone: 'bad' },
   admin: { text: 'AD', tone: 'neutral' },
+  moderation: { text: 'MD', tone: 'bad' },
 };
 
 // Refused or failed auth events get the bad tone; their summary already says so in words.
@@ -29,8 +39,12 @@ const BAD_AUTH_ACTIONS = new Set([
   'auth.oauth_refresh_reuse_revoked',
 ]);
 
-const tileFor = (entry: UserTimelineEntry): TimelineTile =>
-  entry.type === 'signin' && BAD_AUTH_ACTIONS.has(entry.audit.action) ? { text: 'IN', tone: 'bad' } : TILES[entry.type];
+/** The server's `alert` (a refusal, a negative balance, a failed charge) turns any tile red. */
+const tileFor = (entry: UserTimelineEntry): TimelineTile => {
+  const tile = TILES[entry.type];
+  const badAuth = entry.type === 'signin' && BAD_AUTH_ACTIONS.has(entry.audit.action);
+  return entry.alert || badAuth ? { ...tile, tone: 'bad' } : tile;
+};
 
 /** Admin entry meta: "Reason: x" then "by <actor>", joined with a middle dot. */
 export const adminMeta = (audit: AuditEntry): string =>
@@ -46,6 +60,7 @@ export const timelineItem = (entry: UserTimelineEntry, handlers: TimelineHandler
     id: `${entry.type}-${entry.id}`,
     tile: tileFor(entry),
     aside: <RelativeTime at={entry.at} />,
+    flags: entry.flags,
   };
   switch (entry.type) {
     case 'admin':
@@ -59,8 +74,13 @@ export const timelineItem = (entry: UserTimelineEntry, handlers: TimelineHandler
     case 'key':
       return { ...base, summary: entry.summary, meta: entry.detail, onOpen: () => handlers.onOpenAudit(entry.audit) };
     case 'credit':
+    case 'spend':
+    case 'payment':
       return { ...base, summary: entry.summary, meta: entry.detail || undefined, onOpen: handlers.onOpenCredits };
     case 'usage':
+    case 'signup':
+    case 'limit':
+    case 'moderation':
       return { ...base, summary: entry.summary, meta: entry.detail };
   }
 };

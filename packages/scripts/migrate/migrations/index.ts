@@ -303,6 +303,7 @@ import PinSignupGrantScheduleKeys from './20260921237480_pin-signup-grant-schedu
 import DropQuestSignupActivity from './20260921237490_drop-quest-signup-activity';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
 import DropRetiredGrantSettings from './20260921239996_drop-retired-grant-settings';
+import EnsureUserLimitEventIndexes from './20260921240010_ensure-user-limit-event-indexes';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 import EnsureAutoContainmentDecisionIndexes from './20260921239950_ensure-auto-containment-decision-indexes';
@@ -530,6 +531,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureStripeDisputeIndexes,
   ConvertLegacyQuestPlansToFiles,
   DropRetiredGrantSettings,
+  EnsureUserLimitEventIndexes,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
 ];

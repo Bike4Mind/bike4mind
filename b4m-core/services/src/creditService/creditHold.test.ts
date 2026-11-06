@@ -80,6 +80,26 @@ describe('holdCredits', () => {
     expect(state.user).toBe(10);
   });
 
+  it('reports a balance refusal to onInsufficientCredits, and still refuses when the hook throws', async () => {
+    const { adapters } = makeAdapters({ user: 10 });
+    const onInsufficientCredits = vi.fn(async () => {
+      throw new Error('store down');
+    });
+    await expect(
+      holdCredits(
+        { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video', logger },
+        { ...adapters, onInsufficientCredits }
+      )
+    ).rejects.toThrow(/do not have enough credits for video/);
+    expect(onInsufficientCredits).toHaveBeenCalledWith({
+      userId: 'u1',
+      reason: 'balance',
+      featureLabel: 'video',
+      requiredCredits: 30,
+      availableCredits: 10,
+    });
+  });
+
   it('refuses a hold beyond the member cap before moving either balance', async () => {
     const { adapters, state } = makeAdapters({ user: 100, org: 100 });
     vi.mocked(adapters.organizations.findById).mockResolvedValueOnce({

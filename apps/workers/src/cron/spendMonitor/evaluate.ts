@@ -1,9 +1,11 @@
 import {
   SPEND_BUCKET_MS,
+  spendAlertOpenKey,
   type ISpendAlertRepository,
   type ISpendRollup,
   type ISpendRollupRepository,
   type SpendAlertRecord,
+  type SpendRuleId,
   type SpendSeriesPoint,
 } from '@bike4mind/common';
 import type { SlackAlarmMessage } from '../../events/alarmSlackMessage';
@@ -205,6 +207,83 @@ async function scopeBreaches(
   });
 }
 
+const KEY_RULES: SpendRuleId[] = ['apikey_spike', 'apikey_ceiling'];
+
+/** True while a payer incident that already folded this key (by id) is still active, clearing or not. */
+const payerIncidentFoldedKey = (
+  active: SpendAlertRecord[],
+  payerType: string,
+  payerId: string,
+  keyId: string
+): boolean =>
+  active.some(
+    alert =>
+      alert.scopeType === payerType &&
+      alert.scopeId === payerId &&
+      Array.isArray(alert.context.viaKeyIds) &&
+      (alert.context.viaKeyIds as unknown[]).includes(keyId)
+  );
+
+/**
+ * Drops an api key breach when its paying user or organization breached this run (a scope carries at
+ * most one breach, so the rule kinds need not match), naming the key on the payer's breach instead, or
+ * while a payer incident that already names the key is active. Best effort: a failed lookup leaves the
+ * breaches as they were.
+ */
+async function foldKeyBreaches(
+  breaches: SpendBreach[],
+  active: SpendAlertRecord[],
+  deps: EvaluateDeps
+): Promise<{ breaches: SpendBreach[]; superseded: Set<string> }> {
+  const superseded = new Set<string>();
+  const keyBreaches = breaches.filter(b => b.scopeType === 'apiKey');
+  if (keyBreaches.length === 0) return { breaches, superseded };
+
+  try {
+    const resolved = await resolveScopes(
+      keyBreaches.map(({ scopeType, scopeId }) => ({ scopeType, scopeId })),
+      deps.resolveScopeDeps
+    );
+    const activeKeys = new Set(
+      active.map(alert => alert.openKey ?? spendAlertOpenKey(alert.rule, alert.scopeType, alert.scopeId))
+    );
+    const viaKeys = new Map<SpendBreach, { names: string[]; ids: string[] }>();
+    const folded = new Set<SpendBreach>();
+
+    for (const keyBreach of keyBreaches) {
+      const scope = resolved.get(scopeMapKey(keyBreach.scopeType, keyBreach.scopeId));
+      if (!scope?.payerId || scope.payerType === 'unknown') continue;
+      const payer = breaches.find(b => b.scopeType === scope.payerType && b.scopeId === scope.payerId);
+      if (payer) {
+        const via = viaKeys.get(payer) ?? { names: [], ids: [] };
+        via.names.push(scope.name ?? keyBreach.scopeId);
+        via.ids.push(keyBreach.scopeId);
+        viaKeys.set(payer, via);
+      } else if (!payerIncidentFoldedKey(active, scope.payerType, scope.payerId, keyBreach.scopeId)) {
+        continue;
+      }
+      folded.add(keyBreach);
+      for (const rule of KEY_RULES) {
+        const key = spendAlertOpenKey(rule, keyBreach.scopeType, keyBreach.scopeId);
+        if (activeKeys.has(key)) superseded.add(key);
+      }
+    }
+
+    return {
+      breaches: breaches
+        .filter(b => !folded.has(b))
+        .map(b => {
+          const via = viaKeys.get(b);
+          return via ? { ...b, viaKeys: via.names, viaKeyIds: via.ids } : b;
+        }),
+      superseded,
+    };
+  } catch (error) {
+    deps.logger.error('spend-monitor-fold-failed', { error });
+    return { breaches, superseded: new Set() };
+  }
+}
+
 /** Writes each decision; returns what to announce. A failed write is reported, never silently dropped. */
 async function persistDecisions(
   decisions: IncidentDecision[],
@@ -256,7 +335,10 @@ async function persistDecision(
     return null;
   }
   // A resolve for an incident the channel never saw announced would be a stray message.
-  if (decision.kind === 'resolve') return existing.lastNotifiedAt ? { kind: 'resolve', alert: merged } : null;
+  if (decision.kind === 'resolve') {
+    if (decision.announce === false) return null;
+    return existing.lastNotifiedAt ? { kind: 'resolve', alert: merged } : null;
+  }
   if (decision.kind === 'update') return null;
   // An incident whose opening post never landed is still announced as an open.
   return { kind: existing.lastNotifiedAt ? 'escalate' : 'open', alert: merged };
@@ -330,6 +412,12 @@ async function sourceMixByScope(
   return mix;
 }
 
+/** Platform criticals first, then other criticals, then warnings and resolves. */
+function notificationRank({ kind, alert }: Notification): number {
+  if (kind === 'resolve' || alert.severity !== 'critical') return 2;
+  return alert.scopeType === 'platform' ? 0 : 1;
+}
+
 async function buildMessages(
   notifications: Notification[],
   window: EvaluatedWindow,
@@ -352,7 +440,12 @@ async function buildMessages(
     label: resolved.get(account.label)?.label ?? account.label,
   }));
 
-  return notifications.map(notification => {
+  const ordered = notifications
+    .map(notification => ({ notification, rank: notificationRank(notification) }))
+    .sort((a, b) => a.rank - b.rank);
+  const firstCritical = ordered.findIndex(({ rank }) => rank < 2);
+
+  return ordered.map(({ notification }, index) => {
     const { alert } = notification;
     const isPlatform = alert.scopeType === 'platform';
     const scope = isPlatform
@@ -370,7 +463,14 @@ async function buildMessages(
           : undefined;
     return {
       notification,
-      message: buildSpendAlertMessage({ kind: notification.kind, alert, scope, breakdown, ...deps.messageContext }),
+      message: buildSpendAlertMessage({
+        kind: notification.kind,
+        alert,
+        scope,
+        breakdown,
+        ...deps.messageContext,
+        mention: index === firstCritical ? deps.messageContext.mention : undefined,
+      }),
     };
   });
 }
@@ -465,7 +565,8 @@ export async function evaluateSpend(
   }
   const window: EvaluatedWindow = { start: windowStart, end: windowEnd, accountTotals };
 
-  const decisions = decideIncidents(active, breaches, now, windowEnd);
+  const folded = await foldKeyBreaches(breaches, active, deps);
+  const decisions = decideIncidents(active, folded.breaches, now, windowEnd, folded.superseded);
   const persisted = await persistDecisions(decisions, active, deps);
   const announced = await announce(persisted.notifications, window, now, deps);
 

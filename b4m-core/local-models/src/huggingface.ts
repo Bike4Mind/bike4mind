@@ -431,6 +431,13 @@ function ollamaAcceptsRepo(repo: string): boolean {
   return !owner.includes('.') && owner.length <= OLLAMA_NAME_PART_MAX && name.length <= OLLAMA_NAME_PART_MAX;
 }
 
+/** `hf.co/<repo>:<tag>`, or null when the repo id or the tag breaks Ollama's name rules. */
+export function ollamaHubName(repo: string, tag: string): string | null {
+  return isHubRepoId(repo) && ollamaAcceptsRepo(repo) && OLLAMA_TAG_RE.test(tag)
+    ? `${OLLAMA_HUGGING_FACE_HOST}/${repo}:${tag}`
+    : null;
+}
+
 export function isHubRepoId(repo: string): boolean {
   return REPO_ID_RE.test(repo) && !repo.includes('..');
 }
@@ -635,7 +642,10 @@ function groupGgufFiles(
   url: (path: string) => string,
   pinned: boolean
 ): { builds: HubGgufBuild[]; projectors: HubGgufProjector[] } {
-  const groups = new Map<string, { id: string; total: number; shards: { index: number; file: HubGgufFile }[] }>();
+  const groups = new Map<
+    string,
+    { id: string; total: number; totalsAgree: boolean; shards: { index: number; file: HubGgufFile }[] }
+  >();
   const projectors: HubGgufProjector[] = [];
   for (const entry of entries) {
     if (entry.type !== 'file' || !/\.gguf$/i.test(entry.path)) continue;
@@ -658,7 +668,8 @@ function groupGgufFiles(
     const shard = SHARD_RE.exec(entry.path);
     const id = shard ? entry.path.slice(0, shard.index) : entry.path.replace(/\.gguf$/i, '');
     const key = `${shard ? 'split' : 'single'}:${id}`;
-    const group = groups.get(key) ?? { id, total: shard ? Number(shard[2]) : 1, shards: [] };
+    const group = groups.get(key) ?? { id, total: shard ? Number(shard[2]) : 1, totalsAgree: true, shards: [] };
+    if (shard && Number(shard[2]) !== group.total) group.totalsAgree = false;
     group.shards.push({ index: shard ? Number(shard[1]) : 1, file });
     groups.set(key, group);
   }
@@ -667,7 +678,8 @@ function groupGgufFiles(
     const shards = group.shards.sort((a, b) => a.index - b.index);
     const files = shards.map(shard => shard.file);
     const split = group.total > 1 || shards.length > 1;
-    const complete = shards.length === group.total && shards.every((shard, i) => shard.index === i + 1);
+    const complete =
+      group.totalsAgree && shards.length === group.total && shards.every((shard, i) => shard.index === i + 1);
     const collides = key.startsWith('split:') && groups.has(`single:${group.id}`);
     return {
       id: collides && files[0] ? files[0].path.replace(/\.gguf$/i, '') : group.id,
@@ -999,6 +1011,19 @@ export class HuggingFaceHub {
     try {
       const { data } = await this.#getJson(`/v2/${repo}/manifests/${tag}`, registryManifestSchema, context);
       return registryLayers(data);
+    } catch (error) {
+      if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) return null;
+      throw error;
+    }
+  }
+
+  /** A JSON layer (params) of a manifest `ollamaLayers` read, by its sha256; null when the registry lacks it. */
+  async ollamaRegistryJson(repo: string, sha256: string, options: { signal?: AbortSignal } = {}): Promise<unknown> {
+    assertRepoId(repo);
+    if (!SHA256_RE.test(sha256)) throw new LocalRuntimeError('Invalid blob digest', this.id);
+    const context = { signal: options.signal, repo, manifest: true };
+    try {
+      return (await this.#getJson(`/v2/${repo}/blobs/sha256:${sha256}`, z.unknown(), context)).data;
     } catch (error) {
       if (error instanceof RuntimeHttpError && [400, 404].includes(error.status)) return null;
       throw error;

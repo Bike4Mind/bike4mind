@@ -31,9 +31,10 @@ import {
   isBflImageModel,
   isGeminiImageModel,
   rejectsTransparentBackground,
-  isGPTImageModel,
+  isFlux2ImageModel,
+  getMaxEditReferenceImages,
   MAX_REFERENCE_IMAGES,
-  supportsImageEdit,
+  supportsImageEditEndpoint,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
   ImageModels,
@@ -232,7 +233,12 @@ export class ImageEditService {
       organizationId,
       ...rest
     } = EditImageRequestBodySchema.parse(body);
-    if (fabFileIds.length === 0) throw new BadRequestError('No fabFileIds provided');
+    // FLUX.2 edits from the prompt alone; a mask is refused rather than ignored, like any other unusable input.
+    if (isFlux2ImageModel(requestedModel)) {
+      if (fabFileIds.length > 0) throw new BadRequestError('FLUX.2 edits take no mask; omit fabFileIds');
+    } else if (fabFileIds.length === 0) {
+      throw new BadRequestError('No fabFileIds provided');
+    }
 
     // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
     // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
@@ -385,7 +391,8 @@ export class ImageEditService {
       return [];
     }
 
-    if (!isGPTImageModel(model)) {
+    const maxReferences = getMaxEditReferenceImages(model);
+    if (!maxReferences) {
       logger.debug('Dropping reference images for a model that cannot carry them', {
         model,
         requested: referenceImageFabFileIds.length,
@@ -398,8 +405,8 @@ export class ImageEditService {
     // survives de-duplication. Counted after de-duplication, because the cap exists to bound
     // how many images we actually pay to send.
     const uniqueIds = [...new Set(referenceImageFabFileIds)];
-    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
-      throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
+    if (uniqueIds.length > maxReferences) {
+      throw new BadRequestError(`At most ${maxReferences} reference images may be supplied`);
     }
 
     const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
@@ -606,10 +613,11 @@ export class ImageEditService {
 
       // Editing is a narrower capability than generation, and this handler bills the
       // selected model - so reject an unsupported selection here rather than silently
-      // running (and charging for) some other model. Mirrors the chat edit_image tool.
-      if (!supportsImageEdit(model)) {
+      // running (and charging for) some other model. This is the wider /image-edits gate;
+      // the chat edit_image tool uses the narrower EDIT_SUPPORTED_IMAGE_MODELS list.
+      if (!supportsImageEditEndpoint(model)) {
         throw new BadRequestError(
-          `Model "${model}" does not support image editing. Supported models: ${EDIT_SUPPORTED_IMAGE_MODELS.join(', ')}`
+          `Model "${model}" does not support image editing. Supported models: ${[...EDIT_SUPPORTED_IMAGE_MODELS, 'flux-2-*'].join(', ')}`
         );
       }
 
@@ -753,17 +761,36 @@ export class ImageEditService {
 
       let editResponse: ImageEditResponse;
       if (provider === 'bfl') {
-        // Fill is inpainting-only: without a mask there is nothing for it to fill.
-        if (!maskBase64Image) throw new NotFoundError('Mask image not found');
+        if (isFlux2ImageModel(model)) {
+          // FLUX.2 takes the references inline as base64, like the generation path; the URLs are freshly signed above.
+          const referenceBase64Images = await Promise.all(
+            referenceImageUrls.map(async url => {
+              const encoded = await imageUrlToBase64(url, true);
+              if (!encoded) throw new NotFoundError('Reference image not found');
+              return encoded;
+            })
+          );
+          editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
+            model,
+            referenceImages: referenceBase64Images,
+            safety_tolerance,
+            prompt_upsampling,
+            seed,
+            output_format,
+          });
+        } else {
+          // Fill is inpainting-only: without a mask there is nothing for it to fill.
+          if (!maskBase64Image) throw new NotFoundError('Mask image not found');
 
-        editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
-          mask: maskBase64Image,
-          model,
-          safety_tolerance,
-          prompt_upsampling,
-          seed,
-          output_format,
-        });
+          editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
+            mask: maskBase64Image,
+            model,
+            safety_tolerance,
+            prompt_upsampling,
+            seed,
+            output_format,
+          });
+        }
       } else if (provider === 'gemini') {
         // Gemini edits via natural language and takes no mask; it needs a data URL.
         editResponse = await service.edit(`data:image/png;base64,${sourceBase64Image}`, truncatedPrompt, {

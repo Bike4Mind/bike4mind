@@ -7,7 +7,7 @@ import {
   quotedForMessage,
   storedModelEntry,
   type ModelSettings,
-} from './modelSettings';
+} from './file';
 
 const QWEN = 'local:ollama:qwen3.8:27b';
 

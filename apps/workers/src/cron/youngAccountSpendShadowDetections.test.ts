@@ -52,12 +52,14 @@ const spenderA = {
   creditsSpent: 6000,
   accountCreatedAt: new Date('2026-10-25T05:00:00Z'),
   stripeCustomerId: null,
+  email: 'a@example.com',
 };
 const spenderB = {
   userId: 'user-b',
   creditsSpent: 3000,
   accountCreatedAt: new Date('2026-10-20T11:00:00Z'),
   stripeCustomerId: 'cus_b',
+  email: null,
 };
 const summary = { totalCredits: 9000, accountCount: 2, topSpenders: [spenderA, spenderB] };
 const logger = { error: vi.fn() };

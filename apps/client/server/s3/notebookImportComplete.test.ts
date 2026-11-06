@@ -73,7 +73,11 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/services/llm/imageModerationGate', () => ({
   moderateImageOrThrow: vi.fn(),
 }));
-vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' }, isImageServeable: () => true }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  InboxType: { COMMON: 'common' },
+  isImageServeable: () => true,
+}));
 vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 // Post-commit knowledge-file moderation deps: mocked like every other heavy import so this
 // dispatch-idempotency test stays isolated (the moderation path is not exercised here).
@@ -167,6 +171,9 @@ describe('notebook import duplicate-event guard', () => {
     // Not skipped: the guard must stay narrow, so this reaches the failure path and the user
     // is told. Pins that the not-found branch did not widen into catching everything.
     expect(h.createInboxMessage).toHaveBeenCalled();
+    const { message } = h.createInboxMessage.mock.calls[0][0] as { message: string };
+    expect(message).toContain('Something went wrong on our side');
+    expect(message).not.toContain('boom');
   });
 });
 
