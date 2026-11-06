@@ -17,7 +17,12 @@ const registeredModels = mongoose.modelNames().sort();
 const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
 
 function referencePaths(reference: UserReference): string[] {
-  return [reference.path, ...Object.keys(reference.where ?? {}), ...alsoRedactOf(reference)];
+  return [
+    reference.path,
+    ...Object.keys(reference.where ?? {}),
+    ...alsoRedactOf(reference),
+    ...(reference.identifies ?? []),
+  ];
 }
 
 function alsoRedactOf(reference: UserReference): readonly string[] {

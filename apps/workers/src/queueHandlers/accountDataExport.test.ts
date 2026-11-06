@@ -745,6 +745,41 @@ describe('account data export worker', () => {
       ]);
     });
 
+    it('writes the records within the shorter self-host run budget', async () => {
+      remainingMs = () => 599_000;
+
+      await runForAdmin();
+
+      expect(h.records.mock.calls.map(([model]) => model)).toEqual(['User', 'Note', 'Team']);
+      const entries = await unzip(h.uploaded!);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0 },
+        { model: 'Note', count: 2 },
+        { model: 'Team', count: 0 },
+      ]);
+    });
+
+    it('stops a collection that runs past the records share and omits the rest', async () => {
+      let left = 900_000;
+      remainingMs = () => left;
+      h.records.mockImplementation(async (model: string) => {
+        if (model !== 'Note') return [];
+        left = 100_000;
+        return [{ _id: 'n1' }];
+      });
+
+      await runForAdmin();
+
+      expect(h.records.mock.calls.map(([model]) => model)).toEqual(['User', 'Note']);
+      const entries = await unzip(h.uploaded!);
+      expect(entries.has('records/Note.ndjson')).toBe(false);
+      expect(JSON.parse(entries.get('records/index.json')!).collections).toEqual([
+        { model: 'User', count: 0 },
+        { model: 'Note', count: 0, omitted: 'time_limit' },
+        { model: 'Team', count: 0, omitted: 'time_limit' },
+      ]);
+    });
+
     it('refuses to build when a registered model is unclassified', async () => {
       h.assertClassified.mockImplementation(() => {
         throw new Error('Data subject export refused: unclassified models Mystery');

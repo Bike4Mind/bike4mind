@@ -34,8 +34,8 @@ import {
   adminDataExportKey,
   isMissingObjectError,
 } from '@bike4mind/server-utils/utils/accountDataExport';
-// Registered outside the `@bike4mind/database` barrel; the registry walk refuses a classified model
-// it cannot query, so both must be registered here.
+// Registered outside the `@bike4mind/database` barrel: unregistered, the registry walk cannot query
+// them and the index would list both as omitted.
 import '@bike4mind/server-utils/models/Subscription';
 import '@server/models/UserSubscription';
 import { SubjectRecordExport, assertEveryModelClassified } from '@server/dataSubject/subjectRecordExport';
@@ -63,8 +63,6 @@ export const MAX_FILE_BYTES = 3 * 1024 ** 3;
 // Left for the upload and the email once the file copy stops.
 const UPLOAD_RESERVE_MS = 5 * 60 * 1000;
 const EXPORT_LEASE_MS = 20 * 60 * 1000;
-// The registry records stop here, leaving the content sections a share before the upload reserve.
-const RECORDS_RESERVE_MS = 2 * UPLOAD_RESERVE_MS;
 // Aborts, timeouts and network resets are retried by SQS; any other per-object error omits that object.
 const isTransientError = (error: unknown) => {
   const { name, code } = (error ?? {}) as { name?: string; code?: string };
@@ -81,6 +79,12 @@ const isTransientError = (error: unknown) => {
 // Notebooks stop once two thirds of the time past the upload reserve is used, so files and
 // artifacts keep a share on both the 15-minute Lambda and the shorter self-host budget.
 const notebookReserveMs = (startingMs: number) => UPLOAD_RESERVE_MS + Math.max(0, startingMs - UPLOAD_RESERVE_MS) / 3;
+// The registry records, written first, stop once a third of that time is used, leaving the content
+// sections the rest. Relative, because the self-host budget (10 min) is shorter than the Lambda's.
+const recordsReserveMs = (startingMs: number) =>
+  UPLOAD_RESERVE_MS + (Math.max(0, startingMs - UPLOAD_RESERVE_MS) * 2) / 3;
+
+class RecordsTimeLimit extends Error {}
 
 type Archiver = archiver.Archiver;
 type Storage = ReturnType<typeof getFilesStorage>;
@@ -508,9 +512,11 @@ async function writeAgentsAndProjects(archive: Archiver, userId: string) {
 const RECORDS_README = `
 records/           Admin data subject export only: every stored record that names this person, one
                    NDJSON file per collection (records/<Model>.ndjson), walked from the data holder
-                   registry. Credentials, token hashes and other secrets are removed. Where a record
-                   belongs to someone else and only lists this person in an array (a shared
-                   notebook's members), just this person's entries and the record id are included.
+                   registry. Credentials, token hashes and other secrets are removed, and so is
+                   every other person named on a record. Where a record belongs to someone else and
+                   only lists this person (a shared notebook's members, the admin who acted on an
+                   account), just the entries or fields naming this person and the record id are
+                   included. Free text (notes, summaries) is exported as written.
                    records/index.json lists every collection searched with its record count; an
                    "omitted" value of time_limit or error means that collection is not included.
 `;
@@ -550,11 +556,20 @@ ${includesRecords ? RECORDS_README : ''}`;
 
 type RecordsIndexEntry = { model: string; count: number; omitted?: 'time_limit' | 'error' };
 
-/** Streams one model's records to a scratch NDJSON file and returns how many there were. */
-async function writeModelRecords(exporter: SubjectRecordExport, model: string, scratchPath: string): Promise<number> {
+/**
+ * Streams one model's records to a scratch NDJSON file and returns how many there were. Throws
+ * `RecordsTimeLimit` once `outOfTime()`, so one large model cannot spend the content sections' share.
+ */
+async function writeModelRecords(
+  exporter: SubjectRecordExport,
+  model: string,
+  scratchPath: string,
+  outOfTime: () => boolean
+): Promise<number> {
   let count = 0;
   async function* lines() {
     for await (const record of exporter.records(model)) {
+      if (outOfTime()) throw new RecordsTimeLimit(model);
       count++;
       yield `${JSON.stringify(record)}\n`;
     }
@@ -577,18 +592,24 @@ async function writeRegistryRecords(
   assertEveryModelClassified(mongoose.modelNames());
   const exporter = new SubjectRecordExport(subject);
   const index: RecordsIndexEntry[] = [];
+  const reserveMs = recordsReserveMs(remainingMs());
+  const outOfTime = () => remainingMs() < reserveMs;
   for (const model of exporter.models) {
-    if (remainingMs() < RECORDS_RESERVE_MS) {
+    if (outOfTime()) {
       index.push({ model, count: 0, omitted: 'time_limit' });
       continue;
     }
     const scratchPath = path.join(scratchDir, `records-${index.length}.ndjson`);
     try {
-      const count = await writeModelRecords(exporter, model, scratchPath);
+      const count = await writeModelRecords(exporter, model, scratchPath, outOfTime);
       if (count > 0) await appendEntry(archive, createReadStream(scratchPath), `records/${model}.ndjson`);
       index.push({ model, count });
     } catch (error) {
       if (isTransientError(error)) throw error;
+      if (error instanceof RecordsTimeLimit) {
+        index.push({ model, count: 0, omitted: 'time_limit' });
+        continue;
+      }
       // A child of an omitted parent fails here too, so the gap shows for every collection it affects.
       logger.error('Data subject export: collection omitted', { model, error });
       index.push({ model, count: 0, omitted: 'error' });
