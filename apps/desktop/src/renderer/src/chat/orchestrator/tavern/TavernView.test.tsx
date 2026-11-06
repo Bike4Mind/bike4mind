@@ -593,3 +593,31 @@ describe('TavernView', () => {
     });
   });
 });
+
+describe('TavernView light and the quiet room', () => {
+  afterEach(() => themed.unmount());
+
+  it('lights the room for the theme, and burns low at last call once settled', async () => {
+    await renderTavern([agentFixture('a')]);
+    expect(el('orchestrator-tavern-light').getAttribute('data-mood')).toBe('day');
+    expect(el('orchestrator-tavern-frame').hasAttribute('data-settled')).toBe(false);
+
+    await renderTavern([agentFixture('a')], false, null, { settled: true });
+    expect(el('orchestrator-tavern-light').getAttribute('data-mood')).toBe('last-call');
+    expect(el('orchestrator-tavern-frame').hasAttribute('data-settled')).toBe(true);
+  });
+
+  it('keeps the light out of the way of clicks and screen readers', async () => {
+    await renderTavern([]);
+    const light = el('orchestrator-tavern-light');
+    expect(light.getAttribute('aria-hidden')).toBe('true');
+    expect(light.querySelectorAll('[data-light-glow="fire"]')).toHaveLength(1);
+  });
+
+  it("puts each agent's state on its nameplate, and none on the Innkeeper's", async () => {
+    await renderTavern([agentFixture('a', 'needs-you'), agentFixture('b', 'done')]);
+    expect(el('orchestrator-tavern-name-a').getAttribute('data-state')).toBe('needs-you');
+    expect(el('orchestrator-tavern-name-b').getAttribute('data-state')).toBe('done');
+    expect(el('orchestrator-tavern-innkeeper-name').hasAttribute('data-state')).toBe(false);
+  });
+});

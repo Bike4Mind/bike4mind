@@ -36,6 +36,8 @@ export interface OrchestratorViewProps {
   sceneOverlay?: ReactNode;
   /** Talking to the orchestrating conversation from the scene; the Tavern draws it as the Innkeeper's order slip. */
   desk?: InnkeeperDesk;
+  /** The chrome has settled out (StageAmbient); the Tavern dims to last call and fills the pane. */
+  settled?: boolean;
 }
 
 /** The parent conversation's front door in the scene: one thread, reached from the bar as well as the composer. */
@@ -200,6 +202,7 @@ export function OrchestratorStage({
     celebrating: finale.shown,
     sceneOverlay: bannerInScene ? banner : undefined,
     desk,
+    settled: ambient?.settled === true,
   };
 
   const settled = ambient?.settled === true;
