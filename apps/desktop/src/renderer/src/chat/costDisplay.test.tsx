@@ -50,7 +50,8 @@ function CostSurfaces() {
         sessionId="s1"
         disabled={false}
         streaming={false}
-        usage={{ contextTokens: 1200, contextLimit: 200000, credits: 1000, lastTurn: usage }}
+        // A low allowance, so the composer's credits ring (and its tooltip) is drawn at all.
+        usage={{ contextTokens: 1200, contextLimit: 200000, credits: 1000, monthlyAllowance: 10_000, lastTurn: usage }}
         attachments={{
           attachments: [],
           busy: false,

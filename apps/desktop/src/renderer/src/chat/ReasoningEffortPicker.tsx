@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Dropdown from '@mui/joy/Dropdown';
@@ -17,6 +18,7 @@ import {
 } from '@shared/chat';
 import { effortSent } from '@shared/generation';
 import type { ModelEffort } from '@shared/modelSettings';
+import { ChangedKnob, knobButtonProps } from './tuneChip';
 
 export const EFFORT_LABELS: Readonly<Record<ReasoningEffortSetting, string>> = {
   default: 'Default',
@@ -81,6 +83,9 @@ function supportState(option: ChatModelOption | undefined): { supported: boolean
  * control disabled and says why, rather than quietly accepting a choice the next turn would drop
  * on the floor; a local one shows nothing. A local model that can think but names no levels
  * (`thinkingToggle`) gets a thinking On/Off switch instead.
+ *
+ * `compact` is the composer row with the tune tray closed: the picker renders nothing while it
+ * sits at its default, and otherwise a tinted chip with a reset beside it.
  */
 export function ReasoningEffortPicker({
   models,
@@ -88,6 +93,7 @@ export function ReasoningEffortPicker({
   effort,
   defaultEffort,
   disabled,
+  compact = false,
   onSelect,
 }: {
   /** The loaded catalog, for the flags this reads off the conversation's model. */
@@ -97,28 +103,36 @@ export function ReasoningEffortPicker({
   /** The model's default level from the Models screen, which a Default chat runs at. */
   defaultEffort?: ModelEffort | null;
   disabled?: boolean;
+  compact?: boolean;
   onSelect: (effort: ReasoningEffortSetting) => void;
 }) {
   const option = findModelOption(models, modelId);
   const { supported, known } = supportState(option);
   const unsupported = known && !supported;
-  const sx = { fontWeight: 'normal', minWidth: 0 } as const;
+  const button = knobButtonProps(compact);
+  const changed = (picker: ReactElement) =>
+    compact ? (
+      <ChangedKnob
+        resetLabel="Reset effort to default"
+        onReset={() => onSelect('default')}
+        disabled={disabled}
+        testId="effort-picker-reset-btn"
+      >
+        {picker}
+      </ChangedKnob>
+    ) : (
+      picker
+    );
   const levels = option?.controls?.effort?.levels ?? UNLISTED_LEVELS;
 
   // A local model whose server takes no effort, only thinking on or off; any setting but Off thinks.
   if (option?.thinkingToggle && !option.controls?.effort) {
     const alwaysOn = option.thinkingAlwaysOn === true;
     const thinkingOn = alwaysOn || !thinkingSwitchedOff(effort, option);
-    return (
+    if (compact && thinkingOn) return null;
+    return changed(
       <Dropdown>
-        <MenuButton
-          size="sm"
-          variant="plain"
-          color="neutral"
-          disabled={disabled}
-          sx={sx}
-          slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}
-        >
+        <MenuButton {...button} disabled={disabled} slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}>
           <Typography level="body-xs" noWrap textColor="inherit">
             Thinking: {thinkingOn ? 'On' : 'Off'}
           </Typography>
@@ -152,6 +166,7 @@ export function ReasoningEffortPicker({
     );
   }
 
+  if (compact && unsupported) return null;
   if (unsupported && option && isLocalModel(option.id)) return null;
 
   if (unsupported) {
@@ -176,7 +191,7 @@ export function ReasoningEffortPicker({
             variant="plain"
             color="neutral"
             disabled
-            sx={sx}
+            sx={button.sx}
             slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}
           >
             <Typography level="body-xs" noWrap textColor="inherit">
@@ -189,16 +204,10 @@ export function ReasoningEffortPicker({
   }
 
   const shown = shownEffort(effort, levels);
-  return (
+  if (compact && shown === 'default') return null;
+  return changed(
     <Dropdown>
-      <MenuButton
-        size="sm"
-        variant="plain"
-        color="neutral"
-        disabled={disabled}
-        sx={sx}
-        slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}
-      >
+      <MenuButton {...button} disabled={disabled} slotProps={{ root: { 'data-testid': 'effort-picker-btn' } }}>
         <Typography level="body-xs" noWrap textColor="inherit">
           Effort: {EFFORT_LABELS[shown]}
         </Typography>

@@ -47,8 +47,17 @@ const FILTER_THRESHOLD = 8;
 /** Keys the menu, not the filter box, should act on - navigation, and the way out. */
 const MENU_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageUp', 'PageDown', 'Tab', 'Escape']);
 
+/**
+ * The model's name as the composer chip shows it. Claude's family names (Opus, Sonnet, Haiku,
+ * Fable) are unambiguous on their own, so the vendor word goes; every other name is kept whole,
+ * because "2.5 Pro" without its "Gemini" would say nothing.
+ */
+export function compactModelName(name: string): string {
+  return name.replace(/^Claude (?=(Opus|Sonnet|Haiku|Fable)\b)/, '');
+}
+
 function shortLabel(models: readonly ChatModelOption[], modelId: string): string {
-  return findModelOption(models, modelId)?.name ?? modelId;
+  return compactModelName(findModelOption(models, modelId)?.name ?? modelId);
 }
 
 interface ModelGroup {
@@ -461,7 +470,10 @@ export function ModelPicker({
         variant="plain"
         color={unavailable || serverDown ? 'warning' : 'neutral'}
         disabled={disabled}
-        sx={{ fontWeight: 'normal', minWidth: 0 }}
+        aria-label={`Model: ${label}${unavailable || serverDown ? ' (unavailable)' : ''}`}
+        // The row's anchor: it never shrinks, so the name is never cut. Everything else in the
+        // row gives way or wraps first.
+        sx={{ fontWeight: 'normal', minWidth: 0, flexShrink: 0, borderRadius: 'xl' }}
         slotProps={{ root: { 'data-testid': 'model-picker-btn' } }}
       >
         <Typography level="body-xs" noWrap textColor="inherit">

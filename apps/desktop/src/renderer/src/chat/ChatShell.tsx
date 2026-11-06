@@ -49,6 +49,7 @@ import { modelSwitchCredits } from './modelSwitchCost';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { GenerationSettingsPicker } from './GenerationSettingsPicker';
 import { PromptCacheTtlPicker } from './PromptCacheTtlPicker';
+import { TuneTray } from './TuneTray';
 import { CacheExpiryNote } from './CacheExpiryNote';
 import { ContextRing } from './ContextRing';
 import { GrantedFolderChips, SessionChips } from './SessionChips';
@@ -1828,6 +1829,7 @@ export function ChatShell({
                 promptCache={promptCache}
                 streaming={turnOpen}
                 hasReply={hasReply}
+                usage={composerUsage}
               />
             }
             placeholder={
@@ -1871,6 +1873,40 @@ export function ChatShell({
             }
             footer={
               <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+                <TuneTray disabled={!activeId}>
+                  {compact => (
+                    <>
+                      <ReasoningEffortPicker
+                        models={catalog.models}
+                        modelId={conversation.session?.model ?? null}
+                        effort={conversation.session?.reasoningEffort ?? 'default'}
+                        defaultEffort={defaultEffort}
+                        disabled={!activeId}
+                        compact={compact}
+                        onSelect={effort => void conversation.setReasoningEffort(effort)}
+                      />
+                      {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
+                      <GenerationSettingsPicker
+                        key={activeId ?? ''}
+                        model={modelOption}
+                        generation={conversation.session?.generation}
+                        modelDefaults={modelDefaults ?? undefined}
+                        effort={conversation.session?.reasoningEffort ?? 'default'}
+                        disabled={!activeId}
+                        compact={compact}
+                        onChange={conversation.setGeneration}
+                      />
+                      <PromptCacheTtlPicker
+                        model={modelOption}
+                        ttl={sessionCacheTtl}
+                        contextTokens={composerUsage.contextTokens ?? 0}
+                        disabled={!activeId}
+                        compact={compact}
+                        onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
+                      />
+                    </>
+                  )}
+                </TuneTray>
                 <ModelPicker
                   catalog={catalog}
                   modelId={conversation.session?.model ?? null}
@@ -1885,31 +1921,6 @@ export function ChatShell({
                   servers={savedServers}
                   hasHistory={conversation.messages.length > 0}
                   sessionId={activeId}
-                />
-                <ReasoningEffortPicker
-                  models={catalog.models}
-                  modelId={conversation.session?.model ?? null}
-                  effort={conversation.session?.reasoningEffort ?? 'default'}
-                  defaultEffort={defaultEffort}
-                  disabled={!activeId}
-                  onSelect={effort => void conversation.setReasoningEffort(effort)}
-                />
-                {/* One per chat: Mod+1-9 switches chats from inside the dialog, and its edits belong to the old one. */}
-                <GenerationSettingsPicker
-                  key={activeId ?? ''}
-                  model={modelOption}
-                  generation={conversation.session?.generation}
-                  modelDefaults={modelDefaults ?? undefined}
-                  effort={conversation.session?.reasoningEffort ?? 'default'}
-                  disabled={!activeId}
-                  onChange={conversation.setGeneration}
-                />
-                <PromptCacheTtlPicker
-                  model={modelOption}
-                  ttl={sessionCacheTtl}
-                  contextTokens={composerUsage.contextTokens ?? 0}
-                  disabled={!activeId}
-                  onSelect={ttl => void conversation.setPromptCacheTtl(ttl)}
                 />
               </Stack>
             }

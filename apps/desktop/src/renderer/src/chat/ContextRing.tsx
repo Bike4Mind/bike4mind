@@ -13,6 +13,8 @@ import {
   type CacheStatus,
 } from './contextStatus';
 import { promptCacheExpiresAt } from './modelSwitchCost';
+import { describeUsage, type ComposerUsage } from './statusLine';
+import { useShowDollarCosts } from './costDisplay';
 import { useLoadedModelState } from './useLoadedModelState';
 
 /** Re-renders once a second while `active`, so a countdown in an open tooltip stays live. */
@@ -46,6 +48,9 @@ function useRerenderAt(at: number | null): void {
  * known about its cache. Cloud models count down the last reply's prompt-cache stamp; local
  * Ollama models report whether the model is loaded. Nothing is said about the cache mid-turn.
  * A cold cache after an earlier reply also puts an amber dot in the ring's center.
+ *
+ * It is the row's one standing indicator, so the tooltip also carries the credit balance. The
+ * composer's own credits ring only appears once the allowance runs low (see Composer).
  */
 export function ContextRing({
   tokens,
@@ -54,6 +59,7 @@ export function ContextRing({
   promptCache,
   streaming,
   hasReply,
+  usage,
 }: {
   tokens: number | null;
   limit: number | null;
@@ -63,10 +69,12 @@ export function ContextRing({
   streaming: boolean;
   /** Whether the conversation has an assistant reply for the cache to have been warmed by. */
   hasReply: boolean;
+  usage?: ComposerUsage | null;
 }) {
   const local = !!modelId && isLocalModel(modelId);
   const loaded = useLoadedModelState(local ? modelId : null, !streaming);
   const [open, setOpen] = useState(false);
+  const showDollars = useShowDollarCosts();
   useSecondTick(open);
 
   const expiresAt = promptCache && promptCache.model === modelId ? promptCacheExpiresAt(promptCache) : null;
@@ -80,7 +88,8 @@ export function ContextRing({
   const ring = contextRingValue(tokens, limit);
   const cache = cacheLine(status, now, tokens);
   const cold = showColdDot(status, now, { streaming, hasReply });
-  const title = contextTooltip(tokens, limit, cache);
+  const credits = usage ? describeUsage(usage, showDollars) : null;
+  const title = [contextTooltip(tokens, limit, cache), credits].filter(Boolean).join('\n\n');
   const label = cold && cache ? `${contextLine(tokens, limit)}. ${cache}` : contextLine(tokens, limit);
 
   return (

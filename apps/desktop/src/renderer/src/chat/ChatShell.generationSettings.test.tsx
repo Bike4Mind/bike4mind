@@ -152,6 +152,8 @@ async function press(target: Element, init: KeyboardEventInit) {
 }
 
 async function openParams() {
+  // Params at its default sits in the composer's tune tray, which stays open once opened.
+  if (!find('generation-settings-btn')) await act(async () => el('composer-tune-btn').click());
   await act(async () => el('generation-settings-btn').click());
 }
 

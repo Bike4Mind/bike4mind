@@ -282,6 +282,7 @@ export function Composer({
   const allowancePercent = shownUsage
     ? creditAllowancePercent(shownUsage.credits, shownUsage.monthlyAllowance ?? null)
     : null;
+  const creditsLow = ['warning', 'danger'].includes(allowanceColor(allowancePercent));
 
   // See composerInput.ts for what wins here and why.
   const shown = shownSuggestion({ disabled, text, suggestion });
@@ -853,7 +854,9 @@ export function Composer({
 
         {!disabled && !notReady && contextStatus}
 
-        {shownUsage && (
+        {/* Only once the allowance runs low: otherwise the balance lives in the context ring's
+            tooltip, so the row keeps a single indicator. */}
+        {shownUsage && creditsLow && (
           <Tooltip
             title={usageDetail ?? ''}
             placement="top"

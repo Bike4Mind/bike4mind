@@ -10,6 +10,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { ChatModelOption, ReasoningEffortSetting } from '@shared/chat';
 import type { ModelSettings } from '@shared/modelSettings';
 import { turnEffortSetting, turnGeneration, turnThinks } from '@shared/modelDefaults';
+import { ChangedKnob, knobButtonProps } from './tuneChip';
 import {
   effectiveControls,
   effortSent,
@@ -203,6 +204,7 @@ export function GenerationSettingsPicker({
   modelDefaults,
   effort = 'default',
   disabled,
+  compact = false,
   onChange,
 }: {
   model: ChatModelOption | undefined;
@@ -210,6 +212,8 @@ export function GenerationSettingsPicker({
   modelDefaults?: ModelSettings;
   effort?: ReasoningEffortSetting;
   disabled?: boolean;
+  /** The composer row with the tune tray closed: hidden with nothing set, else a chip with a reset. */
+  compact?: boolean;
   onChange: (generation: GenerationSettings) => Promise<boolean> | void;
 }) {
   const titleId = useId();
@@ -237,6 +241,7 @@ export function GenerationSettingsPicker({
   const applied = fields.filter(({ field }) => generation?.[field] !== undefined && sent[field] !== undefined).length;
   const resettable = fields.some(({ field, control }) => !control.locked && generation?.[field] !== undefined);
   const firstEditable = fields.find(({ control }) => !control.locked)?.field;
+  if (compact && applied === 0) return null;
 
   const save = (next: GenerationSettings) => {
     pending.current = next;
@@ -267,18 +272,15 @@ export function GenerationSettingsPicker({
     });
   };
 
-  return (
+  const picker = (
     <>
       <Button
         ref={anchor}
-        size="sm"
-        variant="plain"
-        color="neutral"
+        {...knobButtonProps(compact)}
         disabled={disabled}
         aria-haspopup="dialog"
         aria-expanded={place !== null}
         onClick={open}
-        sx={{ fontWeight: 'normal', minWidth: 0 }}
         data-testid="generation-settings-btn"
       >
         <Typography level="body-xs" noWrap textColor="inherit">
@@ -351,5 +353,16 @@ export function GenerationSettingsPicker({
         </Sheet>
       </Modal>
     </>
+  );
+  if (!compact || !resettable) return picker;
+  return (
+    <ChangedKnob
+      resetLabel="Reset params to default"
+      onReset={resetShown}
+      disabled={disabled}
+      testId="generation-settings-reset-btn"
+    >
+      {picker}
+    </ChangedKnob>
   );
 }

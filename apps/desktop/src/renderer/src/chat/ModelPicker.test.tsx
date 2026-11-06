@@ -481,7 +481,7 @@ describe('ModelPicker Bedrock route variants', () => {
   it('keeps a conversation on a hidden variant selected on its own row, without switching it', () => {
     const { onSelect } = mount(fable, 'anthropic.claude-fable-5-1', credits);
 
-    expect(el('model-picker-btn').textContent).toBe('Claude Fable 5.1');
+    expect(el('model-picker-btn').textContent).toBe('Fable 5.1');
     expect(document.querySelector('[data-testid="model-picker-unavailable"]')).toBeNull();
     expect(rows()).toEqual([
       'Claude Fable 5.1anthropic~265 cr',
