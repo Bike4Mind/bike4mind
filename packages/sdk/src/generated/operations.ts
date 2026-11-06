@@ -33,6 +33,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/artifacts',
   },
+  createArtifactVersion: {
+    method: 'POST',
+    path: '/api/v1/artifacts/{id}/versions',
+  },
   createCompletion: {
     method: 'POST',
     path: '/api/ai/v1/completions',
@@ -229,6 +233,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/agents',
   },
+  listArtifactTypes: {
+    method: 'GET',
+    path: '/api/v1/artifacts/types',
+  },
   listArtifactVersions: {
     method: 'GET',
     path: '/api/v1/artifacts/{id}/versions',
@@ -332,6 +340,10 @@ export const operations = {
   reviewSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/review',
+  },
+  searchArtifacts: {
+    method: 'GET',
+    path: '/api/v1/artifacts/search',
   },
   searchDataLake: {
     method: 'POST',
