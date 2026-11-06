@@ -42,6 +42,7 @@ import { usableEvidenceConfidence } from './iterationConfidence';
 import {
   parseSelfReport,
   SELF_REPORT_CONFIDENCE_PROMPT,
+  SELF_REPORT_CONFIDENCE_REMINDER,
   SelfReportStreamFilter,
   type SelfReport,
 } from './selfReportConfidence';
@@ -584,7 +585,7 @@ export class ReActAgent extends EventEmitter {
           trimSteps(this.steps, maxHistoryIterations);
         }
 
-        appendWorkflowReminder(messages, options.workflowReminder);
+        appendWorkflowReminder(messages, this.reminderProvider(options.workflowReminder, iterations > 1));
         this.repairTranscriptBeforeRequest(messages);
 
         // Build cache strategy for prompt caching (system prompt + tools are static
@@ -1070,6 +1071,15 @@ export class ReActAgent extends EventEmitter {
     return this.context.selfReportConfidence ? `${withArtifact}\n\n${SELF_REPORT_CONFIDENCE_PROMPT}` : withArtifact;
   }
 
+  /** The trailing reminder source for a request: the caller's workflow state plus, after a tool result, the confidence nudge. */
+  private reminderProvider(
+    workflowReminder: (() => string | null) | undefined,
+    followsToolResult: boolean
+  ): (() => string | null) | undefined {
+    if (!this.context.selfReportConfidence || !followsToolResult) return workflowReminder;
+    return () => [workflowReminder?.()?.trim(), SELF_REPORT_CONFIDENCE_REMINDER].filter(Boolean).join('\n\n');
+  }
+
   /** The turn text split into the model's confidence report and the rest; a no-op when self-report is off. */
   private readSelfReport(text: string): { report?: SelfReport; text: string } {
     return this.context.selfReportConfidence ? parseSelfReport(text) : { text };
@@ -1498,7 +1508,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         trimSteps(this.steps, maxHistoryIterations);
       }
 
-      appendWorkflowReminder(this.messages, options.workflowReminder);
+      appendWorkflowReminder(this.messages, this.reminderProvider(options.workflowReminder, this.iterations > 1));
       // A resumed checkpoint can need repair inside its protected prefix; keep the prefix ending at the
       // same message so trimming never drops the query.
       const lastProtected = this.messages[this.initialMessageCount - 1];
