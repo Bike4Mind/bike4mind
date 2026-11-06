@@ -361,6 +361,15 @@ export const ADMIN_AUDIT_CATALOGUE = {
   'audit.unreviewed': { category: 'support', severity: 'info', write: 'bestEffort' },
 
   'model_hub.curated.imported': { category: 'settings', severity: 'critical', write: 'strict' },
+
+  // Two-person approvals (apps/client/server/admin/approvals). executed/failed are bestEffort because
+  // the gated action has already run (or failed) when they are written; the record keeps the outcome.
+  'admin.approval.requested': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.approved': { category: 'access', severity: 'critical', write: 'strict' },
+  'admin.approval.rejected': { category: 'access', severity: 'notice', write: 'strict' },
+  'admin.approval.executed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.failed': { category: 'access', severity: 'critical', write: 'bestEffort' },
+  'admin.approval.denied': { category: 'access', severity: 'critical', write: 'bestEffort' },
 } as const satisfies Record<string, AdminAuditCatalogueEntry>;
 
 export type AdminAuditAction = keyof typeof ADMIN_AUDIT_CATALOGUE;
