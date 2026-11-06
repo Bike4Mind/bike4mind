@@ -108,6 +108,20 @@ describe('buildLinkedAccountEvidence', () => {
     });
   });
 
+  it('keeps the other evidence when the device read fails', async () => {
+    const evidence = await buildLinkedAccountEvidence(
+      ['u1', 'u2'],
+      id => id,
+      makeDeps({ bannedDeviceLinks: async () => Promise.reject(new Error('read down')) })
+    );
+    expect(signalsOf(evidence)).toMatchObject({
+      maxSameSignupIpAccounts: 2,
+      sameCardAccounts: 1,
+      sameDeviceBannedAccounts: null,
+      hoursToBannedSameDeviceAccount: null,
+    });
+  });
+
   it('reports unknown rather than zero when nothing was observed', async () => {
     const evidence = await buildLinkedAccountEvidence(
       ['u1'],
