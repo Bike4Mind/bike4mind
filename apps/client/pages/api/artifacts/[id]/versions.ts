@@ -50,6 +50,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
 
       const versions = await artifactVersionRepository.findByArtifactId(artifactId);
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.json({
         success: true,
         data: versions,
@@ -123,6 +124,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeySco
         }
       );
 
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.status(201).json({
         success: true,
         data: updatedArtifact,
