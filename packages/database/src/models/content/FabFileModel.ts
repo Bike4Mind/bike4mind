@@ -1438,6 +1438,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return res.modifiedCount === 1;
   }
 
+  /** Live files the legacy Questmaster conversion wrote for `userId` (see legacyQuestPlanConversion.ts). */
+  async countQuestmasterArchiveFiles(userId: string): Promise<number> {
+    return this.fabFileModel.countDocuments({
+      userId,
+      deletedAt: null,
+      sourceType: FabFileSourceType.QUESTMASTER_ARCHIVE,
+    });
+  }
+
   async countByUserIdAndTag(userId: string, tag: string): Promise<number> {
     if (!tag) return 0;
     // Anchored and escaped for the same reason as removeTagByUserId, which queries this same
