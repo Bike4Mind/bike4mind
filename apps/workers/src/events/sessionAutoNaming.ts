@@ -1,12 +1,13 @@
 import { withEventContext } from '@workers/utils/eventContext';
 import { SessionEvents } from '@bike4mind/server-utils/utils/eventBus';
-import { questRepository, Session, sessionRepository, userRepository } from '@bike4mind/database';
+import { fabFileRepository, questRepository, Session, sessionRepository, userRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@bike4mind/server-utils/services/operationsModelService';
 import { sessionService } from '@bike4mind/services';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@workers/events/recordSessionOperationalUsage';
 import { payerCanFundSessionOperation } from '@workers/events/sessionOperationalCreditGate';
 import { aiAccessDeniedMessage } from '@bike4mind/services/userService/accountState';
+import { hasAutoNamePlaceholderName } from '@bike4mind/common';
 
 export const handler = withEventContext(async (event, logger) => {
   const { sessionId, userId } = SessionEvents.AutoName.schema.parse(event.properties);
@@ -32,15 +33,9 @@ export const handler = withEventContext(async (event, logger) => {
   }
 
   // Additional check: If session name was recently updated, skip
-  // Exclude placeholder names that should still be auto-renamed: the core
-  // defaults, plus whatever placeholder a product surface stamped at create
-  // (session.autoNamePlaceholder). A session the user has RENAMED no longer
-  // matches its placeholder, so it keeps the recent-update protection below.
-  const defaultNames = ['Untitled', 'New Notebook'];
-  const hasPlaceholderName =
-    defaultNames.includes(session.name) ||
-    (session.autoNamePlaceholder != null && session.name === session.autoNamePlaceholder);
-  if (session.updatedAt && session.name && !hasPlaceholderName) {
+  // Placeholder names (see hasAutoNamePlaceholderName) are exempt so they still get named. A
+  // session the user has RENAMED no longer matches its placeholder, so it keeps this protection.
+  if (session.updatedAt && session.name && !hasAutoNamePlaceholderName(session)) {
     const timeSinceLastUpdate = Date.now() - new Date(session.updatedAt).getTime();
     if (timeSinceLastUpdate < 10000) {
       // 10 seconds
@@ -78,6 +73,7 @@ export const handler = withEventContext(async (event, logger) => {
         db: {
           sessions: sessionRepository,
           quests: questRepository,
+          files: fabFileRepository,
         },
         createCompletion: async (prompt: string) => {
           let result = '';

@@ -18,6 +18,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: mocks.findUser },
   sessionRepository: {},
   questRepository: {},
+  fabFileRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { autoName: mocks.autoName } }));
 vi.mock('@bike4mind/server-utils/services/operationsModelService', () => ({

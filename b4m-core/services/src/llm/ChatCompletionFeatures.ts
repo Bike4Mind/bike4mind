@@ -16,6 +16,7 @@ export type LimitEventRecord = {
 import {
   ChatCompletionCreateInput,
   ChatCompletionCreateInputSchema,
+  isLowSignalNamingPrompt,
   ChatModels,
   ContextTelemetry,
   ContextTelemetryAlerts,
@@ -1129,6 +1130,11 @@ export class AutoNameSessionFeature implements ChatCompletionFeature {
     const conversationMessages = messages.filter(m => m.role === 'user' || m.role === 'assistant');
     const conversationCount = Math.round(conversationMessages.length / 2);
     if (session.isAutoNamed && conversationMessages.length !== 1) {
+      return;
+    }
+    // Same rule as the turn-start publish (ChatCompletionInvoke.dispatchTurnStartAutoName): a
+    // "Hello" turn, even with its reply, only names the notebook "Greeting". A later turn names it.
+    if (!session.isAutoNamed && isLowSignalNamingPrompt(quest.prompt ?? '', quest.fabFileIds?.length ?? 0)) {
       return;
     }
     try {
