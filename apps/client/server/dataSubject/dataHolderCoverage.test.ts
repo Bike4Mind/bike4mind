@@ -20,7 +20,13 @@ const classifiedModels = Object.keys(DATA_HOLDER_REGISTRY).sort();
 
 function referencePaths(reference: UserReference): string[] {
   const scopePaths = reference.scope === 'personal' ? ['organizationId'] : [];
-  return [reference.path, ...Object.keys(reference.where ?? {}), ...scopePaths, ...alsoRedactOf(reference)];
+  return [
+    reference.path,
+    ...Object.keys(reference.where ?? {}),
+    ...scopePaths,
+    ...alsoRedactOf(reference),
+    ...(reference.identifies ?? []),
+  ];
 }
 
 function alsoRedactOf(reference: UserReference): readonly string[] {

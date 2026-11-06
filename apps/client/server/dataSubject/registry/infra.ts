@@ -29,8 +29,21 @@ export const infraHolders = {
   AdminAuditLog: {
     kind: 'holder',
     references: [
-      { path: 'actor.userId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
-      { path: 'actor.impersonatedUserId', matchBy: 'userId', action: 'retain', ...AUDIT_LOG },
+      {
+        path: 'actor.userId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        identifies: ['actor.email', 'actor.name', 'context.ip', 'context.userAgent'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'actor.impersonatedUserId',
+        matchBy: 'userId',
+        action: 'retain',
+        ...AUDIT_LOG,
+        exportScope: 'reference',
+      },
       {
         path: 'target.id',
         matchBy: 'userId',

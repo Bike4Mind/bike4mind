@@ -31,6 +31,17 @@ export function assertEveryModelClassified(modelNames: readonly string[]): void 
 /** Keys of exported parents, by the parent field the children match on. */
 type ParentKeys = { owned: Map<string, Map<string, unknown>>; anonymized: Map<string, Map<string, unknown>> };
 
+/** The person is a party to the record (it is theirs, or kept about them), not only its actor. */
+const isParty = (reference: UserReference): boolean =>
+  reference.action === 'deleteDocument' || (reference.action === 'retain' && reference.exportScope !== 'reference');
+
+/** The reference and every field beside it that describes the person it names. */
+const personPathsOf = (reference: UserReference): readonly string[] => [
+  reference.path,
+  ...(reference.action === 'anonymize' || reference.action === 'retain' ? (reference.alsoRedact ?? []) : []),
+  ...(reference.identifies ?? []),
+];
+
 const isExported = (holder: DataHolder): boolean =>
   holder.kind === 'subject' || holder.kind === 'holder' || holder.kind === 'viaParent';
 
@@ -91,14 +102,15 @@ export class SubjectRecordExport {
     if (clauses.length === 0) return;
     for await (const document of this.query(model, { $or: clauses })) {
       const matched = references.filter(reference => this.matches(document, reference));
-      if (matched.some(reference => reference.action !== 'pullFromArray')) {
+      if (matched.some(isParty)) {
         const owns = matched.some(({ action }) => action === 'deleteDocument' || action === 'retain');
         this.rememberParentKeys(model, document, owns);
-        yield document;
+        yield this.withholdOthers(document, references);
         continue;
       }
-      const pulled = this.pulledElements(document, matched);
-      if (pulled) yield pulled;
+      if (matched.some(({ action }) => action !== 'pullFromArray')) this.rememberParentKeys(model, document, false);
+      const record = this.referenceRecord(document, matched);
+      if (record) yield record;
     }
   }
 
@@ -121,7 +133,7 @@ export class SubjectRecordExport {
       for await (const document of this.query(model, { [holder.foreignKey]: { $in: batch } })) {
         seen.add(String(document._id));
         this.rememberParentKeys(model, document, true);
-        yield document;
+        yield this.withholdOthers(document, holder.attribution ?? []);
       }
     }
     const attribution = holder.attribution ?? [];
@@ -131,7 +143,7 @@ export class SubjectRecordExport {
       if (seen.has(String(document._id))) continue;
       if (!attribution.some(reference => this.matches(document, reference))) continue;
       this.rememberParentKeys(model, document, false);
-      yield document;
+      yield this.withholdOthers(document, attribution);
     }
   }
 
@@ -171,16 +183,60 @@ export class SubjectRecordExport {
     });
   }
 
-  /** Only this person's elements of each matched array, and the document id. */
-  private pulledElements(document: LeanDocument, matched: readonly UserReference[]): ExportedRecord | null {
+  private isSubject(reference: UserReference): (value: unknown) => boolean {
+    const expected = this.expectedValue(reference);
+    return value => expected !== null && String(value) === expected;
+  }
+
+  /**
+   * The document, less every other person on it: a reference naming someone else goes with the
+   * fields that describe them, and an array a reference reads through keeps only this person's
+   * elements.
+   */
+  private withholdOthers(document: LeanDocument, references: readonly UserReference[]): ExportedRecord {
+    const kept = new Map<string, Set<unknown>>();
+    const throughArray = new Map<string, unknown[]>();
+    for (const reference of references) {
+      const isSubject = this.isSubject(reference);
+      const match = matchingArrayElements(document, reference.path, isSubject);
+      if (match) {
+        throughArray.set(match.arrayPath, valuesAt(document, match.arrayPath));
+        const elements = kept.get(match.arrayPath) ?? new Set<unknown>();
+        for (const element of match.elements) elements.add(element);
+        kept.set(match.arrayPath, elements);
+        continue;
+      }
+      if (valuesAt(document, reference.path).some(isSubject)) continue;
+      for (const path of personPathsOf(reference)) omitPath(document, path);
+    }
+    for (const [arrayPath, elements] of throughArray) {
+      const mine = kept.get(arrayPath) ?? new Set<unknown>();
+      setPath(
+        document,
+        arrayPath,
+        elements.filter(element => mine.has(element))
+      );
+    }
+    return document;
+  }
+
+  /** The document id and only what names this person: the matched fields, or their array elements. */
+  private referenceRecord(document: LeanDocument, matched: readonly UserReference[]): ExportedRecord | null {
     const record: ExportedRecord = { _id: document._id };
     let found = false;
     for (const reference of matched) {
-      const expected = this.expectedValue(reference);
-      const match = matchingArrayElements(document, reference.path, value => String(value) === expected);
-      if (!match || match.elements.length === 0) continue;
-      const already = valuesAt(record, match.arrayPath);
-      setPath(record, match.arrayPath, [...already, ...match.elements.filter(element => !already.includes(element))]);
+      const match = matchingArrayElements(document, reference.path, this.isSubject(reference));
+      if (match) {
+        if (match.elements.length === 0) continue;
+        const already = valuesAt(record, match.arrayPath);
+        setPath(record, match.arrayPath, [...already, ...match.elements.filter(element => !already.includes(element))]);
+        found = true;
+        continue;
+      }
+      for (const path of personPathsOf(reference)) {
+        const values = valuesAt(document, path);
+        if (values.length > 0) setPath(record, path, values.length === 1 ? values[0] : values);
+      }
       found = true;
     }
     return found ? record : null;

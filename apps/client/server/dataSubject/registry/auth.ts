@@ -9,16 +9,44 @@ export const authHolders = {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      {
+        path: 'author.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['author.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'editor.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['editor.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   AdminUserNoteRevision: {
     kind: 'holder',
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument' },
-      { path: 'author.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
-      { path: 'editor.id', matchBy: 'userId', action: 'retain', ...ADMIN_NOTE },
+      {
+        path: 'author.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['author.name'],
+        exportScope: 'reference',
+      },
+      {
+        path: 'editor.id',
+        matchBy: 'userId',
+        action: 'retain',
+        ...ADMIN_NOTE,
+        identifies: ['editor.name'],
+        exportScope: 'reference',
+      },
     ],
   },
   ApiKey: {
