@@ -72,3 +72,24 @@ describe('internal artifact routes declare notebooks scopes', () => {
     expect(mockUpdate).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('internal artifact responses are not cacheable', () => {
+  const run = async (key: string, query: Record<string, string>, method: 'GET' | 'POST' = 'GET') => {
+    const { req, res } = createMocks({ method, query, body: BODY });
+    Object.assign(req, { user: { id: 'u1' } });
+    await handlers[key](req, res);
+    return res;
+  };
+
+  it.each([
+    ['types', '1:get', {}],
+    ['search', '2:get', { q: 'x' }],
+    ['versions list', '3:get', { id: 'a1' }],
+  ])('%s sends no-store', async (_name, key, query) => {
+    expect((await run(key, query)).getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('version-create sends no-store', async () => {
+    expect((await run('3:post', { id: 'a1' }, 'POST')).getHeader('Cache-Control')).toBe('private, no-store');
+  });
+});
