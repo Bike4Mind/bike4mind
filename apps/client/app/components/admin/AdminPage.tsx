@@ -63,7 +63,7 @@ const ApprovalsTab = dynamic(() => import('./Approvals'), { ssr: false });
 
 // The shell gives every tab panel the page frame. These tabs still pad themselves while open work on
 // their pages lands; each leaves this list in the change that drops its own outer padding, and no new
-// tab joins it (DESIGN_GUIDE section 3, "Page skeletons").
+// tab joins it (DESIGN_GUIDE section 3, "Page frame").
 const SELF_FRAMED_ATTR = 'data-admin-self-framed';
 const selfFramed = { [SELF_FRAMED_ATTR]: '' };
 
