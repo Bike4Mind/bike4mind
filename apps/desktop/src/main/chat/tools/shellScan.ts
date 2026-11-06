@@ -20,6 +20,7 @@ import {
   onAnotherComputer,
   operandPlaces,
   operandTargets,
+  physicalTarget,
   realpathNearest,
   resolveWithinRootsPhysically,
   type OperandReader,
@@ -90,15 +91,85 @@ export interface ShellScan {
   unread?: true;
   /** A `git config` key the script sets that makes git run a program, such as `core.fsmonitor`. */
   gitProgram?: string;
+  /** Set when a command checks out a tree from another computer, whose files no scan can list beforehand. */
+  remoteTree?: true;
 }
 
 const CHANGES_DIRECTORY = new Set(['cd', 'chdir', 'pushd', 'popd']);
 const COPIES = new Set(['cp', 'mv', 'install', 'ln', 'rsync', 'scp']);
 // The short flag may close a cluster (`-fsSLo`, `-qO`); curl's `-O` names no path, so case matters.
 const DOWNLOAD_OUTPUT = new Map<string, { long: string; short: RegExp }>([
-  ['curl', { long: '--output', short: /^-[a-zA-Z]*?o(.*)$/ }],
   ['wget', { long: '--output-document', short: /^-[a-zA-Z]*?O(.*)$/ }],
 ]);
+
+/**
+ * Short options that take a value, and the file options among them (`w` written, `r` read), for programs whose
+ * file options the scan reads even when glued to their value (`-o<path>`, `-cf<path>`); long ones by full name.
+ */
+const OPTION_FILES: Readonly<
+  Record<string, { valued: string; files: Record<string, 'r' | 'w'>; long?: Record<string, 'r' | 'w'> }>
+> = {
+  sort: { valued: 'kStTo', files: { o: 'w', T: 'w' }, long: { output: 'w', 'temporary-directory': 'w' } },
+  shuf: { valued: 'ion', files: { o: 'w' }, long: { output: 'w' } },
+  iconv: { valued: 'fto', files: { o: 'w' }, long: { output: 'w' } },
+  tree: { valued: 'LPIoHT', files: { o: 'w' } },
+  tar: { valued: 'bCfFgHIKLNTVX', files: { f: 'r', C: 'r', g: 'w', X: 'r' }, long: { file: 'r', directory: 'r' } },
+  'git format-patch': { valued: 'ovN', files: { o: 'w' }, long: { 'output-directory': 'w', output: 'w' } },
+};
+
+/**
+ * Each file option value of `args` as `{ raw, write }`, glued or not, split by the program's option grammar so
+ * `-so<path>` reads as `-s -o <path>`; a tar archive counts as written when the call creates one. Null when a
+ * glued value starts inside quoting the scan cannot split.
+ */
+function optionFiles(program: string, args: readonly string[]): { raw: string; write: boolean }[] | null {
+  const [sub] = args;
+  const key = program === 'bsdtar' ? 'tar' : program === 'git' && sub === 'format-patch' ? 'git format-patch' : program;
+  const grammar = own(OPTION_FILES, key);
+  if (!grammar) return [];
+  const words = key === 'git format-patch' ? args.slice(1) : args;
+  const found: { raw: string; write: boolean; letter: string }[] = [];
+  let creates = false;
+  for (let index = 0; index < words.length; index++) {
+    const raw = words[index] as string;
+    if (raw === '--') break;
+    const value = wordValue(raw);
+    const oldStyle = key === 'tar' && index === 0 && /^[A-Za-z]+$/.test(value);
+    if (value.startsWith('--')) {
+      const [name = '', glued] = value.slice(2).split(/=(.*)/s);
+      if (key === 'tar' && /^(create|append|update|catenate|concatenate)$/.test(name)) creates = true;
+      const kind = grammar.long ? own(grammar.long, name) : undefined;
+      if (kind === undefined) continue;
+      const text = glued ?? words[++index];
+      if (text !== undefined) found.push({ raw: text, write: kind === 'w', letter: name });
+      continue;
+    }
+    if (!oldStyle && (!value.startsWith('-') || value === '-')) continue;
+    // A glued value is sliced from the word as written, which only works while no quote precedes it.
+    const letters = oldStyle ? value : value.slice(1);
+    for (let at = 0; at < letters.length; at++) {
+      const letter = letters[at] as string;
+      if (key === 'tar' && 'cruA'.includes(letter)) creates = true;
+      if (!grammar.valued.includes(letter)) continue;
+      const tail = letters.slice(at + 1);
+      let text: string | undefined;
+      if (tail !== '' && !oldStyle) {
+        const prefix = raw.slice(0, at + 2);
+        if (prefix !== value.slice(0, at + 2) || /['"\\$`]/.test(prefix)) return null;
+        text = raw.slice(at + 2);
+      } else {
+        text = words[++index];
+      }
+      const kind = own(grammar.files, letter);
+      if (kind !== undefined && text !== undefined) found.push({ raw: text, write: kind === 'w', letter });
+      if (!oldStyle) break;
+    }
+  }
+  return found.map(({ raw, write, letter }) => ({
+    raw,
+    write: write || (creates && (letter === 'f' || letter === 'file')),
+  }));
+}
 const GIT_CONFIG_SETS =
   /^(set|unset|edit|-e|--edit|--add|--unset|--unset-all|--replace-all|--rename-section|--remove-section|rename-section|remove-section)$/;
 
@@ -221,6 +292,9 @@ const BRANCHES = new Set([
   'c_style_for_statement',
   'case_statement',
 ]);
+
+/** Nodes whose body can run more than once, or later than where the scan reads it. */
+const REPEATS = new Set(['while_statement', 'for_statement', 'c_style_for_statement', 'function_definition']);
 
 const HARMLESS_REDIRECT_TARGETS = new Set(['/dev/null', '/dev/stdin', '/dev/stdout', '/dev/stderr', '/dev/tty']);
 
@@ -543,8 +617,9 @@ const WSL_SCAN_DEADLINE_MS = 15000;
 /** Builtins whose words name the variables they assign. */
 const NAMES_VARIABLES = /^(export|declare|typeset|local|readonly|read|readarray|mapfile)$/;
 
-/** An assignment whose name holds a brace expansion, `C{D,}PATH=`. */
-const BRACED_ASSIGNMENT = /^[A-Za-z_]\w*\{[^{}=]*(,|\.\.)[^{}=]*\}[\w{},.]*\+?=/;
+/** An assignment whose name holds a brace expansion, `C{D,}PATH=`; each part of the pattern matches in one pass. */
+const BRACED_NAME = /^[A-Za-z_]\w*\{([^{}=]*)\}[\w{},.]*\+?=/;
+const BRACED_ASSIGNMENT = { test: (word: string): boolean => /,|\.\./.test(BRACED_NAME.exec(word)?.[1] ?? '') };
 
 /**
  * Whether the script can assign a variable whose name the text does not spell out: an ANSI-C quote, the
@@ -929,7 +1004,7 @@ function xargsReplaces(tokens: readonly string[]): boolean {
 
 /** `git config` keys whose value is a program git runs, or a file of more config. Case is ignored, as git does. */
 const GIT_PROGRAM_CONFIG =
-  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass)|alias\..+|.+\.textconv|diff\.external|diff\..+\.command|credential(\..+)?\.helper|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|include(if\..+)?\.path)$/i;
+  /^(core\.(fsmonitor|sshcommand|pager|editor|hookspath|gitproxy|askpass|alternaterefscommand)|alias\..+|.+\.textconv|diff\.external|.+\.(cmd|command)|credential\..+|filter\..+|sequence\.editor|gpg(\..+)?\.program|merge\..+\.driver|pager\..+|uploadpack\.packobjectshook|remote\..+\.(uploadpack|receivepack)|include(if\..+)?\.path)$/i;
 
 /** `git config` options whose value is the next word. */
 const GIT_CONFIG_VALUED = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']);
@@ -1006,7 +1081,7 @@ function treeOperands(
     case 'find': {
       const end = args.findIndex(arg => /^[-(!]/.test(unquote(arg)));
       const paths = positional.filter(index => end === -1 || index < end);
-      const reach = args.some(arg => (RUNS_A_PROGRAM.find as RegExp).test(unquote(arg))) ? 'write' : 'read';
+      const reach = findActions(args).reach;
       mark(paths, reach);
       return { operands, cwd: paths.length === 0 ? reach : null, glued };
     }
@@ -1033,6 +1108,78 @@ function treeOperands(
       break;
   }
   return { operands, cwd: null, glued };
+}
+
+/** Names a `find -name` pattern must not match for a delete to leave the session's settings alone. */
+const SETTINGS_NAMES = ['.claude', 'settings.json', 'settings.local.json'];
+
+/** Whether a `find -name` pattern may match a settings name; one with an escape is not read. */
+const mayNameSettings = (pattern: string): boolean =>
+  pattern.includes('\\') ||
+  SETTINGS_NAMES.some(name =>
+    globMatches(
+      [...pattern].map(char => ({ char, glob: '*?['.includes(char), active: true })),
+      name,
+      true
+    )
+  );
+
+/**
+ * What a find expression does to the tree it walks: `write` for `-delete`, `rm {}` or an `-fprint` file, unless
+ * the delete follows only ANDed `-name`/`-type` tests none of which can match a settings name. A program it runs
+ * (`-exec`, `-ok`, and the `dir` forms) is `untrackable` unless it only reads and its other operands are static,
+ * which are returned in `reads`.
+ */
+function findActions(args: readonly string[]): { reach: Reach; untrackable: boolean; reads: string[] } {
+  const words = args.map(wordValue);
+  let write = false;
+  let untrackable = false;
+  const reads: string[] = [];
+  let narrowed = true;
+  let named = false;
+  const deletes = (): void => {
+    if (!(narrowed && named)) write = true;
+  };
+  for (let at = 0; at < words.length; at++) {
+    const word = words[at] as string;
+    if (/^-(exec|execdir|ok|okdir)$/.test(word)) {
+      const end = words.findIndex((value, index) => index > at && (value === ';' || value === '+'));
+      if (end === -1) return { reach: 'write', untrackable: true, reads };
+      const inner = args.slice(at + 1, end);
+      const values = words.slice(at + 1, end);
+      const operands = values.slice(1).filter(value => !value.startsWith('-'));
+      if (programName(values[0] ?? '') === 'rm' && operands.every(value => value === '{}')) deletes();
+      else if (
+        onlyReads(inner) &&
+        !inner.some(isDynamic) &&
+        values.every(value => value === '{}' || !value.includes('{}')) &&
+        (word.endsWith('dir') ? operands.every(value => value === '{}') : true)
+      ) {
+        reads.push(
+          ...inner
+            .slice(1)
+            .filter((raw, index) => !(values[index + 1] as string).startsWith('-') && values[index + 1] !== '{}')
+        );
+      } else untrackable = true;
+      at = end;
+    } else if (word === '-delete') {
+      deletes();
+    } else if (/^-(fprint0?|fprintf|fls)$/.test(word)) {
+      write = true;
+      at++;
+    } else if (/^-i?name$/.test(word)) {
+      const pattern = words[++at];
+      if (pattern === undefined || mayNameSettings(pattern)) narrowed = false;
+      named = true;
+    } else if (/^-(type|maxdepth|mindepth)$/.test(word)) {
+      at++;
+    } else if (/^-(depth|xdev|mount|print0?)$/.test(word)) {
+      continue;
+    } else if (word.startsWith('-') || ['(', ')', '!', ','].includes(word)) {
+      narrowed = false;
+    }
+  }
+  return { reach: write ? 'write' : 'read', untrackable, reads };
 }
 
 /** Whether a command that walks a tree follows the links it finds there, not only those it is given. */
@@ -1092,7 +1239,12 @@ const under = (folder: string, name: string): string => (folder.endsWith('/') ? 
  * lstat as bash expands it. Null when the expansion reads more than WALK_ENTRIES entries or makes more than
  * GLOB_MATCHES paths.
  */
-async function globLinkMatches(word: OperandWord, cwd: string, dotGlob: boolean): Promise<string[] | null> {
+async function globLinkMatches(
+  word: OperandWord,
+  cwd: string,
+  dotGlob: boolean,
+  stopped: () => boolean
+): Promise<string[] | null> {
   const components: GlobChar[][] = [[]];
   for (let at = 0; at < word.text.length; at++) {
     const char = word.text[at] as string;
@@ -1110,6 +1262,7 @@ async function globLinkMatches(word: OperandWord, cwd: string, dotGlob: boolean)
     if (component.length === 0) continue;
     const next: typeof found = [];
     for (const { path, linked } of found) {
+      if (stopped()) return null;
       let names = [component.map(piece => piece.char).join('')];
       if (component.some(piece => piece.glob)) {
         const listed = await readdir(path).catch((error: unknown) => (missing(error) ? [] : null));
@@ -1119,6 +1272,7 @@ async function globLinkMatches(word: OperandWord, cwd: string, dotGlob: boolean)
       entries += names.length;
       if (entries > WALK_ENTRIES) return null;
       for (const name of names) {
+        if (stopped()) return null;
         const info = await lstat(under(path, name)).catch((error: unknown) => (missing(error) ? undefined : null));
         if (info === null) return null;
         // What lies past a link into a process folder exists for bash, not for this process.
@@ -1166,11 +1320,12 @@ async function linksThroughProcess(path: string): Promise<boolean | null> {
   return false;
 }
 
-/** Links inside the tree at `root`, by a walk that enters none of them; null once `budget` runs out. */
-async function linksUnder(root: string, budget: { entries: number }): Promise<string[] | null> {
+/** Links inside the tree at `root`, by a walk that enters none of them; null once `budget` runs out or `stopped`. */
+async function linksUnder(root: string, budget: { entries: number }, stopped: () => boolean): Promise<string[] | null> {
   const links: string[] = [];
   const folders = [root];
   for (let folder = folders.pop(); folder !== undefined; folder = folders.pop()) {
+    if (stopped()) return null;
     const entries = await readdir(folder, { withFileTypes: true }).catch((error: unknown) =>
       missing(error) ? [] : null
     );
@@ -2047,7 +2202,7 @@ function stdinRedirected(node: Node): boolean {
  * The folders the command before `node` in its pipeline lists from, when it is a lister (`listsNames`), so its
  * output is all xargs reads; null otherwise.
  */
-function listerFeeds(node: Node): string[] | null {
+function listerFeeds(node: Node): Listing | null {
   const pipeline = node.parent;
   if (pipeline?.type !== 'pipeline') return null;
   const members = pipeline.namedChildren.filter((child): child is Node => child !== null);
@@ -2110,12 +2265,13 @@ const LS_FILES_LISTS = /^(-[zcomd]+|--(cached|others|modified|deleted|exclude-st
  * Whether a command only prints names it found under the folders it was given: `find` printing paths,
  * `rg -l`, `rg --files`, `git ls-files`. Those folders are scanned as its own operands. No wrapper, no
  * leading `find` option (`-L`, `-H`, `-P`, `-D`, `-O`), and nothing that follows a link or reads start
- * points from a file. Returns the folders it lists from, or null for any other command.
+ * points from a file. Returns the folders it lists from, `tracked` for git, which lists a tracked link as a name
+ * whatever it points to; null for any other command.
  */
-function listsNames(raw: readonly string[]): string[] | null {
+function listsNames(raw: readonly string[]): Listing | null {
   if (raw.some(isDynamic) || isWrapper(raw[0] ?? '')) return null;
   const [program, ...args] = raw.map(unquote);
-  const orHere = (folders: string[]): string[] => (folders.length > 0 ? folders : ['.']);
+  const orHere = (folders: string[]): Listing => ({ folders: folders.length > 0 ? folders : ['.'], tracked: false });
   if (program === 'find') {
     if (args[0]?.startsWith('-') && !/^-(name|iname|path|ipath|type|maxdepth|mindepth)$/.test(args[0])) return null;
     if (args.some(arg => /^-(follow|files0-from)$/.test(arg))) return null;
@@ -2137,11 +2293,29 @@ function listsNames(raw: readonly string[]): string[] | null {
     return orHere(patterned ? operands.slice(1) : operands);
   }
   if (program === 'git') {
-    const lists =
-      args[0] === 'ls-files' && args.slice(1).every(arg => !arg.startsWith('-') || LS_FILES_LISTS.test(arg));
-    return lists ? ['.'] : null;
+    if (args[0] !== 'ls-files') return null;
+    const operands: string[] = [];
+    for (const arg of args.slice(1)) {
+      if (arg.startsWith('-')) {
+        if (!LS_FILES_LISTS.test(arg)) return null;
+      } else if (/[*?[]/.test(arg)) {
+        // A pathspec glob matches anywhere below the folder it starts from, and magic (`:/`) leaves it.
+        if (arg.startsWith(':') || arg.startsWith('/') || arg.split('/').includes('..')) return null;
+        operands.push('.');
+      } else {
+        if (arg.startsWith(':')) return null;
+        operands.push(arg);
+      }
+    }
+    return { ...orHere(operands), tracked: true };
   }
   return null;
+}
+
+/** The folders a lister walks; `tracked` when what it lists is git's index, links included. */
+interface Listing {
+  folders: string[];
+  tracked: boolean;
 }
 
 /** A wrapper can change the executable, and these clients can start sending data just by changing flags. */
@@ -2850,8 +3024,8 @@ const MODELED_PROGRAMS = new Set([
 ]);
 
 /** curl options the scan reads: flags, and options whose value is no file (`-o` is noted as a download). */
-const CURL_FLAGS = 'sSfLIivkgG46N#';
-const CURL_VALUED = 'oXHmdAeurx';
+const CURL_FLAGS = 'sSfLIivkgG46N#OJ';
+const CURL_VALUED = 'oXHmdAeurxwcbDT';
 const CURL_LONG_FLAGS = new Set([
   'silent',
   'show-error',
@@ -2875,6 +3049,10 @@ const CURL_LONG_FLAGS = new Set([
   'retry-all-errors',
   'fail-early',
   'path-as-is',
+  'remote-name',
+  'remote-name-all',
+  'remote-header-name',
+  'create-dirs',
 ]);
 const CURL_LONG_VALUED = new Set([
   'output',
@@ -2900,6 +3078,11 @@ const CURL_LONG_VALUED = new Set([
   'max-redirs',
   'limit-rate',
   'write-out',
+  'output-dir',
+  'cookie',
+  'cookie-jar',
+  'dump-header',
+  'upload-file',
 ]);
 
 /** A URL curl fetches over http or https: the scheme as written, or a bare host curl does not guess another for. */
@@ -2908,41 +3091,105 @@ const CURL_BARE_HOST =
   /^(?!(ftp|dict|ldap|imap|smtp|pop3|gopher|mqtt|telnet|tftp|rtsp|scp|sftp|smb)\.)[\w.-]+(:\d+)?(\/[^\s{}[\]]*)?$/i;
 const curlUrl = (url: string): boolean => CURL_URL.test(url) || CURL_BARE_HOST.test(url);
 
-/**
- * Whether the scan reads every curl word: each option is one above, no value reads a file (`@path`, as
- * `-d @f` and `-H @f` do) or writes one (`-w '%output{f}'`), and each URL is http or https.
- */
-function curlModeled(args: readonly string[]): boolean {
-  const readsFile = (option: string, value: string | undefined): boolean =>
-    (option !== 'data-raw' &&
-      /^[dH]$|^(data|data-binary|data-urlencode|json|header)$/.test(option) &&
-      /(^|=)@/.test(value ?? '')) ||
-    (/^(w|write-out)$/.test(option) && /%output|^@/.test(value ?? '')) ||
-    (option === 'url' && !curlUrl(value ?? ''));
+/** Each curl option the scan reads, by its long name, with its value; null for an option outside the lists above. */
+function curlOptions(args: readonly string[]): { name: string; value?: string }[] | null {
+  const options: { name: string; value?: string }[] = [];
   for (let at = 0; at < args.length; at++) {
     const arg = args[at] as string;
-    if (arg === '--') return args.slice(at + 1).every(curlUrl);
+    if (arg === '--') {
+      options.push(...args.slice(at + 1).map(value => ({ name: 'url', value })));
+      break;
+    }
     if (arg.startsWith('--')) {
       const [name = '', value] = arg.slice(2).split(/=(.*)/s);
-      if (CURL_LONG_FLAGS.has(name) && value === undefined) continue;
-      if (!CURL_LONG_VALUED.has(name)) return false;
-      const given = value ?? args[++at];
-      if (readsFile(name, given)) return false;
+      if (CURL_LONG_FLAGS.has(name) && value === undefined) options.push({ name });
+      else if (!CURL_LONG_VALUED.has(name)) return null;
+      else options.push({ name, value: value ?? args[++at] });
       continue;
     }
     if (!arg.startsWith('-') || arg === '-') {
-      if (!curlUrl(arg)) return false;
+      options.push({ name: 'url', value: arg });
       continue;
     }
     for (let letter = 1; letter < arg.length; letter++) {
       const option = arg[letter] as string;
-      if (CURL_FLAGS.includes(option)) continue;
-      if (!CURL_VALUED.includes(option)) return false;
-      if (readsFile(option, arg.slice(letter + 1) || args[++at])) return false;
-      break;
+      const name = own(CURL_SHORT, option);
+      if (CURL_FLAGS.includes(option)) options.push({ name: name ?? option });
+      else if (!CURL_VALUED.includes(option)) return null;
+      else {
+        options.push({ name: name ?? option, value: arg.slice(letter + 1) || args[++at] });
+        break;
+      }
     }
   }
-  return true;
+  return options;
+}
+
+/** Long names of the short curl options whose files the scan reads. */
+const CURL_SHORT: Readonly<Record<string, string>> = {
+  o: 'output',
+  O: 'remote-name',
+  J: 'remote-header-name',
+  c: 'cookie-jar',
+  b: 'cookie',
+  D: 'dump-header',
+  T: 'upload-file',
+  d: 'data',
+  H: 'header',
+  w: 'write-out',
+};
+
+/**
+ * Whether the scan reads every curl word: each option is one above, `-w` writes no file of its own
+ * (`%output{f}`), and each URL is http or https. A file an option reads or writes is checked by `curlFiles`.
+ */
+function curlModeled(args: readonly string[]): boolean {
+  const options = curlOptions(args);
+  return (
+    options !== null &&
+    options.every(({ name, value }) =>
+      name === 'url' ? curlUrl(value ?? '') : name !== 'write-out' || !/%output|^@/.test(value ?? '')
+    )
+  );
+}
+
+/** `text` as one single-quoted shell word. */
+const shellQuoted = (text: string): string => `'${text.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The files a curl call reads and writes, as shell words: `-o` (under `--output-dir`), `-c`, `-D`, a `-O` name
+ * taken from each URL, `-b` without `=`, `-T`, and `@file` data. `named` when `-J` lets the server name the file.
+ */
+function curlFiles(args: readonly string[]): { reads: string[]; writes: string[]; named: boolean } {
+  const options = curlOptions(args) ?? [];
+  const values = (...names: string[]): string[] =>
+    options.flatMap(({ name, value }) => (names.includes(name) && value !== undefined ? [value] : []));
+  const directory = values('output-dir').at(-1);
+  const inDirectory = (path: string): string => (directory === undefined ? path : `${directory}/${path}`);
+  const remote = options.some(({ name }) => name === 'remote-name' || name === 'remote-name-all');
+  const named = options.some(({ name }) => name === 'remote-header-name');
+  const urlName = (url: string): string =>
+    wordValue(url)
+      .replace(/[?#].*$/s, '')
+      .replace(/^.*\//s, '');
+  const remoteNames = remote
+    ? values('url').map(url =>
+        shellQuoted(directory === undefined ? urlName(url) : `${wordValue(directory)}/${urlName(url)}`)
+      )
+    : [];
+  // `@f`, `name@f` and `name=@f` all count as reading `f`; reading one more path only asks more often.
+  const data = values('data', 'data-binary', 'data-urlencode', 'json', 'header')
+    .map(wordValue)
+    .flatMap(value => (value.includes('@') ? [shellQuoted(value.slice(value.indexOf('@') + 1))] : []));
+  const given = (value: string): boolean => !['', '-'].includes(wordValue(value));
+  const cookies = values('cookie').filter(value => !wordValue(value).includes('='));
+  return {
+    reads: [...cookies, ...values('upload-file'), ...data].filter(given),
+    writes: [...values('output').map(inDirectory), ...values('cookie-jar', 'dump-header'), ...remoteNames].filter(
+      given
+    ),
+    named,
+  };
 }
 
 /** A function name the scan can track. */
@@ -2971,7 +3218,23 @@ function untrackableCommand(raw: readonly string[]): boolean {
   // tar's first word may be an old-style cluster without a dash (`xvfT list`).
   const tarList = /^[A-Za-z]*T/.test(args[0] ?? '') || args.some(arg => /^-[A-Za-z]*T/.test(arg));
   if ((name === 'tar' || name === 'bsdtar') && tarList) return true;
+  if (name === 'git' && gitConfigRunsProgram(args)) return true;
+  // Each of these runs a program the option names.
+  if (name === 'rg' && args.some(arg => /^--pre(-glob)?(=|$)/.test(arg))) return true;
+  if (name === 'rsync' && args.some(arg => /^--rs/.test(arg) || /^-[A-Za-z]*e/.test(arg))) return true;
   return name === 'curl' && !curlModeled(args);
+}
+
+/** Whether `git -c key=value` or `--config-env key=VAR` before the subcommand sets a key that runs a program. */
+function gitConfigRunsProgram(args: readonly string[]): boolean {
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at] as string;
+    if (!arg.startsWith('-')) return false;
+    const setting = arg === '-c' || arg === '--config-env' ? args[++at] : /^--config-env=(.*)$/s.exec(arg)?.[1];
+    if (setting !== undefined && GIT_PROGRAM_CONFIG.test(setting.split('=')[0] ?? '')) return true;
+    if (['-C', '--git-dir', '--work-tree', '--namespace'].includes(arg)) at++;
+  }
+  return false;
 }
 
 /**
@@ -3370,13 +3633,15 @@ async function ownPlaces(
 export async function scanShell(
   command: string,
   startDirectory: string,
-  roots: readonly string[]
+  roots: readonly string[],
+  deadlineMs = wslLocation(startDirectory) === null ? SCAN_DEADLINE_MS : WSL_SCAN_DEADLINE_MS
 ): Promise<ShellScan | null> {
   if (command.length > MAX_SCRIPT) return null;
   const tree = await parseBash(command);
   if (!tree) return null;
 
   let expired = false;
+  const stopped = (): boolean => expired;
   const scanning = (async (): Promise<ShellScan | null> => {
     const { home, known: homeKnown, temp } = await shellHome(startDirectory);
     let homeGuessed = false;
@@ -3432,6 +3697,8 @@ export async function scanShell(
     );
     // Under lastpipe the last part of a pipeline runs in this shell, so a cd there moves it.
     const lastpipe = /lastpipe|shopt[^;&|\n]*[{}]/.test(gateText);
+    // `set -P` makes every later cd resolve links first; read for the whole script, wherever it sits.
+    const physicalShell = /\bset\b[^;&|\n]*(\s-[A-Za-z]*P|\bphysical\b)/.test(gateText);
     const directories = new Set<string>();
     const ungranted = new Set<string>();
     const envFiles = new Set<string>();
@@ -3443,6 +3710,7 @@ export async function scanShell(
     const writtenTrees = new Set<string>();
     let contained = true;
     let readOnly = true;
+    let remoteTree = false;
 
     const noteEnvFile = (raw: string): void => {
       const path = expand(unquote(raw));
@@ -3500,7 +3768,7 @@ export async function scanShell(
      */
     const linkMatches = async (word: OperandWord, operand: ReadOperand, cwd: string): Promise<string[] | null> => {
       if (operand.start === null || operand.unread || sep !== '/' || wslLocation(cwd) !== null) return [];
-      return globLinkMatches(word, cwd, dotGlob);
+      return globLinkMatches(word, cwd, dotGlob, stopped);
     };
 
     /** Counts an exact operand unread when a link on its way leads into a process's own folders. */
@@ -3509,8 +3777,12 @@ export async function scanShell(
       if ((await linksThroughProcess(posix.isAbsolute(text) ? text : under(cwd, text))) !== false) unreadOperands++;
     };
 
-    /** Whether the folders a lister walks hold no link, by the same bounded walk a link-following command gets. */
-    const linkFree = async (folders: readonly string[]): Promise<boolean> => {
+    /**
+     * Whether what a lister prints can be followed: each folder it walks is read, and each link in it is checked
+     * as the path it is, by the same bounded walk a link-following command gets. A git listing holding a link,
+     * which git prints whatever it points to, cannot.
+     */
+    const listingChecked = async ({ folders, tracked }: Listing): Promise<boolean> => {
       if (state.lost || sep !== '/' || wslLocation(state.cwd) !== null) return false;
       const budget = { entries: WALK_ENTRIES };
       for (const folder of folders) {
@@ -3520,13 +3792,16 @@ export async function scanShell(
           const operand = readOperand(word, posix.dirname);
           if (operand.unread || operand.start !== null) return false;
           const root = posix.isAbsolute(operand.path) ? operand.path : under(state.cwd, operand.path);
+          if (underCreatedLink(state.cwd, operand.path, 'program')) return false;
           const self = await lstat(root).then(
             info => info.isSymbolicLink(),
             (error: unknown) => (missing(error) ? false : null)
           );
-          if (self !== false || underCreatedLink(state.cwd, operand.path, 'program')) return false;
-          const links = await linksUnder(root, budget);
-          if (links === null || links.length > 0) return false;
+          if (self === null || (self && tracked)) return false;
+          const links = self ? [root] : await linksUnder(root, budget, stopped);
+          if (links === null || (tracked && links.length > 0)) return false;
+          await checkArgument(word, 'read', true);
+          for (const link of links) await checkArgument(exactWord(link), 'read', true);
         }
       }
       return true;
@@ -3544,13 +3819,19 @@ export async function scanShell(
       word: OperandWord,
       operand: ReadOperand,
       rules: { dirname: (path: string) => string },
-      windows: boolean
+      windows: boolean,
+      cwd: string
     ): { shape: GlobShape | null; folder: string } => {
       const shape =
         operand.start === null || operand.unread
           ? null
           : globShape(word, operand.start, dotGlob, windows ? /[\\/]/ : /\//);
       let folder = operand.path;
+      if ((shape?.up ?? 0) > 0 && !isAbsolutePath(folder)) {
+        // Climbing from a relative `.` would stay put, so the climb starts from the folder it names.
+        if (sep === '/' && wslLocation(cwd) === null) folder = posix.resolve(cwd, folder);
+        else unreadOperands++;
+      }
       for (let up = 0; up < (shape?.up ?? 0); up++) folder = rules.dirname(folder);
       return { shape, folder };
     };
@@ -3566,6 +3847,7 @@ export async function scanShell(
       reader: OperandReader = 'program',
       reach: Reach | null = null
     ): Promise<string | null> => {
+      if (expired) return null;
       if (reader === 'windows') {
         const [device, text] = windowsDevicePath(raw);
         if (state.lost && !isAbsolutePath(device + text)) unreadOperands++;
@@ -3603,7 +3885,7 @@ export async function scanShell(
         if (linked === null) unreadOperands++;
         for (const match of linked ?? []) await checkWord(exactWord(match), device, cwd, probe, reader, reach);
       }
-      const { shape, folder } = shapeOf(word, operand, rules, reader === 'windows' || sep === '\\');
+      const { shape, folder } = shapeOf(word, operand, rules, reader === 'windows' || sep === '\\', cwd);
       const prefix = device + folder;
       if (underCreatedLink(cwd, prefix, reader)) unreadOperands++;
       const named = operand.start === null ? prefix : device + text.slice(0, operand.start);
@@ -3647,12 +3929,15 @@ export async function scanShell(
 
     /**
      * Where the scan believes bash is. `lost` once a directory change may or may not have happened, from which
-     * point every relative operand is unread; `stackLost` once the pushd stack is no longer known.
+     * point every relative operand is unread; `stackLost` once the pushd stack is no longer known. `cwd` is where
+     * operands resolve, and `logical` is bash's $PWD, which a `cd` without `-P` folds `..` against.
      */
     const state = {
       cwd: startDirectory,
+      logical: startDirectory,
       previous: startDirectory,
-      stack: [] as { cwd: string; lost: boolean }[],
+      previousLogical: startDirectory,
+      stack: [] as { cwd: string; logical: string; lost: boolean }[],
       lost: false,
       previousLost: false,
       stackLost: false,
@@ -3701,6 +3986,7 @@ export async function scanShell(
         return;
       }
       state.cwd = next;
+      state.logical = next;
     };
 
     const runCommand = async (
@@ -3727,7 +4013,7 @@ export async function scanShell(
           folders === null ||
           effects.folders.length > 0 ||
           stdinRedirected(node) ||
-          !(await linkFree(folders))
+          !(await listingChecked(folders))
         ) {
           unreadOperands++;
         }
@@ -3742,6 +4028,7 @@ export async function scanShell(
       if (state.lost && inPlace.files.length + inPlace.trees.length > 0) unreadOperands++;
       for (const file of inPlace.files) noteWrite(file);
       for (const tree of inPlace.trees) noteWrite(tree, writtenTrees);
+      const cloned = inPlace.remote === undefined ? [] : await noteRemoteTree(inPlace.remote);
 
       if (CHANGES_DIRECTORY.has(program)) {
         directoryChanges++;
@@ -3857,6 +4144,33 @@ export async function scanShell(
       for (const arg of rest) if (!arg.startsWith('-')) noteEnvFile(arg);
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
       const trees = treeOperands(name, wrappedRest);
+      if (name === 'find') {
+        const actions = findActions(wrappedRest);
+        if (actions.untrackable) unreadOperands++;
+        for (const read of actions.reads) await check(read, state.cwd);
+      }
+      if (runsOpaqueScript(name, wrappedRest)) unreadOperands++;
+      const files = optionFiles(name, wrappedRest);
+      if (files === null) unreadOperands++;
+      for (const { raw, write } of files ?? []) {
+        if (write) noteWrite(raw);
+        await check(raw, state.cwd);
+      }
+      if (name === 'curl') {
+        const curl = curlFiles(wrappedRest);
+        if (curl.named) unreadOperands++;
+        for (const path of curl.reads) await check(path, state.cwd);
+        for (const path of curl.writes) {
+          noteWrite(path);
+          await check(path, state.cwd);
+        }
+      }
+      if (
+        name === 'cpio' &&
+        (/p/.test(shortFlags(wrappedRest)) || wrappedRest.some(arg => unquote(arg) === '--pass-through'))
+      ) {
+        await noteCopiedTree(wrappedRest.filter(arg => !unquote(arg).startsWith('-')).at(-1));
+      }
       const wrapperWordCount = rest.length - wrappedRest.length;
       const reachAt = (index: number): Reach | null => trees.operands.get(index - wrapperWordCount) ?? null;
       // A wrapped program is read as it is without its wrappers, whose own words are read as arguments.
@@ -3922,7 +4236,8 @@ export async function scanShell(
             if (operand.unread) continue;
             const links = await linksUnder(
               posix.isAbsolute(operand.path) ? operand.path : under(state.cwd, operand.path),
-              budget
+              budget,
+              stopped
             );
             if (links === null) unreadOperands++;
             for (const link of links ?? []) await checkArgument(exactWord(link), 'read', true);
@@ -3944,6 +4259,7 @@ export async function scanShell(
           for (const place of operandTargets(state.cwd, expand(path))) createdLinks.add(guardForm(place));
         }
       }
+      for (const place of cloned) createdLinks.add(guardForm(place));
       if (unreadOperands > unreadBefore) Object.assign(entry, { coverable: false, words: original });
     };
 
@@ -3958,7 +4274,7 @@ export async function scanShell(
       pathLike: boolean,
       modeled = true
     ): Promise<void> => {
-      if (word.text === '') return;
+      if (word.text === '' || expired) return;
       if (processPath(word.text, state.cwd)) unreadOperands++;
       const rules = operandRules(state.cwd);
       const operand = readOperand(word, rules.dirname);
@@ -3970,7 +4286,7 @@ export async function scanShell(
       const linked = await linkMatches(word, operand, state.cwd);
       if (linked === null) unreadOperands++;
       for (const match of linked ?? []) await checkArgument(exactWord(match), reach, true);
-      const { shape, folder: prefix } = shapeOf(word, operand, rules, sep === '\\');
+      const { shape, folder: prefix } = shapeOf(word, operand, rules, sep === '\\', state.cwd);
       if (underCreatedLink(state.cwd, prefix, 'program')) unreadOperands++;
       const record = async (physical: string): Promise<void> => {
         paths.add(physical);
@@ -4009,8 +4325,8 @@ export async function scanShell(
     const noteLinks = async (args: readonly string[]): Promise<void> => {
       const flags = shortFlags(args);
       // getopt_long takes `--sy` and longer for `--symbolic`; `--s` could be `--suffix` too.
-      const symbolic = args.some(arg => /^--sy/.test(unquote(arg)) && '--symbolic'.startsWith(unquote(arg)));
-      if (!flags.includes('s') && !symbolic) return;
+      const symbolic =
+        flags.includes('s') || args.some(arg => /^--sy/.test(unquote(arg)) && '--symbolic'.startsWith(unquote(arg)));
       let directory: string | null = null;
       const operands: string[] = [];
       for (let index = 0; index < args.length; index++) {
@@ -4043,11 +4359,63 @@ export async function scanShell(
         const name = text(source);
         return name === null ? [] : [join(location, rules.basename(name))];
       });
-      for (const source of sources) {
-        await check(source, location);
-        if (named) await check(source, dirname(location));
+      if (!symbolic) {
+        // A hard link to a symlink is that symlink again, as GNU ln makes one without `-L`.
+        if (flags.includes('L') || args.some(arg => unquote(arg) === '--logical')) return;
+        const symlinks = await Promise.all(
+          sources.map(async source => {
+            const name = text(source);
+            if (name === null || /[*?[]/.test(name) || underCreatedLink(state.cwd, name, 'program')) return true;
+            const info = await lstat(operandTargets(state.cwd, name)[0] ?? name).catch((error: unknown) =>
+              missing(error) ? undefined : null
+            );
+            return info === null || info?.isSymbolicLink() === true;
+          })
+        );
+        if (!symlinks.includes(true)) return;
+      } else {
+        for (const source of sources) {
+          await check(source, location);
+          if (named) await check(source, dirname(location));
+        }
       }
       for (const link of named ? [location, ...inside] : inside) createdLinks.add(guardForm(link));
+    };
+
+    /** `cpio -p DEST` copies what it reads into DEST, links included, so DEST is written and read as a link this script made. */
+    const noteCopiedTree = async (raw: string | undefined): Promise<void> => {
+      const words = raw === undefined ? null : operandWords(raw, scope());
+      const word = words?.length === 1 ? words[0] : undefined;
+      if (raw === undefined || word === undefined || readOperand(word, posix.dirname).start !== null || state.lost) {
+        unreadOperands++;
+        return;
+      }
+      noteWrite(raw, writtenTrees);
+      await checkArgument(word, 'write', true);
+      for (const place of operandTargets(state.cwd, word.text)) createdLinks.add(guardForm(place));
+    };
+
+    /**
+     * A clone from another computer writes a tree no scan can list: auto mode asks, and over a settings base it is
+     * untrackable. Returns the folders it fills, which the caller marks as links once the command's own words are checked.
+     */
+    const noteRemoteTree = async (raw: string): Promise<string[]> => {
+      remoteTree = true;
+      const words = operandWords(raw, scope());
+      const word = words?.length === 1 ? words[0] : undefined;
+      if (word === undefined || readOperand(word, posix.dirname).start !== null || state.lost) {
+        unreadOperands++;
+        return [];
+      }
+      noteWrite(raw, writtenTrees);
+      await checkArgument(word, 'write', true);
+      const places = operandTargets(state.cwd, word.text);
+      for (const place of places) {
+        const physical = await physicalTarget(place).catch(() => null);
+        const form = physical === null ? null : guardForm(physical);
+        if (form === null || settingsBases.some(base => guardFormWithin(form, guardForm(base)))) unreadOperands++;
+      }
+      return places;
     };
 
     /** Whether `path` is a link, holds one, or lies over or under a link this script made; true when it cannot tell. */
@@ -4058,7 +4426,7 @@ export async function scanShell(
       if (info === undefined) return false;
       if (info === null || info.isSymbolicLink()) return true;
       if (!info.isDirectory()) return false;
-      const links = await linksUnder(path, budget);
+      const links = await linksUnder(path, budget, stopped);
       return links === null || links.length > 0;
     };
 
@@ -4105,7 +4473,7 @@ export async function scanShell(
       }
       if (recursive) {
         for (const folder of into) {
-          const links = await linksUnder(folder, budget);
+          const links = await linksUnder(folder, budget, stopped);
           if (links === null) unreadOperands++;
           for (const link of links ?? []) await checkArgument(exactWord(link), 'write', true);
         }
@@ -4139,7 +4507,13 @@ export async function scanShell(
         }
         const back = state.stack.pop();
         if (back) {
-          Object.assign(state, { previous: state.cwd, previousLost: state.lost, cwd: back.cwd });
+          Object.assign(state, {
+            previous: state.cwd,
+            previousLogical: state.logical,
+            previousLost: state.lost,
+            cwd: back.cwd,
+            logical: back.logical,
+          });
           state.lost = back.lost || !certain;
         }
         return false;
@@ -4155,8 +4529,29 @@ export async function scanShell(
         return true;
       }
       const words = target === undefined || target === '-' ? [] : operandWords(target, scope());
+      // As bash: `-P` (the last of `-L`/`-P`, or `set -P`) resolves links first; otherwise `..` folds on $PWD.
+      let physical = physicalShell;
+      const options = rest.slice(0, target === undefined ? rest.length : rest.indexOf(target)).map(unquote);
+      for (const letter of options.filter(arg => /^-[LPe@]+$/.test(arg)).join('')) {
+        if (letter === 'P') physical = true;
+        if (letter === 'L') physical = false;
+      }
+      const [only] = words ?? [];
+      const folded =
+        !physical &&
+        words?.length === 1 &&
+        only !== undefined &&
+        readOperand(only, posix.dirname).start === null &&
+        sep === '/' &&
+        wslLocation(state.cwd) === null &&
+        !state.lost
+          ? posix.resolve(state.logical, only.text)
+          : null;
       const unread = unreadOperands;
-      const next = target === '-' ? state.previous : await check(target ?? '~', state.cwd, false, 'shell');
+      const next =
+        target === '-'
+          ? state.previous
+          : await check(folded === null ? (target ?? '~') : shellQuoted(folded), state.cwd, false, 'shell');
       const unknown =
         words === null ||
         words.length > 1 ||
@@ -4169,27 +4564,37 @@ export async function scanShell(
       // In an `&&`/`||` list a failed cd is one of the outcomes visitList weighs, so only a lone one must exist.
       const landed = inList || (await stat(next).catch(() => null))?.isDirectory() === true;
       const fromLost = target === '-' && (state.previousLost || state.lost);
-      if (program === 'pushd') state.stack.push({ cwd: state.cwd, lost: state.lost });
-      Object.assign(state, { previous: state.cwd, previousLost: state.lost, cwd: next });
+      if (program === 'pushd') state.stack.push({ cwd: state.cwd, logical: state.logical, lost: state.lost });
+      const logical = target === '-' ? state.previousLogical : (folded ?? next);
+      Object.assign(state, {
+        previous: state.cwd,
+        previousLogical: state.logical,
+        previousLost: state.lost,
+        cwd: next,
+        logical,
+      });
       state.lost = unknown || fromLost || !certain || !landed;
       return unknown;
     };
 
     // Every reading is kept: a write recorded at a place the command never wrote only asks more often.
-    const noteWrite = (raw: string, into = writes): void => {
+    /** `raw` is a shell word unless `value`, a name already as bash passes it (a copy's joined destination). */
+    const noteWrite = (raw: string, into = writes, value = false): void => {
       const bound = boundWords(raw, loopBindings);
       if (bound) {
         for (const word of bound) noteWrite(wordValue(word), into);
         return;
       }
-      const text = expand(unquote(raw));
-      if (!text || HARMLESS_REDIRECT_TARGETS.has(text)) return;
-      const homeWord = rebound && /^~|\$\{?HOME\b/.test(unquote(raw));
-      if (isDynamic(text) || (state.lost && !isAbsolutePath(text)) || processPath(text, state.cwd) || homeWord) {
-        unreadOperands++;
-        return;
+      // The word as bash passes it (`.cl''aude`), and as written, in case a quote kept a `~` literal.
+      for (const text of new Set([expand(unquote(raw)), expand(value ? raw : wordValue(raw))])) {
+        if (!text || HARMLESS_REDIRECT_TARGETS.has(text)) continue;
+        const homeWord = rebound && /^~|\$\{?HOME\b/.test(unquote(raw));
+        if (isDynamic(text) || (state.lost && !isAbsolutePath(text)) || processPath(text, state.cwd) || homeWord) {
+          unreadOperands++;
+          return;
+        }
+        for (const target of operandTargets(state.cwd, text)) into.add(target);
       }
-      for (const target of operandTargets(state.cwd, text)) into.add(target);
     };
 
     const noteWrites = (program: string, rest: string[]): void => {
@@ -4226,7 +4631,7 @@ export async function scanShell(
       if (target === undefined) return;
       noteWrite(target);
       for (const source of operands) {
-        if (source !== target) noteWrite(rules.join(unquote(target), rules.basename(unquote(source))));
+        if (source !== target) noteWrite(rules.join(unquote(target), rules.basename(unquote(source))), writes, true);
       }
       const recursive =
         program === 'rsync' ||
@@ -4369,6 +4774,8 @@ export async function scanShell(
 
     const visit = async (node: Node): Promise<void> => {
       if (expired) return;
+      // A loop or function body may run a git call again after a later one in it moved a ref.
+      if (REPEATS.has(node.type) && /\bgit\b/.test(node.text)) gitScript.refsMoved = true;
       if (node.type === 'list') {
         if (await visitList(node)) state.lost = true;
         return;
@@ -4424,19 +4831,17 @@ export async function scanShell(
       writtenTrees: [...writtenTrees],
       ...(unreadOperands > 0 ? { unread: true as const } : {}),
       ...(gitProgram ? { gitProgram } : {}),
+      ...(remoteTree ? { remoteTree: true as const } : {}),
     };
   })().finally(() => tree.delete());
 
-  // A scan that outlives its deadline reads as one it could not follow; the walk stops at its next statement.
+  // A scan that outlives its deadline reads as one it could not follow; its walks and checks stop at their next step.
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<null>(resolve => {
-    timer = setTimeout(
-      () => {
-        expired = true;
-        resolve(null);
-      },
-      wslLocation(startDirectory) === null ? SCAN_DEADLINE_MS : WSL_SCAN_DEADLINE_MS
-    );
+    timer = setTimeout(() => {
+      expired = true;
+      resolve(null);
+    }, deadlineMs);
   });
   try {
     return await Promise.race([scanning, deadline]);

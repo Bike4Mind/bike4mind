@@ -148,9 +148,6 @@ describe('scanShell writes', () => {
     'git config user.email',
     'git config --get user.email',
     'npm pkg get name',
-    'curl -O https://example.com/a',
-    'curl --output-dir d -O https://example.com/a',
-    'curl -sSLO https://example.com/a',
     "sed 's/a/b/' a.sh",
     "sed -n '/x/p' a.sh",
     "perl -pe 's/a/b/' a.sh",
@@ -174,6 +171,14 @@ describe('scanShell writes', () => {
     ["perl -pie 's/a/b/' a.txt", ['a.txt']],
     ["gawk -iinplace '{print}' a.sh", ['a.sh']],
   ])('records only the edited files for %s, not the program', async (command, expected) => {
+    expect(await writes(command)).toEqual(expected.map(path => join(root, path)));
+  });
+
+  it.each([
+    ['curl -O https://example.com/a', ['a']],
+    ['curl --output-dir d -O https://example.com/a', ['d/a']],
+    ['curl -sSLO https://example.com/a?x=1', ['a']],
+  ])('records the file curl names from the URL for %s', async (command, expected) => {
     expect(await writes(command)).toEqual(expected.map(path => join(root, path)));
   });
 });
