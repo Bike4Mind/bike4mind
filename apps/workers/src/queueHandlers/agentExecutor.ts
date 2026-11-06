@@ -3579,6 +3579,9 @@ async function processExecution(
       totalTokens: finalCheckpoint.totalTokens,
       totalIterations: finalCheckpoint.iteration,
       reachedMaxIterations,
+      ...(lowConfidenceCompletion && {
+        lowConfidence: { confidence: lowConfidenceCompletion.confidence, reason: lowConfidenceCompletion.reason },
+      }),
     });
 
     await sendWs('completed', {

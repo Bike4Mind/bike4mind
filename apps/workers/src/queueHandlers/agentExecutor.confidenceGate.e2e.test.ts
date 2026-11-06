@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   probeTurns: 1,
   // Profile `lowConfidenceCompletion` the executor resolves; undefined keeps the executor default.
   lowConfidenceMode: undefined as 'block' | 'annotate' | 'off' | undefined,
+  // Profile `confidenceGateThreshold` the executor resolves; undefined keeps the built-in threshold.
+  gateThreshold: undefined as number | undefined,
 }));
 
 vi.mock('./agentExecutor.orchestrationProfile', async () => {
@@ -35,6 +37,7 @@ vi.mock('./agentExecutor.orchestrationProfile', async () => {
     resolveTopLevelProfile: async (args: Parameters<typeof actual.resolveTopLevelProfile>[0]) => ({
       ...(await actual.resolveTopLevelProfile(args)),
       lowConfidenceCompletion: h.lowConfidenceMode,
+      confidenceGateThreshold: h.gateThreshold,
     }),
   };
 });
@@ -193,6 +196,7 @@ describe('confidence gate, end to end', () => {
     h.llmTurns = 0;
     h.probeTurns = 1;
     h.lowConfidenceMode = undefined;
+    h.gateThreshold = undefined;
   });
 
   it('pauses on a streak of low overrides, resumes through a gate response, and completes', async () => {
@@ -252,7 +256,7 @@ describe('confidence gate, end to end', () => {
   });
 
   describe('a final answer after one low iteration', () => {
-    async function runToAnswer(confidence: number) {
+    async function runToAnswer(confidence: number, maxIterations?: number) {
       const { handler } = await import('./agentExecutor');
       const run = await seedRun([confidence]);
       await handler(
@@ -263,6 +267,7 @@ describe('confidence gate, end to end', () => {
           query: 'Run the probe, then report',
           model: 'test-model',
           connectionId: 'conn-1',
+          ...(maxIterations !== undefined && { maxIterations }),
         } as never,
         lambdaContext
       );
@@ -279,6 +284,7 @@ describe('confidence gate, end to end', () => {
       expect(h.wsEvents).toContainEqual(
         expect.objectContaining({ action: 'low_confidence_completion', executionId, confidence: 0.1, mode: 'annotate' })
       );
+      expect(execution?.result).toMatchObject({ lowConfidence: { confidence: 0.1 } });
       expect(actions()).not.toContain('confidence_gate');
       expect(actions().indexOf('low_confidence_completion')).toBeLessThan(actions().indexOf('completed'));
     });
@@ -321,7 +327,7 @@ describe('confidence gate, end to end', () => {
         expect(execution?.status).toBe('paused');
         expect(actions()).toContain('low_confidence_completion');
       } finally {
-        await AdminSettings.deleteOne({ settingName: 'orchestrationDefaults' });
+        await AdminSettings.collection.deleteOne({ settingName: 'orchestrationDefaults' });
       }
     });
 
@@ -331,6 +337,7 @@ describe('confidence gate, end to end', () => {
 
       expect(execution?.status).toBe('completed');
       expect(execution?.result).toMatchObject({ answer: FINAL_ANSWER });
+      expect(execution?.result).not.toHaveProperty('lowConfidence');
       expect(actions()).not.toContain('low_confidence_completion');
     });
 
@@ -338,6 +345,40 @@ describe('confidence gate, end to end', () => {
       const { execution } = await runToAnswer(0.9);
 
       expect(execution?.status).toBe('completed');
+      expect(execution?.result).not.toHaveProperty('lowConfidence');
+      expect(actions()).not.toContain('low_confidence_completion');
+    });
+
+    it('a profile mode beats the admin default', async () => {
+      h.lowConfidenceMode = 'off';
+      const { AdminSettings } = await import('@bike4mind/database');
+      await AdminSettings.create({
+        settingName: 'orchestrationDefaults',
+        settingValue: { lowConfidenceCompletion: 'block' } as never,
+      });
+      try {
+        const { execution } = await runToAnswer(0.1);
+
+        expect(execution?.status).toBe('completed');
+        expect(actions()).not.toContain('low_confidence_completion');
+      } finally {
+        await AdminSettings.collection.deleteOne({ settingName: 'orchestrationDefaults' });
+      }
+    });
+
+    it('uses the profile threshold when it sets one', async () => {
+      h.gateThreshold = 0.05;
+      const { execution } = await runToAnswer(0.1);
+
+      expect(execution?.status).toBe('completed');
+      expect(actions()).not.toContain('low_confidence_completion');
+    });
+
+    it('emits nothing when the answer lands on the iteration ceiling', async () => {
+      const { execution } = await runToAnswer(0.1, 1);
+
+      expect(execution?.status).toBe('completed');
+      expect(execution?.result).toMatchObject({ reachedMaxIterations: true });
       expect(actions()).not.toContain('low_confidence_completion');
     });
   });
