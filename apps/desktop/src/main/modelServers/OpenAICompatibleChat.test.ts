@@ -748,6 +748,25 @@ describe('OpenAICompatibleChat on a server that fronts several models', () => {
       expect(await client.contextTokens(MODEL_A)).toBe(32768);
     });
 
+    it('lists the server at its served context while the settings cannot be read, and still rejects the budget', async () => {
+      const unreadable = 'The model settings file /data/model-settings.json is not valid JSON.';
+      const client = new OpenAICompatibleChat({
+        runtimeId: 'srv-abc123',
+        baseUrl: BASE,
+        label: 'vllm box',
+        product: 'vllm',
+        fetch: proxy(65536).fetch,
+        hasCredentials: () => false,
+        redact: text => text,
+        loadSettings: () => Promise.reject(new Error(unreadable)),
+      });
+      expect((await client.listModels()).map(model => [model.name, model.contextWindow])).toEqual([
+        ['a', 65536],
+        ['b', 65536],
+      ]);
+      await expect(client.contextTokens(MODEL_A)).rejects.toThrow(unreadable);
+    });
+
     it('offers only sizes below what the server runs, and nothing when it does not say', async () => {
       expect(await budgeted(proxy(65536).fetch).loadOffer(MODEL_A)).toEqual({
         context: { kind: 'budget', server: 65536, sizes: [16384, 32768] },
