@@ -259,6 +259,15 @@ describe('POST /api/sessions/bulk - favorite', () => {
     });
   });
 
+  it('keeps bulk favorites open to a key without notebooks:write', async () => {
+    withScopes([]);
+    const { req, res } = fireWith('POST', { action: 'favorite', add: [id(1)], remove: [] });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockFav.add).toHaveBeenCalledTimes(1);
+  });
+
   it('fails an inaccessible or malformed id without failing the request', async () => {
     mockFav.add.mockRejectedValueOnce(new Error('Session not found or not accessible'));
     const { req, res } = fireWith('POST', { action: 'favorite', add: [id(1), 'not-an-id', id(2)], remove: [] });

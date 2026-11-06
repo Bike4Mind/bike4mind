@@ -62,13 +62,7 @@ type BulkItemResult = { id: string; ok: boolean; error?: string; session?: unkno
 type BulkWriteResponse = { results: BulkItemResult[]; okCount: number };
 type BulkWriteRequest = Request<{}, BulkWriteResponse, unknown, unknown, Record<string, unknown>>;
 
-// Same scope PUT /api/sessions/[id] requires; checked per action because the route-level gate
-// would also apply to the scope-less bulk DELETE.
-const assertCanWriteNotebooks = (req: BulkWriteRequest) =>
-  assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
-
 async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string[]): Promise<BulkWriteResponse> {
-  assertCanWriteNotebooks(req);
   const user = req.user!;
   const ids = [...new Set(sessionIds)];
   const newTags = [...new Set(tags.map(t => t.trim()))];
@@ -122,7 +116,6 @@ async function addTags(req: BulkWriteRequest, sessionIds: string[], tags: string
 }
 
 async function generateTags(req: BulkWriteRequest, sessionIds: string[]): Promise<BulkWriteResponse> {
-  assertCanWriteNotebooks(req);
   // impersonationGate admits POST here for favorite/addTags; AI tagging stays off-limits, as on /[id]/tag.
   if (req.user?.impersonatedBy) throw new ForbiddenError('Not available while impersonating');
   const ids = [...new Set(sessionIds)];
@@ -212,6 +205,11 @@ const handler = baseApi()
         throw new BadRequestError(parsed.error.issues[0]?.message || 'Invalid request body');
       }
       const body = parsed.data;
+      // Same scope PUT /api/sessions/[id] requires; favorites stay scope-less like /[id]/favorite. Kept
+      // inside the .post() link so apiKeyScopeRoutes.ts does not attribute it to the scope-less DELETE.
+      if (body.action !== 'favorite') {
+        assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
+      }
       if (body.action === 'addTags') return res.json(await addTags(req, body.sessionIds, body.tags));
       if (body.action === 'generateTags') return res.json(await generateTags(req, body.sessionIds));
       const results: BulkItemResult[] = [];
