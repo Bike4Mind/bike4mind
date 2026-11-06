@@ -56,8 +56,10 @@ describe('indexed entity lookup', () => {
     expect((await searchAdminEntities('example ORG'))[0].id).toBe(String(orgId));
     expect((await searchAdminEntities('cus_example')).map(result => result.type)).toEqual(['user', 'organization']);
     expect(await searchAdminEntities('Example')).toEqual([]);
+  });
+  it('does not search organization names for ID-shaped input', async () => {
     await Organization.collection.insertOne({ name: String(userId) });
-    expect((await searchAdminEntities(String(userId))).map(result => result.type)).toEqual(['user', 'organization']);
+    expect((await searchAdminEntities(String(userId))).map(result => result.type)).toEqual(['user']);
   });
   it('resolves key prefixes to their owner without returning secret fields', async () => {
     const results = await searchAdminEntities('b4m_live_abcd');
