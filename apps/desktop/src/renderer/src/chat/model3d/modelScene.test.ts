@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import type { ModelPartMesh } from '@shared/model3d';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
+  fitAngle,
   buildModelObject,
   exportGlb,
   loadAsset,
@@ -25,6 +26,15 @@ function box(name: string, x: number, y: number, z: number): ModelPartMesh {
   ]);
   return { name, color: '#8b5a2b', positions, indices };
 }
+
+describe('fitAngle', () => {
+  it('is half the vertical field of view in a wide pane and narrows with a tall one', () => {
+    const camera = new THREE.PerspectiveCamera(40, 2);
+    expect(fitAngle(camera)).toBeCloseTo(THREE.MathUtils.degToRad(20));
+    camera.aspect = 0.5;
+    expect(fitAngle(camera)).toBeCloseTo(Math.atan(Math.tan(THREE.MathUtils.degToRad(20)) * 0.5));
+  });
+});
 
 describe('summarizeParts', () => {
   it('reports size in model axes, triangles and param values', () => {

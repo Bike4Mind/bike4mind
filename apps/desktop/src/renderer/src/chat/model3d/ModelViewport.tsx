@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { ModelJoint, ModelView } from '@shared/model3d';
 import { newPartNames, startBuildIn } from './buildIn';
-import { explodeModel, frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
+import { explodeModel, fitAngle, frameCamera, poseJoints, VIEW_DIRECTIONS } from './modelScene';
 import {
   addGlowLights,
   enableShadows,
@@ -171,9 +171,17 @@ export function ModelViewport({
     controls.addEventListener('start', () => {
       userMoved.current = true;
     });
-    const reframe = () => {
-      if (userMoved.current || !shownObject.current) return;
-      controls.target.copy(frameCamera(camera, shownObject.current));
+    // A camera the user placed keeps its angle and target, and moves in or out as the pane's
+    // narrower side does, so the model keeps its size in the pane instead of cropping.
+    const reframe = (previousFit = fitAngle(camera)) => {
+      if (!shownObject.current) return;
+      if (!userMoved.current) {
+        controls.target.copy(frameCamera(camera, shownObject.current));
+      } else {
+        const offset = camera.position.clone().sub(controls.target);
+        offset.multiplyScalar(Math.sin(previousFit) / Math.sin(fitAngle(camera)));
+        camera.position.copy(controls.target).add(offset);
+      }
       controls.update();
     };
     const resize = () => {
@@ -181,9 +189,10 @@ export function ModelViewport({
       if (!clientWidth || !clientHeight || recording) return;
       renderer.setSize(clientWidth, clientHeight);
       composer.setSize(clientWidth, clientHeight, window.devicePixelRatio);
+      const previousFit = fitAngle(camera);
       camera.aspect = clientWidth / clientHeight;
       camera.updateProjectionMatrix();
-      reframe();
+      reframe(previousFit);
       render();
     };
     let pressedAt: { x: number; y: number } | null = null;
