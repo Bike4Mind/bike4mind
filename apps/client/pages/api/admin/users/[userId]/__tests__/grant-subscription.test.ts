@@ -139,6 +139,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
     const { res, run } = call(5);
     await run();
+    expect(sendToClient).toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
   });
@@ -257,6 +258,7 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
     vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
     const { res, run } = callIndividual(plan.priceId);
     await run();
+    expect(sendToClient).toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ success: true, credits: plan.credits * 2 });
   });

@@ -110,7 +110,7 @@ export async function executeApprovedAdminDelete(req: Request, params: DeleteAdm
   if (isSelfOrImpersonator(req.user!, params.userId)) {
     throw new ForbiddenError('Admins cannot delete their own account.');
   }
-  // Checked here too so a demoted target fails before the subscription cancel, which cannot roll back.
+  // Early fail only; hardDeleteUser re-checks right before the subscription cancel and again in the transaction.
   await assertStillAdmin(params.userId);
   let committed = false;
   try {

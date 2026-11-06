@@ -141,6 +141,7 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
     const { res, run } = call({});
     await run();
+    expect(sendToClient).toHaveBeenCalled();
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', creditsAdded: 100 });
   });
