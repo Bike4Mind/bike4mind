@@ -1,35 +1,70 @@
+import { realpathSync } from 'node:fs';
 import { readlink, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, sep } from 'node:path';
+import {
+  isMissingNameError,
+  isMissingPathError,
+  MAX_LINK_HOPS,
+  MAX_WALK_NAMES,
+  type NearestPath,
+  type NearestWalk,
+} from '../tools/paths';
 import type { PermissionSubject } from './rules';
 
-/**
- * Codes meaning no file by this name exists. ENAMETOOLONG is one: a shell operand such as a
- * multi-line `git commit -m` message is checked like a path, and no file can carry that name.
- * So is ERR_INVALID_ARG_VALUE, a NUL in the name: a WSL share path keeps some Linux names behind one.
- */
-const MISSING = new Set(['ENOENT', 'ENOTDIR', 'ENAMETOOLONG', 'ERR_INVALID_ARG_VALUE']);
-
-export async function physicalPath(path: string): Promise<string> {
+// Mirrors nativeOrJsRealpath in ../tools/paths: win32 volumes outside the mount manager throw EISDIR.
+async function realpathOrJs(path: string): Promise<string> {
   try {
     return await realpath(path);
   } catch (error) {
-    if (!(error instanceof Error && 'code' in error && MISSING.has(String(error.code)))) throw error;
-    // realpath cannot follow a dangling link, but a write will still follow it to create its target.
-    try {
-      const target = await readlink(path);
-      return physicalPath(isAbsolute(target) ? target : `${dirname(path)}${sep}${target}`);
-    } catch (linkError) {
-      if (!(
-        linkError instanceof Error &&
-        'code' in linkError &&
-        (linkError.code === 'EINVAL' || MISSING.has(String(linkError.code)))
-      ))
-        throw linkError;
-    }
-    const parent = dirname(path);
-    if (parent === path) throw error;
-    return join(await physicalPath(parent), basename(path));
+    if (process.platform !== 'win32' || (error as NodeJS.ErrnoException).code !== 'EISDIR') throw error;
+    return realpathSync(path);
   }
+}
+
+export async function physicalPath(path: string): Promise<string> {
+  return (await nearest(path, { hops: 0, names: 0 })).path;
+}
+
+const unresolvable = (code: string, reason: string, path: string): Error =>
+  Object.assign(new Error(`${code}: ${reason}, resolve '${path}'`), { code });
+
+// Mirrors nearestSync in ../tools/paths, throwing where it returns null.
+async function nearest(path: string, walk: NearestWalk): Promise<NearestPath> {
+  try {
+    return { path: await realpathOrJs(path), exists: true };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((code !== 'ENAMETOOLONG' && !isMissingPathError(code, path)) || dirname(path) === path) throw error;
+  }
+  if (++walk.names > MAX_WALK_NAMES) throw unresolvable('ENAMETOOLONG', 'too many names', path);
+  const parent = await nearest(dirname(path), walk);
+  const name = basename(path);
+  const candidate = join(parent.path, name);
+  // Nothing under a missing folder can be a link, but `..` climbs back out to where one can be.
+  if (!parent.exists) {
+    if (name === '..') throw unresolvable('ENOENT', 'parent of a missing folder', path);
+    return { path: candidate, exists: false };
+  }
+  let target: string;
+  try {
+    target = await readlink(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EINVAL') return { path: await realpathOrJs(candidate), exists: true };
+    if (isMissingNameError(code, candidate, name)) return { path: candidate, exists: false };
+    throw error;
+  }
+  // realpath cannot follow a dangling link, but a write will still follow it to create its target.
+  if (++walk.hops > MAX_LINK_HOPS) throw unresolvable('ELOOP', 'too many symbolic links', path);
+  return nearest(isAbsolute(target) ? target : `${parent.path}${sep}${target}`, walk);
+}
+
+// Also the path's own physical location: an unlink acts on a final link, not on its target.
+async function physicalSpellings(path: string): Promise<string[]> {
+  const target = await physicalPath(path);
+  const parent = dirname(path);
+  if (!isAbsolute(path) || parent === path) return [target];
+  return [target, join(await physicalPath(parent), basename(path))];
 }
 
 /** Check both the requested name and its target, including symlinked parents of new files. */
@@ -37,8 +72,8 @@ export async function resolveSubject(subject: PermissionSubject): Promise<Permis
   const paths = subject.paths;
   const shellPaths = subject.shell?.paths;
   if (!paths && !shellPaths) return subject;
-  const resolved = await Promise.all((paths ?? []).map(physicalPath));
-  const resolvedShell = await Promise.all((shellPaths ?? []).map(physicalPath));
+  const resolved = (await Promise.all((paths ?? []).map(physicalSpellings))).flat();
+  const resolvedShell = (await Promise.all((shellPaths ?? []).map(physicalSpellings))).flat();
   return {
     ...subject,
     ...(paths ? { paths: [...new Set([...paths, ...resolved])] } : {}),

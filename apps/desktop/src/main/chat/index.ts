@@ -142,7 +142,7 @@ import { folderToRemember } from './project/recentFolderToRecord';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
-import { permissionProtectedRoots, toolProtectedPaths } from './protectedLocations';
+import { permissionProtectedLocations, toolProtectedLocations } from './protectedLocations';
 import { keepSessionWritesIn } from './tools/sessionScripts';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
@@ -453,12 +453,15 @@ export function registerChat(
   // are folders no allow rule may cover, since a call writing there would grant itself more.
   const home = app.getPath('home');
   const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
+  const permissionProtected = permissionProtectedLocations(userData, home, dirname(MANAGED_SETTINGS_PATH), logger);
+  const toolProtected = toolProtectedLocations(userData, logger);
   const permissions: PermissionService = new PermissionService({
     store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
     claudeCode,
     isTrusted: directory => projectTrust.isTrusted(directory),
     home,
-    protectedRoots: permissionProtectedRoots(userData, home, dirname(MANAGED_SETTINGS_PATH)),
+    protectedRoots: () => permissionProtected.paths(),
+    unresolvedProtected: () => permissionProtected.unresolved(),
     logger,
   });
   void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
@@ -715,7 +718,12 @@ export function registerChat(
     skills,
     // userData holds the auth vault. Without this a user who shares their home folder would be
     // one `cat` away from the access token, which breaks the rule that tokens never leave the main process.
-    protectedPaths: toolProtectedPaths(userData),
+    get protectedPaths() {
+      return toolProtected.paths();
+    },
+    get unresolvedProtectedPaths() {
+      return toolProtected.unresolved();
+    },
     get deferredTools() {
       return deferredTools.current();
     },

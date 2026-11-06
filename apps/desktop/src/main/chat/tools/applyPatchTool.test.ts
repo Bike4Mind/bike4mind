@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readlink, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatDiff } from '@shared/chat';
@@ -368,6 +368,16 @@ describe('apply_patch', () => {
       expect(await exists('../escape.txt')).toBe(false);
       await expect(stat(join(outside, 'planted.txt'))).rejects.toThrow();
       expect(await read('a.ts')).toBe('one\ntwo\nthree\n');
+    });
+
+    it('does not delete a link that sits in a protected folder reached through an alias', async () => {
+      await mkdir(join(outside, 'prot'));
+      await symlink(outside, file('alias'));
+      await symlink(file('a.ts'), join(outside, 'prot', 'lnk'));
+      context = { ...context, protectedPaths: [join(outside, 'prot')] };
+
+      await expect(run(wrap('*** Delete File: alias/prot/lnk'))).rejects.toBeInstanceOf(PathAccessDenied);
+      await expect(readlink(join(outside, 'prot', 'lnk'))).resolves.toBe(file('a.ts'));
     });
   });
 
