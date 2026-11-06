@@ -12,6 +12,8 @@ import {
   siblingGlbPath,
   writeParamValue,
 } from '@shared/model3d';
+import { realpathNearest } from '../tools/paths';
+import { withPathLock } from '../tools/writeTools';
 import { isModelPaneGlbFile, stampModelPaneGlb } from './glbMarker';
 
 export type ModelCaptureRequest = { id: string; views: ModelView[]; pose: ModelPose };
@@ -252,12 +254,15 @@ export class ModelLiveView {
   async setParam(key: string, value: number): Promise<boolean> {
     const { path, kind } = this.state;
     if (kind !== 'model' || !path) return false;
-    const source = await readFile(path, 'utf8').catch(() => null);
-    if (source === null) return false;
-    const next = writeParamValue(source, key, value);
-    if (next === null) return false;
-    if (next !== source) await writeFile(path, next, 'utf8');
-    return true;
+    // Same lock key as file_write, so a slider write cannot interleave with an agent edit.
+    return withPathLock(await realpathNearest(path), async () => {
+      const source = await readFile(path, 'utf8').catch(() => null);
+      if (source === null) return false;
+      const next = writeParamValue(source, key, value);
+      if (next === null) return false;
+      if (next !== source) await writeFile(path, next, 'utf8');
+      return true;
+    });
   }
 
   /** Bytes of the open binary asset (glb/stl); the renderer cannot read the disk itself. */

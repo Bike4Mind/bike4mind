@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelViewState } from '@shared/model3d';
+import { realpathNearest } from '../tools/paths';
+import { withPathLock } from '../tools/writeTools';
 import { isModelPaneGlb } from './glbMarker';
 
 const fsControl = vi.hoisted(() => ({
@@ -306,6 +308,19 @@ describe('ModelLiveView', () => {
     const before = readFileSync(file, 'utf8');
     expect(await view.setParam('height', 5)).toBe(false);
     expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('serializes a slider write behind a held lock on the same file', async () => {
+    await view.open(file);
+    let release!: () => void;
+    const held = withPathLock(await realpathNearest(file), () => new Promise<void>(resolve => (release = resolve)));
+    const pending = view.setParam('width', 91);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(readFileSync(file, 'utf8')).toContain('value: 60');
+    release();
+    await held;
+    expect(await pending).toBe(true);
+    expect(readFileSync(file, 'utf8')).toContain('value: 91');
   });
 
   it('writes the GLB once per generation however many windows build it', async () => {
