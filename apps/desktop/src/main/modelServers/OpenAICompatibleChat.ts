@@ -184,7 +184,8 @@ async function contextRefusal(response: Response): Promise<string | null> {
 
 /**
  * The max_tokens a context refusal leaves room for, from the counts in its text (vLLM's and OpenAI's wordings),
- * with `context` standing in for a limit the text does not name. Undefined when the text gives no prompt count.
+ * with `context` standing in for a limit the text does not name. Undefined when the text gives no prompt count, or
+ * names tool definitions it gives no count for (a room sized without them would be too big).
  */
 function roomAfterRefusal(refusal: string, sent: number, context: number | undefined): number | undefined {
   const count = (pattern: RegExp) => {
@@ -193,9 +194,14 @@ function roomAfterRefusal(refusal: string, sent: number, context: number | undef
   };
   const limit = count(/maximum context length is (\d+)/i) ?? context;
   if (limit === undefined) return undefined;
+  const inMessages = count(/(\d+) (?:tokens )?in the messages/i);
+  const inFunctions = count(/(\d+) (?:tokens )?in the functions/i);
+  const resulted = count(/messages resulted in (\d+) tokens/i);
+  // Tool definitions reported apart but uncountable: sizing from the other counts would leave out their share.
+  if (resulted === undefined && inFunctions === undefined && /in the functions/i.test(refusal)) return undefined;
   const prompt =
-    count(/messages resulted in (\d+) tokens/i) ??
-    count(/(\d+) (?:tokens )?in the messages/i) ??
+    resulted ??
+    (inMessages === undefined ? undefined : inMessages + (inFunctions ?? 0)) ??
     count(/(\d+) input tokens/i);
   if (prompt !== undefined) return limit - prompt;
   const requested = count(/you requested (\d+) tokens/i);
