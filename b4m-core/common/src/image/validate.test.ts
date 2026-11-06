@@ -287,6 +287,14 @@ describe('validateImageRequest', () => {
       }
     });
 
+    it('asks for one image when the model makes only one', () => {
+      expect(
+        reasonsOf(
+          validateImageRequest({ mode: 'edit', inputs: [{ role: 'edit_source' }, { role: 'mask' }], count: 0 }, fill)
+        )
+      ).toEqual(['Ask for one image; you asked for 0']);
+    });
+
     it('carries the typed detail the reason was built from', () => {
       const result = validateImageRequest({ mode: 'generate', count: 11 }, fluxPro);
       expect(result).toMatchObject({

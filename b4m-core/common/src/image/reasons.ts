@@ -62,7 +62,8 @@ function aspectRatioReason(requested: string, mode: ImageMode, allowed: AspectRa
 
 function outputCountReason(mode: ImageMode, requested: number, max: number): string {
   if (!Number.isInteger(requested) || requested < 1) {
-    return `Ask for a whole number of images from 1 to ${max}; you asked for ${requested}`;
+    const wanted = max === 1 ? 'Ask for one image' : `Ask for a whole number of images from 1 to ${max}`;
+    return `${wanted}; you asked for ${requested}`;
   }
   const limit = max === 1 ? 'one image' : `up to ${max} images`;
   return `This model makes ${limit} per request ${MODE_WHEN[mode]}; you asked for ${requested}`;
