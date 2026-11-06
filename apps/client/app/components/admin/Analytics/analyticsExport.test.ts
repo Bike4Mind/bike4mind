@@ -33,7 +33,7 @@ const overview = {
     bySource: [{ day: '2026-06-14', partial: false, counts: null }],
     sources: ['web'],
   },
-  signups: { buckets: [], totals: { legit: 0, suspected: 0, unclassified: 0 }, bySignal: [] },
+  signups: { buckets: [], totals: { legit: 0, suspected: 0 }, bySignal: [] },
   usage: {
     features: ['chat', 'other'],
     days: [

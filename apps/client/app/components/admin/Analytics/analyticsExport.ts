@@ -95,7 +95,6 @@ export function buildAnalyticsCsvFiles(
         'Partial bucket',
         'Likely legit (signups)',
         'Suspected (signups)',
-        'Unclassified (signups)',
       ],
       overview.signups.buckets.map(bucket => ({
         'Bucket start (UTC)': bucket.start,
@@ -103,7 +102,6 @@ export function buildAnalyticsCsvFiles(
         'Partial bucket': yesNo(bucket.partial),
         'Likely legit (signups)': bucket.legit,
         'Suspected (signups)': bucket.suspected,
-        'Unclassified (signups)': bucket.unclassified,
       }))
     ),
     csvFile(
