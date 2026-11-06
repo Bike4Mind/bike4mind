@@ -16,10 +16,11 @@ const sensitiveField =
  * stays linear in the input.
  */
 const stringScrubbers: ReadonlyArray<readonly [RegExp, string]> = [
-  [/\bBearer\s+[^\s"',;]+/gi, `Bearer ${REDACTED}`],
-  // Credentials in a URL query string (OAuth callbacks, presigned URLs, magic links).
+  [/\bBearer\s+[^\s"'\\,;]+/gi, `Bearer ${REDACTED}`],
+  // Credentials in a URL query string or fragment (OAuth callbacks, presigned URLs, magic links). The value
+  // stops at a backslash so an escaped quote in a JSON-encoded line survives.
   [
-    /([?&](?:code|token|access_token|refresh_token|id_token|otc|otp|key|api_key|apikey|password|signature|sig|x-amz-signature|x-amz-credential|x-amz-security-token)=)[^&\s"'#]+/gi,
+    /([?&#](?:code|token|access_token|refresh_token|id_token|client_secret|otc|otp|key|api_key|apikey|password|signature|sig|x-amz-signature|x-amz-credential|x-amz-security-token)=)[^&\s"'\\#]+/gi,
     `$1${REDACTED}`,
   ],
   [/\beyJ[\w-]{5,}\.[\w-]{5,}\.[\w-]*/g, '[REDACTED_JWT]'],

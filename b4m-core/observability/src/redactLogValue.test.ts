@@ -141,6 +141,21 @@ describe('redactLogValue', () => {
     expect(redacted).toContain('X-Amz-Signature=[REDACTED]&X-Amz-Credential=[REDACTED]');
   });
 
+  it('keeps JSON-escaped quotes intact after a scrubbed credential', () => {
+    const line = JSON.stringify({ message: 'auth "Bearer abc.def" and "https://x.test/cb?code=abc123"' });
+    const redacted = redactLogText(line);
+    expect(() => JSON.parse(redacted)).not.toThrow();
+    expect(redacted).not.toContain('abc123');
+    expect(redacted).not.toContain('abc.def');
+  });
+
+  it('redacts fragment tokens and client secrets', () => {
+    expect(redactLogText('https://x.test/cb#access_token=abc123&state=s')).toBe(
+      'https://x.test/cb#access_token=[REDACTED]&state=s'
+    );
+    expect(redactLogText('/token?client_secret=shh&x=1')).toBe('/token?client_secret=[REDACTED]&x=1');
+  });
+
   it('leaves ordinary identifiers and prose alone', () => {
     const line = 'task-runner risk-assessment user 64b7f0c2a1e4d3b2c1a09f87 status 502 quest ses_123 at 10:00';
     expect(redactLogText(line)).toBe(line);
