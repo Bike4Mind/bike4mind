@@ -384,6 +384,14 @@ class ShadowDetectionRepository {
     throw new Error(`Shadow detection ${doc._id.toString()} kept changing while removing a deleted user`);
   }
 
+  /** Detections naming this user that no reviewer has judged legitimate (unreviewed included). */
+  async countOpenForUser(userId: string): Promise<number> {
+    return ShadowDetectionModel.countDocuments({
+      userIds: userId,
+      verdict: { $nin: ['legitimate_human', 'legitimate_automation'] },
+    }).exec();
+  }
+
   /** Newest first; `truncated` is true when more than `limit` records match. */
   async list(query: {
     detector?: ShadowDetector;

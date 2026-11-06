@@ -8,6 +8,7 @@ import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from '
 import { PaginatedResponse, UserReasoningEffort } from '../common';
 import type { AuthStrategy } from '../../schemas/user';
 import type { SignupRiskSignal } from '../../schemas/settings';
+import type { SignupRiskAutoApprovalPolicy } from '../../schemas/signupRiskReview';
 import type { RiskEvidenceRecord, RiskEvidenceSummary, RiskEvidenceTrigger } from '../../schemas/riskEvidence';
 import type { SignupGrant, SignupGrantAssessment } from '../../signupGrant';
 import type { AdminPermissionId } from '../../adminPermissions';
@@ -71,6 +72,11 @@ export interface ISignupMeta extends INetworkMeta {
  */
 export const SIGNUP_RISK_REVIEW_STATES = ['none', 'pending', 'approved', 'banned'] as const;
 export type SignupRiskReviewState = (typeof SIGNUP_RISK_REVIEW_STATES)[number];
+
+export interface ISignupRiskAutoApproval {
+  policy: SignupRiskAutoApprovalPolicy;
+  decidedAt: Date;
+}
 
 export interface RiskEvidenceCoverage {
   accounts: number;
@@ -839,6 +845,24 @@ export interface IUser extends ICreditHolder {
   /** Abuse risk of a new account. Never shown to the user: the signals would say how to avoid them. */
   riskScore?: ISignupRiskScore | null;
 
+  /** Set when the pending review was approved automatically; any admin review decision clears it. */
+  riskReviewAutoApproval?: ISignupRiskAutoApproval | null;
+
+  /**
+   * Set when a decided review is reopened, by an admin or by a payment reversal after a settled-payment
+   * approval; the automatic approval rules never act on it again.
+   */
+  riskReviewReopenedAt?: Date | null;
+
+  /**
+   * First refund, dispute or early fraud warning on the account's payments; disqualifies it from the
+   * automatic approval rules even when it has no signup grant to forfeit.
+   */
+  paymentRiskEventAt?: Date | null;
+
+  /** Last time the auto-approval sweep evaluated this pending review; the sweep visits the oldest first. */
+  riskReviewAutoCheckedAt?: Date | null;
+
   /**
    * Behavioral evidence and its refresh state (b4m-core/common/src/schemas/riskEvidence.ts).
    * Shadow-only: never feeds riskScore.reviewState. Admin-only, like riskScore.
@@ -1094,9 +1118,32 @@ export interface IUserRepository
   countPendingRiskReviews: () => Promise<number>;
   /**
    * Move a user's review from `from` to `to`, only if it is still `from`; false when it was not
-   * (already decided or no score). Used for admin approve and its undo.
+   * (already decided or no score). Used for admin approve and its undo; clears riskReviewAutoApproval,
+   * and a move back to pending stamps riskReviewReopenedAt.
    */
   setRiskReviewState: (userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState) => Promise<boolean>;
+  /**
+   * Approve a pending review and record why; false when it was no longer pending, an admin reopened
+   * it, or the account is banned, disputed, suspended, has a payment risk event, has forfeited its
+   * payment unlock or holds a signup grant tranche for review.
+   */
+  autoApproveRiskReview: (userId: string, approval: ISignupRiskAutoApproval) => Promise<boolean>;
+  /** Stamp paymentRiskEventAt, only when it is not already set, so the first event's time is kept. */
+  recordPaymentRiskEvent: (userId: string, at: Date) => Promise<void>;
+  /**
+   * Ids of pending reviews the auto-approval rules can still act on and that were not evaluated since
+   * `checkedBefore`, least recently evaluated first.
+   */
+  findPendingRiskReviewIds: (options: { checkedBefore: Date; limit: number }) => Promise<string[]>;
+  /** Stamp riskReviewAutoCheckedAt, so the next sweep page and run move on to other accounts. */
+  markRiskReviewAutoChecked: (userIds: string[], at: Date) => Promise<void>;
+  /**
+   * Move an automatic approval made under `policy` back to pending and stamp riskReviewReopenedAt;
+   * false when the account is no longer approved under that policy.
+   */
+  reopenRiskAutoApproval: (userId: string, policy: SignupRiskAutoApprovalPolicy) => Promise<boolean>;
+  /** Users still approved by an automatic approval decided at or after `since`, newest first. */
+  findRiskAutoApprovals: (options: { since: Date; limit: number }) => Promise<IUserDocument[]>;
   /**
    * Mark an evidence refresh queued, only if none is pending or the pending one is older than
    * `staleBefore` (its message was lost). True when this call claimed it and should enqueue.

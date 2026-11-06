@@ -29,8 +29,31 @@ export const signupRiskReviewItemSchema = z.object({
 });
 export type SignupRiskReviewItem = z.infer<typeof signupRiskReviewItemSchema>;
 
+/**
+ * Evidence a pending review was approved on without an admin (apps/client/server/security/riskReviewAutoApproval.ts).
+ * Only ever moves pending to approved; a model verdict is never one of these.
+ */
+export const SIGNUP_RISK_AUTO_APPROVAL_POLICIES = ['settled_payment', 'quiet_account'] as const;
+export type SignupRiskAutoApprovalPolicy = (typeof SIGNUP_RISK_AUTO_APPROVAL_POLICIES)[number];
+
+/** Auto-approvals listed for reopening: those still approved, decided within this many days. */
+export const SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS = 30;
+export const SIGNUP_RISK_AUTO_APPROVAL_LIST_LIMIT = 200;
+
+export const signupRiskAutoApprovalItemSchema = z.object({
+  userId: z.string(),
+  email: z.string().nullable(),
+  username: z.string().nullable(),
+  score: z.number().nullable(),
+  policy: z.enum(SIGNUP_RISK_AUTO_APPROVAL_POLICIES),
+  decidedAt: z.date(),
+});
+export type SignupRiskAutoApprovalItem = z.infer<typeof signupRiskAutoApprovalItemSchema>;
+
 export const signupRiskReviewListSchema = z.object({
   data: z.array(signupRiskReviewItemSchema),
+  /** Recent automatic approvals, newest first, so a reviewer can reopen one. */
+  autoApproved: z.array(signupRiskAutoApprovalItemSchema),
   truncated: z.boolean(),
   /** The configured score at which an account needs review. */
   reviewThreshold: z.number(),

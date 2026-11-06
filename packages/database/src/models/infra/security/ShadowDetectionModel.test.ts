@@ -105,6 +105,20 @@ describe('shadowDetectionRepository', () => {
     expect(confirmed.data.map(item => item.id)).toEqual([older]);
   });
 
+  it('counts open detections for a user, leaving out those judged legitimate', async () => {
+    await shadowDetectionRepository.record(detection({ userIds: ['u1', 'u2'] }));
+    await grade(await shadowDetectionRepository.record(detection({ userIds: ['u1'] })), 0, 'confirmed_abuse');
+    await grade(await shadowDetectionRepository.record(detection({ userIds: ['u1'] })), 0, 'legitimate_human');
+    await ShadowDetectionModel.updateOne(
+      { _id: await shadowDetectionRepository.record(detection({ userIds: ['u1'] })) },
+      { $set: { verdict: 'legitimate_automation' } }
+    );
+
+    expect(await shadowDetectionRepository.countOpenForUser('u1')).toBe(2);
+    expect(await shadowDetectionRepository.countOpenForUser('u2')).toBe(1);
+    expect(await shadowDetectionRepository.countOpenForUser('u3')).toBe(0);
+  });
+
   it('adds a verdict and bumps the revision', async () => {
     const id = await shadowDetectionRepository.record(detection());
 

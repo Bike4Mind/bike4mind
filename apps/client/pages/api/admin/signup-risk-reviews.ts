@@ -1,11 +1,14 @@
 import {
   ApiKeyScope,
+  SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS,
+  SIGNUP_RISK_AUTO_APPROVAL_LIST_LIMIT,
   SIGNUP_RISK_REVIEW_LIST_LIMIT,
   SignupRiskScoringSchema,
   emailDomainOf,
   signupRiskReviewDecisionResultSchema,
   signupRiskReviewDecisionSchema,
   signupRiskReviewListSchema,
+  type SignupRiskAutoApprovalItem,
   type SignupRiskReviewItem,
   type SignupRiskReviewState,
 } from '@bike4mind/common';
@@ -34,9 +37,10 @@ import {
 import { respond } from '@server/utils/respond';
 
 const ONE_MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * ONE_MINUTE_MS;
 export const SIGNUP_RISK_REVIEWS_RATE_LIMIT = 30;
 
-// reopen is the undo of approve, offered by the admin tab's undo toast.
+// reopen is the undo of approve, offered by the admin tab's undo toast and on automatic approvals.
 const TRANSITIONS = {
   approve: {
     from: 'pending',
@@ -62,7 +66,7 @@ const domainOf = (email: string | null | undefined) => {
 
 /**
  * The signup risk review queue (admin Risk review tab). GET lists pending accounts with what a
- * reviewer needs to decide; POST approves them (or reopens an approval), one audited transaction
+ * reviewer needs to decide, plus recent automatic approvals (riskReviewAutoApproval.ts) to reopen; POST approves them (or reopens an approval), one audited transaction
  * per user. Approving also pays a signup tranche the signup grant policy withheld, which reopening
  * does not take back. Suspending goes through the bulk abuse response routes instead (admin/abuse/bulk-*).
  */
@@ -73,7 +77,13 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
   .get(
     asyncHandler(async (req, res) => {
       ensureAdmin(req.user?.isAdmin);
-      const users = await userRepository.findPendingRiskReviews(SIGNUP_RISK_REVIEW_LIST_LIMIT + 1);
+      const [users, autoApprovedUsers] = await Promise.all([
+        userRepository.findPendingRiskReviews(SIGNUP_RISK_REVIEW_LIST_LIMIT + 1),
+        userRepository.findRiskAutoApprovals({
+          since: new Date(Date.now() - SIGNUP_RISK_AUTO_APPROVAL_LIST_DAYS * DAY_MS),
+          limit: SIGNUP_RISK_AUTO_APPROVAL_LIST_LIMIT,
+        }),
+      ]);
       const listed = users.slice(0, SIGNUP_RISK_REVIEW_LIST_LIMIT);
       const ids = listed.map(user => user.id);
       const [creditsSpent, apiKeysCreated, settings] = await Promise.all([
@@ -101,9 +111,24 @@ const handler = baseApi({ auth: 'jwtOnly', requiredScopes: [ApiKeyScope.ADMIN] }
             ]
           : []
       );
+      const autoApproved = autoApprovedUsers.flatMap((user): SignupRiskAutoApprovalItem[] =>
+        user.riskReviewAutoApproval
+          ? [
+              {
+                userId: user.id,
+                email: user.email ?? null,
+                username: user.username ?? null,
+                score: user.riskScore?.score ?? null,
+                policy: user.riskReviewAutoApproval.policy,
+                decidedAt: user.riskReviewAutoApproval.decidedAt,
+              },
+            ]
+          : []
+      );
       res.setHeader('Cache-Control', 'private, no-store');
       respond(res, signupRiskReviewListSchema, {
         data,
+        autoApproved,
         truncated: users.length > SIGNUP_RISK_REVIEW_LIST_LIMIT,
         reviewThreshold,
       });

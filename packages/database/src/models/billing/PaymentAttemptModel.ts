@@ -167,6 +167,15 @@ class PaymentAttemptRepository {
     return row?.visitId ?? null;
   }
 
+  /** The account that started this payment intent; null when no attempt was recorded for it. */
+  async findUserId(paymentIntentId: string): Promise<string | null> {
+    const row = await PaymentAttemptModel.findOne({ paymentIntentId })
+      .select({ userId: 1, _id: 0 })
+      .maxTimeMS(2000)
+      .lean();
+    return row?.userId ?? null;
+  }
+
   /**
    * Adds a Stripe-reported outcome to the attempt, creating it when start-payment never saw it
    * (a Checkout subscription). `changed` is false when the update added nothing new (same outcome,
@@ -219,6 +228,24 @@ class PaymentAttemptRepository {
       before.outcome !== outcome ||
       (cardFingerprint !== null && !(before.cardFingerprints ?? []).includes(cardFingerprint));
     return { attempt: toAttempt(after), changed };
+  }
+
+  /** This account's succeeded attempts with this Radar risk level, created at or before `createdBefore`, newest first. */
+  async findSettledByUser(
+    userId: string,
+    input: { riskLevel: string; createdBefore: Date; limit: number }
+  ): Promise<PaymentAttempt[]> {
+    const rows = await PaymentAttemptModel.find({
+      userId,
+      outcome: 'succeeded',
+      riskLevel: input.riskLevel,
+      createdAt: { $lte: input.createdBefore },
+    })
+      .sort({ createdAt: -1 })
+      .limit(input.limit)
+      .lean()
+      .exec();
+    return rows.map(toAttempt);
   }
 
   /** Distinct accounts that have used this card, successfully or not. Null when the scan is truncated. */

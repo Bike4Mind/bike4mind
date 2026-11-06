@@ -17,14 +17,17 @@ import {
   IUserRepository,
   IUserNote,
   IModerationHit,
+  ISignupRiskAutoApproval,
   ISignupRiskScore,
   RISK_EVIDENCE_TRIGGERS,
   type RiskEvidenceCoverage,
   type RiskEvidenceSummary,
   riskEvidenceSummarySchema,
   type RiskEvidenceTrigger,
+  SIGNUP_RISK_AUTO_APPROVAL_POLICIES,
   SIGNUP_RISK_REVIEW_STATES,
   SIGNUP_RISK_SIGNALS,
+  type SignupRiskAutoApprovalPolicy,
   type SignupRiskReviewState,
   UserModerationStatus,
   MFA_MAX_FAILED_ATTEMPTS,
@@ -336,6 +339,15 @@ export type UserLinkState = {
   isBanned: boolean;
   disputePending: boolean;
   moderation: { status: UserModerationStatus } | null;
+};
+
+// A held review tranche is paid only by the admin approve path, so automatic approval skips it.
+// Keep in sync with userService.isSignupGrantHeldForReview.
+const heldReviewTrancheFilter = {
+  'signupGrantAssessment.band': 'review',
+  'signupGrantAssessment.status': 'evaluated',
+  'signupGrant.stage': 'signup',
+  $expr: { $lt: ['$signupGrant.creditsReleased', '$signupGrant.signupCredits'] },
 };
 
 export class UserRepository extends BaseRepository<IUserDocument> implements IUserRepository {
@@ -1111,9 +1123,99 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
 
   async setRiskReviewState(userId: string, from: SignupRiskReviewState, to: SignupRiskReviewState): Promise<boolean> {
     const result = await this.model
-      .updateOne({ _id: userId, 'riskScore.reviewState': from }, { $set: { 'riskScore.reviewState': to } })
+      .updateOne(
+        { _id: userId, 'riskScore.reviewState': from },
+        {
+          $set: { 'riskScore.reviewState': to, ...(to === 'pending' ? { riskReviewReopenedAt: new Date() } : {}) },
+          $unset: { riskReviewAutoApproval: 1 },
+        }
+      )
       .exec();
     return result.modifiedCount === 1;
+  }
+
+  async autoApproveRiskReview(userId: string, approval: ISignupRiskAutoApproval): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        // Re-checks the disqualifiers at write time, so a dispute or suspension landing mid-evaluation wins.
+        // Keep in sync with userService.accountBlockReasons and findPendingRiskReviewIds.
+        {
+          _id: userId,
+          'riskScore.reviewState': 'pending',
+          riskReviewReopenedAt: null,
+          isBanned: { $ne: true },
+          disputePending: { $ne: true },
+          'moderation.status': { $ne: 'suspended' },
+          'signupGrant.unlockForfeited': null,
+          paymentRiskEventAt: null,
+          $nor: [heldReviewTrancheFilter],
+        },
+        { $set: { 'riskScore.reviewState': 'approved', riskReviewAutoApproval: approval } }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async recordPaymentRiskEvent(userId: string, at: Date): Promise<void> {
+    await this.model.updateOne({ _id: userId, paymentRiskEventAt: null }, { $set: { paymentRiskEventAt: at } }).exec();
+  }
+
+  async findPendingRiskReviewIds(options: { checkedBefore: Date; limit: number }): Promise<string[]> {
+    const rows = await this.model
+      .find(
+        {
+          'riskScore.reviewState': 'pending',
+          // Accounts autoApproveRiskReview can never approve stay out, so they do not spend a capped sweep's budget.
+          riskReviewReopenedAt: null,
+          isBanned: { $ne: true },
+          disputePending: { $ne: true },
+          'moderation.status': { $ne: 'suspended' },
+          'signupGrant.unlockForfeited': null,
+          paymentRiskEventAt: null,
+          $nor: [heldReviewTrancheFilter],
+          // $not also matches a review never evaluated (no field), which sorts first.
+          riskReviewAutoCheckedAt: { $not: { $gte: options.checkedBefore } },
+        },
+        { _id: 1 }
+      )
+      .sort({ riskReviewAutoCheckedAt: 1, _id: 1 })
+      .limit(options.limit)
+      .lean<{ _id: mongoose.Types.ObjectId }[]>()
+      .exec();
+    return rows.map(row => row._id.toString());
+  }
+
+  async markRiskReviewAutoChecked(userIds: string[], at: Date): Promise<void> {
+    if (!userIds.length) return;
+    await this.model.updateMany({ _id: { $in: userIds } }, { $set: { riskReviewAutoCheckedAt: at } }).exec();
+  }
+
+  async reopenRiskAutoApproval(userId: string, policy: SignupRiskAutoApprovalPolicy): Promise<boolean> {
+    const result = await this.model
+      .updateOne(
+        { _id: userId, 'riskScore.reviewState': 'approved', 'riskReviewAutoApproval.policy': policy },
+        {
+          $set: { 'riskScore.reviewState': 'pending', riskReviewReopenedAt: new Date() },
+          $unset: { riskReviewAutoApproval: 1 },
+        }
+      )
+      .exec();
+    return result.modifiedCount === 1;
+  }
+
+  async findRiskAutoApprovals(options: { since: Date; limit: number }): Promise<IUserDocument[]> {
+    return this.model
+      .find(
+        {
+          'riskScore.reviewState': 'approved',
+          isBanned: { $ne: true },
+          'riskReviewAutoApproval.decidedAt': { $gte: options.since },
+        },
+        { email: 1, username: 1, riskScore: 1, riskReviewAutoApproval: 1 }
+      )
+      .sort({ 'riskReviewAutoApproval.decidedAt': -1 })
+      .limit(options.limit)
+      .exec();
   }
 
   async claimRiskEvidenceRefresh(
@@ -1689,6 +1791,24 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
     // Recomputed by userService.refreshSignupRiskScore - see IUser.riskScore.
     riskScore: { type: RiskScoreSchema, required: false, default: undefined },
+    // Written by riskReviewAutoApproval (apps/client) - see IUser.riskReviewAutoApproval.
+    riskReviewAutoApproval: {
+      type: new Schema(
+        {
+          policy: { type: String, required: true, enum: [...SIGNUP_RISK_AUTO_APPROVAL_POLICIES] },
+          decidedAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
+    // Written by setRiskReviewState on an admin reopen and by reopenRiskAutoApproval - see IUser.riskReviewReopenedAt.
+    riskReviewReopenedAt: { type: Date, required: false, default: undefined },
+    // Written by forfeitSignupUnlock (apps/client/server/credits/paymentUnlockForfeit.ts) - see IUser.paymentRiskEventAt.
+    paymentRiskEventAt: { type: Date, required: false, default: undefined },
+    // Written by markRiskReviewAutoChecked - see IUser.riskReviewAutoCheckedAt.
+    riskReviewAutoCheckedAt: { type: Date, required: false, default: undefined },
     // Written by userService.refreshRiskEvidence - see IUser.riskEvidence.
     riskEvidence: { type: RiskEvidenceSchema, required: false, default: undefined },
     isSynthetic: { type: Boolean, required: false },

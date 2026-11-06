@@ -225,6 +225,14 @@ describe('signup unlock forfeits', () => {
     expect(mocks.forfeitHeldUnlockForRefund).toHaveBeenCalledExactlyOnceWith(charge, logger);
   });
 
+  it('forfeits on a refunded charge that carries no refund list', async () => {
+    const charge = { id: 'ch_1', customer: 'cus_1', payment_intent: 'pi_1' };
+
+    await deliver({ type: 'charge.refunded', data: { object: charge } });
+
+    expect(mocks.forfeitHeldUnlockForRefund).toHaveBeenCalledExactlyOnceWith(charge, logger);
+  });
+
   // Guards a merge with another radar.early_fraud_warning.created case dropping this call.
   it('cancels a held unlock on an early fraud warning', async () => {
     const warning = { id: 'issfr_1', charge: 'ch_1' };
