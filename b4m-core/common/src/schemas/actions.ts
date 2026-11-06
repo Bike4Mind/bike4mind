@@ -1502,6 +1502,21 @@ export const ConfidenceGateAction = z.object({
 });
 
 /**
+ * A final answer reached on low confidence. Distinct from `confidence_gate`: that event pauses a
+ * run mid-flight, this one reports a run that already has its answer. `annotate` keeps the answer
+ * and completes; `block` also pauses the run for review (the answer stays in the checkpoint).
+ */
+export const LowConfidenceCompletionAction = z.object({
+  action: z.literal('low_confidence_completion'),
+  executionId: z.string(),
+  /** 0..1, the confidence of the last gate-evaluated iteration before the answer. */
+  confidence: z.number(),
+  /** Pre-formatted server copy, e.g. "Answered after an iteration below the 60% confidence threshold (latest 42%)". */
+  reason: z.string(),
+  mode: z.enum(['block', 'annotate']),
+});
+
+/**
  * Persisted snapshot of a non-background child subagent execution. Replayed on
  * reconnect so `SubagentStepNest` can re-render the nested iteration
  * trace under the parent's `delegate_to_agent` action step after a hard refresh
@@ -1700,6 +1715,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   SubagentProgressAction,
   PermissionRequestAction,
   ConfidenceGateAction,
+  LowConfidenceCompletionAction,
   ReconnectResultAction,
 ]);
 export type IMessageDataToClient = z.infer<typeof MessageDataToClient>;
