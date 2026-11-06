@@ -66,7 +66,7 @@ const componentsByFile = {
   'PublishedArtifactsTab.tsx': ['Table'],
   'RapidReplyMetrics.tsx': ['Card', 'Table'],
   'RapidReplyTab.tsx': ['Card', 'Modal', 'Table'],
-  'RateLimits/components/OverviewTab.tsx': ['Card', 'Table'],
+  'RateLimits/components/OverviewTab.tsx': ['Table'],
   'RateLimits/index.tsx': ['Table'],
   'RegistrationInvites/components/CreateInviteModal.tsx': ['Modal'],
   'RegistrationInvites/components/DeleteConfirmModal.tsx': ['Modal'],
