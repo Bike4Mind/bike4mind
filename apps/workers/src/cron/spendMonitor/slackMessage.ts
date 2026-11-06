@@ -94,14 +94,21 @@ export function buildSpendAlertMessage(input: SpendAlertMessageInput): SlackAlar
   const ratio = numberOrNull(alert.context.ratio);
   const isCost = alert.rule === 'platform_cost_spike';
   const trusted = alert.context.trusted === true;
+  const excluded = numberOrNull(alert.context.trustedExcluded);
+  const trustedExcluded = excluded !== null && excluded > 0 ? excluded : null;
 
   const fields = [
     `*Scope*\n${safe(scope.label)}${trusted ? ' (trusted)' : ''}`,
     `*Last ${WINDOW_LABEL}*\n${formatAmount(alert.rule, alert.lastValue, creditUsd)}`,
-    `*Normal (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
+    `*${trustedExcluded === null ? 'Normal' : 'Normal excl. trusted'} (${WINDOW_LABEL})*\n${baseline === null ? 'no history' : formatAmount(alert.rule, baseline, creditUsd)}`,
     `*Ratio*\n${ratio === null ? 'n/a' : `x${ratio.toFixed(1)}`}`,
   ];
   if (scope.paidBy) fields.push(`*Paid by*\n${safe(scope.paidBy)}`);
+  // Platform ratios and floors are judged without trusted accounts; the reported total still includes them.
+  if (trustedExcluded !== null) {
+    const estimate = isCost ? ' (est.)' : '';
+    fields.push(`*Trusted accounts, not in ratio*\n${formatAmount(alert.rule, trustedExcluded, creditUsd)}${estimate}`);
+  }
 
   const sections: string[] = [];
   if (breakdown?.topModels.length) {

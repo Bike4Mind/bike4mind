@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { evaluatePlatform, evaluateScope, type ScopeObservation, type SpendThresholds } from './rules';
+import {
+  evaluatePlatform,
+  evaluateScope,
+  type PlatformObservation,
+  type ScopeObservation,
+  type SpendThresholds,
+} from './rules';
 
 const thresholds: SpendThresholds = {
   platformSpikeRatio: 3,
@@ -13,13 +19,16 @@ const thresholds: SpendThresholds = {
   trustedAccountCeilingCredits: 40000,
 };
 
-const platformCredits = (value: number, baseline: number | null): ScopeObservation => ({
+const platformCredits = (value: number, baseline: number | null, total = value): PlatformObservation => ({
   scopeType: 'platform',
   scopeId: 'all',
   value,
+  total,
   baseline,
 });
-const quietCost = platformCredits(0, 0);
+/** Cost and credits that clear their floors without spiking, so only the other metric decides. */
+const steadyCost = platformCredits(30, 30);
+const steadyCredits = platformCredits(6000, 6000);
 const scope = (scopeType: ScopeObservation['scopeType'], value: number, baseline: number | null): ScopeObservation => ({
   scopeType,
   scopeId: 's1',
@@ -29,48 +38,81 @@ const scope = (scopeType: ScopeObservation['scopeType'], value: number, baseline
 
 describe('evaluatePlatform', () => {
   it('warns on a spike above the floor', () => {
-    const [breach, ...rest] = evaluatePlatform(platformCredits(15000, 4000), quietCost, thresholds);
+    const [breach, ...rest] = evaluatePlatform(platformCredits(15000, 4000), steadyCost, thresholds);
     expect(rest).toEqual([]);
     expect(breach).toMatchObject({ rule: 'platform_spike', severity: 'warning', ratio: 3.75 });
   });
 
   it('is critical at the critical ratio', () => {
-    const breaches = evaluatePlatform(platformCredits(30000, 4000), quietCost, thresholds);
+    const breaches = evaluatePlatform(platformCredits(30000, 4000), steadyCost, thresholds);
     expect(breaches).toHaveLength(1);
     expect(breaches[0].severity).toBe('critical');
   });
 
   it('ignores a ratio spike below the floor', () => {
-    expect(evaluatePlatform(platformCredits(4000, 1000), quietCost, thresholds)).toEqual([]);
+    expect(evaluatePlatform(platformCredits(4000, 1000), steadyCost, thresholds)).toEqual([]);
   });
 
   it('fires on absolute size alone without a baseline, as a warning', () => {
-    const breaches = evaluatePlatform(platformCredits(15000, null), quietCost, thresholds);
+    const breaches = evaluatePlatform(platformCredits(15000, null), steadyCost, thresholds);
     expect(breaches).toHaveLength(1);
     expect(breaches[0]).toMatchObject({ rule: 'platform_spike', severity: 'warning', ratio: null });
   });
 
   it('stays quiet without a baseline below floor * ratio', () => {
-    expect(evaluatePlatform(platformCredits(14999, null), quietCost, thresholds)).toEqual([]);
+    expect(evaluatePlatform(platformCredits(14999, null), steadyCost, thresholds)).toEqual([]);
   });
 
   it('evaluates cost against the cost floor', () => {
-    const breaches = evaluatePlatform(quietCost, platformCredits(100, 10), thresholds);
+    const breaches = evaluatePlatform(steadyCredits, platformCredits(100, 10), thresholds);
     expect(breaches).toHaveLength(1);
     expect(breaches[0]).toMatchObject({ rule: 'platform_cost_spike', severity: 'critical' });
   });
 
   it('fires a cost spike without a baseline once cost reaches floor * ratio', () => {
-    const breaches = evaluatePlatform(quietCost, platformCredits(60, null), thresholds);
+    const breaches = evaluatePlatform(steadyCredits, platformCredits(60, null), thresholds);
     expect(breaches).toEqual([
       expect.objectContaining({ rule: 'platform_cost_spike', severity: 'warning', ratio: null }),
     ]);
-    expect(evaluatePlatform(quietCost, platformCredits(59, null), thresholds)).toEqual([]);
+    expect(evaluatePlatform(steadyCredits, platformCredits(59, null), thresholds)).toEqual([]);
   });
 
   it('returns both breaches when credits and cost spike together', () => {
     const breaches = evaluatePlatform(platformCredits(15000, 4000), platformCredits(100, 10), thresholds);
     expect(breaches.map(breach => breach.rule)).toEqual(['platform_spike', 'platform_cost_spike']);
+  });
+
+  describe('needs both floors', () => {
+    it('stays quiet on a credit spike while cost is under the cost floor', () => {
+      expect(evaluatePlatform(platformCredits(30000, 4000), platformCredits(19, 1), thresholds)).toEqual([]);
+    });
+
+    it('stays quiet on a cost spike while credits are under the credit floor', () => {
+      expect(evaluatePlatform(platformCredits(4999, 100), platformCredits(100, 10), thresholds)).toEqual([]);
+    });
+
+    it('fires once both floors are met', () => {
+      expect(evaluatePlatform(platformCredits(5000, 1000), platformCredits(20, 20), thresholds)).toEqual([
+        expect.objectContaining({ rule: 'platform_spike', ratio: 5 }),
+      ]);
+    });
+  });
+
+  describe('trusted spend', () => {
+    it('judges the floor and ratio on standard spend only', () => {
+      // 15,000 credits in the window, 13,000 of them trusted: only 2,000 standard, under the floor.
+      expect(evaluatePlatform(platformCredits(2000, 1000, 15000), steadyCost, thresholds)).toEqual([]);
+    });
+
+    it('reports the full total and the trusted share when standard spend spikes', () => {
+      const [breach] = evaluatePlatform(platformCredits(15000, 4000, 20000), steadyCost, thresholds);
+      expect(breach).toMatchObject({ rule: 'platform_spike', value: 20000, ratio: 3.75, trustedExcluded: 5000 });
+    });
+
+    it('leaves trustedExcluded unset when nothing was trusted', () => {
+      const [breach] = evaluatePlatform(platformCredits(15000, 4000), steadyCost, thresholds);
+      expect(breach).not.toHaveProperty('trustedExcluded');
+    });
   });
 });
 
