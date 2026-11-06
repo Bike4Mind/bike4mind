@@ -4,6 +4,7 @@ import { GrantOrgParamsSchema, grantOrg } from '@server/admin/creditGrants/grant
 import { GrantSubscriptionParamsSchema, grantSubscription } from '@server/admin/creditGrants/grantSubscription';
 import { TopUpParamsSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
 import { executeApprovedUsersBulk } from '@server/admin/usersBulk/approvalExecutor';
+import { DeleteAdminParamsSchema, executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
 
 /** `req` is the approver's request: the approver's live session runs the stored params. */
 export type ApprovalExecutionContext = { req: Request; approval: AdminApproval };
@@ -22,7 +23,8 @@ export const approvalExecutors: Record<AdminApprovalAction, ApprovalExecutor> = 
   'org.credits.top_up': (params, { req, approval }) => topUpOrg(req, TopUpParamsSchema.parse(params), approval),
   'user.subscription.grant': (params, { req, approval }) =>
     grantSubscription(req, GrantSubscriptionParamsSchema.parse(params), approval),
-  // Approving only unlocks it: the requester redeems it themselves, so the session is never the approver's.
+  // Approving only unlocks it: the requester redeems it in loginAs, so the session is never the approver's.
   'user.impersonate_admin': notExecutableOnApprove('user.impersonate_admin'),
-  'user.delete_admin': notExecutableOnApprove('user.delete_admin'),
+  'user.delete_admin': (params, { req, approval }) =>
+    executeApprovedAdminDelete(req, DeleteAdminParamsSchema.parse(params), approval),
 };

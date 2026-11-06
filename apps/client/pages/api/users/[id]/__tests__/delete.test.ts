@@ -34,6 +34,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 vi.mock('@bike4mind/server-utils/integrations/slack/slack', () => ({ postMessageToSlack: vi.fn() }));
 const { mockPublish } = vi.hoisted(() => ({ mockPublish: vi.fn() }));
 vi.mock('@server/utils/eventBus', () => ({ EmailEvents: { Send: { publish: mockPublish } } }));
+const { mockPolicy, mockRequestApproval } = vi.hoisted(() => ({
+  mockPolicy: vi.fn(),
+  mockRequestApproval: vi.fn(),
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  getApprovalPolicy: () => mockPolicy(),
+  requestApproval: (...a: unknown[]) => mockRequestApproval(...a),
+}));
 vi.mock('@bike4mind/services', () => ({
   userService: { adminDeleteUser: (...a: unknown[]) => mockAdminDeleteUser(...a) },
 }));
@@ -68,6 +76,7 @@ vi.mock('@server/billing/cancelAccountSubscriptions', async importOriginal => ({
 
 import { USER_SECRET_FIELDS, ForbiddenError } from '@bike4mind/common';
 import handler from '../delete';
+import { executeApprovedAdminDelete } from '@server/admin/deleteUserAsAdmin';
 
 type DeleteAdapters = { db: { users: { delete: (id: string) => Promise<unknown> } } };
 
@@ -84,6 +93,8 @@ async function run(options: { user?: { id: string; isAdmin: boolean }; body?: un
 }
 
 beforeEach(() => {
+  mockPolicy.mockReset().mockResolvedValue({ enabled: false, expiryHours: 24 });
+  mockRequestApproval.mockReset().mockResolvedValue({ approvalId: 'appr1', status: 'pending', expiresAt: 'later' });
   mockAdminDeleteUser.mockReset();
   mockRepoDelete.mockReset().mockResolvedValue({ deletedCount: 1 });
   mockFindById.mockReset().mockResolvedValue({ id: 'u1', name: 'Target' });
@@ -453,5 +464,89 @@ describe('DELETE /api/users/[id]/delete', () => {
       expect(mockPurge).not.toHaveBeenCalled();
       expect(mockEmitBillingEvent).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('deleting an admin account needs approval', () => {
+  const approval = {
+    id: 'appr1',
+    requestedBy: { id: 'admin2', name: 'Requester', email: 'r@example.com', selfIds: ['admin2'] },
+  };
+
+  beforeEach(() => {
+    mockPolicy.mockResolvedValue({ enabled: true, expiryHours: 24 });
+    mockFindById.mockResolvedValue({ id: 'u1', name: 'Other Admin', isAdmin: true });
+    mockAdminDeleteUser.mockImplementation(async (_admin: string, _p: unknown, { db }: DeleteAdapters) => {
+      await db.users.delete('u1');
+      return { id: 'u1' };
+    });
+  });
+
+  it('answers 202 for an admin target and deletes nothing', async () => {
+    const { res, call } = await run();
+    await call;
+
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toMatchObject({ approvalId: 'appr1', status: 'pending' });
+    expect(mockRequestApproval).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.delete_admin',
+        params: { userId: 'u1', reason: 'Confirmed duplicate account' },
+        requiredPermission: 'users:delete',
+        requiresFullAdmin: true,
+      }),
+      expect.anything()
+    );
+    expect(mockAdminDeleteUser).not.toHaveBeenCalled();
+    expect(mockRepoDelete).not.toHaveBeenCalled();
+  });
+
+  it('gates a delegated admin target too', async () => {
+    mockFindById.mockResolvedValue({ id: 'u1', isAdmin: false, adminPermissions: ['support:read'] });
+    const { res, call } = await run();
+    await call;
+    expect(res._getStatusCode()).toBe(202);
+  });
+
+  it('deletes a non-admin target immediately', async () => {
+    mockFindById.mockResolvedValue({ id: 'u1', name: 'Target', isAdmin: false });
+    const { res, call } = await run();
+    await call;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRequestApproval).not.toHaveBeenCalled();
+    expect(mockRepoDelete).toHaveBeenCalled();
+  });
+
+  it('runs an approved delete as the approver and points user.deleted at the approval', async () => {
+    const { req } = createMocks({ method: 'POST' });
+    Object.assign(req, {
+      user: { id: 'admin1', isAdmin: true },
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+
+    await expect(
+      executeApprovedAdminDelete(req as never, { userId: 'u1', reason: 'Offboarded' }, approval as never)
+    ).resolves.toEqual({ deletedUserId: 'u1' });
+    expect(mockAdminDeleteUser).toHaveBeenCalledWith('admin1', { id: 'u1' }, expect.anything());
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.deleted',
+        reason: 'Offboarded',
+        details: expect.objectContaining({ approval: expect.objectContaining({ id: 'appr1' }) }),
+      })
+    );
+  });
+
+  it('refuses an approved delete of the approver themselves', async () => {
+    const { req } = createMocks({ method: 'POST' });
+    Object.assign(req, { user: { id: 'u1', isAdmin: true }, logger: { info: vi.fn() } });
+
+    await expect(
+      executeApprovedAdminDelete(req as never, { userId: 'u1', reason: 'Offboarded' }, approval as never)
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    expect(mockAdminDeleteUser).not.toHaveBeenCalled();
   });
 });

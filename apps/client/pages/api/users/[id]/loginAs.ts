@@ -7,7 +7,7 @@ import { issueSessionForRequest } from '@server/auth/issueSession';
 import { readRefreshCookie, setAdminReturnCookie, setRefreshCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 import { UnauthorizedError } from '@bike4mind/server-utils/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
-import { redactUserSecretsForSelf } from '@bike4mind/common';
+import { canAccessAdmin, redactUserSecretsForSelf } from '@bike4mind/common';
 import { respond } from '@server/utils/respond';
 import { selfSessionResponseSchema } from '@server/auth/selfSessionResponseSchema';
 import {
@@ -16,6 +16,8 @@ import {
   parseAdminActionReason,
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
+import { getApprovalPolicy, redeemApproval, requestApproval } from '@server/admin/approvals/service';
+import { approvalDetails } from '@server/admin/creditGrants/approval';
 
 // jwtOnly: impersonation mints a full session, so an API key must never reach it
 // (see sessionGrantRoutesRejectApiKeys.test.ts).
@@ -24,7 +26,11 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
     const targetUserId = req.query.id;
     const adminUser = req.user;
 
-    const { mfaToken, reason: rawReason } = req.body as { mfaToken?: string; reason?: unknown };
+    const {
+      mfaToken,
+      reason: rawReason,
+      approvalId,
+    } = req.body as { mfaToken?: string; reason?: unknown; approvalId?: unknown };
 
     if (!mfaToken || typeof mfaToken !== 'string') {
       throw new BadRequestError('MFA token is required to use loginAs');
@@ -49,6 +55,26 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
       throw new UnauthorizedError('loginAs requires an interactive browser session');
     }
 
+    // Impersonating an admin needs a second admin's approval; the requester then redeems it here.
+    const policy = await getApprovalPolicy();
+    const approvalTarget = policy.enabled ? await userRepository.findById(targetUserId) : null;
+    const needsApproval = canAccessAdmin(approvalTarget);
+    if (needsApproval && typeof approvalId !== 'string') {
+      const pending = await requestApproval(
+        req,
+        {
+          action: 'user.impersonate_admin',
+          params: { targetUserId },
+          summary: `impersonate admin ${approvalTarget?.name || approvalTarget?.email || targetUserId}`,
+          reason,
+          requiredPermission: 'users:impersonate',
+          requiresFullAdmin: true,
+        },
+        policy
+      );
+      return res.status(202).json(pending);
+    }
+
     const targetUser = await adminService.loginAs(
       adminUser,
       { targetUserId, mfaToken: mfaToken.trim() },
@@ -65,6 +91,9 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         },
       }
     );
+    const approval = needsApproval
+      ? await redeemApproval(req, approvalId as string, 'user.impersonate_admin', { targetUserId })
+      : undefined;
 
     // Mint a full session for the impersonated user; its refresh token takes over the primary
     // cookie. The refresh token must belong to the target - if the browser kept the admin's,
@@ -101,7 +130,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         },
         summary: 'started impersonating the user',
         reason,
-        details: { expiresAt: expiresAt.toISOString(), readOnly: true, escalated: false },
+        details: {
+          expiresAt: expiresAt.toISOString(),
+          readOnly: true,
+          escalated: false,
+          ...approvalDetails(approval),
+        },
         related: { impersonationSessionId: session.sid },
       });
       return session;
