@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose, { Schema } from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
@@ -94,12 +94,14 @@ const registry: DataHolderRegistry = {
   DsTestRelease: { kind: 'noUserData', note: 'test' },
 };
 
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 let mongoServer: MongoMemoryServer | undefined;
 
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
-}, MONGO_TEST_TIMEOUT_MS);
+});
 
 afterEach(async () => {
   await mongoose.connection.dropDatabase();
