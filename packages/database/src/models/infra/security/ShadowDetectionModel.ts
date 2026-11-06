@@ -392,24 +392,37 @@ class ShadowDetectionRepository {
     }).exec();
   }
 
-  /** Detections naming any of these users, newest first, at most `limit`. Uses the userIds index. */
+  /**
+   * Detections naming any of these users, newest first, at most `limit`. The `$in` uses the userIds
+   * index but the detectedAt sort is in memory. `userIds` holds only the requested members, since a
+   * cohort detection can name many accounts.
+   */
   async findForUsers(
     userIds: string[],
     limit: number
   ): Promise<Pick<ShadowDetectionItem, 'id' | 'detector' | 'userIds' | 'detectedAt'>[]> {
     if (userIds.length === 0) return [];
-    const docs = await ShadowDetectionModel.find(
-      { userIds: { $in: userIds } },
-      { detector: 1, userIds: 1, detectedAt: 1 }
-    )
-      .sort({ detectedAt: -1, _id: -1 })
-      .limit(limit)
-      .lean<{ _id: Types.ObjectId; detector: ShadowDetector; userIds?: string[]; detectedAt: Date }[]>()
-      .exec();
+    const docs = await ShadowDetectionModel.aggregate<{
+      _id: Types.ObjectId;
+      detector: ShadowDetector;
+      userIds: string[];
+      detectedAt: Date;
+    }>([
+      { $match: { userIds: { $in: userIds } } },
+      { $sort: { detectedAt: -1, _id: -1 } },
+      { $limit: limit },
+      {
+        $project: {
+          detector: 1,
+          detectedAt: 1,
+          userIds: { $filter: { input: { $ifNull: ['$userIds', []] }, cond: { $in: ['$$this', userIds] } } },
+        },
+      },
+    ]);
     return docs.map(doc => ({
       id: doc._id.toString(),
       detector: doc.detector,
-      userIds: doc.userIds ?? [],
+      userIds: doc.userIds,
       detectedAt: doc.detectedAt,
     }));
   }

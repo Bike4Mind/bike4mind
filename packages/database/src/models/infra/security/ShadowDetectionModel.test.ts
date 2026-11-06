@@ -259,12 +259,20 @@ describe('shadowDetectionRepository', () => {
       {
         id: older,
         detector: 'signupNetworkBurst',
-        userIds: ['u1', 'u2'],
+        userIds: ['u2'],
         detectedAt: new Date('2026-10-01T00:00:00Z'),
       },
     ]);
     await expect(shadowDetectionRepository.findForUsers(['u2', 'u3'], 1)).resolves.toHaveLength(1);
     await expect(shadowDetectionRepository.findForUsers([], 10)).resolves.toEqual([]);
+  });
+
+  it('returns only the requested accounts of a detection that names others', async () => {
+    const id = await shadowDetectionRepository.record(detection({ userIds: ['u1', 'u2', 'u3', 'u4'] }));
+
+    const found = await shadowDetectionRepository.findForUsers(['u2', 'u4', 'u8'], 10);
+
+    expect(found.map(item => ({ id: item.id, userIds: item.userIds }))).toEqual([{ id, userIds: ['u2', 'u4'] }]);
   });
 
   it('declares the retention TTL on detectedAt', async () => {
