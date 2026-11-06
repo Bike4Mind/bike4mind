@@ -163,6 +163,7 @@ const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   );
 
 // A chat image from before generations were recorded: kept as a generated image with no request or lineage.
+// GenerationDetails hides this exact record; keep the two in sync.
 const UNRECORDED_IMAGE_GENERATION: GeneratedAssetMetadata = { generator: 'image', provider: 'unknown', prompt: '' };
 
 /**

@@ -69,4 +69,10 @@ describe('GenerationDetails', () => {
     render(<GenerationDetails file={{}} />, { wrapper: Wrapper });
     expect(screen.queryByTestId('generation-details')).toBeNull();
   });
+
+  it('renders nothing for the placeholder record of an image with no recorded generation', () => {
+    const file = { sourceMetadata: { generation: { generator: 'image', provider: 'unknown', prompt: '' } } };
+    render(<GenerationDetails file={file} />, { wrapper: Wrapper });
+    expect(screen.queryByTestId('generation-details')).toBeNull();
+  });
 });
