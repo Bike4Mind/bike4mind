@@ -125,6 +125,14 @@ describe('approveApproval', () => {
     expect(mocks.execute).not.toHaveBeenCalled();
   });
 
+  it('refuses an approver who is impersonating the requester', async () => {
+    await expect(approveApproval(fullAdmin(REQUESTER, { impersonatedBy: APPROVER }), ID)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    expect(auditActions()).toEqual(['admin.approval.denied']);
+    expect(mocks.repo.claim).not.toHaveBeenCalled();
+  });
+
   it('refuses an approver whose own id is in the requester self ids', async () => {
     mocks.repo.findById.mockResolvedValue(
       approvalOf({ requestedBy: { id: REQUESTER, name: 'Ada', email: '', selfIds: [REQUESTER, APPROVER] } })
@@ -233,6 +241,16 @@ describe('rejectApproval', () => {
       rejectApproval(reqAs({ id: APPROVER, adminPermissions: ['support:read'] }), ID, 'no')
     ).rejects.toMatchObject({ statusCode: 403 });
   });
+
+  it('puts the request back to pending and rethrows when the rejected audit write fails', async () => {
+    mocks.record.mockRejectedValueOnce(new Error('audit down'));
+    await expect(rejectApproval(fullAdmin(APPROVER), ID, 'no')).rejects.toThrow('audit down');
+    expect(mocks.repo.finish).toHaveBeenCalledWith(ID, 'rejected', 'pending', {
+      decidedBy: undefined,
+      decidedAt: undefined,
+      decisionReason: undefined,
+    });
+  });
 });
 
 describe('redeemApproval', () => {
@@ -254,6 +272,18 @@ describe('redeemApproval', () => {
       expect.objectContaining({ requestedBy: REQUESTER }),
       expect.anything()
     );
+  });
+
+  it('refuses another admin impersonated by the requester, or acting as them', async () => {
+    mocks.repo.findById.mockResolvedValue(approved());
+    await expect(
+      redeemApproval(fullAdmin(APPROVER, { impersonatedBy: REQUESTER }), ID, 'user.impersonate_admin', PARAMS)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    await expect(
+      redeemApproval(fullAdmin('dddddddddddddddddddddddd'), ID, 'user.impersonate_admin', PARAMS)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(mocks.repo.claim).not.toHaveBeenCalled();
+    expect(auditActions()).toEqual([]);
   });
 
   it('answers 409 while still pending and 409 once used', async () => {
@@ -318,6 +348,24 @@ describe('listApprovals', () => {
     expect(reader[0]).not.toHaveProperty('result');
     expect(reader[0]).not.toHaveProperty('error');
     expect(reader[1]).toMatchObject(decided);
+  });
+
+  it('cuts a withheld row down to its id, action, status, dates and flags', async () => {
+    const decidedAt = new Date();
+    mocks.repo.list.mockResolvedValue([
+      approvalOf({ id: '1', status: 'rejected', decidedBy: { id: REQUESTER, name: 'Ada' }, decidedAt }),
+      approvalOf({ id: '3', requiredPermission: 'support:read' }),
+    ]);
+    const reader = await listApprovals(reqAs({ id: APPROVER, adminPermissions: ['support:read'] }), {});
+    expect(Object.keys(reader[0] ?? {}).sort()).toEqual(
+      ['action', 'canDecide', 'createdAt', 'expiresAt', 'id', 'params', 'reason', 'stalled', 'status', 'summary'].sort()
+    );
+    expect(reader[0]).toMatchObject({ id: '1', status: 'rejected', summary: null, reason: null, params: null });
+    expect(reader[1]).toMatchObject({
+      requestedBy: { id: REQUESTER, name: 'Ada', email: 'ada@example.com' },
+      requiredPermission: 'support:read',
+      requiresFullAdmin: false,
+    });
   });
 
   it('withholds summary and reason exactly where it withholds params', async () => {

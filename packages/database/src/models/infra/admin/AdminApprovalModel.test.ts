@@ -76,6 +76,21 @@ describe('AdminApprovalRepository', () => {
     expect(done).toMatchObject({ status: 'executed', result: { updated: 2 } });
   });
 
+  it('clears fields passed as undefined when rolling a decision back', async () => {
+    const { id } = await adminApprovalRepository.create(newApproval());
+    const decision = { decidedBy: { id: APPROVER, name: 'B' }, decidedAt: new Date(), decisionReason: 'no' };
+    await adminApprovalRepository.claim(id, 'pending', 'rejected', { now: new Date() }, decision);
+    const restored = await adminApprovalRepository.finish(id, 'rejected', 'pending', {
+      decidedBy: undefined,
+      decidedAt: undefined,
+      decisionReason: undefined,
+    });
+    expect(restored?.status).toBe('pending');
+    expect(restored).not.toHaveProperty('decidedBy');
+    expect(restored).not.toHaveProperty('decidedAt');
+    expect(restored).not.toHaveProperty('decisionReason');
+  });
+
   it('lists newest first, filtered by status and cursor', async () => {
     const older = await adminApprovalRepository.create(newApproval({ summary: 'older' }));
     const newer = await adminApprovalRepository.create(newApproval({ summary: 'newer' }));

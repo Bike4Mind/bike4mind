@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   current: '',
   middleware: {} as Record<string, unknown[]>,
   stepUp: Symbol('stepUpGate'),
+  rateLimit: vi.fn((options: unknown) => ({ rateLimit: options })),
   approve: vi.fn(),
   reject: vi.fn(),
   list: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@server/auth/stepUp', () => ({ stepUpGate: () => mocks.stepUp }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: mocks.rateLimit }));
 vi.mock('@server/admin/approvals/service', () => ({
   APPROVAL_LIST_MAX: 100,
   approveApproval: mocks.approve,
@@ -102,5 +104,19 @@ describe('approval routes', () => {
     mocks.reject.mockResolvedValue({ id: 'x', status: 'rejected' });
     await reject(reqOf({ query: { id: 'x' }, body: { reason: 'Not justified by the ticket' } }), resMock());
     expect(mocks.reject).toHaveBeenCalledWith(expect.anything(), 'x', 'Not justified by the ticket');
+  });
+
+  it('approve and reject share one per-admin decision bucket, checked before step-up', async () => {
+    await load('approve', () => import('../[id]/approve'));
+    await load('reject', () => import('../[id]/reject'));
+    const limiterOf = (route: string) =>
+      mocks.middleware[route]?.find(m => typeof m === 'object' && m !== null && 'rateLimit' in m);
+    const approveLimit = limiterOf('approve');
+    expect(approveLimit).toEqual({ rateLimit: { limit: 20, windowMs: 60_000, bucket: 'admin-approval-decision' } });
+    expect(limiterOf('reject')).toEqual(approveLimit);
+    for (const route of ['approve', 'reject']) {
+      const chain = mocks.middleware[route] ?? [];
+      expect(chain.indexOf(limiterOf(route))).toBeLessThan(chain.indexOf(mocks.stepUp));
+    }
   });
 });

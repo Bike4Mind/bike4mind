@@ -100,4 +100,15 @@ describe('Approvals queue', () => {
     expect(rendered).toContain('Impersonate an admin');
     expect(rendered).not.toContain('null');
   });
+
+  it('shows the sorted user ids of a bulk request in the details dialog', () => {
+    rows.push(row('bulk', { params: { type: 'suspend', userIds: ['u-b', 'u-a'] } }));
+    rows.push(row('bare', { params: null }));
+    renderQueue();
+
+    expect(screen.getAllByTestId('admin-approval-details-btn')).toHaveLength(1);
+    fireEvent.click(screen.getByTestId('admin-approval-details-btn'));
+    const list = screen.getByTestId('admin-approval-details-user-ids');
+    expect(Array.from(list.querySelectorAll('li')).map(li => li.textContent)).toEqual(['u-a', 'u-b']);
+  });
 });

@@ -3,6 +3,7 @@ import { Box, Button, FormControl, FormLabel, Input, Option, Select, Stack, Tool
 import { toast } from 'sonner';
 import type { AdminApprovalAction, AdminApprovalStatus } from '@bike4mind/common';
 import { ActionDialog } from '@client/app/components/admin/shared/ActionDialog';
+import { AdminDialog } from '@client/app/components/admin/shared/AdminDialog';
 import { AdminPageHeader } from '@client/app/components/admin/shared/AdminPageHeader';
 import { DataTable, type DataColumn } from '@client/app/components/admin/shared/DataTable';
 import { EmptyState } from '@client/app/components/admin/shared/EmptyState';
@@ -46,7 +47,7 @@ const REJECT_PRESETS = ['Not justified', 'Wrong target', 'Needs more detail'] as
 const IMPERSONATION_PRESETS = ['Reproducing a customer issue', 'Investigating a reported problem'] as const;
 
 const decideHint = (row: AdminApprovalRow, ownId: string | undefined) =>
-  row.requestedBy.id === ownId
+  !!row.requestedBy && row.requestedBy.id === ownId
     ? 'Another admin must approve your own request.'
     : 'You do not have the permission this request needs.';
 
@@ -56,6 +57,50 @@ const targetUserIdOf = (row: AdminApprovalRow) =>
   typeof row.params === 'object' && row.params !== null
     ? String((row.params as { targetUserId?: unknown }).targetUserId ?? '')
     : '';
+
+const hasParams = (row: AdminApprovalRow) =>
+  typeof row.params === 'object' && row.params !== null && Object.keys(row.params).length > 0;
+
+const userIdsOf = (row: AdminApprovalRow): string[] | null => {
+  const ids = (row.params as { userIds?: unknown } | null)?.userIds;
+  return row.action === 'users.bulk' && Array.isArray(ids) ? ids.map(String).sort() : null;
+};
+
+const ParamsDialog: React.FC<{ row: AdminApprovalRow; onClose: () => void }> = ({ row, onClose }) => {
+  const userIds = userIdsOf(row);
+  return (
+    <AdminDialog onClose={onClose} title={summaryOf(row)} width={560} data-testid="admin-approval-details-dialog">
+      <Stack spacing={1} sx={{ maxHeight: '70vh', overflow: 'auto' }}>
+        {userIds && (
+          <Stack spacing={0.5}>
+            <Typography level="body-sm" fontWeight={500}>
+              {userIds.length} users
+            </Typography>
+            <Box component="ul" sx={{ m: 0, pl: 2.5 }} data-testid="admin-approval-details-user-ids">
+              {userIds.map(id => (
+                <li key={id}>
+                  <Typography level="body-xs" sx={{ fontFamily: 'code' }}>
+                    {id}
+                  </Typography>
+                </li>
+              ))}
+            </Box>
+          </Stack>
+        )}
+        <Typography level="body-sm" fontWeight={500}>
+          Parameters
+        </Typography>
+        <Box
+          component="pre"
+          sx={{ m: 0, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+          data-testid="admin-approval-details-params"
+        >
+          {JSON.stringify(row.params, null, 2)}
+        </Box>
+      </Stack>
+    </AdminDialog>
+  );
+};
 
 const StartImpersonationDialog: React.FC<{ row: AdminApprovalRow; onClose: () => void }> = ({ row, onClose }) => {
   const loginAs = useLoginAsUser();
@@ -98,6 +143,7 @@ const Approvals: React.FC = () => {
   const reject = useRejectAdminApproval();
   const [rejecting, setRejecting] = useState<AdminApprovalRow | null>(null);
   const [impersonating, setImpersonating] = useState<AdminApprovalRow | null>(null);
+  const [inspecting, setInspecting] = useState<AdminApprovalRow | null>(null);
 
   const onApprove = async (row: AdminApprovalRow) => {
     try {
@@ -127,7 +173,7 @@ const Approvals: React.FC = () => {
         </Stack>
       ),
     },
-    { id: 'requester', label: 'Requested by', render: row => row.requestedBy.name || row.requestedBy.email },
+    { id: 'requester', label: 'Requested by', render: row => row.requestedBy?.name || row.requestedBy?.email || '-' },
     { id: 'expires', label: 'Expires', render: row => formatTime(row.expiresAt) },
     {
       id: 'status',
@@ -141,10 +187,36 @@ const Approvals: React.FC = () => {
     },
   ];
 
+  const detailsButton = (row: AdminApprovalRow) =>
+    hasParams(row) ? (
+      <Button
+        size="sm"
+        variant="plain"
+        color="neutral"
+        onClick={() => setInspecting(row)}
+        data-testid="admin-approval-details-btn"
+      >
+        Details
+      </Button>
+    ) : null;
+
   const rowActions = (row: AdminApprovalRow) => {
+    const decisionActions = decisionActionsOf(row);
+    const details = detailsButton(row);
+    if (!details) return decisionActions;
+    return (
+      <Stack direction="row" spacing={0.5}>
+        {details}
+        {decisionActions}
+      </Stack>
+    );
+  };
+
+  const decisionActionsOf = (row: AdminApprovalRow) => {
     if (
       row.status === 'approved' &&
       row.action === 'user.impersonate_admin' &&
+      !!row.requestedBy &&
       row.requestedBy.id === currentUser?.id
     ) {
       return (
@@ -183,7 +255,7 @@ const Approvals: React.FC = () => {
           onClick={() => setRejecting(row)}
           data-testid="admin-reject-btn"
         >
-          {row.requestedBy.id === currentUser?.id ? 'Withdraw' : 'Reject'}
+          {!!row.requestedBy && row.requestedBy.id === currentUser?.id ? 'Withdraw' : 'Reject'}
         </Button>
       </Stack>
     );
@@ -238,10 +310,18 @@ const Approvals: React.FC = () => {
         <ActionDialog
           open
           onClose={() => setRejecting(null)}
-          title={rejecting.requestedBy.id === currentUser?.id ? 'Withdraw request' : 'Reject request'}
+          title={
+            !!rejecting.requestedBy && rejecting.requestedBy.id === currentUser?.id
+              ? 'Withdraw request'
+              : 'Reject request'
+          }
           description={`Closes "${summaryOf(rejecting)}" without running it.`}
           reasonPresets={REJECT_PRESETS}
-          confirmLabel={rejecting.requestedBy.id === currentUser?.id ? 'Withdraw request' : 'Reject request'}
+          confirmLabel={
+            !!rejecting.requestedBy && rejecting.requestedBy.id === currentUser?.id
+              ? 'Withdraw request'
+              : 'Reject request'
+          }
           tone="danger"
           pending={reject.isPending}
           onConfirm={async reason => {
@@ -255,6 +335,7 @@ const Approvals: React.FC = () => {
           data-testid="admin-approval-reject-dialog"
         />
       )}
+      {inspecting && <ParamsDialog row={inspecting} onClose={() => setInspecting(null)} />}
       {impersonating && <StartImpersonationDialog row={impersonating} onClose={() => setImpersonating(null)} />}
     </Box>
   );

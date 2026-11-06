@@ -151,8 +151,14 @@ class AdminApprovalRepository implements IAdminApprovalRepository {
     to: AdminApprovalStatus,
     set: AdminApprovalUpdate
   ): Promise<AdminApproval | null> {
+    // A key passed as undefined is cleared; Mongoose would otherwise drop it from $set and leave the old value.
+    const cleared = Object.keys(set).filter(key => set[key as keyof AdminApprovalUpdate] === undefined);
+    const update = {
+      $set: { ...set, status: to },
+      ...(cleared.length > 0 && { $unset: Object.fromEntries(cleared.map(key => [key, 1])) }),
+    };
     const document = await this.approvalModel
-      .findOneAndUpdate(filter, { $set: { ...set, status: to } }, { new: true })
+      .findOneAndUpdate(filter, update, { new: true })
       .lean<AdminApprovalDocumentShape>();
     return document ? toAdminApproval(document) : null;
   }

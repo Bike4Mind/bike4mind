@@ -15,7 +15,8 @@ export type AdminApprovalRow = {
   summary: string | null;
   reason: string | null;
   status: AdminApprovalStatus;
-  requestedBy: { id: string; name: string; email: string };
+  /** Absent on a row the caller neither requested nor may decide, as is everything below but the flags. */
+  requestedBy?: { id: string; name: string; email: string };
   expiresAt: string;
   createdAt?: string;
   decidedBy?: { id: string; name: string };

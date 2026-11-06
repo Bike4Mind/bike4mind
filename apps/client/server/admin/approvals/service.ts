@@ -275,13 +275,23 @@ export async function rejectApproval(req: Request, id: string, reason: string): 
     { decidedBy: { id: user.id, name: displayNameOf(user) }, decidedAt: now, decisionReason: reason }
   );
   if (!rejected) throw new ConflictError('This request was already decided or has expired.');
-  await recordAdminActionFromRequest(req, {
-    action: 'admin.approval.rejected',
-    target: approvalTarget(rejected),
-    summary: `rejected: ${rejected.summary}`,
-    reason,
-    details: { approval: approvalAuditDetails(rejected), action: rejected.action },
-  });
+  try {
+    await recordAdminActionFromRequest(req, {
+      action: 'admin.approval.rejected',
+      target: approvalTarget(rejected),
+      summary: `rejected: ${rejected.summary}`,
+      reason,
+      details: { approval: approvalAuditDetails(rejected), action: rejected.action },
+    });
+  } catch (error) {
+    // An unaudited rejection must not stand; the request goes back to pending.
+    await adminApprovalRepository.finish(rejected.id, 'rejected', 'pending', {
+      decidedBy: undefined,
+      decidedAt: undefined,
+      decisionReason: undefined,
+    });
+    throw error;
+  }
   return rejected;
 }
 
@@ -334,20 +344,20 @@ export async function redeemApproval(
   return redeemed;
 }
 
-export type ApprovalListRow = Omit<AdminApproval, 'paramsJson' | 'summary' | 'reason'> & {
-  summary: string | null;
-  reason: string | null;
-  params: unknown;
-  stalled: boolean;
-  canDecide: boolean;
-};
+type ApprovalListFlags = { stalled: boolean; canDecide: boolean };
+
+export type VisibleApprovalListRow = Omit<AdminApproval, 'paramsJson'> & ApprovalListFlags & { params: unknown };
+
+export type WithheldApprovalListRow = Pick<AdminApproval, 'id' | 'action' | 'status' | 'createdAt' | 'expiresAt'> &
+  ApprovalListFlags & { summary: null; reason: null; params: null };
+
+export type ApprovalListRow = VisibleApprovalListRow | WithheldApprovalListRow;
 
 export const APPROVAL_LIST_MAX = 100;
 
 /**
  * Pending rows past their expiry are reported as expired; the record itself is closed on its next decision.
- * `params`, `summary` and `reason` are null, and the decision reason, result and error left out, unless the caller
- * requested the row or holds what deciding it needs.
+ * A row the caller neither requested nor may decide is cut down to its id, action, status and dates.
  */
 export async function listApprovals(
   req: Request,
@@ -360,24 +370,22 @@ export async function listApprovals(
     before: query.before,
     limit: Math.min(query.limit ?? 50, APPROVAL_LIST_MAX),
   });
-  return approvals.map(record => {
-    const { paramsJson, decisionReason, result, error, ...approval } = record;
+  return approvals.map((record): ApprovalListRow => {
+    const { paramsJson, ...approval } = record;
     const status: AdminApprovalStatus =
       approval.status === 'pending' && isExpired(record, now) ? 'expired' : approval.status;
     const own = isOwnRequest(user, record);
     const mayDecide = canDecideAs(user, record);
-    const visible = own || mayDecide;
-    return {
-      ...approval,
-      status,
-      summary: visible ? approval.summary : null,
-      reason: visible ? approval.reason : null,
-      params: visible ? JSON.parse(paramsJson) : null,
-      ...(visible && { decisionReason, result, error }),
+    const flags: ApprovalListFlags = {
       stalled:
         status === 'executing' &&
         now.getTime() - (approval.decidedAt ?? approval.createdAt).getTime() > APPROVAL_STALLED_AFTER_MS,
       canDecide: status === 'pending' && !own && mayDecide,
     };
+    if (!own && !mayDecide) {
+      const { id, action, createdAt, expiresAt } = approval;
+      return { id, action, status, createdAt, expiresAt, summary: null, reason: null, params: null, ...flags };
+    }
+    return { ...approval, status, params: JSON.parse(paramsJson), ...flags };
   });
 }
