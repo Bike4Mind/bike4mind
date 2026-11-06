@@ -128,7 +128,7 @@ describe('authentication connection metadata forwarding', () => {
     await loadRouter(false, '', '', 'pr123', 'shared-response-function');
     const sharedResponse = { eventType: 'viewer-response', functionArn: 'shared-response-function' };
     expect(mocks.cdn.defaultCacheBehavior.functionAssociations).toContainEqual(sharedResponse);
-    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(3);
+    expect(mocks.cdn.orderedCacheBehaviors).toHaveLength(AUTH_NETWORK_PATHS.length);
     for (const behavior of mocks.cdn.orderedCacheBehaviors ?? []) {
       expect(behavior.functionAssociations).toEqual(mocks.cdn.defaultCacheBehavior.functionAssociations);
     }
