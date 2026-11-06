@@ -58,6 +58,7 @@ describe('findRiskReviewAdvisories', () => {
       result: 'insufficient_evidence',
       confidence: 0.7,
       assessedAt: new Date('2026-11-02T00:00:00Z'),
+      otherVerdicts: 0,
     });
   });
 

@@ -364,6 +364,7 @@ describe('SignupRiskReviewTab', () => {
             result: 'abuse',
             confidence: 0.82,
             assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
           },
         }),
         row({
@@ -375,6 +376,7 @@ describe('SignupRiskReviewTab', () => {
             result: 'legitimate_automation',
             confidence: null,
             assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
           },
         }),
         row({
@@ -386,6 +388,7 @@ describe('SignupRiskReviewTab', () => {
             result: 'insufficient_evidence',
             confidence: 0.4,
             assessedAt: '2026-11-02T10:00:00.000Z',
+            otherVerdicts: 0,
           },
         }),
       ])

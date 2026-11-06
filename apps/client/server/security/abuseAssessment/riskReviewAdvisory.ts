@@ -9,8 +9,9 @@ const MAX_DETECTIONS = 1000;
  * The advisory model verdict to show on each pending risk review row, keyed by user id. Read-only:
  * nothing that approves, reopens or rescores an account reads this, because the model judged
  * attacker-influenced data. Per user, an abuse judgment on any detection naming the account wins;
- * otherwise the newest judgment, among the newest MAX_DETECTIONS detections. Users with no judged
- * detection are absent from the map.
+ * otherwise the newest judgment, among the newest MAX_DETECTIONS detections (a user whose judged
+ * detections all fall outside that window shows no or a non-abuse verdict: an accepted miss for a
+ * display-only hint). Users with no judged detection are absent from the map.
  */
 export async function findRiskReviewAdvisories(
   userIds: string[],
@@ -25,6 +26,7 @@ export async function findRiskReviewAdvisories(
   const assessments = await abuseAssessmentRepository.findLatestJudgedForDetections(detections.map(d => d.id));
   const assessmentByDetection = new Map(assessments.map(assessment => [assessment.detectionId, assessment]));
   const wanted = new Set(userIds);
+  const judgedCount = new Map<string, number>();
 
   for (const detection of detections) {
     const assessment = assessmentByDetection.get(detection.id);
@@ -37,6 +39,7 @@ export async function findRiskReviewAdvisories(
       result: assessment.result,
       confidence: assessment.confidence,
       assessedAt: assessment.assessedAt,
+      otherVerdicts: 0,
     });
     if (!parsed.success) {
       logger.warn('Signup risk review advisory dropped: stored values no longer match', {
@@ -49,10 +52,12 @@ export async function findRiskReviewAdvisories(
     const candidate = parsed.data;
     for (const userId of detection.userIds) {
       if (!wanted.has(userId)) continue;
+      judgedCount.set(userId, (judgedCount.get(userId) ?? 0) + 1);
       const current = advisories.get(userId);
       if (!current || outranks(candidate, current)) advisories.set(userId, candidate);
     }
   }
+  for (const [userId, advisory] of advisories) advisory.otherVerdicts = (judgedCount.get(userId) ?? 1) - 1;
   return advisories;
 }
 

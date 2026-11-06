@@ -25,6 +25,8 @@ export const signupRiskReviewAdvisorySchema = z.object({
   result: z.enum(ABUSE_ASSESSMENT_JUDGMENTS),
   confidence: z.number().nullable(),
   assessedAt: z.date(),
+  /** Judged detections naming the account besides the one shown. */
+  otherVerdicts: z.number().int().nonnegative(),
 });
 export type SignupRiskReviewAdvisory = z.infer<typeof signupRiskReviewAdvisorySchema>;
 

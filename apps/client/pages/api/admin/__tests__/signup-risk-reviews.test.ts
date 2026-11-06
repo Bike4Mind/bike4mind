@@ -184,7 +184,7 @@ describe('signup risk review queue', () => {
     const assessedAt = new Date('2026-11-02T10:00:00Z');
     h.advisories.mockResolvedValue(
       new Map([
-        [USER_A, { detectionId: 'd1', detector: 'signupNetworkBurst', result: 'abuse', confidence: 0.8, assessedAt }],
+        [USER_A, { detectionId: 'd1', detector: 'signupNetworkBurst', result: 'abuse', confidence: 0.8, assessedAt, otherVerdicts: 2 }],
       ])
     );
     const { req, res } = request('GET');
@@ -199,6 +199,7 @@ describe('signup risk review queue', () => {
       result: 'abuse',
       confidence: 0.8,
       assessedAt: assessedAt.toISOString(),
+      otherVerdicts: 2,
     });
     expect(body.data[1].advisory).toBeNull();
   });
