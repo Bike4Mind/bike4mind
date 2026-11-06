@@ -9,6 +9,7 @@ vi.mock('@server/security/autoContainment/deviceLinkEvaluation', () => ({
   evaluateDeviceLinks: vi.fn(),
   liveDeviceLinkReaders: {},
 }));
+vi.mock('@server/security/autoContainment/executor', () => ({ loadAutoContainmentConfig: vi.fn() }));
 
 import type { LinkedAccount } from '@server/billing/linkedAccounts';
 import { buildLinkedAccountEvidence, type LinkedAccountEvidenceDeps } from './linkedAccountEvidence';
