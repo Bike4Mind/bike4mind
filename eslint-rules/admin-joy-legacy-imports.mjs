@@ -3,8 +3,8 @@ export default {
   'AdminGrowthPricingTab.tsx': [[2, '9366696592e95a71']],
   'AdminLiveOpsTriageMultiConfigTab.tsx': [[9, 'dc8a25326b09e153']],
   'AdminModalTab.tsx': [
-    [2, '62745fccb2cb0510'],
-    [25, '68e1a4506bbca636'],
+    [2, '43dca498ff9a0de5'],
+    [22, '68e1a4506bbca636'],
   ],
   'AdminModalTabNew.tsx': [[2, '1fd68f8a7bbdebfd']],
   'AdminSettingInputField.tsx': [[6, '2df9fe7f525eecc9']],
