@@ -13,6 +13,8 @@ vi.mock('@server/admin/approvals/service', () => ({ getApprovalPolicy: async () 
 
 import { creditGrantNeedsApproval, reserveWithinWindow } from './gate';
 
+vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
+
 const ADMIN = 'a'.repeat(24);
 const DAY_MS = 24 * 60 * 60 * 1000;
 let server: MongoMemoryServer;
