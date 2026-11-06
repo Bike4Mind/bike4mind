@@ -135,6 +135,14 @@ describe('POST /api/admin/users/[userId]/grant-subscription - team seat bounds',
     expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
   });
 
+  it('still answers success for a team grant when the post-commit cache push fails', async () => {
+    vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
+    const { res, run } = call(5);
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ seats: 5, credits: 5 * 1000 });
+  });
+
   it('records user.subscription.granted against the user for a team grant, inside the transaction', async () => {
     const { run } = call(5);
     await run();
@@ -243,6 +251,14 @@ describe('POST /api/admin/users/[userId]/grant-subscription - individual', () =>
       })
     );
     expect(res._getJSONData()).toMatchObject({ subscriptionRecordId: 'sub-1' });
+  });
+
+  it('still answers success for an individual grant when the post-commit cache push fails', async () => {
+    vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
+    const { res, run } = callIndividual(plan.priceId);
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ success: true, credits: plan.credits * 2 });
   });
 
   it('records the audit inside the grant transaction', async () => {

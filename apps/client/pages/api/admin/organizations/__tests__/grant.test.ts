@@ -164,6 +164,14 @@ describe('POST /api/admin/organizations/grant', () => {
     });
   });
 
+  it('still answers success when the post-commit cache push fails', async () => {
+    vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(201);
+    expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1' });
+  });
+
   it('records org.credits.granted against the new organization', async () => {
     const { run } = call({});
     await run();

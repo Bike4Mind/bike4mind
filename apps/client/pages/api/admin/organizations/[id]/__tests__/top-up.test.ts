@@ -68,6 +68,7 @@ vi.mock('@server/utils/adminAudit', async importOriginal => ({
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoint' } } }));
 
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
+import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 import { creditService } from '@bike4mind/services';
 import { creditLotRepository, creditTransactionRepository, organizationRepository } from '@bike4mind/database';
 const approvalMocks = vi.hoisted(() => ({
@@ -133,6 +134,14 @@ describe('POST /api/admin/organizations/[id]/top-up', () => {
     const { res, run } = call({});
     await run();
     expect(mockAddCredits).toHaveBeenCalled();
+    expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', creditsAdded: 100 });
+  });
+
+  it('still answers success when the post-commit cache push fails', async () => {
+    vi.mocked(sendToClient).mockRejectedValueOnce(new Error('socket down'));
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ organizationId: 'org-1', creditsAdded: 100 });
   });
 
