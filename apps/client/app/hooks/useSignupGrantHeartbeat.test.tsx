@@ -130,7 +130,8 @@ describe('useSignupGrantHeartbeat', () => {
     h.cap = '12000';
     rerender();
     touch();
-    await advance(HEARTBEAT_INTERVAL_MS);
+    // The new effect takes a fresh tab id, so it waits out the old leader claim first.
+    await advance(HEARTBEAT_INTERVAL_MS * 2);
     expect(h.post).toHaveBeenCalledTimes(2);
   });
 

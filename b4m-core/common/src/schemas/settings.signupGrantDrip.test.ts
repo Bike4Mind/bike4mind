@@ -17,7 +17,7 @@ describe('signup grant schedule settings', () => {
   it.each([
     ['signupGrantInitialCredits', 0],
     ['signupGrantDailyCredits', 0],
-    ['signupGrantDripCap', 9000],
+    ['signupGrantDripCap', 0],
     ['signupGrantInviteBonusCredits', 0],
   ] as const)('registers %s as a user-readable credits setting defaulting to %s', (key, fallback) => {
     const setting = settingsMap[key];
