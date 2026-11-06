@@ -94,6 +94,13 @@ describe('publishMementoCompletion', () => {
     expect(logger.info).not.toHaveBeenCalled();
   });
 
+  it('skips publish for a loop run, even with both gates on', async () => {
+    const logger = makeLogger();
+    await publishMementoCompletion(makeExecution({ loopId: 'loop-1' }), { v1: true, v2: true }, logger);
+
+    expect(publishMock).not.toHaveBeenCalled();
+  });
+
   it('OMITS enableMementosV2 when the opt-in lookup failed, so the subscriber resolves it instead', async () => {
     // A `v2: false` from a rejected lookup is "we could not tell", not "opted out". Asserting it would
     // cost a V2 user a turn of learning over a Mongo blip; omitting the field lets the subscriber

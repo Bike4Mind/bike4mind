@@ -19,6 +19,7 @@ import {
   pruneStageConfig,
   validateLoopAgentId,
   validateLoopBudget,
+  validateLoopMaxConcurrent,
   validateLoopGoal,
   validateLoopInterval,
   validateLoopModel,
@@ -55,10 +56,11 @@ const handler = baseApi({ auth: 'jwtOnly' })
   .patch(async (req, res) => {
     await assertLoopsEnabled();
     const id = String(req.query.id);
-    // agentId, budgetCreditsPerDay and oversees are widened to allow the explicit null that clears them.
-    const body = req.body as Partial<Omit<ILoop, 'agentId' | 'budgetCreditsPerDay' | 'oversees'>> & {
+    // agentId, budgetCreditsPerDay, maxConcurrent and oversees are widened to allow the explicit null that clears them.
+    const body = req.body as Partial<Omit<ILoop, 'agentId' | 'budgetCreditsPerDay' | 'maxConcurrent' | 'oversees'>> & {
       agentId?: string | null;
       budgetCreditsPerDay?: number | null;
+      maxConcurrent?: number | null;
       oversees?: string[] | null;
     };
 
@@ -84,6 +86,9 @@ const handler = baseApi({ auth: 'jwtOnly' })
     if (body.budgetCreditsPerDay !== undefined) {
       patch.budgetCreditsPerDay =
         body.budgetCreditsPerDay === null ? null : validateLoopBudget(body.budgetCreditsPerDay);
+    }
+    if (body.maxConcurrent !== undefined) {
+      patch.maxConcurrent = body.maxConcurrent === null ? null : validateLoopMaxConcurrent(body.maxConcurrent);
     }
     if (body.oversees !== undefined) {
       patch.oversees = await validateLoopOversees(body.oversees, existing.id, req.user!.id);

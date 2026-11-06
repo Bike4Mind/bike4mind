@@ -1,10 +1,10 @@
-import { desktopStagesOf, type ILoop } from '@bike4mind/common';
+import { activeLaneCount, desktopStagesOf, loopMaxConcurrent, type ILoop } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { loopRepository, workItemRepository } from '@bike4mind/database';
 import { ConflictError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { assertLoopsEnabled, LOOP_RATE_LIMIT, LOOP_RATE_WINDOW_MS } from '@server/utils/loopValidation';
-import { loopAdmission, MAX_ACTIVE_LOOP_RUNS, p2RunsLeft, PRIORITIES_OVER_P2_CAP } from '@server/utils/loopBudget';
+import { loopAdmission, loopLaneLimits, p2RunsLeft, PRIORITIES_OVER_P2_CAP } from '@server/utils/loopBudget';
 import { requestLoopDispatch } from '@server/utils/loopDispatch';
 
 /**
@@ -12,8 +12,14 @@ import { requestLoopDispatch } from '@server/utils/loopDispatch';
  * undefined when it should start within seconds. Advisory: the dispatch itself decides.
  */
 async function runNowWaitingReason(loop: ILoop, now: Date): Promise<string | undefined> {
-  if (loop.activeExecutionId) return 'Already running; the next run starts when this one ends';
-  if ((await loopRepository.countInFlight()) >= MAX_ACTIVE_LOOP_RUNS) {
+  if (activeLaneCount(loop) >= loopMaxConcurrent(loop)) {
+    return 'Already running; the next run starts when a run lane frees up';
+  }
+  const { maxActiveRuns, lanesPerUser } = await loopLaneLimits();
+  if ((await loopRepository.countLanesForUser(loop.userId)) >= lanesPerUser) {
+    return 'Your cloud loop runs are all busy; it starts when one ends';
+  }
+  if ((await loopRepository.countInFlight()) >= maxActiveRuns) {
     return 'All run slots are busy; it starts when one frees up';
   }
   if (await heldByP2Cap(loop, now)) return "Today's p2 runs are used up; p2/p3 tickets wait until 00:00 UTC";

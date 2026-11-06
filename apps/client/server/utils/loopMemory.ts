@@ -1,4 +1,11 @@
-import { visibleReplyText, type ILoop, type ILoopDirective, type ILoopMemory, type IWorkItem } from '@bike4mind/common';
+import {
+  LOOP_MEMORY_TAIL_CHARS,
+  visibleReplyText,
+  type ILoop,
+  type ILoopDirective,
+  type ILoopMemory,
+  type IWorkItem,
+} from '@bike4mind/common';
 
 /** Open directives shown to a run, oldest first; the rest wait for a later run. */
 export const LOOP_PROMPT_DIRECTIVES = 10;
@@ -8,8 +15,7 @@ export const LOOP_PROMPT_ANSWERS = 3;
 /** Ticket description cap (chars) in the run's prompt. */
 export const LOOP_TICKET_PROMPT_CHARS = 4000;
 
-/** Fallback `notes` cap (chars) when a run's answer carries no valid memory block. */
-export const LOOP_MEMORY_TAIL_CHARS = 4000;
+export { LOOP_MEMORY_TAIL_CHARS };
 
 const MEMORY_FENCE = /```loop-memory[^\S\n]*\n([\s\S]*?)```/g;
 

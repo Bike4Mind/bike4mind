@@ -3,11 +3,14 @@ import type { ComponentProps } from 'react';
 import ReactMarkdown, { type ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  activeLaneCount,
+  loopMaxConcurrent,
   loopStatusNeedsOwner,
   type B4MLLMTools,
   type ILoop,
   type ILoopHold,
   type ILoopWithUsage,
+  type LoopCapacityLimit,
   type LoopHoldKind,
   type LoopStatus,
 } from '@bike4mind/common';
@@ -49,8 +52,8 @@ export function formatInterval(minutes: number): string {
 export const lastRunLabel = (loop: Pick<ILoop, 'lastRunAt'>) =>
   loop.lastRunAt ? relativeTimeFormat(loop.lastRunAt) : 'never';
 
-export function nextRunLabel(loop: Pick<ILoop, 'status' | 'nextRunAt' | 'activeExecutionId'>): string {
-  if (loop.activeExecutionId) return 'running';
+export function nextRunLabel(loop: Pick<ILoop, 'status' | 'nextRunAt' | 'activeExecutionIds'>): string {
+  if (activeLaneCount(loop) > 0) return 'running';
   if (loop.status !== 'live' || !loop.nextRunAt) return '-';
   return new Date(loop.nextRunAt).getTime() <= Date.now() ? 'due' : relativeTimeFormat(loop.nextRunAt);
 }
@@ -60,19 +63,27 @@ export function nextRunLabel(loop: Pick<ILoop, 'status' | 'nextRunAt' | 'activeE
  * (apps/workers/src/cron/loopScheduler.ts, backoffMinutes). Null when it is not backing off.
  */
 export function backoffLabel(
-  loop: Pick<ILoop, 'status' | 'idleStreak' | 'nextRunAt' | 'activeExecutionId'>,
+  loop: Pick<ILoop, 'status' | 'idleStreak' | 'nextRunAt' | 'activeExecutionIds'>,
   now = Date.now()
 ): string | null {
-  if (loop.status !== 'live' || !loop.idleStreak || !loop.nextRunAt || loop.activeExecutionId) return null;
+  if (loop.status !== 'live' || !loop.idleStreak || !loop.nextRunAt || activeLaneCount(loop) > 0) return null;
   const minutes = Math.max(0, Math.round((new Date(loop.nextRunAt).getTime() - now) / 60_000));
   const runs = loop.idleStreak === 1 ? 'run' : `${loop.idleStreak} runs`;
   return `Backing off: next run in ${minutes} min, nothing changed in the last ${runs}`;
 }
 
-const HOLD_LABELS: Record<LoopHoldKind, (hold: ILoopHold) => string> = {
+const CAPACITY_LABELS: Record<LoopCapacityLimit, (loop: Pick<ILoop, 'maxConcurrent'>) => string> = {
+  loop: loop => `All ${loopMaxConcurrent(loop)} run lanes busy (loop lane limit)`,
+  user: () => 'Waiting for a free run slot (your cloud run limit)',
+  server: () => 'Waiting for a free run slot (server-wide limit)',
+  budget: () => "Waiting for budget: running lanes have reserved the rest of today's budget",
+};
+
+const HOLD_LABELS: Record<LoopHoldKind, (hold: ILoopHold, loop: Pick<ILoop, 'maxConcurrent'>) => string> = {
   pacing: hold =>
     `Paced: next run at ${new Date(hold.until!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} to spread the daily budget`,
-  capacity: () => 'Waiting for a free run slot (server-wide limit)',
+  // A capacity hold from before lanes has no limit; it was the server-wide one.
+  capacity: (hold, loop) => CAPACITY_LABELS[hold.limit ?? 'server'](loop),
   priority_budget: () => 'p2 budget used for today; next p2 at 00:00 UTC',
 };
 
@@ -81,20 +92,20 @@ const HOLD_LABELS: Record<LoopHoldKind, (hold: ILoopHold) => string> = {
  * apps/workers/src/cron/loopScheduler.ts), else its idle back-off. Null when nothing holds it.
  */
 export function holdLabel(
-  loop: Pick<ILoop, 'status' | 'idleStreak' | 'nextRunAt' | 'activeExecutionId' | 'hold'>,
+  loop: Pick<ILoop, 'status' | 'idleStreak' | 'nextRunAt' | 'activeExecutionIds' | 'hold' | 'maxConcurrent'>,
   now = Date.now()
 ): string | null {
-  if (loop.status !== 'live' || loop.activeExecutionId) return null;
+  if (loop.status !== 'live') return null;
   const { hold } = loop;
   // A deferring hold (pacing, priority_budget) lapses once its deferred run is due, or once the loop is made due or
-  // rescheduled (nextRunAt moves off `until`).
+  // rescheduled (nextRunAt moves off `until`). A hold shows beside running lanes: it holds the free ones.
   const deferLive =
     !!hold?.until &&
     new Date(hold.until).getTime() > now &&
     !!loop.nextRunAt &&
     new Date(loop.nextRunAt).getTime() === new Date(hold.until).getTime();
   if (hold && (!hold.until || deferLive)) {
-    return HOLD_LABELS[hold.kind](hold);
+    return HOLD_LABELS[hold.kind](hold, loop);
   }
   return backoffLabel(loop, now);
 }

@@ -100,7 +100,7 @@ describe('LoopRepository', () => {
   it('declares the scheduler and list indexes', async () => {
     const keys = (await Loop.collection.indexes()).map(index => index.key);
     expect(keys).toEqual(
-      expect.arrayContaining([{ status: 1, nextRunAt: 1 }, { activeExecutionId: 1 }, { userId: 1, updatedAt: -1 }])
+      expect.arrayContaining([{ status: 1, nextRunAt: 1 }, { activeExecutionIds: 1 }, { userId: 1, updatedAt: -1 }])
     );
   });
 
@@ -117,11 +117,19 @@ describe('LoopRepository', () => {
       expect([a, b].filter(Boolean)).toHaveLength(1);
     });
 
+    it('claims a loop with a free lane and skips one with every lane busy', async () => {
+      const free = await create({ status: 'live', nextRunAt: past, maxConcurrent: 2, activeExecutionIds: ['a'] });
+      await create({ status: 'live', nextRunAt: past, maxConcurrent: 2, activeExecutionIds: ['b', 'c'] });
+      await create({ status: 'live', nextRunAt: past, maxConcurrent: 1, activeExecutionIds: ['d'] });
+      expect((await loopRepository.claimDue(now, LEASE_MS))?.id).toBe(free.id);
+      expect(await loopRepository.claimDue(now, LEASE_MS)).toBeNull();
+    });
+
     it('skips loops that are not live, not due, leased or have a run in flight', async () => {
       await create({ status: 'paused', nextRunAt: past });
       await create({ status: 'live', nextRunAt: new Date(now.getTime() + 1000) });
       await create({ status: 'live', nextRunAt: past, leaseUntil: new Date(now.getTime() + 1000) });
-      await create({ status: 'live', nextRunAt: past, activeExecutionId: 'exec-1' });
+      await create({ status: 'live', nextRunAt: past, activeExecutionIds: ['exec-1'] });
       expect(await loopRepository.claimDue(now, LEASE_MS)).toBeNull();
     });
 
@@ -136,8 +144,8 @@ describe('LoopRepository', () => {
     });
   });
 
-  it('folds a run once and clears activeExecutionId', async () => {
-    const loop = await create({ status: 'live', activeExecutionId: 'exec-1' });
+  it('folds a run once and pulls it from activeExecutionIds', async () => {
+    const loop = await create({ status: 'live', activeExecutionIds: ['exec-1'] });
     const update = { $inc: { runCount: 1 } };
 
     expect(await loopRepository.foldRun(loop.id, 'exec-1', update)).toBe(true);
@@ -145,7 +153,83 @@ describe('LoopRepository', () => {
 
     const after = await loopRepository.findByIdAndUserId(loop.id, USER);
     expect(after?.runCount).toBe(1);
-    expect(after?.activeExecutionId).toBeUndefined();
+    expect(after?.activeExecutionIds).toEqual([]);
+  });
+
+  it('foldRun pulls only its own lane', async () => {
+    const loop = await create({ status: 'live', maxConcurrent: 2, activeExecutionIds: ['a', 'b'] });
+    expect(await loopRepository.foldRun(loop.id, 'a', {})).toBe(true);
+    expect(await loopRepository.foldRun(loop.id, 'a', {})).toBe(false);
+    expect((await loopRepository.findById(loop.id))?.activeExecutionIds).toEqual(['b']);
+  });
+
+  it('rejects a maxConcurrent outside 1 to 5 or a fractional one', async () => {
+    await expect(create({ maxConcurrent: 0 })).rejects.toThrow(/maxConcurrent/);
+    await expect(create({ maxConcurrent: 6 })).rejects.toThrow(/maxConcurrent/);
+    await expect(create({ maxConcurrent: 1.5 })).rejects.toThrow(/maxConcurrent/);
+    expect((await create({ maxConcurrent: 5 })).maxConcurrent).toBe(5);
+  });
+
+  describe('memory merge', () => {
+    const base = new Date('2026-11-05T10:00:00Z');
+    const start = new Date('2026-11-05T10:05:00Z');
+    const end = new Date('2026-11-05T10:30:00Z');
+    const run = (notes: string, extra: Record<string, unknown> = {}) => ({
+      notes,
+      nextAction: `next ${notes}`,
+      startedAt: start,
+      updatedAt: end,
+      ...extra,
+    });
+    const memoryOf = async (id: string) => (await loopRepository.findById(id))?.memory;
+
+    it('replaces memory nothing wrote since the run started', async () => {
+      const loop = await create({
+        status: 'live',
+        activeExecutionIds: ['a'],
+        memory: { notes: 'old', nextAction: 'x', updatedAt: base },
+      });
+      await loopRepository.foldRun(loop.id, 'a', {}, run('mine'));
+      expect(await memoryOf(loop.id)).toEqual({ notes: 'mine', nextAction: 'next mine', updatedAt: end });
+    });
+
+    it('appends after a parallel write, clips the tail and takes the nextAction', async () => {
+      const later = new Date('2026-11-05T10:10:00Z');
+      const loop = await create({
+        status: 'live',
+        activeExecutionIds: ['a'],
+        memory: { notes: 'x'.repeat(3990), nextAction: 'theirs', updatedAt: later },
+      });
+      await loopRepository.foldRun(loop.id, 'a', {}, run('$mine', { ticketTitle: 'Fix "it"' }));
+      const memory = await memoryOf(loop.id);
+      const suffix = '\n\n[parallel run, ticket "Fix \\"it\\""] $mine';
+      expect(memory?.notes).toHaveLength(4000);
+      expect(memory?.notes.endsWith(suffix)).toBe(true);
+      expect(memory?.nextAction).toBe('next $mine');
+    });
+
+    it('keeps both notes when two folds start from the same base', async () => {
+      const loop = await create({
+        status: 'live',
+        maxConcurrent: 2,
+        activeExecutionIds: ['a', 'b'],
+        memory: { notes: 'base', nextAction: '', updatedAt: base },
+      });
+      await loopRepository.foldRun(loop.id, 'a', {}, run('first'));
+      await loopRepository.foldRun(loop.id, 'b', {}, run('second'));
+      expect((await memoryOf(loop.id))?.notes).toBe('first\n\n[parallel run] second');
+    });
+
+    it('foldRunnerRun merges the same way and counts the run', async () => {
+      const loop = await create({ status: 'live', memory: { notes: 'base', nextAction: '', updatedAt: base } });
+      await loopRepository.foldRunnerRun(loop.id, USER, run('desk'), end);
+      await loopRepository.foldRunnerRun(loop.id, USER, run('cloud', { ticketTitle: 'T' }), end);
+      expect(await loopRepository.findById(loop.id)).toMatchObject({
+        memory: { notes: 'desk\n\n[parallel run, ticket "T"] cloud', nextAction: 'next cloud', updatedAt: end },
+        runCount: 2,
+        lastRunAt: end,
+      });
+    });
   });
 
   it('updateForUser unsets nulls and honours expectedStatus', async () => {
@@ -238,11 +322,15 @@ describe('LoopRepository', () => {
     expect(await loopRepository.claimDue(now, 60_000, [], [USER, 'user-2'])).toBeNull();
   });
 
-  it('countInFlight counts loops with a run in flight', async () => {
-    await create({ activeExecutionId: 'e1' });
-    await create({ activeExecutionId: 'e2' });
+  it('countInFlight counts lanes in flight; countLanesForUser only that user', async () => {
+    await create({ activeExecutionIds: ['e1'] });
+    await create({ maxConcurrent: 3, activeExecutionIds: ['e2', 'e3'] });
+    await create({ userId: 'user-2', activeExecutionIds: ['e4'] });
+    await create({ activeExecutionIds: [] });
     await create();
-    expect(await loopRepository.countInFlight()).toBe(2);
+    expect(await loopRepository.countInFlight()).toBe(4);
+    expect(await loopRepository.countLanesForUser(USER)).toBe(3);
+    expect(await loopRepository.countLanesForUser('user-3')).toBe(0);
   });
 
   it('deferUntil moves a live loop on and releases the lease; a non-live loop keeps its time', async () => {
@@ -305,15 +393,48 @@ describe('LoopRepository', () => {
       expect(dispatched?.hold).toBeUndefined();
       expect(dispatched?.alarm).toBeUndefined();
 
+      expect(dispatched?.activeExecutionIds).toEqual(['exec-1']);
+
       await loopRepository.setAlarm(loop.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'exec-1' });
       expect(await loopRepository.foldRun(loop.id, 'exec-1', {})).toBe(true);
       expect((await loopRepository.findById(loop.id))?.alarm).toBeUndefined();
     });
 
+    it("a second lane keeps the other lane's long_run alarm; the lane hold goes on its fold", async () => {
+      const loop = await create({
+        status: 'live',
+        maxConcurrent: 2,
+        activeExecutionIds: ['a'],
+        alarm: { kind: 'long_run', reason: 'long', since: earlier, executionId: 'a' },
+      });
+      await loopRepository.markDispatched(loop.id, 'b', now, now);
+      expect(await loopRepository.findById(loop.id)).toMatchObject({
+        activeExecutionIds: ['a', 'b'],
+        lastExecutionId: 'b',
+        alarm: { kind: 'long_run', executionId: 'a' },
+        hold: { kind: 'capacity', limit: 'loop', at: now },
+      });
+      await loopRepository.clearCapacityHolds();
+      expect((await loopRepository.findById(loop.id))?.hold?.limit).toBe('loop');
+
+      await loopRepository.foldRun(loop.id, 'b', {});
+      const folded = await loopRepository.findById(loop.id);
+      expect(folded?.alarm?.executionId).toBe('a');
+      expect(folded?.hold).toBeUndefined();
+    });
+
+    it('holdForCapacity holds a live loop with its reason and releases the lease', async () => {
+      const loop = await create({ status: 'live', leaseUntil: later(now) });
+      await loopRepository.holdForCapacity(loop.id, 'budget', now);
+      const held = await loopRepository.findById(loop.id);
+      expect(held?.hold).toEqual({ kind: 'capacity', limit: 'budget', at: now });
+      expect(held?.leaseUntil).toBeUndefined();
+    });
+
     it('setCapacityHolds marks only claimable loops outside skipIds; clearCapacityHolds keeps pacing holds', async () => {
       const due = await create({ status: 'live', nextRunAt: earlier });
       const claimed = await create({ status: 'live', nextRunAt: earlier });
-      const running = await create({ status: 'live', nextRunAt: earlier, activeExecutionId: 'exec-1' });
+      const running = await create({ status: 'live', nextRunAt: earlier, activeExecutionIds: ['exec-1'] });
       const future = await create({ status: 'live', nextRunAt: new Date(now.getTime() + 60_000) });
       const paused = await create({ status: 'paused', nextRunAt: earlier });
       const paced = await create({ status: 'live', nextRunAt: now, hold: { kind: 'pacing', until: now, at: earlier } });
@@ -321,6 +442,7 @@ describe('LoopRepository', () => {
       await loopRepository.setCapacityHolds(now, [claimed.id]);
       const held = async (id: string) => (await loopRepository.findById(id))?.hold?.kind;
       expect(await held(due.id)).toBe('capacity');
+      expect((await loopRepository.findById(due.id))?.hold?.limit).toBe('server');
       expect(await held(paced.id)).toBe('capacity');
       for (const id of [claimed.id, running.id, future.id, paused.id]) expect(await held(id)).toBeUndefined();
 
@@ -344,7 +466,7 @@ describe('LoopRepository', () => {
         since: earlier,
       });
 
-      const running = await create({ status: 'live', activeExecutionId: 'b' });
+      const running = await create({ status: 'live', activeExecutionIds: ['b'] });
       await loopRepository.setAlarm(running.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'b' });
       await loopRepository.setAlarm(running.id, {
         kind: 'long_run',
@@ -356,7 +478,7 @@ describe('LoopRepository', () => {
     });
 
     it('setAlarm writes nothing once the alarm no longer applies', async () => {
-      const running = await create({ status: 'live', activeExecutionId: 'b' });
+      const running = await create({ status: 'live', activeExecutionIds: ['b'] });
       const paused = await create({ status: 'paused' });
       await loopRepository.setAlarm(running.id, { kind: 'idle_with_work', reason: 'idle', since: now });
       await loopRepository.setAlarm(running.id, { kind: 'long_run', reason: 'long', since: now, executionId: 'a' });
@@ -382,7 +504,7 @@ describe('LoopRepository', () => {
       const older = await create({ status: 'live', nextRunAt: new Date(earlier.getTime() - 60_000) });
       const old = await create({ status: 'live', nextRunAt: earlier });
       await create({ status: 'live', nextRunAt: now });
-      await create({ status: 'live', nextRunAt: earlier, activeExecutionId: 'exec-1' });
+      await create({ status: 'live', nextRunAt: earlier, activeExecutionIds: ['exec-1'] });
       await create({ status: 'paused', nextRunAt: earlier });
       await create({ status: 'live', nextRunAt: earlier, hold: { kind: 'capacity', at: now } });
       await create({ status: 'live', nextRunAt: earlier, idleStreak: 2 });
@@ -404,9 +526,11 @@ describe('LoopRepository', () => {
     const live = await create({ status: 'live' });
     const owned = await create({ status: 'paused' });
     const theirs = await create({ status: 'live', userId: 'user-2' });
-    const running = await create({ status: 'live', activeExecutionId: 'exec-1' });
+    const running = await create({ status: 'live', activeExecutionIds: ['exec-1'] });
+    const folded = await create({ status: 'live', activeExecutionIds: [] });
     const patch = { statusReason: 'r', autoResume: 'budget' as const, nextRunAt: at };
-    expect(await loopRepository.pauseAllLiveForUser(USER, patch)).toBe(1);
+    expect(await loopRepository.pauseAllLiveForUser(USER, patch)).toBe(2);
+    expect((await loopRepository.findById(folded.id))?.status).toBe('paused');
     expect((await loopRepository.findById(running.id))?.status).toBe('live');
     expect(await loopRepository.findById(live.id)).toMatchObject({ status: 'paused', ...patch });
     expect((await loopRepository.findById(owned.id))?.autoResume).toBeUndefined();

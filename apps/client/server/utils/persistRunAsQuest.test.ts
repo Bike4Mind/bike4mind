@@ -355,6 +355,20 @@ describe('persistRunAsQuest agent artifact persistence', () => {
   });
 });
 
+describe('persistRunAsQuest loop runs', () => {
+  it('writes the Quest but skips session naming and summarization for a loop run', async () => {
+    stubExecution({ loopId: 'loop-1' });
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    expect(findOneAndUpdateMock).toHaveBeenCalled();
+    expect(persistAgentArtifactsMock).toHaveBeenCalled();
+    expect(autoNamePublishMock).not.toHaveBeenCalled();
+    expect(summarizePublishMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('persistRunAsQuest tool echoes', () => {
   const PAGE =
     '<!DOCTYPE html>\n<html><head><title>Fetched</title></head><body><p>Quoted verbatim from the fetched web page.</p></body></html>';

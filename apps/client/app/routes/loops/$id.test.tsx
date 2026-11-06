@@ -10,6 +10,7 @@ const {
   loopState,
   actions,
   eventsState,
+  ticketsState,
   loopsState,
   overrideDirective,
   resolveUnsure,
@@ -25,6 +26,7 @@ const {
   loopsState: { data: [] as unknown[] },
   overrideDirective: { mutate: vi.fn() },
   eventsState: { data: undefined as unknown },
+  ticketsState: { data: undefined as unknown },
   search: { run: undefined as string | undefined },
   loopState: { data: undefined as unknown, isLoading: false, error: null as unknown },
   actions: { onDeleted: undefined as (() => void) | undefined },
@@ -57,7 +59,7 @@ vi.mock('@client/app/components/Session/AgentExecution/AgentRunViewer', () => ({
 vi.mock('@client/app/hooks/data/loops', async importOriginal => ({
   countNeedsYou: (await importOriginal<typeof import('@client/app/hooks/data/loops')>()).countNeedsYou,
   useLoop: () => loopState,
-  useLoopTickets: () => ({ data: undefined }),
+  useLoopTickets: () => ticketsState,
   useLoopEvents: () => eventsState,
   useLoops: () => loopsState,
   useOverrideDirective: () => overrideDirective,
@@ -99,6 +101,7 @@ beforeEach(() => {
   loopState.data = loop();
   loopState.error = null;
   eventsState.data = undefined;
+  ticketsState.data = undefined;
   loopsState.data = [];
   config.toolAvailability = undefined;
 });
@@ -165,17 +168,37 @@ describe('LoopDetailPage run drawer', () => {
     expect(navigate).toHaveBeenCalledWith({ to: '/loops/$id', params: { id: 'l1' }, search: { run: 'ticket-run' } });
   });
 
-  it('opens the active run from "Latest run", falling back to the last one', () => {
-    loopState.data = loop({ activeExecutionId: 'active-run' });
-    const { unmount } = renderPage();
-    fireEvent.click(screen.getByTestId('loop-detail-latest-run-link'));
-    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'active-run' } }));
-    unmount();
-
+  it('opens the newest run from "Latest run"', () => {
     loopState.data = loop();
     renderPage();
     fireEvent.click(screen.getByTestId('loop-detail-latest-run-link'));
     expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'last-run' } }));
+    expect(screen.queryByTestId('loop-detail-active-runs')).toBeNull();
+    expect(screen.queryByTestId('loop-detail-lanes')).toBeNull();
+  });
+
+  it('lists each active run with View run, by ticket title or as a goal run', () => {
+    loopState.data = loop({ status: 'live', maxConcurrent: 3, activeExecutionIds: ['run-a', 'run-b'] });
+    ticketsState.data = {
+      stages: [{ stage: 'todo', tickets: [{ id: 't1', title: 'Fix login', executionId: 'run-a' }] }],
+      runLimit: 3,
+    };
+    renderPage();
+    expect(screen.getByTestId('loop-detail-lanes').textContent).toContain('2/3 running');
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).toContain('Fix login');
+    expect(screen.getByTestId('loop-detail-active-run-run-b').textContent).toContain('Goal run');
+    fireEvent.click(screen.getByTestId('loop-detail-active-run-view-run-b'));
+    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'run-b' } }));
+    fireEvent.click(screen.getByTestId('loop-detail-active-run-view-run-a'));
+    expect(navigate).toHaveBeenLastCalledWith(expect.objectContaining({ search: { run: 'run-a' } }));
+  });
+
+  it('labels an active run "Run" until the tickets load', () => {
+    loopState.data = loop({ status: 'live', activeExecutionIds: ['run-a'] });
+    ticketsState.data = undefined;
+    renderPage();
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).toContain('Run');
+    expect(screen.getByTestId('loop-detail-active-run-run-a').textContent).not.toContain('Goal run');
   });
 
   it('links an errored loop to its failed run, and only an errored loop', () => {

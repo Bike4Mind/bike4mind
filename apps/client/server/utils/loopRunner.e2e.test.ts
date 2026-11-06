@@ -233,7 +233,7 @@ describe('claimRunnerTicket', () => {
       query: result.prompt,
       runnerLeaseUntil: new Date(NOW.getTime() + 2 * 60_000),
     });
-    expect((await loopOf(loop.id)).activeExecutionId).toBeUndefined();
+    expect((await loopOf(loop.id)).activeExecutionIds).toBeUndefined();
   });
 
   it("serves green-ci as review when the loop's org turned it off", async () => {

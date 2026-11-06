@@ -4,10 +4,12 @@ import {
   ILoop,
   ILoopAlarm,
   ILoopRepository,
-  ILoopMemory,
   LOOP_ALARM_KINDS,
   LOOP_AUTO_RESUME_KINDS,
+  LOOP_CAPACITY_LIMITS,
   LOOP_HOLD_KINDS,
+  LOOP_MAX_CONCURRENT,
+  LOOP_MEMORY_TAIL_CHARS,
   LOOP_P2_RUNS_PER_DAY_MAX,
   LOOP_SERVICE_LEVEL_HOURS_MAX,
   LOOP_MERGE_POLICIES,
@@ -15,12 +17,53 @@ import {
   LOOP_STATUSES,
   LoopAlarmKind,
   LoopAutoResume,
+  LoopCapacityLimit,
+  LoopRunMemory,
   LoopHoldKind,
   LoopStatus,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 const ModelName = 'Loop';
+
+/** A free cloud lane: fewer runs in flight than `maxConcurrent` (absent: 1). Shared by `claimDue` and `setCapacityHolds`. */
+const LANE_FREE = {
+  $expr: { $lt: [{ $size: { $ifNull: ['$activeExecutionIds', []] } }, { $ifNull: ['$maxConcurrent', 1] }] },
+};
+const NO_LANE_ACTIVE = { 'activeExecutionIds.0': { $exists: false } };
+const ANY_LANE_ACTIVE = { 'activeExecutionIds.0': { $exists: true } };
+
+/**
+ * Pipeline expression for a finished run's memory: its own when nothing wrote the loop's memory since the run
+ * started; else the loop's notes plus a `[parallel run]` marker and the run's notes, tail-clipped. `nextAction` is
+ * the last writer's. Every run string is $literal: a pipeline update reads a leading '$' as a field path.
+ */
+function mergedMemory(run: LoopRunMemory) {
+  const marker = run.ticketTitle
+    ? `[parallel run, ticket ${JSON.stringify(run.ticketTitle.slice(0, 120))}]`
+    : '[parallel run]';
+  const joined = { $concat: [{ $ifNull: ['$memory.notes', ''] }, { $literal: `\n\n${marker} ${run.notes}` }] };
+  const tail = {
+    $let: {
+      vars: { s: joined },
+      in: {
+        $substrCP: [
+          '$$s',
+          { $max: [0, { $subtract: [{ $strLenCP: '$$s' }, LOOP_MEMORY_TAIL_CHARS] }] },
+          LOOP_MEMORY_TAIL_CHARS,
+        ],
+      },
+    },
+  };
+  const unchanged = {
+    $or: [{ $eq: [{ $ifNull: ['$memory.updatedAt', null] }, null] }, { $lte: ['$memory.updatedAt', run.startedAt] }],
+  };
+  return {
+    notes: { $cond: [unchanged, { $literal: run.notes }, tail] },
+    nextAction: { $literal: run.nextAction },
+    updatedAt: run.updatedAt,
+  };
+}
 
 export interface ILoopModel extends Model<ILoop> {}
 
@@ -89,7 +132,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         ...(skipUserIds.length > 0 && { userId: { $nin: skipUserIds } }),
         status: 'live',
         nextRunAt: { $lte: now },
-        activeExecutionId: { $exists: false },
+        ...LANE_FREE,
         $or: [{ leaseUntil: { $exists: false } }, { leaseUntil: { $lt: now } }],
       },
       { $set: { leaseUntil: new Date(now.getTime() + leaseMs) } },
@@ -102,14 +145,22 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     await this.loopModel.updateOne({ _id: id }, { $unset: { leaseUntil: '' } });
   }
 
-  async markDispatched(id: string, executionId: string, nextRunAt: Date): Promise<void> {
-    await this.loopModel.updateOne(
-      { _id: id },
+  async markDispatched(id: string, executionId: string, nextRunAt: Date, laneHoldAt?: Date): Promise<void> {
+    await this.loopModel.updateOne({ _id: id }, [
       {
-        $set: { lastExecutionId: executionId, activeExecutionId: executionId, nextRunAt },
-        $unset: { leaseUntil: '', hold: '', alarm: '' },
-      }
-    );
+        $set: {
+          activeExecutionIds: {
+            $concatArrays: [{ $ifNull: ['$activeExecutionIds', []] }, [{ $literal: executionId }]],
+          },
+          lastExecutionId: { $literal: executionId },
+          nextRunAt,
+          hold: laneHoldAt ? { $literal: { kind: 'capacity', limit: 'loop', at: laneHoldAt } } : '$$REMOVE',
+          // Another lane's long_run alarm stays; an idle alarm ends with this run.
+          alarm: { $cond: [{ $eq: ['$alarm.kind', 'idle_with_work'] }, '$$REMOVE', '$alarm'] },
+        },
+      },
+      { $unset: ['leaseUntil'] },
+    ]);
   }
 
   /** Pushes a claimed live loop's next run out without pausing it, and releases the claim. */
@@ -126,9 +177,20 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     if (result.matchedCount === 0) await this.releaseLease(id);
   }
 
+  async holdForCapacity(id: string, limit: LoopCapacityLimit, now: Date): Promise<void> {
+    const result = await this.loopModel.updateOne(
+      { _id: id, status: 'live' },
+      { $set: { hold: { kind: 'capacity', limit, at: now } }, $unset: { leaseUntil: '' } }
+    );
+    if (result.matchedCount === 0) await this.releaseLease(id);
+  }
+
   // The hold/alarm queries state `$exists: true` so the planner can use their partial indexes.
   async clearCapacityHolds(): Promise<void> {
-    await this.loopModel.updateMany({ hold: { $exists: true }, 'hold.kind': 'capacity' }, { $unset: { hold: '' } });
+    await this.loopModel.updateMany(
+      { hold: { $exists: true }, 'hold.kind': 'capacity', 'hold.limit': { $ne: 'loop' } },
+      { $unset: { hold: '' } }
+    );
   }
 
   /** Same filter as `claimDue`, so only loops the run cap kept out this tick are marked. */
@@ -138,10 +200,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         ...(skipIds.length > 0 && { _id: { $nin: skipIds } }),
         status: 'live',
         nextRunAt: { $lte: now },
-        activeExecutionId: { $exists: false },
+        ...LANE_FREE,
         $or: [{ leaseUntil: { $exists: false } }, { leaseUntil: { $lt: now } }],
       },
-      { $set: { hold: { kind: 'capacity', at: now } } }
+      { $set: { hold: { kind: 'capacity', limit: 'server', at: now } } }
     );
   }
 
@@ -151,7 +213,7 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
       .find({
         status: 'live',
         nextRunAt: { $lte: before },
-        activeExecutionId: { $exists: false },
+        ...NO_LANE_ACTIVE,
         'hold.kind': { $ne: 'capacity' },
         idleStreak: { $not: { $gt: 0 } },
       })
@@ -176,10 +238,10 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
         { $eq: [{ $ifNull: ['$alarm.executionId', null] }, alarm.executionId ?? null] },
       ],
     };
-    // Only while the alarm still applies: a long run while it is the active run, an idle alarm while live and idle.
+    // Only while the alarm still applies: a long run while it is an active run, an idle alarm while live and idle.
     const stillApplies = alarm.executionId
-      ? { activeExecutionId: alarm.executionId }
-      : { status: 'live', activeExecutionId: { $exists: false } };
+      ? { activeExecutionIds: alarm.executionId }
+      : { status: 'live', ...NO_LANE_ACTIVE };
     await this.loopModel.updateOne({ _id: id, ...stillApplies }, [
       {
         $set: {
@@ -212,31 +274,71 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     patch: { statusReason: string; autoResume: LoopAutoResume; nextRunAt: Date }
   ): Promise<number> {
     const result = await this.loopModel.updateMany(
-      { userId, status: 'live', activeExecutionId: { $exists: false } },
+      { userId, status: 'live', ...NO_LANE_ACTIVE },
       { $set: { status: 'paused', ...patch }, $unset: { leaseUntil: '' } }
     );
     return result.modifiedCount;
   }
 
+  private async countLanes(match: Record<string, unknown>): Promise<number> {
+    const [row] = await this.loopModel.aggregate<{ lanes: number }>([
+      { $match: { ...match, ...ANY_LANE_ACTIVE } },
+      { $group: { _id: null, lanes: { $sum: { $size: '$activeExecutionIds' } } } },
+    ]);
+    return row?.lanes ?? 0;
+  }
+
   async countInFlight(): Promise<number> {
-    return this.loopModel.countDocuments({ activeExecutionId: { $exists: true } });
+    return this.countLanes({});
+  }
+
+  async countLanesForUser(userId: string): Promise<number> {
+    return this.countLanes({ userId });
   }
 
   async listInFlight(): Promise<ILoop[]> {
-    const results = await this.loopModel.find({ activeExecutionId: { $exists: true } });
+    const results = await this.loopModel.find(ANY_LANE_ACTIVE);
     return results.map(doc => doc.toJSON());
   }
 
   async foldRun(
     id: string,
     executionId: string,
-    update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> }
+    update: { $set?: Record<string, unknown>; $inc?: Record<string, number>; $unset?: Record<string, ''> },
+    memory?: LoopRunMemory
   ): Promise<boolean> {
-    const result = await this.loopModel.updateOne(
-      { _id: id, activeExecutionId: executionId },
-      // An idle alarm cannot coexist with an active run, so any alarm here is this run's long_run alarm.
-      { ...update, $unset: { ...update.$unset, activeExecutionId: '', alarm: '' } }
-    );
+    // One pipeline write, so a crash can never fold the lane without its memory: run values are $literal, and the
+    // classic $inc/$unset map to $add/$$REMOVE. A lane just freed, so the loop-lane hold goes; another lane's
+    // long_run alarm stays.
+    const set: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(update.$set ?? {})) set[key] = { $literal: value };
+    for (const [key, by] of Object.entries(update.$inc ?? {})) set[key] = { $add: [{ $ifNull: [`$${key}`, 0] }, by] };
+    for (const key of Object.keys(update.$unset ?? {})) set[key] = '$$REMOVE';
+    const result = await this.loopModel.updateOne({ _id: id, activeExecutionIds: executionId }, [
+      {
+        $set: {
+          ...set,
+          activeExecutionIds: {
+            $filter: { input: '$activeExecutionIds', cond: { $ne: ['$$this', { $literal: executionId }] } },
+          },
+          alarm: {
+            $cond: [
+              { $and: [{ $eq: ['$alarm.kind', 'long_run'] }, { $eq: ['$alarm.executionId', executionId] }] },
+              '$$REMOVE',
+              '$alarm',
+            ],
+          },
+          hold: {
+            $cond: [
+              { $and: [{ $eq: ['$hold.kind', 'capacity'] }, { $eq: ['$hold.limit', 'loop'] }] },
+              '$$REMOVE',
+              '$hold',
+            ],
+          },
+          ...(memory && { memory: mergedMemory(memory) }),
+        },
+      },
+    ]);
     return result.modifiedCount > 0;
   }
 
@@ -288,11 +390,16 @@ export class LoopRepository extends BaseRepository<ILoop> implements ILoopReposi
     return result.modifiedCount > 0;
   }
 
-  async foldRunnerRun(id: string, userId: string, memory: ILoopMemory | undefined, lastRunAt: Date): Promise<void> {
-    await this.loopModel.updateOne(
-      { _id: id, userId },
-      { $set: { ...(memory && { memory }), lastRunAt }, $inc: { runCount: 1 } }
-    );
+  async foldRunnerRun(id: string, userId: string, run: LoopRunMemory | undefined, lastRunAt: Date): Promise<void> {
+    await this.loopModel.updateOne({ _id: id, userId }, [
+      {
+        $set: {
+          ...(run && { memory: mergedMemory(run) }),
+          lastRunAt,
+          runCount: { $add: [{ $ifNull: ['$runCount', 0] }, 1] },
+        },
+      },
+    ]);
   }
 }
 
@@ -371,7 +478,14 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
     lastRunAt: { type: Date },
     nextRunAt: { type: Date },
     lastExecutionId: { type: String },
-    activeExecutionId: { type: String },
+    activeExecutionIds: { type: [String], default: undefined },
+    // Kept in sync with validateLoopMaxConcurrent (apps/client/server/utils/loopValidation.ts).
+    maxConcurrent: {
+      type: Number,
+      min: 1,
+      max: LOOP_MAX_CONCURRENT,
+      validate: { validator: Number.isInteger, message: 'maxConcurrent must be an integer' },
+    },
     leaseUntil: { type: Date },
     runCount: { type: Number, default: 0 },
     consecutiveFailures: { type: Number, default: 0 },
@@ -383,6 +497,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
         {
           kind: { type: String, enum: LOOP_HOLD_KINDS, required: true },
           until: Date,
+          limit: { type: String, enum: LOOP_CAPACITY_LIMITS },
           at: { type: Date, required: true },
         },
         { _id: false }
@@ -408,7 +523,7 @@ export const LoopSchema = new Schema<ILoop, ILoopModel>(
 );
 
 LoopSchema.index({ status: 1, nextRunAt: 1 });
-LoopSchema.index({ activeExecutionId: 1 }, { partialFilterExpression: { activeExecutionId: { $exists: true } } });
+LoopSchema.index({ activeExecutionIds: 1 }, { partialFilterExpression: { 'activeExecutionIds.0': { $exists: true } } });
 LoopSchema.index({ userId: 1, updatedAt: -1 });
 LoopSchema.index({ 'alarm.kind': 1 }, { partialFilterExpression: { alarm: { $exists: true } } });
 LoopSchema.index({ 'hold.kind': 1 }, { partialFilterExpression: { hold: { $exists: true } } });

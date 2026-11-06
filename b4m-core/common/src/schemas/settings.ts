@@ -675,6 +675,8 @@ export const SettingKeySchema = z.enum([
   // LOOPS SETTINGS
   'EnableLoops',
   'LoopsDailyCreditsPerUser',
+  'LoopsMaxActiveRuns',
+  'LoopsCloudLanesPerUser',
 
   // TIME MACHINE & NIGHT SKY SETTINGS
   'EnableEnhancedDateTime',
@@ -2237,6 +2239,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'enableAgentProactiveMessages', order: 12 },
       { key: 'EnableLoops', order: 13 },
       { key: 'LoopsDailyCreditsPerUser', order: 14 },
+      { key: 'LoopsMaxActiveRuns', order: 14.1 },
+      { key: 'LoopsCloudLanesPerUser', order: 14.2 },
       { key: 'EnableAgentMode', order: 15 },
       { key: 'EnableAgentModeDefault', order: 16 },
       { key: 'EnableArtifacts', order: 20 },
@@ -7201,6 +7205,37 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 14,
+    dependsOn: 'EnableLoops',
+  }),
+  // Clamped again at read time by loopLaneLimits (apps/client/server/utils/loopBudget.ts).
+  LoopsMaxActiveRuns: makeNumberSetting({
+    key: 'LoopsMaxActiveRuns',
+    name: 'Loops: Cloud Runs at Once (Server-wide)',
+    defaultValue: 4,
+    min: 1,
+    // The AgentExecutor's reserved concurrency (infra/agentExecutor.ts); keep in sync.
+    max: 10,
+    int: true,
+    description:
+      'Most cloud loop runs in flight at once across all users. Loop and interactive runs share the agent executor, so keep this well below its 10 reserved slots.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 14.1,
+    dependsOn: 'EnableLoops',
+  }),
+  LoopsCloudLanesPerUser: makeNumberSetting({
+    key: 'LoopsCloudLanesPerUser',
+    name: 'Loops: Cloud Runs at Once per User',
+    defaultValue: 2,
+    min: 1,
+    // MAX_CONCURRENT_EXECUTIONS_PER_USER - 1 (apps/client/server/utils/executionLimits.ts), so a chat slot stays free; keep in sync.
+    max: 2,
+    int: true,
+    description:
+      "Most cloud loop runs one user may have in flight at once, across all of their loops. Always leaves one of the user's run slots free for chat. Desktop runs are not limited by this.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 14.2,
     dependsOn: 'EnableLoops',
   }),
   // Time Machine & Night Sky Settings

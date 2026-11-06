@@ -22,10 +22,12 @@ import {
 } from '@mui/joy';
 import {
   DEFAULT_LOOP_STAGES,
+  LOOP_MAX_CONCURRENT,
   LOOP_P2_RUNS_PER_DAY_MAX,
   LOOP_SERVICE_LEVEL_HOURS,
   LOOP_SERVICE_LEVEL_HOURS_MAX,
   type ILoop,
+  type ILoopsBudget,
   type ILoopStageConfig,
   type LoopMergePolicy,
 } from '@bike4mind/common';
@@ -36,7 +38,13 @@ import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useAccessibleModels } from '@client/app/hooks/useAccessibleModels';
 import { useConfig } from '@client/app/hooks/data/settings';
 import { unavailableTools, unavailableToolsMessage } from '@client/app/components/Loops/loopUi';
-import { useCreateLoop, useLoops, useUpdateLoop, type LoopFormPayload } from '@client/app/hooks/data/loops';
+import {
+  useCreateLoop,
+  useLoops,
+  useLoopsBudget,
+  useUpdateLoop,
+  type LoopFormPayload,
+} from '@client/app/hooks/data/loops';
 
 // Limits mirror apps/client/server/utils/loopValidation.ts; keep in sync.
 const NAME_MAX = 120;
@@ -67,6 +75,8 @@ export interface LoopFormValues {
   oversees: string[];
   /** '' means no daily budget. */
   budget: string;
+  /** Cloud runs at once, as typed. */
+  maxConcurrent: string;
   /** Keyed by stage name, so removing a stage (or it becoming the last) drops its config from the payload. */
   stageConfig: Record<string, StageSettings>;
   /** '' means the default service level (LOOP_SERVICE_LEVEL_HOURS). */
@@ -103,10 +113,35 @@ function desktopGuards(settings: StageSettings): Partial<ILoopStageConfig> {
 
 export type LoopFormErrors = Partial<
   Record<
-    'name' | 'goal' | 'interval' | 'tools' | 'stages' | 'oversees' | 'budget' | 'stageConfig' | 'sla' | 'p2Cap',
+    | 'name'
+    | 'goal'
+    | 'interval'
+    | 'maxConcurrent'
+    | 'tools'
+    | 'stages'
+    | 'oversees'
+    | 'budget'
+    | 'stageConfig'
+    | 'sla'
+    | 'p2Cap',
     string
   >
 >;
+
+/**
+ * The hint under Runs at once: cloud only, and the lower of the admin lane limits when the value is above one
+ * (`loopLaneLimits`, apps/client/server/utils/loopBudget.ts).
+ */
+export function maxConcurrentHint(value: number, limits?: ILoopsBudget['laneLimits']): string {
+  const parts = ["Cloud runs at once; Desktop runs use your machine's own lanes."];
+  if (limits && value > limits.lanesPerUser) {
+    parts.push(
+      `Up to ${limits.lanesPerUser} run at once: your limit is ${limits.lanesPerUser} cloud runs across all loops.`
+    );
+  }
+  if (limits && value > limits.maxActiveRuns) parts.push(`(server-wide limit: ${limits.maxActiveRuns})`);
+  return parts.join(' ');
+}
 
 /** Checks the form against the API's limits; `payload` is set only when there are no errors. */
 export function validateLoopForm(
@@ -126,6 +161,12 @@ export function validateLoopForm(
     errors.interval = 'Interval must be a whole number of minutes';
   } else if (intervalMinutes < INTERVAL_MIN || intervalMinutes > INTERVAL_MAX) {
     errors.interval = `Interval must be from ${INTERVAL_MIN} minutes to 7 days`;
+  }
+
+  // Mirrors validateLoopMaxConcurrent (apps/client/server/utils/loopValidation.ts).
+  const maxConcurrent = Number(values.maxConcurrent);
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > LOOP_MAX_CONCURRENT) {
+    errors.maxConcurrent = `Runs at once must be a whole number from 1 to ${LOOP_MAX_CONCURRENT}`;
   }
 
   if (values.tools.length > TOOLS_MAX) errors.tools = `Pick ${TOOLS_MAX} tools or fewer`;
@@ -190,6 +231,8 @@ export function validateLoopForm(
   const oversees = values.oversees.length > 0 ? values.oversees : mode === 'edit' ? null : undefined;
   const budgetCreditsPerDay = values.budget.trim() ? budget : mode === 'edit' ? null : undefined;
   const stageConfigPayload = stageConfig.length > 0 ? stageConfig : mode === 'edit' ? null : undefined;
+  // 1 is the default, stored as absent.
+  const maxConcurrentPayload = maxConcurrent > 1 ? maxConcurrent : mode === 'edit' ? null : undefined;
   // Blank clears a setting on edit and leaves it out on create.
   const orClear = <T,>(value: T | undefined) => (value !== undefined ? value : mode === 'edit' ? null : undefined);
   const policy = {
@@ -209,6 +252,7 @@ export function validateLoopForm(
       ...(agentId !== undefined && { agentId }),
       ...(oversees !== undefined && { oversees }),
       ...(budgetCreditsPerDay !== undefined && { budgetCreditsPerDay }),
+      ...(maxConcurrentPayload !== undefined && { maxConcurrent: maxConcurrentPayload }),
       ...(stageConfigPayload !== undefined && { stageConfig: stageConfigPayload }),
       ...Object.fromEntries(Object.entries(policy).filter(([, value]) => value !== undefined)),
     },
@@ -227,6 +271,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
       agentId: '',
       oversees: [],
       budget: '',
+      maxConcurrent: '1',
       stageConfig: {},
       slaP0: '',
       slaP1: '',
@@ -247,6 +292,7 @@ function initialValues(loop?: ILoop): LoopFormValues {
     agentId: loop.agentId ?? '',
     oversees: loop.oversees ?? [],
     budget: String(loop.budgetCreditsPerDay ?? ''),
+    maxConcurrent: String(loop.maxConcurrent ?? 1),
     slaP0: String(loop.serviceLevelHours?.p0 ?? ''),
     slaP1: String(loop.serviceLevelHours?.p1 ?? ''),
     p2Cap: String(loop.p2RunsPerDay ?? ''),
@@ -282,6 +328,7 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
   const { accessibleTextModels } = useAccessibleModels();
   const { data: loops = [], isSuccess: loopsLoaded } = useLoops();
   const toolAvailability = useConfig().data?.toolAvailability;
+  const laneLimits = useLoopsBudget().data?.laneLimits;
   // A saved tool stays listed even when unavailable, so the Select can still render it and the owner can remove it.
   const missingTools = unavailableTools(PICKABLE_TOOLS, toolAvailability);
   const pickedMissing = missingTools.filter(tool => values.tools.includes(tool)).map(tool => getToolDisplayName(tool));
@@ -408,6 +455,19 @@ export default function LoopFormModal({ open, onClose, loop }: LoopFormModalProp
               </Select>
             </Stack>
             {errors.interval && <FormHelperText>{errors.interval}</FormHelperText>}
+          </FormControl>
+          <FormControl error={!!errors.maxConcurrent}>
+            <FormLabel>Runs at once</FormLabel>
+            <Input
+              type="number"
+              value={values.maxConcurrent}
+              onChange={e => set('maxConcurrent', e.target.value)}
+              sx={{ width: 120 }}
+              slotProps={{ input: { min: 1, max: LOOP_MAX_CONCURRENT, 'data-testid': 'loop-form-max-concurrent' } }}
+            />
+            <FormHelperText data-testid="loop-form-max-concurrent-hint">
+              {errors.maxConcurrent ?? maxConcurrentHint(Number(values.maxConcurrent), laneLimits)}
+            </FormHelperText>
           </FormControl>
           <FormControl error={!!errors.tools}>
             <FormLabel>Tools</FormLabel>

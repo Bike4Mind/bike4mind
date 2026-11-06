@@ -41,6 +41,7 @@ const repo = vi.hoisted(() => ({
   removeFromOversees: vi.fn(),
   makeDueNow: vi.fn(),
   countInFlight: vi.fn(),
+  countLanesForUser: vi.fn(),
 }));
 const tickets = vi.hoisted(() => ({
   softDeleteByLoop: vi.fn(),
@@ -161,6 +162,7 @@ beforeEach(() => {
   users.findById.mockResolvedValue({});
   executions.sumLoopCreditsForUser.mockResolvedValue(0);
   repo.countInFlight.mockResolvedValue(0);
+  repo.countLanesForUser.mockResolvedValue(0);
   repo.makeDueNow.mockResolvedValue(true);
   loopAdmission.mockResolvedValue({ ok: true });
   p2RunsLeft.mockResolvedValue(Infinity);
@@ -477,6 +479,27 @@ describe('PATCH /api/loops/:id status transitions', () => {
     expect(repo.updateForUser).not.toHaveBeenCalled();
   });
 
+  it('accepts a whole maxConcurrent from 1 to 5, rejects anything else, and resets it with null', async () => {
+    repo.findByIdAndUserId.mockResolvedValue(loop({ maxConcurrent: 3 }));
+    for (const maxConcurrent of [0, 6, 1.5, '2']) {
+      await expect(call('item', 'patch', { query: { id: OID }, body: { maxConcurrent } }).result).rejects.toMatchObject(
+        { statusCode: 400 }
+      );
+      await expect(call('collection', 'post', { body: { ...validBody, maxConcurrent } }).result).rejects.toMatchObject({
+        statusCode: 400,
+      });
+    }
+    expect(repo.updateForUser).not.toHaveBeenCalled();
+    expect(repo.create).not.toHaveBeenCalled();
+
+    for (const maxConcurrent of [1, 5, null]) {
+      await call('item', 'patch', { query: { id: OID }, body: { maxConcurrent } }).result;
+      expect(repo.updateForUser.mock.lastCall![2]).toEqual({ maxConcurrent });
+    }
+    await call('collection', 'post', { body: { ...validBody, maxConcurrent: 5 } }).result;
+    expect(repo.create.mock.lastCall![0]).toMatchObject({ maxConcurrent: 5 });
+  });
+
   it('clears agentId and budgetCreditsPerDay with null', async () => {
     repo.findByIdAndUserId.mockResolvedValue(loop({ agentId: 'a1', budgetCreditsPerDay: 5 }));
     await call('item', 'patch', { query: { id: OID }, body: { agentId: null, budgetCreditsPerDay: null } }).result;
@@ -540,8 +563,14 @@ describe('POST /api/loops/:id/run', () => {
   });
 
   it.each([
-    ['a run is in flight', { activeExecutionId: 'x1' }, () => undefined, /Already running/],
+    ['a run is in flight', { activeExecutionIds: ['x1'] }, () => undefined, /Already running/],
     ['every run slot is busy', {}, () => repo.countInFlight.mockResolvedValue(4), /run slots are busy/],
+    [
+      "the owner's cloud runs are busy",
+      {},
+      () => repo.countLanesForUser.mockResolvedValue(2),
+      /cloud loop runs are all busy/,
+    ],
     [
       'the loop budget is spent',
       {},
@@ -630,13 +659,14 @@ describe('/api/loops/budget', () => {
       userDailyCredits: 30,
       adminDailyCredits: 50,
       effectiveCap: 30,
+      laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 },
     });
   });
 
   it('reports no cap when neither is set', async () => {
     const { res, result } = call('budget', 'get');
     await result;
-    expect(res._getJSONData()).toEqual({ creditsToday: 0 });
+    expect(res._getJSONData()).toEqual({ creditsToday: 0, laneLimits: { lanesPerUser: 2, maxActiveRuns: 4 } });
   });
 
   it('sets, clears and validates the user cap', async () => {
