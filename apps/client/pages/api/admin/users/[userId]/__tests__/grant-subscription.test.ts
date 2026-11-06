@@ -84,7 +84,22 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoin
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+const approvalMocks = vi.hoisted(() => ({
+  policy: vi.fn(async (_credits: number): Promise<unknown> => null),
+  request: vi.fn(),
+}));
+vi.mock('@server/admin/creditGrants/gate', () => ({
+  creditGrantNeedsApproval: (credits: number) => approvalMocks.policy(credits),
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  requestApproval: (...a: unknown[]) => approvalMocks.request(...a),
+}));
+const POLICY = { enabled: true, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
+const PENDING = { approvalId: 'approval-1', status: 'pending' };
+
 import handler from '../grant-subscription';
+import type { Request } from 'express';
+import { grantSubscription } from '@server/admin/creditGrants/grantSubscription';
 
 const REASON = 'Comped for the design partner pilot';
 
@@ -326,5 +341,52 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
         expect.objectContaining({ details: expect.objectContaining({ selfGrant: false }) })
       );
     });
+  });
+});
+
+describe('POST /api/admin/users/[userId]/grant-subscription - approval gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindById.mockResolvedValue({ id: 'user-1', email: 'u@example.com' });
+    mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme' });
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: { currentCredits: 0 }, creditTransactionId: 'tx-sub-grant' });
+    approvalMocks.request.mockResolvedValue(PENDING);
+  });
+
+  it('judges the team grant on seats x per-seat credits and stores that figure', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    const { res, run } = call(5);
+    await run();
+    expect(approvalMocks.policy).toHaveBeenCalledWith(5 * 1000);
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'user.subscription.grant',
+        requiredPermission: 'credits:adjust',
+        params: expect.objectContaining({ userId: 'user-1', seats: 5, creditsAtRequest: 5000 }),
+      }),
+      POLICY
+    );
+    expect(mockSubCreate).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses with 409 at execute when the per-seat credits changed since the request', async () => {
+    const approverReq = { user: { id: 'admin-2', isAdmin: true }, logger: { info: vi.fn() } } as unknown as Request;
+    const params = {
+      subscriptionType: 'team' as const,
+      organizationName: 'Acme',
+      seats: 5,
+      durationMonths: 1,
+      userId: 'user-1',
+      reason: REASON,
+      creditsAtRequest: 4000,
+    };
+    await expect(grantSubscription(approverReq, params)).rejects.toMatchObject({ statusCode: 409 });
+    expect(mockAddCredits).not.toHaveBeenCalled();
+    await grantSubscription(approverReq, { ...params, creditsAtRequest: 5000 });
+    expect(mockAddCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 5000 }), expect.anything());
   });
 });

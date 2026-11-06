@@ -77,6 +77,19 @@ vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws-endpoin
 import { recordAdminActionFromRequest } from '@server/utils/adminAudit';
 import { priceAffectsEntitlements } from '@server/entitlements/paidStanding';
 import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
+const approvalMocks = vi.hoisted(() => ({
+  policy: vi.fn(async (_credits: number): Promise<unknown> => null),
+  request: vi.fn(),
+}));
+vi.mock('@server/admin/creditGrants/gate', () => ({
+  creditGrantNeedsApproval: (credits: number) => approvalMocks.policy(credits),
+}));
+vi.mock('@server/admin/approvals/service', () => ({
+  requestApproval: (...a: unknown[]) => approvalMocks.request(...a),
+}));
+const POLICY = { enabled: true, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
+const PENDING = { approvalId: 'approval-1', status: 'pending' };
+
 import handler from '../grant';
 
 const BODY = {
@@ -201,5 +214,50 @@ describe('POST /api/admin/organizations/grant', () => {
         }),
       })
     );
+  });
+});
+
+describe('POST /api/admin/organizations/grant - approval gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
+    approvalMocks.request.mockResolvedValue(PENDING);
+  });
+
+  it('runs as before when the gate passes it through', async () => {
+    mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
+    const { res, run } = call({});
+    await run();
+    expect(approvalMocks.policy).toHaveBeenCalledWith(BODY.initialCredits);
+    expect(res._getStatusCode()).toBe(201);
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+  });
+
+  it('answers 202 over the threshold and creates nothing', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toEqual(PENDING);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.grant',
+        requiredPermission: 'credits:adjust',
+        params: expect.objectContaining({ ownerEmail: BODY.ownerEmail, initialCredits: 1000, reason: BODY.reason }),
+      }),
+      POLICY
+    );
+    expect(mockOrgCreate).not.toHaveBeenCalled();
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('refuses an unknown owner before storing a request', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockUserFindByEmail.mockResolvedValueOnce(null);
+    await expect(call({}).run()).rejects.toThrow('No user with email');
+    expect(approvalMocks.request).not.toHaveBeenCalled();
   });
 });

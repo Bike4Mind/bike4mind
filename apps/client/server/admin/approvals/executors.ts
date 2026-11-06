@@ -1,5 +1,8 @@
 import { ConflictError, type AdminApproval, type AdminApprovalAction } from '@bike4mind/common';
 import type { Request } from 'express';
+import { GrantOrgParamsSchema, grantOrg } from '@server/admin/creditGrants/grantOrg';
+import { GrantSubscriptionParamsSchema, grantSubscription } from '@server/admin/creditGrants/grantSubscription';
+import { TopUpParamsSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
 import { executeApprovedUsersBulk } from '@server/admin/usersBulk/approvalExecutor';
 
 /** `req` is the approver's request: the approver's live session runs the stored params. */
@@ -15,9 +18,10 @@ const notExecutableOnApprove =
 /** One entry per gated action; the gated route's own module supplies the real executor. */
 export const approvalExecutors: Record<AdminApprovalAction, ApprovalExecutor> = {
   'users.bulk': (params, context) => executeApprovedUsersBulk(params, context),
-  'org.credits.grant': notExecutableOnApprove('org.credits.grant'),
-  'org.credits.top_up': notExecutableOnApprove('org.credits.top_up'),
-  'user.subscription.grant': notExecutableOnApprove('user.subscription.grant'),
+  'org.credits.grant': (params, { req, approval }) => grantOrg(req, GrantOrgParamsSchema.parse(params), approval),
+  'org.credits.top_up': (params, { req, approval }) => topUpOrg(req, TopUpParamsSchema.parse(params), approval),
+  'user.subscription.grant': (params, { req, approval }) =>
+    grantSubscription(req, GrantSubscriptionParamsSchema.parse(params), approval),
   // Approving only unlocks it: the requester redeems it themselves, so the session is never the approver's.
   'user.impersonate_admin': notExecutableOnApprove('user.impersonate_admin'),
   'user.delete_admin': notExecutableOnApprove('user.delete_admin'),

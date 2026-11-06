@@ -26,7 +26,6 @@ import {
   recordAdminActionFromRequest,
 } from '@server/utils/adminAudit';
 import { approvalAuditDetails } from './auditWriter';
-import { approvalExecutors } from './executors';
 
 const HOUR_MS = 60 * 60 * 1000;
 /** An approved action still `executing` after this long most likely died mid-run. */
@@ -212,6 +211,8 @@ export async function approveApproval(req: Request, id: string): Promise<Approve
   if (redeemedByRequester) return { approval: claimed };
 
   try {
+    // Loaded here so a gated route importing requestApproval does not pull in every executor's dependencies.
+    const { approvalExecutors } = await import('./executors');
     const result = await approvalExecutors[claimed.action](JSON.parse(claimed.paramsJson), {
       req,
       approval: claimed,
