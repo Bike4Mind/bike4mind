@@ -576,6 +576,16 @@ describe('AnalyticsTab', () => {
       expect(call?.[1]).toEqual({ params: { range: '90d', compare: 'off', signups: 'legit' } });
     });
 
+    it('does not refetch the funnel when only the Accounts toggle changes', async () => {
+      await renderPage('/admin?tab=analytics');
+      await screen.findByTestId('analytics-funnel-chart');
+      expect(mocks.funnel).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByTestId('analytics-accounts-mode-all'));
+      await waitFor(() => expect(lastParams()).toMatchObject({ accounts: 'all' }));
+      expect(mocks.funnel).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('analytics-funnel-updating')).not.toBeInTheDocument();
+    });
+
     it('explains a range over the limit in the section and on the tile, and offers 90 days', async () => {
       respondFunnel({ status: 'rangeTooLong', maxDays: 93 });
       const router = await renderPage('/admin?tab=analytics&range=12m');
