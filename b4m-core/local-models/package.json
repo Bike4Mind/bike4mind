@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/local-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Discovery and management of local LLM runtimes and host hardware, shared by the B4M CLI and desktop app",
   "repository": {
