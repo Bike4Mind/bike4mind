@@ -82,8 +82,11 @@ export async function reconcilePurchaseStamps(options: ReconcileOptions): Promis
     cleared: 0,
   };
   // One entry per id: an intent whose Stripe read failed fails again in the owner lookup.
+  const errorIds = new Set<string>();
   const recordError = (id: string, error: unknown) => {
-    if (!result.errors.some(e => e.id === id)) result.errors.push({ id, message: message(error) });
+    if (errorIds.has(id)) return;
+    errorIds.add(id);
+    result.errors.push({ id, message: message(error) });
   };
 
   // Same filter as findUnreversedPurchase in packages/database CreditTransactionModel.
