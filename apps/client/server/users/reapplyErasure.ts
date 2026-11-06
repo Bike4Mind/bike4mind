@@ -1,6 +1,7 @@
 import {
   Organization,
   erasureRecordRepository,
+  realtimeConnectionRepository,
   userRepository,
   withTransaction,
   type IErasureRecord,
@@ -37,6 +38,9 @@ export async function reapplyErasure(
 ): Promise<{ ownedOrganizationIds: string[] }> {
   const owned = await Organization.find({ userId, deletedAt: null, personal: { $ne: true } }, { _id: 1 }).lean();
   const writeRecord = () => erasureRecordRepository.record(record);
+  // Fail before deleting the retry anchor if realtime invalidation cannot complete. Unlike the
+  // best-effort revoke service, replay must report a partial erasure as a failure.
+  await realtimeConnectionRepository.endConnections({ userId });
   if (record.initiatedBy !== 'admin') {
     const assertLease = async () => {}; // no purge lease: the account is already past its grace period
     await purgeAccountFiles(userId, { logger, assertLease });
@@ -52,6 +56,12 @@ export async function reapplyErasure(
       await writeRecord();
     });
   }
-  await purgeDeletedUserData(userId, { deletedBy: 'erasure-reapply', logger, integrationGrants: null });
+  // A restored account can reconnect during a long purge. Once its row is gone, close that
+  // window with another invalidation; failures propagate as a partial purge needing follow-up.
+  try {
+    await realtimeConnectionRepository.endConnections({ userId });
+  } finally {
+    await purgeDeletedUserData(userId, { deletedBy: 'erasure-reapply', logger, integrationGrants: null });
+  }
   return { ownedOrganizationIds: owned.map(o => String(o._id)) };
 }

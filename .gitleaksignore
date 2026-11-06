@@ -3,6 +3,9 @@
 # Suppression is by gitleaks fingerprint (commit:file:rule:line hash), NOT by secret value.
 # Do NOT remove entries — they prevent re-filing of already-rotated credentials.
 
+# PR #6751: credential-free MongoDB URI in a dbNameFromUri documentation example.
+de10b6fd7ccfb1fbe5630e1dae9e4f59a08361d1:packages/scripts/src/reapplyErasures.ts:bike4mind-mongodb-uri:41
+
 # Rotated Slack webhook (#8505, PR #8564 removed the code)
 # bike4mind-slack-webhook rule — found in historical commits only
 8a76414a9d6338b48c47ff84aeb7c239f047ae5e:packages/client/server/events/logToSlack.ts:bike4mind-slack-webhook:12

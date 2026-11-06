@@ -1,7 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryReplSet } from 'mongodb-memory-server';
-import { ErasureRecordModel, Organization, Session, User, erasureRecordRepository } from '@bike4mind/database';
+import {
+  Connection,
+  QuerySubscription,
+  ErasureRecordModel,
+  Organization,
+  Session,
+  User,
+  erasureRecordRepository,
+  realtimeConnectionRepository,
+} from '@bike4mind/database';
 import { erasureIdHash } from '@bike4mind/server-utils/privacy/erasureHash';
 import {
   createMongoReplSet,
@@ -113,10 +122,24 @@ describe('reapplyErasure after a simulated restore', () => {
     await ErasureRecordModel.deleteMany({}); // the restored database has no record of the erasure
     await restoreAccount(id, insertRows);
     vi.clearAllMocks();
+    await raw(Connection).insertMany([
+      { connectionId: 'erased-connection', userId: id },
+      { connectionId: 'bystander-connection', userId: bystander.id },
+    ]);
+    await raw(QuerySubscription).insertOne({
+      collectionName: 'sessions',
+      queryId: 'restored-query',
+      subscribers: [{ connectionId: 'erased-connection' }, { connectionId: 'bystander-connection' }],
+    });
 
     const result = await reapplyErasure(id, { record: record!, logger });
 
     expect(result.ownedOrganizationIds).toEqual([]);
+    expect((await raw(Connection).findOne({ connectionId: 'erased-connection' }))?.endedAt).toBeInstanceOf(Date);
+    expect((await raw(Connection).findOne({ connectionId: 'bystander-connection' }))?.endedAt).toBeUndefined();
+    expect((await raw(QuerySubscription).findOne({ queryId: 'restored-query' }))?.subscribers).toEqual([
+      { connectionId: 'bystander-connection' },
+    ]);
     // The repeat leaves the restored database holding the record again.
     expect(await ErasureRecordModel.countDocuments({ idHash: record!.idHash })).toBe(1);
     const counts = await rowCounts();
@@ -146,6 +169,71 @@ describe('reapplyErasure after a simulated restore', () => {
 
     const result = await reapplyErasure(id, { record, logger });
     expect(result.ownedOrganizationIds).toEqual([String(teamOrg)]);
+  });
+
+  it.each(['self', 'admin'] as const)('ends a %s account connection opened during the purge', async initiatedBy => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy, logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    const endConnections = realtimeConnectionRepository.endConnections;
+    const spy = vi.spyOn(realtimeConnectionRepository, 'endConnections').mockImplementationOnce(async filter => {
+      const result = await endConnections(filter);
+      await raw(Connection).insertOne({ connectionId: 'late-connection', userId: id });
+      await raw(QuerySubscription).insertOne({
+        collectionName: 'sessions',
+        queryId: 'late-query',
+        subscribers: [{ connectionId: 'late-connection' }],
+      });
+      return result;
+    });
+    try {
+      await reapplyErasure(id, { record, logger });
+      expect((await raw(Connection).findOne({ connectionId: 'late-connection' }))?.endedAt).toBeInstanceOf(Date);
+      expect(await raw(QuerySubscription).countDocuments({ queryId: 'late-query' })).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each(['self', 'admin'] as const)(
+    'keeps the %s account retryable when realtime cleanup fails',
+    async initiatedBy => {
+      const { id, insertRows } = await seedAccount();
+      await hardDeleteUser(id, { deletedBy: id, initiatedBy, logger }, users => users.delete(id));
+      const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+      await restoreAccount(id, insertRows);
+      const spy = vi
+        .spyOn(realtimeConnectionRepository, 'endConnections')
+        .mockRejectedValueOnce(new Error('prune failed'));
+      try {
+        await expect(reapplyErasure(id, { record, logger })).rejects.toThrow('prune failed');
+        expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(1);
+        await reapplyErasure(id, { record, logger });
+        expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  );
+
+  it('reports a partial erasure when realtime cleanup fails after the delete committed', async () => {
+    const { id, insertRows } = await seedAccount();
+    await hardDeleteUser(id, { deletedBy: id, initiatedBy: 'self', logger }, users => users.delete(id));
+    const record = (await ErasureRecordModel.findOne({ idHash: erasureIdHash(id) }).lean())!;
+    await restoreAccount(id, insertRows);
+    effects.purge.mockClear();
+    const spy = vi
+      .spyOn(realtimeConnectionRepository, 'endConnections')
+      .mockResolvedValueOnce({ connectionIds: [] })
+      .mockRejectedValueOnce(new Error('post-delete prune failed'));
+    try {
+      await expect(reapplyErasure(id, { record, logger })).rejects.toThrow('post-delete prune failed');
+      expect(await raw(User).countDocuments({ _id: new mongoose.Types.ObjectId(id) })).toBe(0);
+      expect(effects.purge).toHaveBeenCalledExactlyOnceWith(id, expect.objectContaining({ integrationGrants: null }));
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it.each(['self', 'admin'] as const)('keeps the %s account when the record write fails', async initiatedBy => {

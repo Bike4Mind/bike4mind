@@ -434,6 +434,25 @@ describe('records source flags', () => {
     expect(describeFailure(new Error('boom'))).toBe('boom');
   });
 
+  it.each([
+    ['mongodb://old.example/prod', 'mongodb://OLD.EXAMPLE:27017/prod'],
+    ['mongodb://first.example,second.example/prod', 'mongodb://second.example:27017,first.example/prod'],
+    ['mongodb://old.example/test', 'mongodb://old.example'],
+    ['mongodb://[::1]/prod', 'mongodb://[::1]:27017/prod'],
+  ])('refuses equivalent source %s and target %s', (sourceUri, targetUri) => {
+    const source = parseRecordsSource(['--records-uri', sourceUri]);
+    expect(() => assertRecordsNotTarget(source, targetUri)).toThrow(/--from-target/);
+  });
+
+  it.each([
+    ['mongodb://old.example:27018/prod', 'mongodb://old.example/prod'],
+    ['mongodb://old.example/prod', 'mongodb://old.example/other'],
+    ['mongodb://old.example/prod', 'mongodb://new.example/prod'],
+  ])('allows distinct source %s and target %s', (sourceUri, targetUri) => {
+    const source = parseRecordsSource(['--records-uri', sourceUri]);
+    expect(() => assertRecordsNotTarget(source, targetUri)).not.toThrow();
+  });
+
   it('prints the records source and refuses one equal to the target', () => {
     const uri = parseRecordsSource(['--records-uri', 'mongodb://u:p@old.example:27017/prod?x=1']);
     expect(describeRecordsSource(uri)).toBe('old.example:27017/prod');

@@ -62,7 +62,7 @@ const parseMongoUri = (uri: string): { host: string; db: string } | undefined =>
   return { host, db: path.join('/') };
 };
 
-/** Database named in a mongo uri path (`mongodb://host/db?x=1`), if any. */
+/** Database named in a mongo uri path (`mongodb://localhost/db?x=1`), if any. */
 export const dbNameFromUri = (uri: string): string | undefined => parseMongoUri(uri)?.db || undefined;
 
 /**
@@ -121,7 +121,20 @@ export const describeRecordsSource = (source: RecordsSource): string =>
  * every erasure after the restore point and still looks like a clean run: refuse it.
  */
 export function assertRecordsNotTarget(source: RecordsSource, targetUri: string): void {
-  if (source.kind === 'uri' && describeRecordsSource(source) === describeMongoTarget(targetUri)) {
+  if (source.kind !== 'uri') return;
+  const sourceTarget = parseMongoUri(source.uri);
+  const target = parseMongoUri(targetUri);
+  if (!sourceTarget || !target) throw new Error('could not compare the records and target databases');
+  const canonicalHosts = (hosts: string): string =>
+    hosts
+      .split(',')
+      .map(host => host.toLowerCase().replace(/:27017$/, ''))
+      .sort()
+      .join(',');
+  if (
+    canonicalHosts(sourceTarget.host) === canonicalHosts(target.host) &&
+    (source.dbName ?? (sourceTarget.db || 'test')) === (target.db || 'test')
+  ) {
     throw new Error('--records-uri is the target database itself; use --from-target if its records survived');
   }
 }
