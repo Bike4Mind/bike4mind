@@ -2526,6 +2526,45 @@ describe('dispatchLoopNow', () => {
 
     expect(h.startAgentExecution).not.toHaveBeenCalled();
     expect((await reload(loop.id)).leaseUntil).toBeUndefined();
+    // Held on the server-wide limit at once, not at the next tick, and the open page is told.
+    expect(await reload(loop.id)).toMatchObject({ hold: { kind: 'capacity', limit: 'server', at: NOW } });
+    expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
+  });
+
+  it('holds a loop whose lanes are all busy on its own lane limit when a new ticket makes it due', async () => {
+    const loop = await createLoop({ maxConcurrent: 2, activeExecutionIds: ['busy-1', 'busy-2'] });
+    executions['busy-1'] = { status: 'running', updatedAt: NOW };
+    executions['busy-2'] = { status: 'running', updatedAt: NOW };
+    await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(await reload(loop.id)).toMatchObject({ hold: { kind: 'capacity', limit: 'loop', at: NOW } });
+    expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
+  });
+
+  it("holds a loop on its owner's lane limit when the owner's other loops fill it", async () => {
+    // The owner's 2 cloud lanes (LoopsCloudLanesPerUser default) are busy; the server-wide cap of 4 is not.
+    await createLoop({ activeExecutionIds: ['busy-1'], nextRunAt: LATER });
+    await createLoop({ activeExecutionIds: ['busy-2'], nextRunAt: LATER });
+    const loop = await createLoop();
+    await createTicket(loop.id);
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect(h.startAgentExecution).not.toHaveBeenCalled();
+    expect(await reload(loop.id)).toMatchObject({ hold: { kind: 'capacity', limit: 'user', at: NOW } });
+    expect(h.pushLoopChanged).toHaveBeenCalledWith('user-1', loop.id, logger);
+  });
+
+  it('sets no hold on a one-lane loop that is still running', async () => {
+    const loop = await createLoop({ activeExecutionIds: ['busy-1'] });
+    executions['busy-1'] = { status: 'running', updatedAt: NOW };
+
+    await dispatchLoopNow(loop.id, NOW, logger);
+
+    expect((await reload(loop.id)).hold).toBeUndefined();
   });
 
   it('folds a finished run, advances its ticket and starts the next run in the same call', async () => {

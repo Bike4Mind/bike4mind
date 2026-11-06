@@ -13,7 +13,7 @@ import {
   priorityPatch,
   ticketMovePatch,
 } from '@server/utils/loopTickets';
-import { requestLoopDispatch } from '@server/utils/loopDispatch';
+import { pushLoopChanged, requestLoopDispatch } from '@server/utils/loopDispatch';
 import {
   validateWorkItemDependencies,
   validateWorkItemDescription,
@@ -133,7 +133,11 @@ const handler = baseApi()
       throw new NotFoundError('Work item not found for id: ' + id);
     }
 
-    if (loop && (await makeDueIfReady(loop))) await requestLoopDispatch(loop.id, req.logger);
+    if (loop) {
+      if (await makeDueIfReady(loop)) await requestLoopDispatch(loop.id, req.logger);
+      // The owner's other tabs and browsers; the tab that made the write already updated its own cache.
+      await pushLoopChanged(req.user!.id, loop.id, req.logger);
+    }
     res.json(updated);
   })
   .delete(async (req, res) => {

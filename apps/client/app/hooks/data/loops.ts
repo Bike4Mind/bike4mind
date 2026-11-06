@@ -289,7 +289,9 @@ export const useMoveLoopTicket = () => {
     },
     onError: (error, { loopId }, context) => {
       if (context?.previous) queryClient.setQueryData(loopKeys.tickets(loopId), context.previous);
-      onError(error);
+      // A refused move shows the server's reason (onLoopError); a save that never reached it says the move is undone.
+      if (isAxiosError(error) && !error.response) toast.error("Move undone: couldn't reach the server.");
+      else onError(error);
     },
     onSettled: (_data, _error, { loopId }) => {
       // The last move to settle refetches, so a refetch does not overwrite a move still saving.
