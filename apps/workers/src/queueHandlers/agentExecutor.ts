@@ -2390,8 +2390,6 @@ async function processExecution(
       ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
       ...buildReActAgentRuntimeConfig(execution),
       thinkingVisibility,
-      // TEMPORARY: preview verification only, revert before merge.
-      selfReportConfidence: true,
       modelBackend: modelInfo?.backend,
       modelAdapterFamily: modelInfo?.adapterFamily,
     });
