@@ -13,6 +13,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT, TEST_GENERATION_PROVIDER_ENVIRONMENT } from
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { searxngUrl } from './searxng';
 import { allSecrets, contributedSecretEnvironment, secrets } from './secrets';
 import { websocketApi } from './websocket';
@@ -42,6 +43,8 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     appFilesBucket,
     websocketApi,
     mcpHandler,
+    // Custom (user-supplied URL) connector calls from agent runs execute here, outside the VPC.
+    remoteMcpHandler,
     eventBus,
     imageProcessor,
     agentContinuationQueue,

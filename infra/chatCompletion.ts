@@ -10,6 +10,7 @@ import { ecsEnvSecret, ecsResourceSecrets, ecsSecretsVersion } from './ecsSecret
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { remoteMcpHandler } from './remoteMcp';
 import { providerFederation } from './providerFederation';
 import { generationJobQueue } from './queues';
 import { cdnUrlForLambdaEnv, originVerifySecret, router, routePrefix } from './router';
@@ -132,6 +133,8 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     appFilesBucket,
     websocketApi,
     mcpHandler,
+    // Custom (user-supplied URL) connector calls from queued chat turns run here, outside the VPC.
+    remoteMcpHandler,
     eventBus,
     imageProcessor,
     generationJobQueue,
