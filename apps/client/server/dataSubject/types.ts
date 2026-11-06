@@ -50,6 +50,10 @@ export type ErasureAction =
 
 export type UserReference = ErasureAction & {
   path: string;
+  /**
+   * `email` is compared case-insensitively with the user's current email only: User does not
+   * lowercase on write and keeps no previous addresses, so a later change of address is not matched.
+   */
   matchBy: 'userId' | 'email';
   /**
    * Extra equality filter, e.g. `{ ownerType: 'User' }` when `ownerId` may also hold an
