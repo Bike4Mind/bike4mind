@@ -1,4 +1,5 @@
 import { getQuestErrorCode } from '@bike4mind/common';
+import type { ImageModerationBlockedError as OwnModerationBlockedError } from '../imageModeration';
 
 export type ExpectedImageFailureKind = 'moderation_blocked' | 'provider_unavailable' | 'input_rejected';
 
@@ -64,7 +65,7 @@ type FailureLogger = {
  * `../imageModeration`, a different class from the provider refusal above). Matched by shape because
  * that module pulls in the Rekognition SDK and is deliberately kept out of this package's root entry.
  */
-function isOwnModerationBlock(error: unknown): error is Error & { labels: { name: string }[] } {
+function isOwnModerationBlock(error: unknown): error is OwnModerationBlockedError {
   return (
     error instanceof Error &&
     error.name === 'ImageModerationBlockedError' &&
