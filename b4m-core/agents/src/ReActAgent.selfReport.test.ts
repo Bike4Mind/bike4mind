@@ -220,6 +220,7 @@ describe('ReActAgent self-reported confidence', () => {
 
     expect(on.length).toBeGreaterThan(0);
     expect(on.every(p => p.includes('<confidence score='))).toBe(true);
+    expect(on.every(p => /every turn that calls a tool/i.test(p) && /follows a tool result/i.test(p))).toBe(true);
     expect(off.some(p => p.includes('<confidence'))).toBe(false);
   });
 
