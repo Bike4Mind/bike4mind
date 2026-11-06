@@ -3497,11 +3497,8 @@ async function processExecution(
     const updatedExecution = await agentExecutionRepository.findById(executionId);
     const finalCheckpoint = agent.toCheckpoint();
 
-    // A final-answer iteration runs no tools, so the per-iteration gate above never evaluates it.
-    // Surface an answer that follows a below-threshold iteration here. `block` parks the run in
-    // `paused` with the answer intact in the checkpoint: Stop accepts it, Continue keeps iterating.
-    // The profile value wins when present; otherwise the admin default is read here, because the
-    // profile is only resolved on a new execution and a continuation Lambda would lose the setting.
+    // A final-answer iteration runs no tools, so the per-iteration gate never scores it; `block`
+    // parks the run paused with the answer in the checkpoint (Continue iterates, Stop accepts).
     const completedOnAnswer =
       iterationResult?.isComplete && !iterationResult.reachedMaxIterations && !iterationResult.reachedMaxTotalTokens;
     const lowConfidenceCompletion =
@@ -3509,8 +3506,14 @@ async function processExecution(
         ? evaluateLowConfidenceCompletion({
             mode:
               orchestrationProfile?.lowConfidenceCompletion ??
-              (await adminSettingsRepository.getSettingsValue('orchestrationDefaults').catch(() => undefined))
-                ?.lowConfidenceCompletion ??
+              (
+                await adminSettingsRepository.getSettingsValue('orchestrationDefaults').catch(err => {
+                  logger.warn('[ConfidenceGate] Failed to load orchestrationDefaults; using built-in default', {
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                  return undefined;
+                })
+              )?.lowConfidenceCompletion ??
               DEFAULT_LOW_CONFIDENCE_COMPLETION,
             lowConfidenceStreak: updatedExecution?.lowConfidenceStreak,
             lastConfidence: updatedExecution?.lastConfidence,
@@ -3522,6 +3525,8 @@ async function processExecution(
       logger.info('[ConfidenceGate] Low-confidence completion', { executionId, mode, confidence });
       await sendWs('low_confidence_completion', { executionId, confidence, reason, mode });
       if (mode === 'block') {
+        // Stop on this pause finishes via handleGateResponse (apps/client/server/websocket/agentExecute.ts),
+        // which persists a thinner result than the completion below (no resolveDisplayAnswer, artifacts, images).
         const paused = await agentExecutionRepository.setPendingGate(executionId, {
           iteration: Math.max(0, finalCheckpoint.iteration - 1),
           confidence,
@@ -3533,9 +3538,6 @@ async function processExecution(
           await sendWs('failed', { executionId, reason: 'aborted' });
           return;
         }
-        // Same rule as the per-iteration gate: a scripted score stays out of the fire-rate counters.
-        if (!updatedExecution?.confidenceOverrides?.length)
-          await agentExecutionRepository.recordGateEmitted(executionId);
         await sendWs('confidence_gate', {
           executionId,
           iteration: Math.max(0, finalCheckpoint.iteration - 1),
